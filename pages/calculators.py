@@ -11,7 +11,7 @@ from load_data import get_month_account_values,load_financial_accounts,get_cap_g
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
 from income_expense import build_income_expenses_display,calculate_taxes
-from tabs import clear_submit
+from planning_app import clear_submit
 
 networth = load_net_worth()
 conversion_tab, something_tab = st.tabs(["Tax planner","something"])
@@ -26,7 +26,7 @@ with conversion_tab:
        change_last_month=(networth["cash"].values[-1]-networth["cash"].values[-2])
        fcash_value=f"${cash_value:,.2f}"
        fchange_last_month=f"{change_last_month:,.2f}"
-       st.metric(label="Cash", value=fcash_value, delta= fchange_last_month + " Monthly Change" )
+       st.metric(label="Cash", value=fcash_value, delta= fchange_last_month + " Monthly Change", key="metric_cash_main")
        #st.metric(label="Change from Last Month", value=fchange_last_month)
     with col1row4:  
        st.header(" ")
@@ -34,7 +34,7 @@ with conversion_tab:
        taxable_last_month=networth["taxable"].values[-1]-networth["taxable"].values[-2]
        ftaxable_value=f"${taxable_value:,.2f}"
        ftaxable_last_month=f"{taxable_last_month:,.2f}"    
-       st.metric(label="Brokerage", value=ftaxable_value, delta=ftaxable_last_month + " Monthly Change"  )
+       st.metric(label="Brokerage", value=ftaxable_value, delta=ftaxable_last_month + " Monthly Change", key="metric_brokerage_main")
        # st.metric(label="Change from Last Month", value=ftaxable_last_month)
     with col1row5:   
        st.header(" ")
@@ -42,7 +42,7 @@ with conversion_tab:
        roth_last_month=networth["tax_free"].values[-1]-networth["tax_free"].values[-2]
        froth_value=f"${roth_value:,.2f}"
        froth_last_month=f"{roth_last_month:,.2f}"
-       st.metric(label="Roth", value=froth_value, delta=froth_last_month+ " Monthly Change" )
+       st.metric(label="Roth", value=froth_value, delta=froth_last_month+ " Monthly Change", key="metric_roth_main")
        #st.metric(label="Change from Last Month", value=froth_last_month)
     with col1row6:   
        st.header(" ")
@@ -50,7 +50,7 @@ with conversion_tab:
        trad_last_month=networth["tax_deferred"].values[-1]-networth["tax_deferred"].values[-2]
        ftrad_value=f"${trad_value:,.2f}"
        ftrad_last_month=f"{trad_last_month:,.2f}"
-       st.metric(label="Traditional", value=ftrad_value, delta=ftrad_last_month+ " Monthly Change" )
+       st.metric(label="Traditional", value=ftrad_value, delta=ftrad_last_month+ " Monthly Change", key="metric_trad_main")
        #st.metric(label="Change from Last Month", value=ftrad_last_month)
     with col1row7:   
        st.header(" ")
@@ -58,7 +58,7 @@ with conversion_tab:
        total_last_month=networth["total"].values[-1]-networth["total"].values[-2]
        ftotal_value=f"${total_value:,.2f}"
        ftotal_last_month=f"{total_last_month:,.2f}"
-       st.metric(label="Total Net Worth", value=ftotal_value, delta=ftotal_last_month+ " Monthly Change" )
+       st.metric(label="Total Net Worth", value=ftotal_value, delta=ftotal_last_month+ " Monthly Change", key="metric_total_main")
        #st.metric(label="Change from Last Month", value=ftotal_last_month)    
 
 
@@ -196,14 +196,14 @@ with conversion_tab:
             fcg_taxable_value=f"${cg_income_lt:,.2f}"
             fint_value=f"${interest:,.2f}"
             if 0 < (agi+conversions):
-                st.metric(label="Adjusted Gross Income", value=fcash_value)
+                st.metric(label="Adjusted Gross Income", value=fcash_value, key="metric_agi")
             if 0 < (interest):
-                st.metric(label="Interest", value=fint_value)
+                st.metric(label="Interest", value=fint_value, key="metric_interest")
             if 0 < (cg_income_st):   
                 print(f"Input STCG is {cg_income_st:.6f}")
-                st.metric(label="Short Term Capital Gains", value=f_cgst_month)
+                st.metric(label="Short Term Capital Gains", value=f_cgst_month, key="metric_stcg")
             if 0 != (cg_income_lt):
-                st.metric(label="Long Term Capital Gains", value=fcg_taxable_value)
+                st.metric(label="Long Term Capital Gains", value=fcg_taxable_value, key="metric_ltcg")
 
         with col1row5:   
             st.markdown('##### Taxes Owed')
@@ -211,28 +211,28 @@ with conversion_tab:
             #    fincome_tax=f"${atm_tax+cg_tax-pd_tax_amount:,.2f}"
             #else:
             fincome_tax=f"${taxable_income+cg_tax-pd_tax_amount:,.2f}"
-            print(f"Income {taxable_income} minus estimated {pd_tax_amount} is {fincome_tax}")
+            #print(f"Income {taxable_income} minus estimated {pd_tax_amount} is {fincome_tax}")
             #print(f"ATM {atm_tax} minus estimated {pd_tax_amount} is {fincome_tax}")
             fcg_tax=f"${cg_tax:,.2f}"
             froth_conv_tax=f"${conversion_tax:,.2f}"
-            if 0 == (cg_income_lt+cg_income_st+interest):
+            if 0 == (wages+cg_income_lt+cg_income_st+interest):
                 state_tax=0
                 quarterly_state_tax=0
             else: 
                  #print(f"state tax = {(cg_income_lt+cg_income_st+interest)}") 
                 #print(f"LTCG: {cg_income_lt} STCG: {cg_income_st} interest: {interest}")  
-                state_tax=((cg_income_lt+cg_income_st+interest)*0.03 )
+                state_tax=((wages+cg_income_lt+cg_income_st+interest)*0.03 )
                 quarterly_state_tax=state_tax/4
             fstate_tax=f"${state_tax:,.2f}"
             fquarterly_state_tax=f"${quarterly_state_tax:,.2f}"
             quarterly_fed_tax=(taxable_income+cg_tax-pd_tax_amount)/4
             fquarterly_fed_tax=f"${quarterly_fed_tax:,.2f}"
             if taxable_income>0:
-                st.metric(label="Income Tax", value=fincome_tax)
-                st.metric(label="Quarterly Fed tax Payment", value=fquarterly_fed_tax)
+                st.metric(label="Income Tax", value=fincome_tax, key="metric_income_tax")
+                st.metric(label="Quarterly Fed tax Payment", value=fquarterly_fed_tax, key="metric_quarterly_fed")
             if state_tax>0: 
-                st.metric(label="State tax", value=fstate_tax)
-                st.metric(label="Quarterly State tax Payment", value=fquarterly_state_tax)
+                st.metric(label="State tax", value=fstate_tax, key="metric_state_tax")
+                st.metric(label="Quarterly State tax Payment", value=fquarterly_state_tax, key="metric_quarterly_state")
        
      
             st.markdown('##### Other costs')
@@ -244,39 +244,39 @@ with conversion_tab:
             fatm_tax_taxable_income=f"${atm_tax-taxable_income:,.2f}" 
             flowerby=f"${lowerby:,.2f}" 
             if calc_daf>0: 
-                st.metric(label="Donor Advisory Fund", value=fdaf)
+                st.metric(label="Donor Advisory Fund", value=fdaf, key="metric_daf")
             #if deferred_distribution>0:
             #   st.metric(label="Traditional Distribution", value=fdeferred_distribution)    
             if cg_tax>0:   
-                st.metric(label="Long Term Capital Gains Tax", value=fcg_tax)
+                st.metric(label="Long Term Capital Gains Tax", value=fcg_tax, key="metric_ltcg_tax")
             if  irmaa_fees_income >0:  
-                st.metric(label="Medicare Surcharge", value=firmaa_fees)
+                st.metric(label="Medicare Surcharge", value=firmaa_fees, key="metric_medicare")
             if irmaa_fees_income_headroom>0 and conversions>0:
-                st.metric(label="Medicare cost w. Roth Conversion", value=firmaa_headroom_month)
+                st.metric(label="Medicare cost w. Roth Conversion", value=firmaa_headroom_month, key="metric_medicare_roth")
                 #st.metric(label="Roth Conversions", value=ftaxable_value)
             if atm_tax>taxable_income:
-                st.metric(label="Additional ATM taxes", value=fatm_tax_taxable_income)
-                st.metric(label="Decrease income or LT Capital gains by", value=flowerby)       
+                st.metric(label="Additional ATM taxes", value=fatm_tax_taxable_income, key="metric_atm_tax")
+                st.metric(label="Decrease income or LT Capital gains by", value=flowerby, key="metric_lowerby")
         with col1row6:   
             st.markdown('##### Traditional Updates')
             ftrad_value=f"${trad_value:,.2f}"
             ftrad_dist_delta=f"${trad_value-deferred_distribution-conversions:,.2f}"
             fdelta=f"{-deferred_distribution-conversions:,.2f}"
             if deferred_distribution+conversions >0:
-                st.metric(label="New Traditional Balance", value=ftrad_dist_delta, delta=fdelta)
+                st.metric(label="New Traditional Balance", value=ftrad_dist_delta, delta=fdelta, key="metric_new_trad")
             else:
-                st.metric(label="Pre Changes Traditional", value=ftrad_value)         
+                st.metric(label="Pre Changes Traditional", value=ftrad_value, key="metric_pre_trad")
         with col1row7:   
             st.markdown('##### Roth Updates')
             fconversions_amt=f"{conversions:,.2f}"
             fconversions=f"${conversions:,.2f}"
             fconversions_total=f"${(roth_value+conversions):,.2f}"
             if conversions > 0:
-                st.metric(label="New Roth Account Balance", value=fconversions_total, delta=fconversions_amt) 
-                st.metric(label="Roth Conversion",value=fconversions)    
-                st.metric(label="Estimated Roth Conversion tax", value=froth_conv_tax)
+                st.metric(label="New Roth Account Balance", value=fconversions_total, delta=fconversions_amt, key="metric_new_roth")
+                st.metric(label="Roth Conversion",value=fconversions, key="metric_roth_conv")
+                st.metric(label="Estimated Roth Conversion tax", value=froth_conv_tax, key="metric_roth_conv_tax")
             else:
-                st.metric(label="Pre Changes Roth", value=froth_value) 
+                st.metric(label="Pre Changes Roth", value=froth_value, key="metric_pre_roth")
                 #st.write("Wages: ", wages, "Trad IRA Distribution: ", deferred_distribution, "Interest: ",interest, "Long Term Cap Gains: ",cg_income_lt, "Max Conversion Rate: ", headroom_rate, "Max Charitable", maxdaf  )
         with col1row8:   
             st.markdown('##### Broker & Cash Updates')
@@ -290,14 +290,14 @@ with conversion_tab:
             f_new_cash_value=f"${new_cash_value:,.2f}"
             #ftotal_last_month=f"${f_new_broker_value:,.2f}"
             if new_cash_value != cash_value:
-                st.metric(label="New Cash Balance", value=f_new_cash_value, delta=fnew_cash_delta)
+                st.metric(label="New Cash Balance", value=f_new_cash_value, delta=fnew_cash_delta, key="metric_new_cash")
                 #st.metric(label="Delta", value=fnew_cash_delta)
             else:   
-                st.metric(label="Pre Changes Cash Balance", value=fcash_value)
+                st.metric(label="Pre Changes Cash Balance", value=fcash_value, key="metric_pre_cash")
             if new_broker_value != taxable_value:
-                st.metric(label="New Broker Balance", value=f_new_broker_value, delta=f_new_broker_delta_value) 
+                st.metric(label="New Broker Balance", value=f_new_broker_value, delta=f_new_broker_delta_value, key="metric_new_broker")
             else:
-                    st.metric(label="Pre Changes Broker Balance", value=ftaxable_value)  
+                    st.metric(label="Pre Changes Broker Balance", value=ftaxable_value, key="metric_pre_broker")
 
             #st.write("Wages: ", wages, "Trad IRA Distribution: ", deferred_distribution, "Interest: ",interest, "Long Term Cap Gains: ",cg_income_lt, "Max Conversion Rate: ", headroom_rate, "Max Charitable", maxdaf  )
 with something_tab:
