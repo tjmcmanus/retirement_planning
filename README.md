@@ -1,4 +1,4 @@
-# Tax & Retirement Planning Application -tom
+# Tax & Retirement Planning Application
 
 A comprehensive Streamlit-based financial planning application for retirement tax optimization, portfolio management, and long-term financial projections.
 
