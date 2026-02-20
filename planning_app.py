@@ -95,58 +95,112 @@ with tab1:
    add_vertical_space(2)
    row2_col1, row2_col2, row2_col3 = st.columns(3)
    with row2_col1:
-       st.markdown('#### Total Net Worth')
+       st.markdown('<h4 style="text-align: center;">Total Net Worth</h4>', unsafe_allow_html=True)
        fig2 = px.histogram(networth, x='date', y='total', nbins=10, color="total", color_discrete_sequence=color_palette)
-       fig2.update_layout( 
-                    autosize=True,
-                    plot_bgcolor='#0f4c75', 
-                    paper_bgcolor='#0f4c75',
-                    xaxis=dict(title='Date',
-                                tickfont=dict(color='white'),
-                                #titlefont=dict(color='white')
-                                ),
-                    yaxis=dict(title='Net Worth',
-                                tickfont=dict(color='white'),
-                                #titlefont=dict(color='white')
-                                ), 
-                    legend=dict(orientation="h", yanchor='bottom',y=1.1, font=dict(color="white"),),  
-                    )
-       fig2.update_layout(showlegend=False)
-       st.plotly_chart(fig2, use_container_width = True)
+       
+       # Calculate y-axis range with 10% padding
+       y_min = networth['total'].min()
+       y_max = networth['total'].max()
+       y_range = y_max - y_min
+       y_axis_min = y_min - (y_range * 1)
+       y_axis_max = y_max + (y_range * 0.1)
+       
+       # Configure chart layout with consistent styling
+       fig2.update_layout(
+           autosize=True,
+           showlegend=False,  # Consolidated: legend disabled for cleaner histogram view
+           plot_bgcolor='white',
+           paper_bgcolor='white',
+           xaxis=dict(
+               title='Date',
+               tickfont=dict(color='black')
+           ),
+           yaxis=dict(
+               title='Net Worth',
+               tickfont=dict(color='black'),
+               range=[y_axis_min, y_axis_max]  # 10% padding above and below data
+           )
+       )
+       
+       # Render chart with responsive width
+       st.plotly_chart(fig2, use_container_width=True)
 
    with row2_col2:
-      # Create traces for each group
-      st.markdown('#### Net Worth by Account')
-      trace1 = go.Bar(x=networth.date, y=networth.cash, name='Cash', legendgroup='1',marker_color='rgb(246, 207, 113)')
-      trace2 = go.Bar(x=networth.date, y=networth.taxable, name='Broker', legendgroup='2',marker_color='rgb(254, 136, 177)')
-      trace3 = go.Bar(x=networth.date, y=networth.tax_deferred, name='Traditional', legendgroup='3',marker_color='rgb(139, 224, 164)')
-      trace4 = go.Bar(x=networth.date, y=networth.tax_free, name='Roth', legendgroup='4',marker_color='rgb(180, 151, 231)')
-      #trace5 = go.Bar(x=networth.date, y=networth.total, name='Total', legendgroup='1',marker_color='rgb(102, 197, 204)')
-      # Layout configuration with grouped legend
+      st.markdown('<h4 style="text-align: center;">Net Worth by Account</h4>', unsafe_allow_html=True)
+      
+      # Calculate stacked totals for y-axis range with 10% padding
+      stacked_totals = (
+          networth.cash +
+          networth.taxable +
+          networth.tax_deferred +
+          networth.tax_free
+      )
+      y_min = 0
+      y_max = stacked_totals.max()
+      y_range = y_max - y_min
+      y_axis_max = y_max + (y_range * 0.1)
+      
+      # Create bar traces with consistent styling
+      trace1 = go.Bar(
+          x=networth.date,
+          y=networth.cash,
+          name='Cash',
+          legendgroup='1',
+          marker_color='rgb(246, 207, 113)'
+      )
+      trace2 = go.Bar(
+          x=networth.date,
+          y=networth.taxable,
+          name='Broker',
+          legendgroup='2',
+          marker_color='rgb(254, 136, 177)'
+      )
+      trace3 = go.Bar(
+          x=networth.date,
+          y=networth.tax_deferred,
+          name='Traditional',
+          legendgroup='3',
+          marker_color='rgb(139, 224, 164)'
+      )
+      trace4 = go.Bar(
+          x=networth.date,
+          y=networth.tax_free,
+          name='Roth',
+          legendgroup='4',
+          marker_color='rgb(180, 151, 231)'
+      )
+      
+      # Configure layout with consistent styling and y-axis range
       layout = go.Layout(
           autosize=True,
-          #color_scale=color_palette
-          plot_bgcolor='#0f4c75',
-          paper_bgcolor='#0f4c75',
-          barmode='stack',  # Group bars together
-          xaxis=dict(title='Dates',
-                    tickfont=dict(color='white'),
-                   # titlefont=dict(color='white')
-                    ),
-          yaxis=dict(title='Amount',
-                    tickfont=dict(color='white'),
-                    #titlefont=dict(color='white')
-                    ),
-        legend=dict(title='Account Type', orientation="h",yanchor='bottom',y=1.1, groupclick = 'togglegroup',font=dict(color="white"))  # Legend title
-        )
-      # Create the figure
-      fig = go.Figure(data=[trace3, trace4, trace2,trace1], layout=layout,)
-      #fig.update_layout(showlegend=True)
-      # Display the plotly chart
-      chart = st.plotly_chart(fig, use_container_width=True, key='selection')
+          plot_bgcolor='white',
+          paper_bgcolor='white',
+          barmode='stack',
+          xaxis=dict(
+              title='Dates',
+              tickfont=dict(color='black')
+          ),
+          yaxis=dict(
+              title='Amount',
+              tickfont=dict(color='black'),
+              range=[y_min, y_axis_max]  # 10% padding above stacked max
+          ),
+          legend=dict(
+              title='Account Type',
+              orientation='h',
+              yanchor='bottom',
+              y=1.1,
+              groupclick='togglegroup',
+              font=dict(color='black')
+          )
+      )
+      
+      # Create and display the figure
+      fig = go.Figure(data=[trace3, trace4, trace2, trace1], layout=layout)
+      st.plotly_chart(fig, use_container_width=True, key='selection')
    
    with row2_col3:
-       st.markdown('#### Asset mix')
+       st.markdown('<h4 style="text-align: center;">Asset mix</h4>', unsafe_allow_html=True)
        # 2. Select the specific row to plot
        row_to_plot = networth.iloc[-1,1:5] # Select the first row
 
@@ -158,38 +212,38 @@ with tab1:
            color_discrete_sequence=color_palette,
            title=' '
         )
-     # Customize the chart (optional)
+       # Customize the chart (optional)
        fig.update_traces(textinfo='label+percent+value',  # Display percentage and label
                   pull=[0, 0, 0, 0],      # "Explode" a slice (e.g., category C)
                   marker_colors=['rgb(246, 207, 113)', 'rgb(254, 136, 177)','rgb(139, 224, 164)', 'rgb(180, 151, 231)'],
-                  title_font=dict(color="white"),
+                  title_font=dict(color="black"),
                   hoverinfo='label+percent+value',
                   insidetextfont=dict(color='black')) # Custom colors
        title_text=''
-       fig.update_layout( 
+       fig.update_layout(
            autosize=True,
-           plot_bgcolor='#0f4c75', 
-           paper_bgcolor='#0f4c75',
-           title_font=dict(color="white"),
-           legend=dict(title='Account Type', orientation="h",yanchor='bottom',y=1.1, groupclick = 'togglegroup',font=dict(color="white")), 
+           plot_bgcolor='white',
+           paper_bgcolor='white',
+           title_font=dict(color="black"),
+           legend=dict(title='Account Type', orientation="h",yanchor='bottom',y=1.1, groupclick = 'togglegroup',font=dict(color="black")),
            margin=dict(l=1,r=1,b=1,t=1)
-        )
+       )
        st.plotly_chart(fig, use_container_width=True)
    
    add_vertical_space(2)
    tab1_row2_col1,tab1_row2_col2 = st.columns(2)
    with tab1_row2_col1:
-       st.markdown('#### Account Mix Breakdown')
+       st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
     # CURRENT MONTH SPEND BY CATEGORY [TREEMAP CHART]
     
     # CURRENT MONTH SPEND BY CATEGORY [TREEMAP CHART]
        # 2. Select the specific row to plot
 
        mtd_spend = get_month_account_values(curr_month,curr_year)
-       print(mtd_spend)
+       #print(mtd_spend)
       # monthly_balance = account_data.iloc[-1,1:15] # Select the first row
        fig_mtd_spend_by_cateogry = px.treemap(mtd_spend, path=['type','account'],
-                     values='amount',color='amount', color_continuous_scale='tealrose',color_continuous_midpoint=np.average(mtd_spend['amount'], weights=mtd_spend['amount']), title="")
+                     values='amount',color='amount', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(mtd_spend['amount'], weights=mtd_spend['amount']), title="")
        fig_mtd_spend_by_cateogry.data[0].textinfo = "label+text+value+percent root"
 
        #fig_mtd_spend_by_cateogry.update_layout(margin=dict(l=0,r=0,t=0,b=0))
@@ -198,7 +252,16 @@ with tab1:
        st.plotly_chart(fig_mtd_spend_by_cateogry, use_container_width=True)
 
    with tab1_row2_col2:
-       st.markdown('#### Account mix')
+        st.markdown('<h4 style="text-align: center;">Portfolio mix - Need to sync portfolio with accounts</h4>', unsafe_allow_html=True)
+        portdf_no_totals = build_portfolio_display()
+        portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector'],
+        values='Current value',color='Current value', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
+        #values='Current value',color='Current value', title="")
+        portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
+        portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
+        portfolio_by_sector.update_layout(margin = dict(t=50, l=25, r=25, b=25))
+
+        st.plotly_chart(portfolio_by_sector, use_container_width=True)
        
 with tab2:
     st.header("Withdrawl and Conversion calculator")
@@ -404,13 +467,13 @@ with tab2:
             #print(f"ATM {atm_tax} minus estimated {pd_tax_amount} is {fincome_tax}")
             fcg_tax=f"${cg_tax:,.2f}"
             froth_conv_tax=f"${conversion_tax:,.2f}"
-            if 0 == (cg_income_lt+cg_income_st+interest):
+            if 0 == (wages+cg_income_lt+cg_income_st+interest):
                 state_tax=0
                 quarterly_state_tax=0
             else: 
                  #print(f"state tax = {(cg_income_lt+cg_income_st+interest)}") 
                 #print(f"LTCG: {cg_income_lt} STCG: {cg_income_st} interest: {interest}")  
-                state_tax=((cg_income_lt+cg_income_st+interest)*0.03 )
+                state_tax=((wages+cg_income_lt+cg_income_st+interest)*0.03 )
                 quarterly_state_tax=state_tax/4
             fstate_tax=f"${state_tax:,.2f}"
             fquarterly_state_tax=f"${quarterly_state_tax:,.2f}"
@@ -519,10 +582,10 @@ with tab3:
     
     map_tab,details_tab,update_tab = st.tabs(["Map Of Portfolio", "Details", "Update Securities"])
     with map_tab:
-        st.markdown('#### Account Mix Breakdown')
+        st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
 
         portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector', 'Ticker'],
-            values='Current value',color='Current value', color_continuous_scale='tealrose',color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
+            values='Current value',color='Current value', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
                     #values='Current value',color='Current value', title="")
         portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
         portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
@@ -561,7 +624,7 @@ with tab3:
         },hide_index=True)
 
     with update_tab:  
-        st.title('Editable Data Entry Table')
+        st.title('Editable Data Entry Table(not functional - roadmap)')
 
         initial_data = pd.DataFrame(getPortfolioData())
         st.markdown("### Update Data Below")

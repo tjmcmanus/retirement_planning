@@ -140,7 +140,7 @@ def calculate_atm(total_income,cap_gains,atmdf):
         if income >= lower and income <= upper: 
             tax_owed [i] = round(income*rate,0)
             lowerby = income-lower
-            print(f"Income is ${income:.2f} which is above ${lower:,.2f} tween Rate is {rate:.0%}: Tax is ${tax_owed [i]:.2f}")
+           # print(f"Income is ${income:.2f} which is above ${lower:,.2f} tween Rate is {rate:.0%}: Tax is ${tax_owed [i]:.2f}")
         tax += tax_owed[i]
     #print(f"tax owed ${tax:,.2f}")
     #print(f"Lowerby is {lowerby}")
@@ -211,20 +211,45 @@ def calculate_irmma_penalty(income, irmaa_range, people):
 def calculate_cap_gains(income, cg_range, cg_income):
     # Create an array of zeros with the same length as the number of tax brackets
     tax_owed = np.zeros(len(cg_range))
+    #tobetaxed = np.zeros(len(cg_range))
     # Calculate tax owed for each bracket
+    #\print(f"Income {income} cg_income {cg_income}")
+    
+    agi=income+cg_income
     tax=0
+    tobetaxed=0
+    #print(f"agi {agi} tax {tax} tobetaxed {tobetaxed}")
     for i, (lower, upper, rate) in enumerate(cg_range[['lower', 'upper', 'rate']].values):
           amount=0
           if cg_income <= 0:
+             # print(f"cg_income {cg_income}")
               tax_owed[i] = 0
-          elif income+cg_income<lower:
+          elif agi<lower:
+              #print(f"AGI is {agi}")
+             # print(f"AGI is {agi} lowwer {lower}  rate {rate}")
               tax_owed[i] = 0
-          elif income+cg_income >= lower and income <= upper: 
-              tax_owed[i] = round(cg_income * rate,0)
-          elif income+cg_income >= upper:      
-              tax_owed[i] = 0
+          elif agi >= lower and agi <= upper: 
+              #print(f"Middle AGI is {agi} lowwer {lower} upper {upper} rate {rate}")
+              taxed_cg=agi-lower-income
+              tobetaxed=cg_income-taxed_cg
+              tax_owed[i] = round((cg_income) * rate,0)
               
+              #print(f"agi {agi} tax {tax} cg_income {cg_income} tobetaxed {tobetaxed} and tax_owed[i] {tax_owed[i]}")
+              
+          elif agi >= upper:  
+             # print(f"Upper AGI is {agi} lowwer {lower} upper {upper} rate {rate}")
+              if income > upper:
+                  tax_owed[i] = 0
+                  tobetaxed=cg_income
+              else:
+                  taxed_cg=upper-income
+                  tobetaxed=cg_income-taxed_cg
+                  tax_owed[i] = round((taxed_cg) * rate,0)
+                 # print(f"agi {agi} tax {tax} taxed_cg {taxed_cg} tobetaxed {tobetaxed} and tax_owed[i] {tax_owed[i]}")
+              
+          cg_income = tobetaxed
           tax += tax_owed[i]
+          #print(f"total tax  ${tax}  Tax Rate ${rate}  Income  ${income} Upper Range ${upper} , CG Amount ${cg_income} to be taxed {tobetaxed} Tax Calculated  ${tax_owed[i]}")
           #print(f"total tax  ${tax}  Tax Rate ${rate}  Income  ${income} Upper Range ${upper} , CG Amount ${cg_income} Tax Calculated  ${tax_owed[i]}")
 
     return tax

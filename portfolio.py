@@ -27,7 +27,7 @@ def get_current_price(symbol):
 def get_qty(symbol):
     df = getPortfolioData()
     quanity = df.loc[df['symbol'] == symbol, 'qty'].iloc[0]
-    print("quanity price is: {quanity}")
+    #print(f"quantity is: {quanity}")
     return quanity
 
 #@st.cache_data()
@@ -117,7 +117,7 @@ def loadPortfolio():
    return portfoliodf
 
 def get_portfolio_filename():
-    filename=f"portfolio.csv"
+    filename=f"portfolio_sample.csv"
     return filename
   
 @st.cache_data() 

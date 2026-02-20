@@ -57,21 +57,21 @@ def get_net_worth(ret_date):
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
 def load_net_worth():
-   networth_data =pd.read_csv('financial_data.csv')
+   networth_data =pd.read_csv('financial_data_sample.csv')
    return  networth_data
 
 #@st.cache_data()
 def load_financial_accounts():
-   account_data =pd.read_csv('financial_account.csv')
+   account_data =pd.read_csv('financial_account_sample.csv')
    return  account_data
 
 def get_month_account_values(month, year):
    account_data =load_financial_accounts()
-   print(account_data)
+   #print(account_data)
    ytd_spend = account_data[account_data['year']==year]
-   print(ytd_spend)
+   #print(ytd_spend)
    mtd_spend = ytd_spend[ytd_spend['month']== month]
-   print(mtd_spend)
+   #print(mtd_spend)
    return mtd_spend
 
 def load_ssi_data():
