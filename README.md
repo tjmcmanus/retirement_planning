@@ -130,7 +130,7 @@ The application requires the following CSV files in the root directory:
 
 #### Alternative Minimum Tax (AMT)
 - **`atm.csv`**: Alternative Minimum Tax parameters
-  - Columns: `year`, `deduction`, `lower`, `upper`, `phase_out`, `rate`, `execption_rate`
+  - Columns: `year`, `deduction`, `lower`, `upper`, `phase_out`, `rate`, `exception_rate`
   - **Official Resources:**
     - [IRS AMT Overview](https://www.irs.gov/taxtopics/tc556)
     - [IRS Form 6251 Instructions](https://www.irs.gov/forms-pubs/about-form-6251)

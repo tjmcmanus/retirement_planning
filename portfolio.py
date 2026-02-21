@@ -7,14 +7,14 @@ import pandas as pd
 import streamlit as st
 import os
 from datetime import datetime
+from load_data import get_portfolio_truth_by_month
 
 def color_negative_positive(value):
     """
     Colors the text red if the value is negative, and green if positive or zero.
     """
     if isinstance(value, (int, float)):
-        color = 'red' if value < 0 else 'green'
-        return f'color: {color}'
+        return 'color: red' if value < 0 else 'color: green'
     return ''
 
 @st.cache_data()
@@ -120,13 +120,33 @@ def get_portfolio_filename():
     filename=f"portfolio_sample.csv"
     return filename
   
-@st.cache_data() 
-def getPortfolioData():
-    portdf = loadPortfolio()
-    selected_columns = ['account_type','symbol', 'name','sector', 'qty', 'purchase_price']
+@st.cache_data()
+def getPortfolioData(month=None, year=None):
+    """
+    Get portfolio data for a specific month and year.
+    If month/year not provided, defaults to current month/year.
+    
+    Args:
+        month (int, optional): Month number (1-12). Defaults to current month.
+        year (int, optional): Year (e.g., 2025, 2026). Defaults to current year.
+    
+    Returns:
+        pd.DataFrame: Portfolio data with columns: account_type, symbol, name, sector, qty, purchase_price
+    """
+    # Use current month/year if not provided
+    if month is None or year is None:
+        now = datetime.now()
+        month = month or now.month
+        year = year or now.year
+    
+    # Get portfolio data from the truth dataset
+    portdf = get_portfolio_truth_by_month(month, year)
+    
+    # Select the required columns (same as before for backward compatibility)
+    selected_columns = ['account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price']
     df_selected = portdf[selected_columns]
     #print(df_selected)
-    return df_selected  
+    return df_selected
 
 def get_entry_in_portfolio(symbol):
     try:
@@ -154,17 +174,20 @@ def get_list_of_tickers():
         
     return comma_separated_list
     
-@st.cache_data()   
+@st.cache_data()
 def build_portfolio_display():
     getPortfolioData()
     results = get_list_of_tickers()
+    
+    # Initialize python_list_of_values to avoid unbound variable error
+    python_list_of_values = []
+    
     if isinstance(results, str) and not results.startswith("Error"):
         # Split the resulting string back into a list if needed for further Python operations
-        python_list_of_values_unsorted = results.split(', ') 
-        python_list_of_values=sorted(python_list_of_values_unsorted)
+        python_list_of_values_unsorted = results.split(', ')
+        python_list_of_values = sorted(python_list_of_values_unsorted)
         #print(python_list_of_values)
-        
-    df_list = []
+    
     portdf = pd.DataFrame(columns=['Tax Type','Ticker', 'Name','Sector', 'Quantity', 'Price', "Current value", "Cost Basis","Net Return","Dividend date","Dividend Amount","annual dividend amount","dividend yield"])
     
     for ticker in python_list_of_values:
