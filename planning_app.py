@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from streamlit_card import card
 from streamlit_extras.metric_cards import style_metric_cards 
 from streamlit_extras.add_vertical_space import add_vertical_space
-from load_data import get_month_account_values,load_financial_accounts,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, load_net_worth
+from load_data import get_month_account_values,load_financial_accounts,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
 from income_expense import build_income_expenses_display,calculate_taxes
@@ -28,10 +28,78 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 
 def clear_submit():
     st.session_state["submit"] = False
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def build_historical_networth(num_months=12):
+    """
+    Build historical net worth DataFrame using get_networth_by_month.
     
+    Args:
+        num_months: Number of months of historical data to fetch (default: 12)
+    
+    Returns:
+        pd.DataFrame: Historical net worth with columns: date, cash, taxable, tax_deferred, tax_free, total
+    """
+    currentDate = datetime.date.today()
+    curr_year = currentDate.year
+    curr_month = currentDate.month
+    
+    # Build list of (month, year) tuples for the last num_months
+    months_data = []
+    for i in range(num_months, 0, -1):
+        # Calculate month and year going backwards
+        target_month = curr_month - i + 1
+        target_year = curr_year
+        
+        # Handle year rollover
+        while target_month <= 0:
+            target_month += 12
+            target_year -= 1
+        
+        months_data.append((target_month, target_year))
+    
+    # Fetch net worth for each month
+    networth_rows = []
+    for month, year in months_data:
+        try:
+            _, summary_df = get_networth_by_month(month, year)
+            
+            if not summary_df.empty:
+                # Extract values by account_type
+                cash = summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum()
+                taxable = summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum()
+                tax_deferred = summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum()
+                tax_free = summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum()
+                
+                # Get total (excluding the 'Total' row to avoid double counting)
+                total = summary_df[summary_df['account_type'] != 'Total']['market_value'].sum()
+                
+                # Create date string (using first day of month for consistency)
+                date_str = f"{month:02d}/01/{year}"
+                
+                networth_rows.append({
+                    'date': date_str,
+                    'cash': cash,
+                    'taxable': taxable,
+                    'tax_deferred': tax_deferred,
+                    'tax_free': tax_free,
+                    'total': total
+                })
+        except Exception as e:
+            st.warning(f"Could not fetch data for {month}/{year}: {e}")
+            continue
+    
+    # Create DataFrame
+    if networth_rows:
+        networth_df = pd.DataFrame(networth_rows)
+        return networth_df
+    else:
+        # Return empty DataFrame with correct structure if no data
+        return pd.DataFrame(columns=['date', 'cash', 'taxable', 'tax_deferred', 'tax_free', 'total'])
+
 currentDate = datetime.date.today()
 curr_year = currentDate.year
-curr_month = currentDate.month    
+curr_month = currentDate.month
 
 st.header("Retirement planner")
 ##############################################################################################
@@ -43,13 +111,20 @@ sidebar()
 
 tab1, tab2, tab3, tab4 = st.tabs(["Dashboard","Tax planner", "Portfolio planner", "Retirement planner"])
 with tab1:
-   networth = load_net_worth()
+   # Build historical net worth using optimized portfolio truth data
+   networth = build_historical_networth(num_months=12)
+   
+   # Check if we have enough data
+   if networth.empty or len(networth) < 2:
+       st.error("Insufficient historical data. Need at least 2 months of portfolio data.")
+       st.stop()
+   
    color_palette = px.colors.qualitative.Pastel
    cg_income_lt=0
    cg_income_st=0
    interest=0
    agi=0
-   col1row3, col1row4, col1row5, col1row6,col1row7 = st.columns(5) 
+   col1row3, col1row4, col1row5, col1row6,col1row7 = st.columns(5)
    with col1row3:
        st.header(" ")
        cash_value=networth["cash"].values[-1]
@@ -242,8 +317,8 @@ with tab1:
        mtd_spend = get_month_account_values(curr_month,curr_year)
        #print(mtd_spend)
       # monthly_balance = account_data.iloc[-1,1:15] # Select the first row
-       fig_mtd_spend_by_cateogry = px.treemap(mtd_spend, path=['type','account'],
-                     values='amount',color='amount', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(mtd_spend['amount'], weights=mtd_spend['amount']), title="")
+       fig_mtd_spend_by_cateogry = px.treemap(mtd_spend, path=['account_type','account_name'],
+                     values='market_value',color='market_value', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']), title="")
        fig_mtd_spend_by_cateogry.data[0].textinfo = "label+text+value+percent root"
 
        #fig_mtd_spend_by_cateogry.update_layout(margin=dict(l=0,r=0,t=0,b=0))

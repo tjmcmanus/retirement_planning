@@ -1,4 +1,4 @@
-year,deduction,lower,upper,phase_out,rate,execption_rate
+year,deduction,lower,upper,phase_out,rate,exception_rate
 2025,137000,0,239100,1252700,0.26,0.25
 2025,137000,239100,12000000,1252700,0.28,0.25
 2026,137000,0,239100,1000000,0.26,0.50
