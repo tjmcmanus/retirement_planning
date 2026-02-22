@@ -6,7 +6,11 @@ Allows users to view and edit application constants and preferences.
 import streamlit as st
 from datetime import datetime
 import json
+import pandas as pd
+import os
+import shutil
 from config import get_config_manager, reload_config
+from portfolio_data_entry import validate_portfolio_dataframe, VALID_ACCOUNT_TYPES, VALID_SECTORS
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
 
@@ -17,12 +21,13 @@ st.title("⚙️ Retirement Planning Configuration")
 st.markdown("Configure your personal information, financial assumptions, and planning parameters.")
 
 # Create tabs for different configuration sections
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "👤 Personal Info",
     "💰 Financial Assumptions",
     "🏥 Healthcare",
     "📊 Social Security",
     "📈 Tax Strategy",
+    "📊 Portfolio Data",
     "🔧 Advanced"
 ])
 
@@ -318,8 +323,237 @@ with tab5:
             key="planned_distribution_2027"
         )
 
-# Advanced Tab
+# Portfolio Data Tab
 with tab6:
+    st.header("Portfolio Data Configuration")
+    st.markdown("Enter your portfolio holdings. This data will be saved to `portfolio_data_truth.csv`.")
+    
+    # Accounts Section
+    st.subheader("📋 Account Configuration")
+    st.markdown("Define your investment accounts. These will be available when entering portfolio holdings.")
+    
+    # Initialize session state for accounts
+    if 'accounts_list' not in st.session_state:
+        # Try to load from config or use defaults
+        st.session_state['accounts_list'] = config_mgr.get("portfolio_accounts", "accounts", [
+            {"account_name": "Schwab", "account_type": "Roth"},
+            {"account_name": "Fidelity", "account_type": "Traditional"},
+            {"account_name": "Vanguard", "account_type": "Brokerage"}
+        ])
+    
+    # Display accounts in a data editor
+    accounts_df = pd.DataFrame(st.session_state['accounts_list'])
+    if accounts_df.empty:
+        accounts_df = pd.DataFrame(columns=['account_name', 'account_type'])
+    
+    col_acc1, col_acc2, col_acc3 = st.columns([2, 1, 1])
+    
+    with col_acc1:
+        st.markdown("**Your Accounts:**")
+    
+    with col_acc2:
+        if st.button("➕ Add Account", use_container_width=True, key="add_account_btn"):
+            new_account = pd.DataFrame({
+                'account_name': ['New Account'],
+                'account_type': ['Brokerage']
+            })
+            accounts_df = pd.concat([accounts_df, new_account], ignore_index=True)
+            st.session_state['accounts_list'] = accounts_df.to_dict('records')
+            st.rerun()
+    
+    with col_acc3:
+        if st.button("💾 Save Accounts", use_container_width=True, key="save_accounts_btn"):
+            config_mgr.update_section("portfolio_accounts", {
+                "accounts": st.session_state['accounts_list']
+            })
+            if config_mgr.save_config():
+                st.success("✅ Accounts saved!")
+            else:
+                st.error("❌ Error saving accounts")
+    
+    # Configure column settings for accounts editor
+    accounts_column_config = {
+        'account_name': st.column_config.TextColumn('Account Name', required=True, help="Name of your investment account"),
+        'account_type': st.column_config.SelectboxColumn('Account Type', options=VALID_ACCOUNT_TYPES, required=True, help="Type of account")
+    }
+    
+    # Display editable accounts dataframe
+    edited_accounts_df = st.data_editor(
+        accounts_df,
+        column_config=accounts_column_config,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="accounts_editor"
+    )
+    
+    # Update session state with edited accounts
+    st.session_state['accounts_list'] = edited_accounts_df.to_dict('records')
+    
+    st.markdown("---")
+    
+    # Initialize session state for portfolio data
+    if 'portfolio_df' not in st.session_state:
+        # Try to load existing data
+        if os.path.exists('portfolio_data_truth.csv'):
+            try:
+                st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
+            except Exception as e:
+                st.error(f"Error loading portfolio data: {e}")
+                st.session_state['portfolio_df'] = pd.DataFrame(columns=[
+                    'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+                ])
+        else:
+            st.session_state['portfolio_df'] = pd.DataFrame(columns=[
+                'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+            ])
+    
+    # File management buttons
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📂 Load Current Data", use_container_width=True):
+            if os.path.exists('portfolio_data_truth.csv'):
+                try:
+                    st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
+                    st.success(f"Loaded {len(st.session_state['portfolio_df'])} rows from portfolio_data_truth.csv")
+                except Exception as e:
+                    st.error(f"Error loading data: {e}")
+            else:
+                st.warning("portfolio_data_truth.csv not found")
+    
+    with col2:
+        if st.button("➕ Add Empty Row", use_container_width=True):
+            new_row = pd.DataFrame({
+                'month': [datetime.now().month],
+                'year': [datetime.now().year],
+                'account_name': [''],
+                'account_type': ['Brokerage'],
+                'symbol': [''],
+                'name': [''],
+                'sector': [''],
+                'qty': [0.0],
+                'purchase_price': [0.0]
+            })
+            st.session_state['portfolio_df'] = pd.concat([st.session_state['portfolio_df'], new_row], ignore_index=True)
+            st.rerun()
+    
+    with col3:
+        if st.button("🗑️ Clear All", use_container_width=True):
+            st.session_state['portfolio_df'] = pd.DataFrame(columns=[
+                'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+            ])
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Display data editor
+    st.subheader("Portfolio Holdings")
+    
+    # Configure column settings for the data editor
+    column_config = {
+        'month': st.column_config.NumberColumn('Month', min_value=1, max_value=12, step=1, required=True),
+        'year': st.column_config.NumberColumn('Year', min_value=2000, max_value=2100, step=1, required=True),
+        'account_name': st.column_config.TextColumn('Account Name', required=True),
+        'account_type': st.column_config.SelectboxColumn('Account Type', options=VALID_ACCOUNT_TYPES, required=True),
+        'symbol': st.column_config.TextColumn('Symbol', required=True),
+        'name': st.column_config.TextColumn('Name', required=True),
+        'sector': st.column_config.SelectboxColumn('Sector', options=VALID_SECTORS, required=True),
+        'qty': st.column_config.NumberColumn('Quantity', min_value=0, step=0.01, format="%.2f", required=True),
+        'purchase_price': st.column_config.NumberColumn('Purchase Price', min_value=0, step=0.01, format="%.2f", required=True)
+    }
+    
+    # Display editable dataframe
+    edited_df = st.data_editor(
+        st.session_state['portfolio_df'],
+        column_config=column_config,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="portfolio_editor"
+    )
+    
+    # Update session state with edited data
+    st.session_state['portfolio_df'] = edited_df
+    
+    st.markdown("---")
+    
+    # Save section
+    st.subheader("Save Portfolio Data")
+    
+    col_save1, col_save2 = st.columns(2)
+    
+    with col_save1:
+        st.info(f"**Current rows:** {len(edited_df)}")
+        
+        # Validate data before saving
+        if len(edited_df) > 0:
+            valid_df, invalid_df = validate_portfolio_dataframe(edited_df)
+            
+            if len(invalid_df) > 0:
+                st.warning(f"⚠️ {len(invalid_df)} rows have validation errors")
+                with st.expander("View Validation Errors"):
+                    st.dataframe(invalid_df[['month', 'year', 'symbol', 'validation_error']], use_container_width=True)
+            
+            if len(valid_df) > 0:
+                st.success(f"✅ {len(valid_df)} rows are valid and ready to save")
+    
+    with col_save2:
+        if st.button("💾 Save Portfolio Data", type="primary", use_container_width=True, disabled=len(edited_df) == 0):
+            # Validate the data
+            valid_df, invalid_df = validate_portfolio_dataframe(edited_df)
+            
+            if len(invalid_df) > 0:
+                st.error(f"Cannot save: {len(invalid_df)} rows have validation errors. Please fix them first.")
+            elif len(valid_df) == 0:
+                st.error("No valid data to save")
+            else:
+                try:
+                    # Create backup of existing file
+                    if os.path.exists('portfolio_data_truth.csv'):
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        backup_name = f'portfolio_data_sample.csv'
+                        shutil.copy2('portfolio_data_truth.csv', backup_name)
+                        st.info(f"✅ Backed up existing data to {backup_name}")
+                    
+                    # Save the new data
+                    valid_df.to_csv('portfolio_data_truth.csv', index=False)
+                    st.success(f"✅ Successfully saved {len(valid_df)} rows to portfolio_data_truth.csv")
+                    st.balloons()
+                    
+                except Exception as e:
+                    st.error(f"Error saving portfolio data: {e}")
+    
+    # Display sample data format
+    with st.expander("📋 View Sample Data Format"):
+        st.markdown("""
+        **Required Columns:**
+        - `month`: Month (1-12)
+        - `year`: Year (e.g., 2026)
+        - `account_name`: Name of the account (e.g., "Fidelity", "Schwab")
+        - `account_type`: Type of account (Cash, Brokerage, Traditional, Roth)
+        - `symbol`: Ticker symbol (e.g., "AAPL", "MF:CASH")
+        - `name`: Security name (e.g., "Apple Inc.", "Money Market")
+        - `sector`: Sector classification
+        - `qty`: Quantity/shares owned
+        - `purchase_price`: Purchase price per share
+        """)
+        
+        sample_data = pd.DataFrame({
+            'month': [1, 1],
+            'year': [2026, 2026],
+            'account_name': ['Schwab', 'Fidelity'],
+            'account_type': ['Brokerage', 'Traditional'],
+            'symbol': ['AAPL', 'MF:CASH'],
+            'name': ['Apple Inc.', 'Money Market'],
+            'sector': ['Technology', 'MF:Cash'],
+            'qty': [100.0, 50000.0],
+            'purchase_price': [150.0, 1.0]
+        })
+        st.dataframe(sample_data, use_container_width=True)
+
+# Advanced Tab
+with tab7:
     st.header("Advanced Settings")
     
     col1, col2 = st.columns(2)

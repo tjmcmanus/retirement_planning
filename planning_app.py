@@ -11,7 +11,7 @@ from load_data import get_month_account_values,get_cap_gains_brackets, get_incom
 from withdrawal_strategy import build_withdrawal_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
-from portfolio_data_entry import validate_ticker_symbol, validate_portfolio_dataframe, save_portfolio_data, create_empty_entry_template, load_previous_month_data
+from portfolio_data_entry import validate_ticker_symbol, validate_portfolio_dataframe, save_portfolio_data, create_empty_entry_template, load_previous_month_data, start_from_scratch, revert_to_last_backup
 from income_expense import build_income_expenses_display,calculate_taxes
 from components.sidebar import sidebar
 st.set_page_config(page_title="Retirement Planner", page_icon="😊", layout="wide")
@@ -530,17 +530,17 @@ with tab3:
                 )
             },
             hide_index=True,
-            use_container_width=True
+            width='stretch'
         )
         
         # Update session state
         st.session_state.portfolio_entries = edited_df
         
         # Action buttons
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
-            if st.button('🔍 Validate & Lookup Tickers', type="primary", use_container_width=True):
+            if st.button('🔍 Validate & Lookup Tickers', type="primary", width='stretch'):
                 with st.spinner("Validating ticker symbols with Yahoo Finance..."):
                     # Filter out empty rows
                     non_empty_df = edited_df[edited_df['symbol'].str.strip() != ''].copy()
@@ -579,7 +579,7 @@ with tab3:
                         # Display validation results
                         st.markdown("### Validation Results")
                         results_df = pd.DataFrame(validation_results)
-                        st.dataframe(results_df, use_container_width=True, hide_index=True)
+                        st.dataframe(results_df, width='stretch', hide_index=True)
                         
                         # Check if all valid
                         invalid_count = sum(1 for r in validation_results if '❌' in r['Status'])
@@ -589,7 +589,7 @@ with tab3:
                             st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
         
         with col2:
-            if st.button('💾 Save to CSV', type="secondary", use_container_width=True):
+            if st.button('💾 Save to CSV', type="secondary", width='stretch'):
                 # Filter out empty rows
                 non_empty_df = edited_df[edited_df['symbol'].str.strip() != ''].copy()
                 
@@ -601,7 +601,7 @@ with tab3:
                     
                     if not invalid_df.empty:
                         st.error(f"❌ Found {len(invalid_df)} invalid entries. Please fix errors before saving:")
-                        st.dataframe(invalid_df[['symbol', 'account_name', 'validation_error']], use_container_width=True, hide_index=True)
+                        st.dataframe(invalid_df[['symbol', 'account_name', 'validation_error']], width='stretch', hide_index=True)
                     elif valid_df.empty:
                         st.warning("No valid entries to save.")
                     else:
@@ -624,16 +624,74 @@ with tab3:
                             st.error(f"❌ {message}")
         
         with col3:
-            if st.button('🔄 Reload Previous Month', use_container_width=True):
+            if st.button('🔄 Reload Previous Month', width='stretch'):
                 st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
                 st.rerun()
+        
+        with col4:
+            if st.button('🆕 Start from Scratch', type="secondary", width='stretch'):
+                # Show confirmation dialog
+                if 'confirm_scratch' not in st.session_state:
+                    st.session_state.confirm_scratch = False
+                
+                if not st.session_state.confirm_scratch:
+                    st.session_state.confirm_scratch = True
+                    st.warning("⚠️ This will backup your current data and create a blank file. Click again to confirm.")
+                    st.rerun()
+                else:
+                    with st.spinner("Creating backup and blank file..."):
+                        success, message = start_from_scratch()
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.info("🔄 Refreshing data...")
+                            
+                            # Clear caches and reset
+                            st.cache_data.clear()
+                            st.session_state.portfolio_entries = create_empty_entry_template(entry_month, entry_year)
+                            st.session_state.confirm_scratch = False
+                            
+                            # Force refresh
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                            st.session_state.confirm_scratch = False
+        
+        with col5:
+            if st.button('⏮️ Revert to Last Backup', type="secondary", width='stretch'):
+                # Show confirmation dialog
+                if 'confirm_revert' not in st.session_state:
+                    st.session_state.confirm_revert = False
+                
+                if not st.session_state.confirm_revert:
+                    st.session_state.confirm_revert = True
+                    st.warning("⚠️ This will restore the most recent backup. Click again to confirm.")
+                    st.rerun()
+                else:
+                    with st.spinner("Reverting to last backup..."):
+                        success, message = revert_to_last_backup()
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.info("🔄 Refreshing data...")
+                            
+                            # Clear caches and reload
+                            st.cache_data.clear()
+                            st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
+                            st.session_state.confirm_revert = False
+                            
+                            # Force refresh
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                            st.session_state.confirm_revert = False
         
         # Display current data preview
         st.markdown("---")
         st.markdown("### Current Entries Preview")
         non_empty_preview = edited_df[edited_df['symbol'].str.strip() != '']
         if not non_empty_preview.empty:
-            st.dataframe(non_empty_preview, use_container_width=True, hide_index=True)
+            st.dataframe(non_empty_preview, width='stretch', hide_index=True)
         else:
             st.info("No entries yet. Add rows above to get started.")
         
@@ -808,7 +866,7 @@ with tab5:
                 "IRMAA Penalty": st.column_config.NumberColumn("IRMAA Penalty", format="$%,.0f")
             }
             
-            st.dataframe(display_df, column_config=column_config, hide_index=True, use_container_width=True)
+            st.dataframe(display_df, column_config=column_config, hide_index=True, width='stretch')
         
         with balances_tab:
             st.subheader("Account Balances Over Time")
@@ -824,7 +882,7 @@ with tab5:
                 "Total Portfolio": st.column_config.NumberColumn("Total Portfolio", format="$%,.0f")
             }
             
-            st.dataframe(balances_df, column_config=balance_column_config, hide_index=True, use_container_width=True)
+            st.dataframe(balances_df, column_config=balance_column_config, hide_index=True, width='stretch')
         
         with charts_tab:
             st.subheader("Portfolio Balance Projections")
@@ -877,7 +935,7 @@ with tab5:
                 paper_bgcolor='white'
             )
             
-            st.plotly_chart(fig_balances, use_container_width=True)
+            st.plotly_chart(fig_balances, width='stretch')
             
             # Create income sources chart
             if 'Total Income' in strategy_df.columns:
@@ -919,7 +977,7 @@ with tab5:
                     paper_bgcolor='white'
                 )
                 
-                st.plotly_chart(fig_income, use_container_width=True)
+                st.plotly_chart(fig_income, width='stretch')
     
     except Exception as e:
         st.error(f"Error calculating withdrawal strategy: {e}")

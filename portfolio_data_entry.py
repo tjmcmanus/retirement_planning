@@ -9,6 +9,9 @@ import streamlit as st
 from datetime import datetime
 from typing import Tuple, Optional
 import logging
+import os
+import shutil
+import glob
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -338,5 +341,132 @@ def load_previous_month_data(month: int, year: int) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error loading previous month data: {e}")
         return create_empty_entry_template(month, year)
+
+
+def backup_portfolio_data() -> Tuple[bool, str]:
+    """
+    Create a timestamped backup of the current portfolio_data_truth.csv file.
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    try:
+        if not os.path.exists(PORTFOLIO_TRUTH_FILE):
+            return False, f"{PORTFOLIO_TRUTH_FILE} does not exist - nothing to backup"
+        
+        # Create timestamp suffix
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"portfolio_data_truth_{timestamp}.csv"
+        
+        # Copy the file
+        shutil.copy2(PORTFOLIO_TRUTH_FILE, backup_filename)
+        
+        logger.info(f"Created backup: {backup_filename}")
+        return True, f"Backup created: {backup_filename}"
+        
+    except Exception as e:
+        logger.error(f"Error creating backup: {e}")
+        return False, f"Error creating backup: {str(e)}"
+
+
+def create_blank_portfolio_file() -> Tuple[bool, str]:
+    """
+    Create a blank portfolio_data_truth.csv file with only column headers.
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    try:
+        # Create DataFrame with just headers
+        blank_df = pd.DataFrame(columns=[
+            'month', 'year', 'account_name', 'account_type',
+            'symbol', 'name', 'sector', 'qty', 'purchase_price'
+        ])
+        
+        # Save to file
+        blank_df.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
+        
+        logger.info(f"Created blank {PORTFOLIO_TRUTH_FILE}")
+        return True, f"Created blank {PORTFOLIO_TRUTH_FILE} with column headers only"
+        
+    except Exception as e:
+        logger.error(f"Error creating blank file: {e}")
+        return False, f"Error creating blank file: {str(e)}"
+
+
+def start_from_scratch() -> Tuple[bool, str]:
+    """
+    Backup the current portfolio file and create a blank one.
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    # First, backup the existing file
+    backup_success, backup_msg = backup_portfolio_data()
+    
+    if not backup_success:
+        return False, backup_msg
+    
+    # Then create a blank file
+    blank_success, blank_msg = create_blank_portfolio_file()
+    
+    if not blank_success:
+        return False, f"{backup_msg}, but failed to create blank file: {blank_msg}"
+    
+    return True, f"{backup_msg}. {blank_msg}"
+
+
+def get_latest_backup() -> Optional[str]:
+    """
+    Find the most recent backup file.
+    
+    Returns:
+        Filename of the latest backup, or None if no backups exist
+    """
+    try:
+        # Find all backup files
+        backup_files = glob.glob("portfolio_data_truth_*.csv")
+        
+        if not backup_files:
+            return None
+        
+        # Sort by modification time (most recent first)
+        backup_files.sort(key=os.path.getmtime, reverse=True)
+        
+        return backup_files[0]
+        
+    except Exception as e:
+        logger.error(f"Error finding latest backup: {e}")
+        return None
+
+
+def revert_to_last_backup() -> Tuple[bool, str]:
+    """
+    Restore the portfolio_data_truth.csv from the most recent backup.
+    
+    Returns:
+        Tuple of (success, message)
+    """
+    try:
+        latest_backup = get_latest_backup()
+        
+        if not latest_backup:
+            return False, "No backup files found to revert to"
+        
+        # Backup current file before reverting (just in case)
+        if os.path.exists(PORTFOLIO_TRUTH_FILE):
+            temp_backup = f"portfolio_data_truth_before_revert_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            shutil.copy2(PORTFOLIO_TRUTH_FILE, temp_backup)
+            logger.info(f"Created safety backup before revert: {temp_backup}")
+        
+        # Copy backup to main file
+        shutil.copy2(latest_backup, PORTFOLIO_TRUTH_FILE)
+        
+        logger.info(f"Reverted to backup: {latest_backup}")
+        return True, f"Successfully reverted to backup: {latest_backup}"
+        
+    except Exception as e:
+        logger.error(f"Error reverting to backup: {e}")
+        return False, f"Error reverting to backup: {str(e)}"
 
 # Made with Bob
