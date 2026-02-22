@@ -3,31 +3,179 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
-from load_data import load_ssi_data,get_annual_ssi_data,get_std_deduction, get_income_tax_brackets,load_net_worth
+import logging
+import os
+from load_data import load_ssi_data,get_annual_ssi_data,get_std_deduction, get_income_tax_brackets,get_networth_by_month
 from calculations import calculate_taxable_income, calculate_std_deduction,get_rmd_value
 from ssibenefits import get_monthly_benefit,get_age, get_claiming_age,get_year
 
+# Configure logging to match calculations.py pattern
+log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
-def calculate_taxes(income,daf,year):
-    stddectdf = get_std_deduction(year)
-   # print(stddectdf)
-    taxratedf = get_income_tax_brackets(year)
-    std_dect = calculate_std_deduction(income,stddectdf)
-    #print(std_dect)
-    agi=(income-std_dect)-daf
-    taxes,maxrate,uppermax = calculate_taxable_income(agi,taxratedf)
-    return taxes
+# Distribution configuration constants
+YEAR_2026_CONVERSION = 100000
+YEAR_2027_DAF_RATIO = 0.33
+PRE_SSI_CONVERSION = 375000
+
+
+def _calculate_year_distributions(year: int, ssi_year: int,
+                                  planned_dist_2027: float,
+                                  convert_at: int) -> tuple:
+    """
+    Calculate planned distributions, DAF contributions, and conversions for a given year.
+    
+    Args:
+        year: The year to calculate distributions for
+        ssi_year: The year SSI benefits begin
+        planned_dist_2027: Planned distribution amount for 2027
+        convert_at: Conversion amount to use at SSI age
+        
+    Returns:
+        tuple: (planned_dist, daf, conversions) as floats
+        
+    Raises:
+        ValueError: If ssi_year <= 2027
+    """
+    # Input validation
+    if year < 2026:
+        logger.warning(f"Year {year} is before 2026, returning zero distributions")
+        return (0.0, 0.0, 0.0)
+    
+    if ssi_year <= 2027:
+        logger.error(f"Invalid ssi_year {ssi_year}, must be > 2027")
+        raise ValueError(f"ssi_year must be greater than 2027, got {ssi_year}")
+    
+    # Year-specific distribution logic
+    if year == 2026:
+        return (0.0, 0.0, float(YEAR_2026_CONVERSION))
+    
+    if year == 2027:
+        daf = planned_dist_2027 * YEAR_2027_DAF_RATIO
+        return (planned_dist_2027, daf, 0.0)
+    
+    if 2027 < year < ssi_year:
+        return (0.0, 0.0, float(PRE_SSI_CONVERSION))
+    
+    # Default case: year >= ssi_year
+    return (0.0, 0.0, float(convert_at))
+
+
+def calculate_taxes(income, daf, year):
+    """
+    Calculate taxes based on income, donor advised fund contributions, and year.
+    
+    Args:
+        income: Total taxable income
+        daf: Donor Advised Fund contribution amount
+        year: Tax year for calculation
+        
+    Returns:
+        float: Calculated tax amount (returns 0.0 on error)
+        
+    Raises:
+        No exceptions raised - errors are logged and 0.0 is returned
+    """
+    try:
+        logger.debug(f"calculate_taxes inputs: income={income:,.2f}, daf={daf:,.2f}, year={year}")
+        
+        # Validate inputs
+        if income < 0:
+            logger.warning(f"Negative income provided: {income:,.2f}, setting to 0")
+            income = 0
+        
+        if daf < 0:
+            logger.warning(f"Negative DAF provided: {daf:,.2f}, setting to 0")
+            daf = 0
+            
+        if not isinstance(year, int) or year < 1900 or year > 2100:
+            logger.error(f"Invalid year provided: {year}, must be integer between 1900-2100")
+            return 0.0
+        
+        # Get standard deduction data
+        stddectdf = get_std_deduction(year)
+        if stddectdf is None or stddectdf.empty:
+            logger.error(f"Failed to retrieve standard deduction data for year {year}")
+            return 0.0
+        logger.debug(f"Retrieved standard deduction data for year {year}")
+        
+        # Get tax bracket data
+        taxratedf = get_income_tax_brackets(year)
+        if taxratedf is None or taxratedf.empty:
+            logger.error(f"Failed to retrieve tax brackets for year {year}")
+            return 0.0
+        logger.debug(f"Retrieved tax bracket data for year {year}")
+        
+        # Calculate standard deduction
+        std_dect = calculate_std_deduction(income, stddectdf)
+        logger.debug(f"Standard deduction calculated: {std_dect:,.2f}")
+        
+        # Calculate AGI
+        agi = (income - std_dect) - daf
+        logger.debug(f"AGI calculated: {agi:,.2f} (income={income:,.2f} - std_dect={std_dect:,.2f} - daf={daf:,.2f})")
+        
+        # Calculate taxes
+        taxes, maxrate, uppermax = calculate_taxable_income(agi, taxratedf)
+        logger.debug(f"Taxes calculated: {taxes:,.2f}, maxrate={maxrate}, uppermax={uppermax:,.2f}")
+        
+        return taxes
+        
+    except TypeError as e:
+        logger.error(f"Type error in calculate_taxes: {e}. Inputs - income: {income}, daf: {daf}, year: {year}")
+        return 0.0
+    except ValueError as e:
+        logger.error(f"Value error in calculate_taxes: {e}. Inputs - income: {income}, daf: {daf}, year: {year}")
+        return 0.0
+    except KeyError as e:
+        logger.error(f"Key error in calculate_taxes (missing data): {e}. Year: {year}")
+        return 0.0
+    except Exception as e:
+        logger.error(f"Unexpected error in calculate_taxes: {type(e).__name__}: {e}. Inputs - income: {income}, daf: {daf}, year: {year}")
+        return 0.0
 
 def build_income_expenses_display():
     #getPortfolioData()
     cash=0
     tax_free=0
     current_year = datetime.date.today().year
-    networth = load_net_worth()
-    cash_in=networth["cash"].values[-1]
-    brokerage=networth["taxable"].values[-1]
-    trad_value=networth["tax_deferred"].values[-1]
-    tax_free_in =networth["tax_free"].values[-1]
+    # Load current net worth data using get_networth_by_month (replaces deprecated load_net_worth)
+    try:
+        # Get current month and year for latest portfolio values
+        current_month = datetime.date.today().month
+        
+        # Get net worth with current market prices
+        detailed_df, summary_df = get_networth_by_month(current_month, current_year)
+        
+        # Validate summary DataFrame is not empty
+        if summary_df.empty:
+            logger.error(f"Net worth data is empty for {current_month}/{current_year}, using default values of 0")
+            cash_in = brokerage = trad_value = tax_free_in = 0.0
+        else:
+            # Extract values by account_type from summary DataFrame
+            # Using .get() with default 0.0 for safe access
+            cash_in = float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum())
+            brokerage = float(summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum())
+            trad_value = float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum())
+            tax_free_in = float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum())
+            
+            logger.debug(f"Loaded net worth for {current_month}/{current_year} - "
+                       f"Cash: ${cash_in:,.2f}, Brokerage: ${brokerage:,.2f}, "
+                       f"Traditional: ${trad_value:,.2f}, Tax-Free: ${tax_free_in:,.2f}")
+    
+    except ValueError as e:
+        logger.error(f"Invalid date parameters for net worth: {e}. Using default values of 0")
+        cash_in = brokerage = trad_value = tax_free_in = 0.0
+    except RuntimeError as e:
+        logger.error(f"Failed to load portfolio data: {e}. Using default values of 0")
+        cash_in = brokerage = trad_value = tax_free_in = 0.0
+    except Exception as e:
+        logger.error(f"Unexpected error loading net worth: {type(e).__name__}: {e}. Using default values of 0")
+        cash_in = brokerage = trad_value = tax_free_in = 0.0
    
     
     # The end year (range() is exclusive of the stop value, so we use 2051 to include 2050)
@@ -72,23 +220,15 @@ def build_income_expenses_display():
        
        #print(ssi_year)
        convert_at = int(st.session_state["CONV_AMOUNT_AT_SSI_AGE"])
+       planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", "575000"))
        
-       if year == 2026:
-          planned_dist = 0
-          daf=0
-          conversions = 100000
-       elif year == 2027:
-          planned_dist = 575000
-          daf = planned_dist*0.33
-          conversions = 0
-       elif year >2027 and year < ssi_year:
-          planned_dist = 0
-          daf=0
-          conversions = 375000
-       else:
-           planned_dist = 0
-           daf=0
-           conversions = convert_at
+       # Calculate year-specific distributions using helper function
+       planned_dist, daf, conversions = _calculate_year_distributions(
+           year=year,
+           ssi_year=ssi_year,
+           planned_dist_2027=planned_dist_2027,
+           convert_at=convert_at
+       )
        
        rmd_distribution = get_rmd_value(t_age)
        if rmd_distribution > 0:

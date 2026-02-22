@@ -13,7 +13,7 @@ initial_data = pd.DataFrame(
         {"Name": "Bob", "Age": 45, "City": "Paris"},
         {"Name": "Charlie", "Age": 28, "City": "London"},
     ]
-)
+).reset_index(drop=True)
 
 # You can also start with an empty structure for new inputs:
 # initial_data = pd.DataFrame(columns=['Name', 'Age', 'City'])
