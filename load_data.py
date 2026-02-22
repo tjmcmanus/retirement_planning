@@ -181,6 +181,16 @@ def get_month_account_values(month, year):
 def load_ssi_data():
    ssi_data =pd.read_csv('ssincome.csv')
    return  ssi_data
+
+def load_rmd_data():
+    """
+    Load Required Minimum Distribution (RMD) data from CSV file.
+    
+    Returns:
+        DataFrame: RMD data with 'Age' and 'Distribution' columns
+    """
+    rmd_data = pd.read_csv('rmd.csv')
+    return rmd_data
 def get_annual_ssi_data(year):
    ssi_data = load_ssi_data()
    year_df = ssi_data[ssi_data['year']==year]
@@ -336,8 +346,8 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     # Initialize current_price with purchase_price as fallback
     detailed_df['current_price'] = detailed_df['purchase_price']
     
-    # Get unique non-CASH symbols
-    non_cash_mask = detailed_df['symbol'] != CASH_SYMBOL
+    # Get unique non-CASH symbols (handle both 'CASH' and 'MF:CASH')
+    non_cash_mask = ~detailed_df['symbol'].isin([CASH_SYMBOL, 'MF:CASH'])
     unique_symbols = detailed_df.loc[non_cash_mask, 'symbol'].unique().tolist()
     
     # Fetch all prices in one batch (MAJOR PERFORMANCE IMPROVEMENT)
@@ -358,8 +368,8 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
         except Exception as e:
             logger.warning(f"Error fetching current prices, using purchase prices as fallback: {e}")
     
-    # Set CASH to 1.0
-    detailed_df.loc[detailed_df['symbol'] == CASH_SYMBOL, 'current_price'] = CASH_PRICE
+    # Set CASH to 1.0 (handle both 'CASH' and 'MF:CASH')
+    detailed_df.loc[detailed_df['symbol'].isin([CASH_SYMBOL, 'MF:CASH']), 'current_price'] = CASH_PRICE
     
     # Calculate market_value = current_price * qty (vectorized operation)
     detailed_df['market_value'] = detailed_df['current_price'] * detailed_df['qty']
