@@ -15,6 +15,8 @@ The configuration system stores all settings in a JSON file (`retirement_config.
 - **Healthcare**: ACA insurance costs, Medicare start age
 - **Social Security**: Benefit start ages and amounts
 - **Tax Strategy**: Roth conversion parameters, DAF disbursement rates
+- **Portfolio Accounts**: Investment account names and types
+- **Portfolio Data**: Detailed holdings stored in `portfolio_data_truth.csv`
 
 ### 2. Configuration Page (`pages/configuration.py`)
 
@@ -47,6 +49,23 @@ Access the configuration page through the Streamlit sidebar or by navigating to 
 - Configure Roth conversion amounts and tax rates
 - Set Donor Advised Fund disbursement rate
 - Set planned distributions for specific years
+
+#### Portfolio Data Tab
+- **Account Configuration**: Define your investment accounts with names and types
+  - Add accounts (e.g., "Schwab" - "Roth", "Fidelity" - "Traditional")
+  - Edit or remove existing accounts
+  - Save account configurations to use when entering portfolio holdings
+- **Portfolio Holdings**: Enter detailed portfolio data
+  - Add holdings with month, year, account, symbol, sector, quantity, and purchase price
+  - Edit existing holdings in an interactive data editor
+  - Validate data before saving
+  - **Important**: Requires at least 2 months of data for the application to work properly
+- **Data Management**:
+  - Load existing portfolio data from `portfolio_data_truth.csv`
+  - Add empty rows for new entries
+  - Clear all data to start fresh
+  - Save with automatic timestamped backups (e.g., `portfolio_data_truth_20260222_181305.csv`)
+- **Validation**: Automatic validation of account types, sectors, and data completeness
 
 #### Advanced Tab
 - **Save All Changes**: Persist all configuration changes to file
@@ -129,6 +148,22 @@ The sidebar now automatically loads values from the configuration file:
     "daf_disbursement_rate": 25,
     "planned_distribution_2027": 75000
   },
+  "portfolio_accounts": {
+    "accounts": [
+      {
+        "account_name": "Schwab",
+        "account_type": "Roth"
+      },
+      {
+        "account_name": "Fidelity",
+        "account_type": "Traditional"
+      },
+      {
+        "account_name": "Vanguard",
+        "account_type": "Brokerage"
+      }
+    ]
+  },
   "metadata": {
     "last_updated": "2026-02-22T16:30:00",
     "version": "1.0"
@@ -175,6 +210,8 @@ age = config_mgr.get_person_age(1)  # Person 1 or 2
 3. **Validation**: Always review calculated values (like cash reserves) after changing assumptions
 4. **Documentation**: Use the notes feature (if added) to document why certain values were chosen
 5. **Testing**: After importing a configuration, verify all values are correct before running analyses
+6. **Portfolio Data**: Always maintain at least 2 months of portfolio data for proper application functionality
+7. **Timestamped Backups**: Portfolio data is automatically backed up with timestamps before each save - review these backups periodically
 
 ## Troubleshooting
 
@@ -185,8 +222,15 @@ age = config_mgr.get_person_age(1)  # Person 1 or 2
 
 ### Changes Not Persisting
 - Ensure you click "Save All Changes" after making modifications
-- Check file permissions on `retirement_config.json`
-- Verify the file is not read-only
+- Check file permissions on `retirement_config.json` and `portfolio_data_truth.csv`
+- Verify the files are not read-only
+
+### Portfolio Data Issues
+- Ensure you have at least 2 months of data entered
+- Check that all required fields are filled (month, year, account_name, account_type, symbol, name, sector, qty, purchase_price)
+- Verify account types match valid options: Cash, Brokerage, Traditional, Roth
+- Check that sectors are valid (use the dropdown in the data editor)
+- Review timestamped backup files if data was accidentally overwritten
 
 ### Import Fails
 - Ensure the JSON file is properly formatted

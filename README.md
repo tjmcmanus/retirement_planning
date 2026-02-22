@@ -18,6 +18,18 @@ This application helps users plan their retirement by:
 
 ## Recent Updates (February 2026)
 
+### 🎯 New: Configuration System & Portfolio Data Management
+Complete configuration management system with portfolio data entry:
+- **Centralized Configuration**: Store all planning parameters in `retirement_config.json`
+- **Portfolio Data Entry**: Interactive data editor for investment holdings
+- **Account Management**: Define and organize investment accounts by type
+- **Automatic Backups**: Timestamped backups of portfolio data before each save
+- **Data Validation**: Built-in validation for account types, sectors, and completeness
+- **Import/Export**: Backup and restore configurations as JSON files
+- **Minimum Data Requirement**: At least 2 months of portfolio data required
+
+See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for complete configuration documentation.
+
 ### ✨ New: 5-Stage Withdrawal Strategy Module
 Complete retirement withdrawal strategy implementation covering all life phases:
 - **Stage 1: Accumulation** - Tax-efficient asset building while employed
@@ -57,6 +69,22 @@ Comprehensive validation in [`test_withdrawal_strategy.py`](test_withdrawal_stra
 
 ## Features
 
+### 0. Configuration Page (⚙️)
+**NEW: Centralized configuration management**
+- **Personal Information**: Names, birth dates, retirement ages with automatic age calculation
+- **Financial Assumptions**: Expenses, inflation, returns, cash reserves
+- **Healthcare Settings**: ACA insurance premiums, Medicare start age
+- **Social Security**: Benefit amounts and claiming ages for both spouses
+- **Tax Strategy**: Roth conversion parameters, DAF disbursement rates
+- **Portfolio Accounts**: Define investment accounts with names and types (e.g., "Schwab" - "Roth")
+- **Portfolio Data Entry**: Interactive editor for detailed holdings with validation
+  - Requires at least 2 months of data for proper application functionality
+  - Automatic timestamped backups before each save
+  - Real-time validation of account types and sectors
+- **Configuration Management**: Export/import, backup/restore, reset to defaults
+
+See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed configuration instructions.
+
 ### 1. Dashboard Tab
 - **Net Worth Tracking**: Monitor cash, brokerage, traditional IRA, and Roth IRA accounts
 - **Visual Analytics**: Interactive charts showing account balances over time
@@ -90,13 +118,27 @@ Comprehensive validation in [`test_withdrawal_strategy.py`](test_withdrawal_stra
 - **Cash Flow Analysis**: Year-by-year inflows and outflows through 2051
 - **Withdrawal Sequencing**: Tax-efficient account prioritization
 
-## Installation
+## Getting Started
 
-### Prerequisites
+### Quick Start Guide
+
+1. **Install and Run** (see Installation section below)
+2. **Configure Your Settings** - Navigate to the Configuration page (⚙️ icon)
+   - Fill in personal information, financial assumptions, and tax strategy
+   - See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed setup instructions
+3. **Enter Portfolio Data** - Use the Portfolio Data tab in Configuration
+   - Define your investment accounts (names and types)
+   - Enter at least 2 months of portfolio holdings
+   - Save with automatic backup protection
+4. **Explore the Application** - Use the main tabs to analyze your retirement plan
+
+### Installation
+
+#### Prerequisites
 - Python 3.8 or higher
 - pip package manager
 
-### Setup
+#### Setup
 
 1. Clone or download this repository:
 ```bash
@@ -236,8 +278,26 @@ streamlit run planning_app.py
 
 ## Configuration
 
-### Sidebar Settings
-Configure retirement parameters in the sidebar (see [`components/sidebar.py`](components/sidebar.py)):
+### Configuration System
+The application now uses a centralized configuration system. See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for complete documentation.
+
+**Key Configuration Files:**
+- `retirement_config.json` - Main configuration file (auto-created)
+- `portfolio_data_truth.csv` - Portfolio holdings data (requires at least 2 months)
+- `portfolio_data_truth_YYYYMMDD_HHMMSS.csv` - Automatic timestamped backups
+
+**Configuration Page (⚙️):**
+Access through the sidebar to manage:
+- Personal information and retirement ages
+- Financial assumptions and expense projections
+- Healthcare costs (ACA and Medicare)
+- Social Security benefit planning
+- Tax strategy and Roth conversions
+- Portfolio accounts and holdings data
+- Import/export and backup/restore
+
+### Sidebar Settings (Legacy)
+The sidebar still provides quick access to key parameters (see [`components/sidebar.py`](components/sidebar.py)):
 - **Social Security Age**: Age to begin claiming benefits (default: 70)
 - **Roth Conversion at SSI Age**: Annual conversion amount after SS starts
 - **Max Tax Rate for Roth Conversion**: Target marginal tax rate (default: 24%)
@@ -246,11 +306,15 @@ Configure retirement parameters in the sidebar (see [`components/sidebar.py`](co
 - **Expected Annual Rate of Return**: Investment growth rate (default: 6%)
 - **DAF Disbursement Rate**: Annual charitable giving rate (default: 25%)
 
+**Note:** For permanent changes, use the Configuration page. Sidebar changes are temporary (session-only).
+
 ## Project Structure
 
 ```
 retirement_planning/
 ├── planning_app.py                    # Main Streamlit application
+├── config.py                          # Configuration management system
+├── portfolio_data_entry.py            # Portfolio data validation
 ├── withdrawal_strategy.py             # 5-stage withdrawal strategy engine
 ├── example_withdrawal_strategy.py     # Example scenarios and runner
 ├── test_withdrawal_strategy.py        # Test suite for withdrawal module
@@ -263,6 +327,7 @@ retirement_planning/
 ├── components/
 │   └── sidebar.py                     # Sidebar configuration
 ├── pages/
+│   ├── configuration.py               # Configuration page (NEW)
 │   ├── calculators.py                 # Additional calculator pages
 │   └── flow_of_funds.py               # Cash flow analysis
 ├── .streamlit/
@@ -271,11 +336,15 @@ retirement_planning/
 ├── run.sh                             # Main app setup and run script
 ├── run_strategy.sh                    # Withdrawal strategy runner
 ├── README.md                          # This file (main documentation)
+├── CONFIG_GUIDE.md                    # Configuration system guide (NEW)
 ├── WITHDRAWAL_STRATEGY_README.md      # Withdrawal strategy documentation
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation details
 ├── ERRORS_FOUND.md                    # Bug fixes and code analysis
 ├── LOGGING_GUIDE.md                   # Debug logging guide
-├── *.csv                              # Data files
+├── retirement_config.json             # Configuration file (auto-created)
+├── portfolio_data_truth.csv           # Portfolio holdings data
+├── portfolio_data_truth_*.csv         # Timestamped backups
+├── *.csv                              # Tax reference data files
 └── example*.csv                       # Generated strategy outputs
 ```
 
@@ -327,6 +396,13 @@ retirement_planning/
 
 ### Core Documentation
 - **[`README.md`](README.md)** (this file) - Main application documentation
+- **[`CONFIG_GUIDE.md`](CONFIG_GUIDE.md)** - Configuration system guide (NEW - 256 lines)
+  - Configuration page walkthrough
+  - Portfolio data entry instructions
+  - Account management
+  - Backup and restore procedures
+  - API reference
+  - Troubleshooting
 - **[`WITHDRAWAL_STRATEGY_README.md`](WITHDRAWAL_STRATEGY_README.md)** - Complete withdrawal strategy guide (625 lines)
   - Installation and setup
   - API documentation
@@ -528,10 +604,12 @@ cp financial_account_sample.csv financial_account.csv
 ## Best Practices
 
 ### Data Management
-1. **Backup regularly**: Keep copies of your CSV files
-2. **Update annually**: Refresh tax bracket files with current IRS rates
-3. **Verify calculations**: Cross-check results with tax software or professionals
-4. **Use sample data first**: Test with sample files before using real financial data
+1. **Use Configuration System**: Leverage the Configuration page for centralized settings management
+2. **Backup regularly**: Export configuration JSON and keep copies of CSV files
+3. **Portfolio Data**: Maintain at least 2 months of data; automatic backups are created on save
+4. **Update annually**: Refresh tax bracket files with current IRS rates
+5. **Verify calculations**: Cross-check results with tax software or professionals
+6. **Use sample data first**: Test with sample files before using real financial data
 
 ### Tax Planning
 1. **Consult professionals**: This tool is for planning, not tax advice
@@ -581,12 +659,15 @@ This project uses code from Stack Overflow (CC BY-SA 4.0) as noted in [`portfoli
 ## Version History
 
 ### Current Version (February 2026)
+- ✅ **Configuration System**: Centralized settings management with JSON storage
+- ✅ **Portfolio Data Entry**: Interactive editor with validation and automatic backups
+- ✅ **Account Management**: Define and organize investment accounts by type
 - ✅ **5-Stage Withdrawal Strategy**: Complete life-cycle planning engine
 - ✅ **Enhanced Logging**: Configurable debug output throughout
 - ✅ **Example Scenarios**: 4 pre-built retirement strategies
 - ✅ **Test Suite**: Comprehensive validation (all tests passing)
 - ✅ **Bug Fixes**: Resolved f-string syntax error
-- ✅ **Documentation**: 4 comprehensive guides (1,500+ lines)
+- ✅ **Documentation**: 5 comprehensive guides (1,800+ lines)
 - ✅ **Run Scripts**: Automated setup for app and strategies
 
 ### Previous Features
@@ -600,11 +681,14 @@ This project uses code from Stack Overflow (CC BY-SA 4.0) as noted in [`portfoli
 
 For issues or questions:
 1. Review this README thoroughly
-2. Check CSV file formats match requirements
-3. Verify all dependencies are installed
-4. Test with sample data files first
-5. Consult official IRS and SSA resources for tax/benefit questions
-6. Review documentation files for detailed guidance:
+2. **Start with Configuration**: See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for setup instructions
+3. Check CSV file formats match requirements
+4. Verify all dependencies are installed
+5. Test with sample data files first
+6. Ensure at least 2 months of portfolio data are entered
+7. Consult official IRS and SSA resources for tax/benefit questions
+8. Review documentation files for detailed guidance:
+   - [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) - Configuration system (NEW)
    - [`WITHDRAWAL_STRATEGY_README.md`](WITHDRAWAL_STRATEGY_README.md) - Withdrawal strategies
    - [`LOGGING_GUIDE.md`](LOGGING_GUIDE.md) - Debug logging
    - [`ERRORS_FOUND.md`](ERRORS_FOUND.md) - Bug fixes
@@ -624,18 +708,257 @@ For issues or questions:
 
 ## Future Enhancements (Roadmap)
 
-### Planned Features
-1. **Monte Carlo Simulation** - Market volatility modeling with success probabilities
-2. **State Tax Integration** - State-specific tax calculations
-3. **Healthcare Cost Modeling** - Detailed medical expense projections
-4. **Estate Planning** - Beneficiary optimization and estate tax considerations
-5. **Interactive Visualizations** - Enhanced Streamlit charts and graphs
-6. **Portfolio Rebalancing** - Automated rebalancing recommendations
-7. **What-If Scenarios** - Interactive parameter adjustment
-8. **PDF Report Generation** - Comprehensive retirement plan exports
+### High Priority Enhancements
+
+#### 1. Withdrawal Strategy Refinements (Alpha → Production)
+**Status: Alpha code - needs production hardening**
+- **Validation & Testing**
+  - Add comprehensive edge case testing (zero balances, negative returns, extreme ages)
+  - Implement boundary condition validation (e.g., RMD age changes, SS claiming limits)
+  - Add integration tests with real historical market data
+  - Create regression test suite for tax calculations
+- **Strategy Optimization**
+  - Implement dynamic Roth conversion optimization based on future tax bracket projections
+  - Add intelligent IRMAA cliff avoidance (stay just below thresholds)
+  - Optimize ACA subsidy maximization with income targeting
+  - Add multi-year tax planning (look-ahead optimization)
+- **Error Handling**
+  - Add graceful degradation when data is missing
+  - Implement validation for impossible scenarios (e.g., negative balances)
+  - Add warning system for suboptimal strategies
+  - Create detailed error messages with remediation suggestions
+
+#### 2. Monte Carlo Simulation Engine
+**Priority: High - Critical for realistic retirement planning**
+- **Core Simulation**
+  - Implement 10,000+ iteration Monte Carlo analysis
+  - Model market volatility using historical return distributions
+  - Add sequence-of-returns risk analysis
+  - Calculate probability of success metrics (e.g., 90% confidence intervals)
+- **Scenario Analysis**
+  - Best case / worst case / median outcome projections
+  - Stress testing (2008 crash, stagflation, etc.)
+  - Longevity risk modeling (living to 95, 100, 105)
+  - Inflation shock scenarios
+- **Visualization**
+  - Fan charts showing outcome distributions
+  - Success probability heatmaps
+  - Interactive scenario comparison tools
+  - Downloadable Monte Carlo reports
+
+#### 3. Advanced Tax Optimization
+**Priority: High - Significant financial impact**
+- **Multi-Year Tax Planning**
+  - 5-year rolling tax optimization window
+  - Bracket management across multiple years
+  - Capital loss harvesting strategies
+  - Qualified Business Income (QBI) deduction planning
+- **State Tax Integration**
+  - State-specific tax calculations (all 50 states)
+  - Multi-state retirement scenarios
+  - State tax migration strategies
+  - Property tax considerations
+- **Advanced Strategies**
+  - Backdoor Roth IRA contribution tracking
+  - Mega backdoor Roth strategies
+  - Net Unrealized Appreciation (NUA) for company stock
+  - Qualified Charitable Distributions (QCD) optimization
+  - 72(t) SEPP (Substantially Equal Periodic Payments) calculations
+
+### Medium Priority Enhancements
+
+#### 4. Healthcare Cost Modeling
+**Priority: Medium - Major retirement expense**
+- **Comprehensive Medical Expenses**
+  - Medicare Part A/B/D premium projections
+  - Medigap policy cost modeling
+  - Out-of-pocket expense estimates by health status
+  - Prescription drug cost tracking
+  - Long-term care insurance integration
+- **Long-Term Care Planning**
+  - Nursing home cost projections by state
+  - Home health care expense modeling
+  - Long-term care insurance benefit calculations
+  - Medicaid spend-down strategies
+  - Self-insurance vs. LTC insurance analysis
+- **HSA Integration**
+  - Health Savings Account contribution tracking
+  - HSA investment growth projections
+  - HSA withdrawal strategies in retirement
+  - Triple tax advantage optimization
+
+#### 5. Estate Planning Module
+**Priority: Medium - Important for wealth transfer**
+- **Estate Tax Calculations**
+  - Federal estate tax projections
+  - State estate/inheritance tax calculations
+  - Lifetime gift tax tracking
+  - Generation-skipping transfer tax (GSTT)
+- **Beneficiary Optimization**
+  - IRA beneficiary designation strategies
+  - Stretch IRA calculations (SECURE Act 2.0 compliant)
+  - Trust beneficiary modeling
+  - Spousal rollover vs. inherited IRA analysis
+- **Charitable Giving**
+  - Charitable Remainder Trust (CRT) modeling
+  - Charitable Lead Trust (CLT) calculations
+  - Private foundation vs. DAF comparison
+  - Legacy giving impact analysis
+
+#### 6. Portfolio Management Enhancements
+**Priority: Medium - Improve investment tracking**
+- **Advanced Portfolio Features**
+  - Real-time portfolio editing (currently roadmap feature)
+  - Automatic rebalancing recommendations
+  - Tax-loss harvesting identification
+  - Asset location optimization (tax-efficient placement)
+  - Factor-based portfolio analysis
+- **Performance Analytics**
+  - Time-weighted vs. money-weighted returns
+  - Benchmark comparison (S&P 500, custom indices)
+  - Risk-adjusted return metrics (Sharpe, Sortino ratios)
+  - Drawdown analysis and recovery periods
+  - Contribution vs. growth attribution
+- **Integration Enhancements**
+  - Direct brokerage account integration (Schwab, Fidelity, Vanguard APIs)
+  - Automatic transaction import
+  - Real-time balance synchronization
+  - Multi-currency support for international holdings
+
+### Lower Priority / Nice-to-Have
+
+#### 7. Enhanced Visualizations & Reporting
+**Priority: Low - Improves user experience**
+- **Interactive Dashboards**
+  - Customizable dashboard layouts
+  - Drag-and-drop widget arrangement
+  - Real-time data refresh controls
+  - Mobile-responsive design
+- **Advanced Charts**
+  - Waterfall charts for cash flow analysis
+  - Sankey diagrams for money flow visualization
+  - 3D surface plots for multi-variable optimization
+  - Animated timeline visualizations
+- **Report Generation**
+  - PDF comprehensive retirement plan exports
+  - Executive summary one-pagers
+  - Detailed appendix with assumptions
+  - Customizable report templates
+  - Email scheduling for periodic reports
+
+#### 8. Scenario Planning & What-If Analysis
+**Priority: Low - Enhances planning flexibility**
+- **Interactive Scenarios**
+  - Side-by-side scenario comparison (up to 4 scenarios)
+  - Real-time parameter adjustment with instant recalculation
+  - Scenario saving and loading
+  - Scenario sharing via URL parameters
+- **Life Event Modeling**
+  - Early retirement scenarios
+  - Part-time work in retirement
+  - Inheritance windfalls
+  - Major expense events (home purchase, college funding)
+  - Divorce/remarriage financial impact
+  - Disability income scenarios
+
+#### 9. Social Security Optimization
+**Priority: Low - Refinement of existing feature**
+- **Advanced SS Strategies**
+  - File and suspend strategies (if applicable)
+  - Spousal benefit optimization
+  - Divorced spouse benefit calculations
+  - Survivor benefit planning
+  - Earnings test impact modeling (working while collecting)
+- **Break-Even Analysis**
+  - Claiming age break-even calculations
+  - Net present value comparisons
+  - Longevity-adjusted recommendations
+  - Spousal coordination strategies
+
+#### 10. Data Management & Security
+**Priority: Low - Operational improvements**
+- **Enhanced Data Management**
+  - Cloud backup integration (encrypted)
+  - Version control for configurations
+  - Data import from financial software (Quicken, Mint, Personal Capital)
+  - Bulk data entry tools
+  - Data validation and cleanup utilities
+- **Security Enhancements**
+  - End-to-end encryption for sensitive data
+  - Password protection for configuration files
+  - Audit logging for data changes
+  - Two-factor authentication option
+  - GDPR/privacy compliance features
+
+### Technical Debt & Code Quality
+
+#### 11. Code Improvements
+- **Refactoring**
+  - Modularize withdrawal strategy into smaller, testable components
+  - Implement dependency injection for better testability
+  - Add type hints throughout codebase (currently partial)
+  - Create abstract base classes for strategy patterns
+- **Testing**
+  - Increase test coverage to >80% (currently ~60% estimated)
+  - Add property-based testing for tax calculations
+  - Implement continuous integration (CI) pipeline
+  - Add performance benchmarking tests
+- **Documentation**
+  - Add inline code documentation (docstrings) for all functions
+  - Create API documentation with Sphinx
+  - Add architecture decision records (ADRs)
+  - Create video tutorials for common workflows
+
+#### 12. Performance Optimization
+- **Caching Improvements**
+  - Implement Redis for distributed caching
+  - Add intelligent cache invalidation
+  - Optimize database queries (if DB added)
+  - Lazy loading for large datasets
+- **Computation Optimization**
+  - Parallelize Monte Carlo simulations
+  - Use NumPy vectorization for tax calculations
+  - Implement incremental computation for large projections
+  - Add progress indicators for long-running operations
+
+### Integration & Ecosystem
+
+#### 13. Third-Party Integrations
+- **Financial Data Providers**
+  - Alpha Vantage API for market data
+  - IEX Cloud for real-time quotes
+  - Morningstar API for fund analysis
+  - Federal Reserve Economic Data (FRED) for economic indicators
+- **Tax Software Integration**
+  - TurboTax data export
+  - H&R Block integration
+  - TaxAct compatibility
+  - IRS e-file format generation
+- **Financial Planning Tools**
+  - Export to Excel/Google Sheets with formulas
+  - Import from other retirement calculators
+  - Integration with financial advisor platforms
+  - API for third-party tool integration
+
+#### 14. Collaboration Features
+- **Multi-User Support**
+  - Shared planning sessions for couples
+  - Financial advisor collaboration mode
+  - Role-based access control
+  - Comment and annotation system
+- **Communication**
+  - In-app messaging for advisor/client
+  - Scheduled review reminders
+  - Change notification system
+  - Shared decision tracking
 
 ### Contributions Welcome
-See development guidelines in the Contributing section above.
+See development guidelines in the Contributing section above. Priority areas for community contributions:
+1. **Withdrawal Strategy Testing** - Help move from alpha to production
+2. **State Tax Calculations** - Contribute state-specific tax logic
+3. **Monte Carlo Engine** - Implement simulation framework
+4. **Documentation** - Improve guides and add examples
+5. **Test Coverage** - Add unit and integration tests
 
 ---
 
@@ -643,6 +966,7 @@ See development guidelines in the Contributing section above.
 
 ## Quick Links
 
+- ⚙️ [Configuration Guide](CONFIG_GUIDE.md) - **START HERE**
 - 📖 [Withdrawal Strategy Guide](WITHDRAWAL_STRATEGY_README.md)
 - 🔧 [Implementation Summary](IMPLEMENTATION_SUMMARY.md)
 - 🐛 [Bug Fixes & Analysis](ERRORS_FOUND.md)
