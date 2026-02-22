@@ -189,18 +189,26 @@ This generates:
 
 The application requires the following CSV files in the root directory:
 
-### Financial Data Files
-- **`financial_data.csv`**: Historical net worth data
-  - Columns: `date`, `cash`, `taxable`, `tax_deferred`, `tax_free`, `total`, `expenses`, `daf`
-  - Sample file: [`financial_data_sample.csv`](financial_data_sample.csv)
+### Portfolio Data Files
 
-- **`financial_account.csv`**: Account-level details
-  - Columns: `year`, `month`, `type`, `account`, `amount`
-  - Sample file: [`financial_account_sample.csv`](financial_account_sample.csv)
+#### Primary Data File (REQUIRED)
+- **`portfolio_data_truth.csv`**: Portfolio holdings with monthly snapshots
+  - **Columns**: `month`, `year`, `account_name`, `account_type`, `symbol`, `name`, `sector`, `qty`, `purchase_price`
+  - **Minimum Requirement**: At least 2 months of data required for proper application functionality
+  - **Account Types**: Cash, Brokerage, Traditional, Roth
+  - **Data Entry**: Use the Configuration page (⚙️) → Portfolio Data tab for interactive data entry
+  - **Automatic Backups**: Timestamped backups created before each save (`portfolio_data_truth_YYYYMMDD_HHMMSS.csv`)
+  - **Dynamic Valuation**: Application calculates current market values using Yahoo Finance API
+  - **Net Worth Calculation**: Automatically computed from portfolio holdings with real-time prices
+  - See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed data entry instructions
 
-- **`portfolio.csv`**: Investment holdings
-  - Columns: `account_type`, `symbol`, `name`, `sector`, `qty`, `purchase_price`
-  - Sample file: [`portfolio_sample.csv`](portfolio_sample.csv)
+#### Legacy Files (DEPRECATED - Not Used by Application)
+The following files are **no longer used** by the application but sample files remain for reference:
+- ~~`financial_data.csv`~~ - Replaced by dynamic calculation from `portfolio_data_truth.csv`
+- ~~`financial_account.csv`~~ - Replaced by account aggregation from `portfolio_data_truth.csv`
+- ~~`portfolio.csv`~~ - Replaced by `portfolio_data_truth.csv`
+
+**Migration Note**: The application has transitioned from static CSV files to a dynamic portfolio tracking system. All net worth and account data is now calculated in real-time from `portfolio_data_truth.csv` using current market prices.
 
 ### Tax Reference Files
 
@@ -467,10 +475,12 @@ All critical bugs have been resolved:
 See [`ERRORS_FOUND.md`](ERRORS_FOUND.md) for complete analysis.
 
 ### Data Requirements
-- Sample CSV files are provided but need to be renamed (remove `_sample` suffix) or create your own
-- Real portfolio data requires valid stock tickers
-- Historical net worth data must be manually maintained
-- Tax bracket files should be updated annually to reflect current IRS rates
+- **Portfolio Data**: Use `portfolio_data_truth.csv` with at least 2 months of holdings data
+- **Data Entry**: Use the Configuration page (⚙️) for interactive portfolio data management
+- **Real-time Valuation**: Portfolio values calculated dynamically using Yahoo Finance API
+- **Valid Tickers**: Ensure stock symbols are valid on Yahoo Finance
+- **Tax Reference Files**: Update annually to reflect current IRS rates (income_rates.csv, standard.csv, etc.)
+- **Legacy Sample Files**: Provided for reference only; not used by the application
 
 ### API Limitations
 - Yahoo Finance API may rate-limit requests for large portfolios
@@ -576,18 +586,23 @@ pip install -r requirements.txt
 ```
 
 ### "FileNotFoundError" for CSV files
-Ensure all required CSV files exist. Copy sample files:
+Ensure all required CSV files exist. The primary data file needed is:
 ```bash
-cp financial_data_sample.csv financial_data.csv
-cp portfolio_sample.csv portfolio.csv
-cp financial_account_sample.csv financial_account.csv
+# The application requires portfolio_data_truth.csv
+# Use the Configuration page (⚙️) to create and manage this file interactively
+# Or create it manually with the required columns:
+# month, year, account_name, account_type, symbol, name, sector, qty, purchase_price
 ```
+
+**Note**: Legacy sample files (`financial_data_sample.csv`, `portfolio_sample.csv`, `financial_account_sample.csv`) are no longer used by the application. Use the Configuration page for data entry instead.
 
 ### Portfolio data not loading
 - Verify stock tickers are valid (check on Yahoo Finance)
 - Check internet connection for Yahoo Finance API
-- Review [`portfolio.csv`](portfolio.csv) format matches expected columns
-- Ensure `account_type`, `symbol`, `name`, `sector`, `qty`, and `purchase_price` columns exist
+- Review [`portfolio_data_truth.csv`](portfolio_data_truth.csv) format matches expected columns
+- Ensure required columns exist: `month`, `year`, `account_name`, `account_type`, `symbol`, `name`, `sector`, `qty`, `purchase_price`
+- Verify at least 2 months of data are present
+- Use the Configuration page (⚙️) → Portfolio Data tab to validate and edit data
 
 ### Tax calculations seem incorrect
 - Verify tax bracket CSV files match current IRS rates
