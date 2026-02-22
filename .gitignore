@@ -4,3 +4,8 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+
+
+# Retirement Planning App - Personal Configuration
+# Contains personal information like names, birth dates, and financial data
+retirement_config.json

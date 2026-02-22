@@ -8,6 +8,7 @@ from streamlit_card import card
 from streamlit_extras.metric_cards import style_metric_cards 
 from streamlit_extras.add_vertical_space import add_vertical_space
 from load_data import get_month_account_values,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month
+from withdrawal_strategy import build_withdrawal_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
 from income_expense import build_income_expenses_display,calculate_taxes
@@ -109,7 +110,7 @@ sidebar()
 ##############################################################################################
 
 
-tab1, tab3, tab4 = st.tabs(["Dashboard", "Portfolio planner", "Retirement planner"])
+tab1, tab3, tab4, tab5 = st.tabs(["Dashboard", "Portfolio planner", "Retirement planner", "Withdrawal Strategy"])
 with tab1:
    # Build historical net worth using optimized portfolio truth data
    networth = build_historical_networth(num_months=12)
@@ -550,3 +551,208 @@ with tab4:
             ),
         },  
         hide_index=True)
+
+with tab5:
+    st.header("Withdrawal Strategy Analysis")
+    
+    # Get parameters from session state (set by sidebar)
+    try:
+        ssi_age = int(st.session_state.get("SSI_AGE", 70))
+        conv_amount_at_ssi = float(st.session_state.get("CONV_AMOUNT_AT_SSI_AGE", 5000))
+        conv_tax_rate = float(st.session_state.get("CONV_TAX_RATE", 12))
+        annual_expenses = float(st.session_state.get("EXPENSE", 50000))
+        expense_multiplier = float(st.session_state.get("EXPENSE_MULITPLIER", 4))
+        rate_of_return = float(st.session_state.get("RATE", 6)) / 100
+        daf_rate = float(st.session_state.get("DAF_RATE", 25)) / 100
+        planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", 75000))
+    except (ValueError, TypeError) as e:
+        st.error(f"Error reading sidebar parameters: {e}. Using default values.")
+        ssi_age = 70
+        conv_amount_at_ssi = 5000
+        conv_tax_rate = 12
+        annual_expenses = 50000
+        expense_multiplier = 4
+        rate_of_return = 0.06
+        daf_rate = 0.25
+        planned_dist_2027 = 75000
+    
+    # Display current parameters
+    st.subheader("Strategy Parameters")
+    param_col1, param_col2, param_col3, param_col4 = st.columns(4)
+    with param_col1:
+        st.metric("Social Security Age", ssi_age)
+        st.metric("Annual Expenses", f"${annual_expenses:,.0f}")
+    with param_col2:
+        st.metric("Roth Conv @ SSI Age", f"${conv_amount_at_ssi:,.0f}")
+        st.metric("Expense Multiplier", f"{expense_multiplier}x")
+    with param_col3:
+        st.metric("Max Conv Tax Rate", f"{conv_tax_rate}%")
+        st.metric("Rate of Return", f"{rate_of_return*100:.1f}%")
+    with param_col4:
+        st.metric("DAF Disbursement", f"{daf_rate*100:.0f}%")
+        st.metric("2027 Planned Dist", f"${planned_dist_2027:,.0f}")
+    
+    add_vertical_space(2)
+    
+    # Calculate withdrawal strategy
+    try:
+        with st.spinner("Calculating withdrawal strategy..."):
+            strategy_df, balances_df = build_withdrawal_strategy_display(
+                start_year=curr_year,
+                end_year=2051,
+                growth_rate=rate_of_return,
+                expense_inflation=0.03,
+                person1_name="Tom",
+                person2_name="Sarah"
+            )
+        
+        # Display strategy results in tabs
+        strategy_tab, balances_tab, charts_tab = st.tabs(["Annual Strategy", "Account Balances", "Visualizations"])
+        
+        with strategy_tab:
+            st.subheader("Year-by-Year Withdrawal Strategy")
+            
+            # Format the strategy dataframe for display
+            display_cols = [
+                'Year', 'Stage', 'Age Primary', 'Age Spouse',
+                'Expenses', 'Wages', 'Social Security',
+                'Roth Conversion', 'RMD', 'Portfolio Withdrawal',
+                'Total Income', 'Federal Tax', 'IRMAA Penalty'
+            ]
+            
+            available_cols = [col for col in display_cols if col in strategy_df.columns]
+            display_df = strategy_df[available_cols].copy()
+            
+            # Configure column formatting
+            column_config = {
+                "Year": st.column_config.NumberColumn("Year", format="%d"),
+                "Stage": st.column_config.TextColumn("Life Stage"),
+                "Age Primary": st.column_config.NumberColumn("Age (Primary)", format="%d"),
+                "Age Spouse": st.column_config.NumberColumn("Age (Spouse)", format="%d"),
+                "Expenses": st.column_config.NumberColumn("Expenses", format="$%,.0f"),
+                "Wages": st.column_config.NumberColumn("Wages", format="$%,.0f"),
+                "Social Security": st.column_config.NumberColumn("Social Security", format="$%,.0f"),
+                "Roth Conversion": st.column_config.NumberColumn("Roth Conversion", format="$%,.0f"),
+                "RMD": st.column_config.NumberColumn("RMD", format="$%,.0f"),
+                "Portfolio Withdrawal": st.column_config.NumberColumn("Portfolio Withdrawal", format="$%,.0f"),
+                "Total Income": st.column_config.NumberColumn("Total Income", format="$%,.0f"),
+                "Federal Tax": st.column_config.NumberColumn("Federal Tax", format="$%,.0f"),
+                "IRMAA Penalty": st.column_config.NumberColumn("IRMAA Penalty", format="$%,.0f")
+            }
+            
+            st.dataframe(display_df, column_config=column_config, hide_index=True, use_container_width=True)
+        
+        with balances_tab:
+            st.subheader("Account Balances Over Time")
+            
+            # Configure column formatting for balances
+            balance_column_config = {
+                "Year": st.column_config.NumberColumn("Year", format="%d"),
+                "Cash Balance": st.column_config.NumberColumn("Cash", format="$%,.0f"),
+                "Taxable Balance": st.column_config.NumberColumn("Taxable", format="$%,.0f"),
+                "Traditional Balance": st.column_config.NumberColumn("Traditional", format="$%,.0f"),
+                "Roth Balance": st.column_config.NumberColumn("Roth", format="$%,.0f"),
+                "DAF Balance": st.column_config.NumberColumn("DAF", format="$%,.0f"),
+                "Total Portfolio": st.column_config.NumberColumn("Total Portfolio", format="$%,.0f")
+            }
+            
+            st.dataframe(balances_df, column_config=balance_column_config, hide_index=True, use_container_width=True)
+        
+        with charts_tab:
+            st.subheader("Portfolio Balance Projections")
+            
+            # Create stacked area chart for account balances
+            fig_balances = go.Figure()
+            
+            fig_balances.add_trace(go.Scatter(
+                x=balances_df['Year'],
+                y=balances_df['Cash Balance'],
+                name='Cash',
+                mode='lines',
+                stackgroup='one',
+                fillcolor='rgb(246, 207, 113)'
+            ))
+            
+            fig_balances.add_trace(go.Scatter(
+                x=balances_df['Year'],
+                y=balances_df['Taxable Balance'],
+                name='Taxable',
+                mode='lines',
+                stackgroup='one',
+                fillcolor='rgb(254, 136, 177)'
+            ))
+            
+            fig_balances.add_trace(go.Scatter(
+                x=balances_df['Year'],
+                y=balances_df['Traditional Balance'],
+                name='Traditional',
+                mode='lines',
+                stackgroup='one',
+                fillcolor='rgb(139, 224, 164)'
+            ))
+            
+            fig_balances.add_trace(go.Scatter(
+                x=balances_df['Year'],
+                y=balances_df['Roth Balance'],
+                name='Roth',
+                mode='lines',
+                stackgroup='one',
+                fillcolor='rgb(180, 151, 231)'
+            ))
+            
+            fig_balances.update_layout(
+                title='Projected Account Balances',
+                xaxis_title='Year',
+                yaxis_title='Balance ($)',
+                hovermode='x unified',
+                plot_bgcolor='white',
+                paper_bgcolor='white'
+            )
+            
+            st.plotly_chart(fig_balances, use_container_width=True)
+            
+            # Create income sources chart
+            if 'Total Income' in strategy_df.columns:
+                st.subheader("Income Sources Over Time")
+                
+                fig_income = go.Figure()
+                
+                if 'Wages' in strategy_df.columns:
+                    fig_income.add_trace(go.Bar(
+                        x=strategy_df['Year'],
+                        y=strategy_df['Wages'],
+                        name='Wages',
+                        marker_color='rgb(99, 110, 250)'
+                    ))
+                
+                if 'Social Security' in strategy_df.columns:
+                    fig_income.add_trace(go.Bar(
+                        x=strategy_df['Year'],
+                        y=strategy_df['Social Security'],
+                        name='Social Security',
+                        marker_color='rgb(239, 85, 59)'
+                    ))
+                
+                if 'Portfolio Withdrawal' in strategy_df.columns:
+                    fig_income.add_trace(go.Bar(
+                        x=strategy_df['Year'],
+                        y=strategy_df['Portfolio Withdrawal'],
+                        name='Portfolio Withdrawal',
+                        marker_color='rgb(0, 204, 150)'
+                    ))
+                
+                fig_income.update_layout(
+                    title='Income Sources by Year',
+                    xaxis_title='Year',
+                    yaxis_title='Amount ($)',
+                    barmode='stack',
+                    hovermode='x unified',
+                    plot_bgcolor='white',
+                    paper_bgcolor='white'
+                )
+                
+                st.plotly_chart(fig_income, use_container_width=True)
+    
+    except Exception as e:
+        st.error(f"Error calculating withdrawal strategy: {e}")
+        st.info("Please ensure all sidebar parameters are properly configured and try refreshing the data.")
