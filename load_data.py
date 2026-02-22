@@ -109,38 +109,7 @@ def get_net_worth(ret_date):
    
    return cash, taxable, tax_deferred, tax_free, total, expenses, daf
 
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
-def load_net_worth():
-   """
-   DEPRECATED: Load net worth data from CSV file.
-   
-   This function is deprecated and maintained only for backward compatibility.
-   New code should use get_networth_by_month() instead, which provides
-   current market values from portfolio_data_truth.csv.
-   
-   Returns:
-       pd.DataFrame: Net worth data from financial_data_sample.csv
-   """
-   logger.warning("load_net_worth() is deprecated. Use get_networth_by_month() instead.")
-   networth_data = pd.read_csv('financial_data_sample.csv')
-   return networth_data
 
-#@st.cache_data()
-def load_financial_accounts():
-   """
-   DEPRECATED: Load financial account data from CSV file.
-   
-   This function is deprecated and maintained only for backward compatibility.
-   New code should use get_portfolio_truth_by_month() instead, which provides
-   detailed portfolio holdings from portfolio_data_truth.csv.
-   
-   Returns:
-       pd.DataFrame: Account data from financial_account_sample.csv
-   """
-   logger.warning("load_financial_accounts() is deprecated. Use get_portfolio_truth_by_month() instead.")
-   account_data = pd.read_csv('financial_account_sample.csv')
-   return account_data
 
 def get_month_account_values(month, year):
    """

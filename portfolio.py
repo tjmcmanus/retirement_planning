@@ -129,34 +129,6 @@ def get_dividend_frequency(symbol):
     
     return count
     
-#@st.cache_data()
-def loadPortfolio():
-    """
-    DEPRECATED: This function is deprecated and will be removed in a future version.
-    Use getPortfolioData() instead, which supports month/year parameters and uses the portfolio truth dataset.
-    """
-    import warnings
-    warnings.warn(
-        "loadPortfolio() is deprecated. Use getPortfolioData() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    portfoliodf =pd.read_csv(get_portfolio_filename())
-    return portfoliodf
-
-def get_portfolio_filename():
-    """
-    DEPRECATED: This function is deprecated and will be removed in a future version.
-    Use getPortfolioData() instead, which supports month/year parameters and uses the portfolio truth dataset.
-    """
-    import warnings
-    warnings.warn(
-        "get_portfolio_filename() is deprecated. Use getPortfolioData() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    filename=f"portfolio_sample.csv"
-    return filename
   
 @st.cache_data()
 def getPortfolioData(month=None, year=None):

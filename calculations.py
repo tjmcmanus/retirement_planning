@@ -8,7 +8,7 @@ import argparse
 import logging
 from datetime import date
 from datetime import datetime
-from load_data import get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, load_net_worth, load_rmd_data
+from load_data import get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, load_rmd_data
 
 # Configure logging
 # Set default level to WARNING to suppress debug messages unless explicitly enabled
