@@ -328,6 +328,9 @@ with tab6:
     st.header("Portfolio Data Configuration")
     st.markdown("Enter your portfolio holdings. This data will be saved to `portfolio_data_truth.csv`.")
     
+    # Important notice about data requirements
+    st.info("⚠️ **Important:** You need at least 2 months of portfolio data for the application to work properly. Make sure to enter holdings for at least two different months.")
+    
     # Accounts Section
     st.subheader("📋 Account Configuration")
     st.markdown("Define your investment accounts. These will be available when entering portfolio holdings.")
@@ -509,10 +512,10 @@ with tab6:
                 st.error("No valid data to save")
             else:
                 try:
-                    # Create backup of existing file
+                    # Create timestamped backup of existing file
                     if os.path.exists('portfolio_data_truth.csv'):
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        backup_name = f'portfolio_data_sample.csv'
+                        backup_name = f'portfolio_data_truth_{timestamp}.csv'
                         shutil.copy2('portfolio_data_truth.csv', backup_name)
                         st.info(f"✅ Backed up existing data to {backup_name}")
                     
