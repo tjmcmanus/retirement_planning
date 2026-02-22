@@ -11,6 +11,7 @@ from load_data import get_month_account_values,get_cap_gains_brackets, get_incom
 from withdrawal_strategy import build_withdrawal_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
+from portfolio_data_entry import validate_ticker_symbol, validate_portfolio_dataframe, save_portfolio_data, create_empty_entry_template, load_previous_month_data
 from income_expense import build_income_expenses_display,calculate_taxes
 from components.sidebar import sidebar
 st.set_page_config(page_title="Retirement Planner", page_icon="😊", layout="wide")
@@ -410,64 +411,231 @@ with tab3:
             format="percent")
         },hide_index=True)
 
-    with update_tab:  
-        st.title('Editable Data Entry Table(not functional - roadmap)')
-
-        initial_data = pd.DataFrame(getPortfolioData())
-        # Ensure numeric columns are properly typed to prevent Arrow serialization errors
-        numeric_columns = ['qty', 'purchase_price', 'Price']
-        for col in numeric_columns:
-            if col in initial_data.columns:
-                # Replace empty strings with NaN, then convert to numeric
-                initial_data[col] = initial_data[col].replace('', np.nan)
-                initial_data[col] = pd.to_numeric(initial_data[col], errors='coerce').fillna(0)
+    with update_tab:
+        st.title('Manual Portfolio Data Entry')
+        st.markdown("Enter your monthly portfolio holdings below. The system will validate ticker symbols against Yahoo Finance and save to portfolio_data_truth.csv")
         
-        st.markdown("### Update Data Below")
-        edited_df = st.data_editor(initial_data, num_rows="dynamic",
-        column_config={
-            "account_type": st.column_config.SelectboxColumn(
-            "Type of Account",
-            options=[
-                "Brokerage",
-                "Traditional",
-                "Roth",
-            ],
-            required=True,
-            ),
-            "sector": st.column_config.SelectboxColumn(
-            "Sector",
-            options=[
-                "Stock/ETF",
-                "MF:Large-Cap",
-                "MF:Mid-Cap",
-                "MF:Small-Cap",
-                "MF:Reit",
-                "MF:Cash",
-                "MF:Global",
-                "MF:Asia",
-                "MF:Europe",
-                "MF:Latin America",
-            ],
-            ),
-        },
-        hide_index=True)
-
-        if st.button('Validate Data'):
-            st.success(f'Validate Data. Total entries: {len(edited_df)}.')
-            st.write(edited_df)
-            # Further processing of the 'edited_df' can be done here.    
-        # 3. The 'edited_df' variable automatically contains the current state of the table
-        # after user interactions (editing cells, adding/deleting rows).
-
-        st.markdown("### Extracted DataFrame (After Editing)")
-
-        # 4. Display the extracted DataFrame for verification
-        #st.write(edited_df)
-
-        # You can also use the data in other parts of your application, for example:
-        if st.button('Process Data'):
-            st.success(f'Data processed. Total entries: {len(edited_df)}.')
-            # Further processing of the 'edited_df' can be done here.    
+        # Month/Year selection
+        col1, col2 = st.columns(2)
+        with col1:
+            entry_month = st.number_input("Month", min_value=1, max_value=12, value=curr_month, step=1)
+        with col2:
+            entry_year = st.number_input("Year", min_value=2000, max_value=2100, value=curr_year, step=1)
+        
+        # Initialize session state for the data editor
+        if 'portfolio_entries' not in st.session_state:
+            st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
+            st.session_state.last_loaded_month = entry_month
+            st.session_state.last_loaded_year = entry_year
+        
+        # Reload data if month/year changed
+        if 'last_loaded_month' not in st.session_state or 'last_loaded_year' not in st.session_state or \
+           st.session_state.last_loaded_month != entry_month or \
+           st.session_state.last_loaded_year != entry_year:
+            st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
+            st.session_state.last_loaded_month = entry_month
+            st.session_state.last_loaded_year = entry_year
+        
+        st.markdown("### Enter Portfolio Data")
+        
+        # Show info about data source
+        prev_month = entry_month - 1 if entry_month > 1 else 12
+        prev_year = entry_year if entry_month > 1 else entry_year - 1
+        
+        if len(st.session_state.portfolio_entries) > 1 or \
+           (len(st.session_state.portfolio_entries) == 1 and st.session_state.portfolio_entries['symbol'].iloc[0] != ''):
+            st.info(f"📋 Loaded {len(st.session_state.portfolio_entries)} entries from {prev_month}/{prev_year}. You can add, update, or delete rows as needed.")
+        else:
+            st.info("💡 No previous month data found. Add rows using the '+' button. For ticker symbols, use standard symbols (e.g., AAPL, GOOGL) or MF:CASH for cash holdings.")
+        
+        # Data editor with proper column configuration
+        edited_df = st.data_editor(
+            st.session_state.portfolio_entries,
+            num_rows="dynamic",
+            column_config={
+                "month": st.column_config.NumberColumn(
+                    "Month",
+                    min_value=1,
+                    max_value=12,
+                    step=1,
+                    format="%d"
+                ),
+                "year": st.column_config.NumberColumn(
+                    "Year",
+                    min_value=2000,
+                    max_value=2100,
+                    step=1,
+                    format="%d"
+                ),
+                "account_name": st.column_config.TextColumn(
+                    "Account Name",
+                    help="e.g., PNC, Schwab, Fidelity",
+                    required=True
+                ),
+                "account_type": st.column_config.SelectboxColumn(
+                    "Account Type",
+                    options=["Cash", "Brokerage", "Traditional", "Roth"],
+                    required=True
+                ),
+                "symbol": st.column_config.TextColumn(
+                    "Ticker Symbol",
+                    help="Stock ticker or MF:CASH for cash",
+                    required=True
+                ),
+                "name": st.column_config.TextColumn(
+                    "Security Name",
+                    help="Will be auto-filled during validation"
+                ),
+                "sector": st.column_config.SelectboxColumn(
+                    "Sector",
+                    options=[
+                        "MF:Cash",
+                        "Stock/ETF",
+                        "MF:Large-Cap",
+                        "MF:Mid-Cap",
+                        "MF:Small-Cap",
+                        "MF:Reit",
+                        "MF:Global",
+                        "MF:Asia",
+                        "MF:Europe",
+                        "MF:Latin America",
+                        "Automotive",
+                        "Technology",
+                        "Communication Services",
+                        "Healthcare",
+                        "Consumer Defensive",
+                        "Financial Services",
+                        "Energy",
+                        "Industrials",
+                        "Real Estate",
+                        "Utilities",
+                        "Basic Materials",
+                        "Consumer Cyclical"
+                    ],
+                    help="Will be auto-filled during validation"
+                ),
+                "qty": st.column_config.NumberColumn(
+                    "Quantity",
+                    min_value=0,
+                    step=0.01,
+                    format="%.2f",
+                    required=True
+                ),
+                "purchase_price": st.column_config.NumberColumn(
+                    "Purchase Price",
+                    min_value=0,
+                    step=0.01,
+                    format="$%.2f",
+                    required=True
+                )
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Update session state
+        st.session_state.portfolio_entries = edited_df
+        
+        # Action buttons
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button('🔍 Validate & Lookup Tickers', type="primary", use_container_width=True):
+                with st.spinner("Validating ticker symbols with Yahoo Finance..."):
+                    # Filter out empty rows
+                    non_empty_df = edited_df[edited_df['symbol'].str.strip() != ''].copy()
+                    
+                    if non_empty_df.empty:
+                        st.warning("No entries to validate. Please add at least one row with a ticker symbol.")
+                    else:
+                        validation_results = []
+                        
+                        # Validate each ticker and auto-fill name/sector
+                        for idx, row in non_empty_df.iterrows():
+                            symbol = row['symbol'].strip().upper()
+                            is_valid, name, sector, error = validate_ticker_symbol(symbol)
+                            
+                            if is_valid:
+                                # Update name and sector in the dataframe
+                                non_empty_df.at[idx, 'name'] = name
+                                non_empty_df.at[idx, 'sector'] = sector
+                                validation_results.append({
+                                    'Symbol': symbol,
+                                    'Status': '✅ Valid',
+                                    'Name': name,
+                                    'Sector': sector
+                                })
+                            else:
+                                validation_results.append({
+                                    'Symbol': symbol,
+                                    'Status': '❌ Invalid',
+                                    'Name': '',
+                                    'Sector': error
+                                })
+                        
+                        # Update session state with validated data
+                        st.session_state.portfolio_entries = non_empty_df
+                        
+                        # Display validation results
+                        st.markdown("### Validation Results")
+                        results_df = pd.DataFrame(validation_results)
+                        st.dataframe(results_df, use_container_width=True, hide_index=True)
+                        
+                        # Check if all valid
+                        invalid_count = sum(1 for r in validation_results if '❌' in r['Status'])
+                        if invalid_count == 0:
+                            st.success(f"✅ All {len(validation_results)} ticker symbols validated successfully!")
+                        else:
+                            st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
+        
+        with col2:
+            if st.button('💾 Save to CSV', type="secondary", use_container_width=True):
+                # Filter out empty rows
+                non_empty_df = edited_df[edited_df['symbol'].str.strip() != ''].copy()
+                
+                if non_empty_df.empty:
+                    st.warning("No entries to save. Please add at least one row.")
+                else:
+                    # Validate the dataframe
+                    valid_df, invalid_df = validate_portfolio_dataframe(non_empty_df)
+                    
+                    if not invalid_df.empty:
+                        st.error(f"❌ Found {len(invalid_df)} invalid entries. Please fix errors before saving:")
+                        st.dataframe(invalid_df[['symbol', 'account_name', 'validation_error']], use_container_width=True, hide_index=True)
+                    elif valid_df.empty:
+                        st.warning("No valid entries to save.")
+                    else:
+                        # Save to CSV
+                        success, message = save_portfolio_data(valid_df, append=True)
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.info("🔄 Refreshing portfolio data and switching to Map view...")
+                            
+                            # Clear ALL caches to force reload of portfolio data
+                            st.cache_data.clear()
+                            
+                            # Reset the entry form
+                            st.session_state.portfolio_entries = create_empty_entry_template(entry_month, entry_year)
+                            
+                            # Force a complete page refresh to reload all data
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+        
+        with col3:
+            if st.button('🔄 Reload Previous Month', use_container_width=True):
+                st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
+                st.rerun()
+        
+        # Display current data preview
+        st.markdown("---")
+        st.markdown("### Current Entries Preview")
+        non_empty_preview = edited_df[edited_df['symbol'].str.strip() != '']
+        if not non_empty_preview.empty:
+            st.dataframe(non_empty_preview, use_container_width=True, hide_index=True)
+        else:
+            st.info("No entries yet. Add rows above to get started.")
         
 
 
