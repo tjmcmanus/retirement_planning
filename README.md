@@ -16,6 +16,16 @@ This application helps users plan their retirement by:
 - **Charitable Planning**: Donor Advised Fund (DAF) contribution strategies
 - **RMD Compliance**: Automatic Required Minimum Distribution calculations
 
+### 🆕 NEW: BETR Roth Conversion Algorithm
+Advanced Roth conversion analysis based on Vanguard research:
+- **Break-Even Tax Rate (BETR)**: Calculate the future tax rate that makes conversion indifferent
+- **Smart Optimization**: Find optimal conversion amounts to stay within target tax brackets
+- **Multi-Factor Analysis**: Accounts for tax payment source, nontaxable basis, and future opportunities
+- **Scenario Comparison**: Analyze multiple conversion strategies side-by-side
+- **Integration Ready**: Works seamlessly with existing tax calculations and withdrawal strategies
+
+See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_conversion.py`](betr_roth_conversion.py) for implementation.
+
 ## Recent Updates (February 2026)
 
 ### 🎯 New: Configuration System & Portfolio Data Management
@@ -324,6 +334,7 @@ retirement_planning/
 ├── config.py                          # Configuration management system
 ├── portfolio_data_entry.py            # Portfolio data validation
 ├── withdrawal_strategy.py             # 5-stage withdrawal strategy engine
+├── betr_roth_conversion.py            # BETR Roth conversion algorithm (NEW)
 ├── example_withdrawal_strategy.py     # Example scenarios and runner
 ├── test_withdrawal_strategy.py        # Test suite for withdrawal module
 ├── calculations.py                    # Tax calculation functions (with logging)
@@ -344,7 +355,8 @@ retirement_planning/
 ├── run.sh                             # Main app setup and run script
 ├── run_strategy.sh                    # Withdrawal strategy runner
 ├── README.md                          # This file (main documentation)
-├── CONFIG_GUIDE.md                    # Configuration system guide (NEW)
+├── CONFIG_GUIDE.md                    # Configuration system guide
+├── BETR_GUIDE.md                      # BETR Roth conversion guide (NEW)
 ├── WITHDRAWAL_STRATEGY_README.md      # Withdrawal strategy documentation
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation details
 ├── ERRORS_FOUND.md                    # Bug fixes and code analysis
@@ -371,6 +383,15 @@ retirement_planning/
 - `calculate_aca_subsidy()` - ACA marketplace subsidies
 - `generate_strategy_summary()` - Summary statistics
 - `print_strategy_report()` - Formatted reporting
+### BETR Roth Conversion ([`betr_roth_conversion.py`](betr_roth_conversion.py))
+**NEW: Advanced Roth conversion analysis based on Vanguard research**
+- `BETRInputs` - Input parameters dataclass
+- `BETRResults` - Results dataclass with detailed analysis
+- `calculate_betr()` - Calculate Break-Even Tax Rate
+- `optimize_conversion_amount()` - Find optimal conversion to stay in target bracket
+- `analyze_conversion_scenarios()` - Compare multiple conversion amounts
+- `print_betr_report()` - Generate formatted analysis report
+
 
 ### Tax Calculations ([`calculations.py`](calculations.py))
 **Enhanced with configurable debug logging**
@@ -417,6 +438,14 @@ retirement_planning/
   - Strategy explanations for each life stage
   - Tax optimization techniques
   - Integration examples
+- **[`BETR_GUIDE.md`](BETR_GUIDE.md)** - BETR Roth conversion guide (NEW - 600 lines)
+  - BETR methodology explanation
+  - Quick start examples
+  - API reference
+  - Integration with existing modules
+  - Use cases and scenarios
+  - Decision framework
+  - Best practices
   - Troubleshooting guide
 
 ### Implementation Details
@@ -977,11 +1006,12 @@ See development guidelines in the Contributing section above. Priority areas for
 
 ---
 
-**Made with IBM Bob** | Last Updated: 2026-02-22
+**Made with IBM Bob** | Last Updated: 2026-02-23
 
 ## Quick Links
 
 - ⚙️ [Configuration Guide](CONFIG_GUIDE.md) - **START HERE**
+- 💰 [BETR Roth Conversion Guide](BETR_GUIDE.md) - **NEW**
 - 📖 [Withdrawal Strategy Guide](WITHDRAWAL_STRATEGY_README.md)
 - 🔧 [Implementation Summary](IMPLEMENTATION_SUMMARY.md)
 - 🐛 [Bug Fixes & Analysis](ERRORS_FOUND.md)
