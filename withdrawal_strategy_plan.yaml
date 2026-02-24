@@ -1,0 +1,4285 @@
+# Retirement Portfolio Withdrawal Strategy - Implementation Plan
+# 5-Stage Life Cycle Approach
+# Author: IBM Bob
+# Date: 2026-02-24
+
+metadata:
+  module_name: withdrawal_strategy.py
+  version: "1.0"
+  created: "2026-02-22"
+  last_reviewed: "2026-02-24"
+  purpose: "Comprehensive retirement withdrawal strategy across 5 life stages with tax optimization"
+  integration: "Streamlit retirement planning application"
+
+# ==============================================================================
+# OVERVIEW
+# ==============================================================================
+
+overview:
+  description: |
+    A sophisticated withdrawal strategy module that adapts to different life stages,
+    optimizing for tax efficiency using the BETR (Break-Even Tax Rate) algorithm for
+    Roth conversions, IRMAA management, and ACA subsidies. Based on Vanguard research
+    (July 2025) for optimal conversion decisions.
+    
+  key_features:
+    - Multi-stage lifecycle approach (5 distinct stages)
+    - BETR algorithm for optimal Roth conversion decisions
+    - RMD lookback optimization (adjust early conversions to reduce future RMDs)
+    - Tax-optimized Roth conversion ladder using break-even analysis
+    - IRMAA threshold management with 2-year lookback
+    - ACA subsidy optimization for early retirees
+    - Long-term capital gains harvesting at 0% rate
+    - RMD compliance and optimization
+    - 4% sustainable withdrawal rate
+    - Cash buffer management (2 years cash + 3 years taxable)
+    - State tax, AMT, and NIIT planning frameworks
+
+  life_stages:
+    stage_1:
+      name: "Accumulation"
+      trigger: "Has wages/employment income"
+      focus: "Tax-efficient contributions and asset building, tax-loss harvesting, Roth Conversion based on BETR algorythm to reduce RMDs in Stage 5"
+      
+    stage_2:
+      name: "Early Retirement"
+      trigger: "No wages, pre-Medicare, pre-SS, pre-RMD"
+      focus: "use traditional, brokerage and cash accounts to fund lifestyle, Aggressive Roth conversions based on BETR algorythm to reduce RMDs in Stage 5, ACA optimization if applicable and tax-loss harvesting"
+      
+    stage_3:
+      name: "Medicare"
+      trigger: "No wages,Age 65+, on Medicare, pre-SS, pre-RMD"
+      focus: "use traditional, brokerage and cash accounts to fund lifestyle, IRMAA optimization while continuing roth conversions to reduce RMDs in Stage 5"
+      
+    stage_4:
+      name: "Social Security"
+      trigger: "Collecting SS benefits, pre-RMD"
+      focus: "Balance SS taxation with IRMAA and coRoth conversions based on BETR algorythm to reduce RMDs in Stage 5"
+      
+    stage_5:
+      name: "RMD"
+      trigger: "Age 73+ (SECURE Act 2.0)"
+      focus: "RMD compliance and tax-efficient distributions"
+
+# ==============================================================================
+# ARCHITECTURE
+# ==============================================================================
+
+architecture:
+  design_pattern: "Strategy Pattern"
+  description: |
+    Uses polymorphic LifeStage classes that implement stage-specific withdrawal logic.
+    WithdrawalStrategyEngine orchestrates stage determination and multi-year projections.
+    
+  core_components:
+    data_classes:
+      - name: "PortfolioBalances"
+        purpose: "Container for 5 account types"
+        fields:
+          - cash: "Checking/savings/cash accounts"
+          - taxable: "Brokerage accounts"
+          - traditional: "401k, Traditional IRA (tax-deferred)"
+          - roth: "Roth IRA, Roth 401k (tax-free)"
+          - daf: "Donor Advised Fund"
+        methods:
+          - total(): "Sum of all account balances"
+          
+      - name: "YearlyStrategy"
+        purpose: "Complete strategy for a single year"
+        fields:
+          year: "Calendar year"
+          age_primary: "Primary person age"
+          age_spouse: "Spouse age"
+          stage: "Life stage name"
+          wages: "W-2 employment income"
+          ss_benefits: "Social Security benefits"
+          rmd_amount: "Required Minimum Distribution"
+          traditional_withdrawal: "Traditional IRA withdrawals"
+          taxable_withdrawal: "Taxable account withdrawals"
+          roth_withdrawal: "Roth IRA withdrawals"
+          roth_conversion: "Traditional → Roth conversion amount"
+          ltcg_harvested: "Long-term capital gains harvested"
+          daf_contribution: "Donor Advised Fund contributions"
+          expenses: "Annual living expenses"
+          federal_tax: "Federal income tax"
+          irmaa_penalty: "Medicare IRMAA surcharge"
+          aca_premium: "ACA marketplace premium"
+          balances: "End-of-year PortfolioBalances"
+    
+    base_classes:
+      - name: "LifeStage"
+        type: "Abstract base class"
+        methods:
+          - applies(): "Determines if stage applies to current situation"
+          - calculate_strategy(): "Computes optimal withdrawal strategy"
+        
+    stage_implementations:
+      - class: "Stage1Accumulation"
+        inherits: "LifeStage"
+        trigger_logic: "has_wages == True"
+        
+      - class: "Stage2EarlyRetirement"
+        inherits: "LifeStage"
+        trigger_logic: "not has_wages and not has_ss and age < 65"
+        
+      - class: "Stage3Medicare"
+        inherits: "LifeStage"
+        trigger_logic: "not has_wages and not has_ss and age >= 65 and age < 73"
+        
+      - class: "Stage4SocialSecurity"
+        inherits: "LifeStage"
+        trigger_logic: "has_ss and age < 73"
+        
+      - class: "Stage5RMD"
+        inherits: "LifeStage"
+        trigger_logic: "age >= 73"
+    
+    engine:
+      - name: "WithdrawalStrategyEngine"
+        purpose: "Orchestrates multi-year strategy calculation"
+        methods:
+          - determine_stage(): "Selects applicable LifeStage"
+          - calculate_multi_year_strategy(): "Projects 25+ years"
+          - _strategies_to_dataframe(): "Converts to pandas DataFrame"
+
+# ==============================================================================
+# STAGE 1: ACCUMULATION
+# ==============================================================================
+
+stage_1_accumulation:
+  name: "Stage 1: Accumulation"
+  description: "Employed, earning wages, building retirement assets"
+  
+  trigger_conditions:
+    - has_wages: true
+    
+  objectives:
+    primary: "Maximize tax-efficient contributions"
+    secondary:
+      - "Build emergency fund"
+      - "Optimize Roth vs Traditional contributions"
+      - "Maximize employer match"
+      
+  strategy:
+    contributions:
+      traditional_401k: "Pre-tax contributions reduce current AGI"
+      roth_401k: "After-tax contributions for tax-free growth"
+      decision_criteria: "Based on current tax bracket vs expected retirement bracket"
+      
+    withdrawals:
+      policy: "No withdrawals during accumulation"
+      exceptions: "Emergency fund access only"
+      
+    tax_optimization:
+      - "Maximize pre-tax contributions if in high bracket (24%+)"
+      - "Consider Roth contributions if in low bracket (12%)"
+      - "Utilize standard deduction fully"
+      
+  implementation_details:
+    key_calculations:
+      - "AGI = wages - traditional_401k_contribution"
+      - "Taxable income = AGI - standard_deduction"
+      - "Federal tax = calculate_taxable_income(taxable_income, tax_brackets)"
+      
+    balance_updates:
+      - "traditional += contribution_401k"
+      - "roth += contribution_roth"
+      - "No withdrawals from any account"
+
+# ==============================================================================
+# STAGE 2: EARLY RETIREMENT
+# ==============================================================================
+
+stage_2_early_retirement:
+  name: "Stage 2: Early Retirement"
+  description: "Pre-Medicare, pre-SS, pre-RMD - Prime Roth conversion window"
+  
+  trigger_conditions:
+    - has_wages: false
+    - has_ss: false
+    - age_primary: "< 65"
+    - age_spouse: "< 65"
+    
+  objectives:
+    primary: "Aggressive Roth conversions to fill lower tax brackets"
+    secondary:
+      - "Harvest LTCG at 0% rate"
+      - "Optimize for ACA subsidies (< 400% FPL)"
+      - "Build cash buffer (2 years expenses)"
+      - "Build taxable buffer (3 years expenses)"
+      - "Implement 4% withdrawal rate"
+      
+  strategy:
+    cash_buffer_management:
+      cash_target: "2 years of expenses"
+      taxable_target: "3 years of expenses"
+      ramp_up_period: "3 years to reach targets"
+      calculation: "calculate_cash_buffer_targets(expenses)"
+      purpose: "Avoid forced sales during market downturns"
+      
+    roth_conversion_ladder:
+      approach: "Use BETR (Break-Even Tax Rate) algorithm to optimize conversions"
+      methodology: "Vanguard BETR algorithm (July 2025 research)"
+      target_brackets:
+        - "12% bracket (preferred)"
+        - "22% bracket (acceptable)"
+        - "24% bracket (maximum)"
+      betr_optimization:
+        description: "BETR calculates break-even future tax rate accounting for multiple factors"
+        factors_considered:
+          - "Current vs expected future tax rates"
+          - "Tax payment source (taxable account vs IRA)"
+          - "Nontaxable basis in Traditional IRA"
+          - "Future backdoor Roth opportunities"
+          - "Time horizon and investment returns"
+        decision_rule: "Convert if expected future tax rate > BETR"
+      calculation: |
+        # Use BETR algorithm from betr_roth_conversion.py
+        from betr_roth_conversion import optimize_conversion_amount, BETRInputs, calculate_betr
+        
+        # Optimize conversion to stay within target bracket
+        optimal_amount, betr_results = optimize_conversion_amount(
+            traditional_ira_balance=traditional_balance,
+            current_agi=current_income,
+            target_tax_bracket=max_conversion_rate,
+            year=current_year,
+            pay_from_taxable=True,
+            taxable_account_balance=taxable_balance,
+            years_to_withdrawal=years_until_rmd,
+            annual_return=growth_rate - 1.0
+        )
+        
+        # Verify conversion is beneficial
+        if betr_results.conversion_recommended:
+            roth_conversion = optimal_amount
+        else:
+            roth_conversion = 0  # Skip conversion if BETR analysis says no
+      constraints:
+        - "Limited by Traditional IRA balance"
+        - "Consider ACA subsidy cliffs"
+        - "Watch future IRMAA impact (2-year lookback)"
+        - "BETR must indicate conversion is beneficial"
+        
+    ltcg_harvesting:
+      strategy: "Harvest at 0% capital gains rate"
+      bracket_limit: "~$94,000 MAGI for married filing jointly"
+      calculation: "ltcg_room = cg_0_percent_limit - std_deduction"
+      benefits:
+        - "Tax-free income to fund expenses"
+        - "Reset cost basis higher"
+        - "No wash sale rule for gains"
+      implementation: "Sell appreciated positions, immediately rebuy"
+      
+    aca_optimization:
+      enabled: "When aca_optimize = True"
+      target: "Keep MAGI < 400% Federal Poverty Level"
+      benefit: "Maximize premium tax credits"
+      calculation: "calculate_aca_subsidy(magi, year, household_size)"
+      trade_off: "May limit Roth conversions to stay under threshold"
+      
+    withdrawal_sequence:
+      order:
+        1: "Cash (for immediate expenses)"
+        2: "Taxable (LTCG harvesting)"
+        3: "Roth (preserve for last)"
+      rationale: "Minimize taxes while maintaining liquidity"
+      
+    buffer_replenishment:
+      source: "Traditional IRA withdrawals"
+      timing: "Before Roth conversions"
+      amount: "Sufficient to reach/maintain buffer targets"
+      
+  implementation_details:
+    key_calculations:
+      ltcg_harvest: |
+        cg_0_percent_limit = get from cap_gains_brackets
+        ltcg_room = cg_0_percent_limit - std_deduction
+        ltcg_harvested = min(expenses * 1.15, ltcg_room, taxable * 0.5)
+        
+      roth_conversion: |
+        # Use BETR algorithm for optimal conversion
+        from betr_roth_conversion import optimize_conversion_amount
+        
+        target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(max_rate)
+        current_income = ltcg_harvested
+        
+        # Calculate optimal conversion using BETR
+        optimal_amount, betr_results = optimize_conversion_amount(
+            traditional_ira_balance=traditional_balance,
+            current_agi=current_income,
+            target_tax_bracket=target_bracket_rate,
+            year=current_year,
+            pay_from_taxable=True,
+            taxable_account_balance=taxable_balance,
+            years_to_withdrawal=(73 - age_primary),  # Years until RMD
+            annual_return=growth_rate - 1.0
+        )
+        
+        # Only convert if BETR analysis recommends it
+        if betr_results.conversion_recommended:
+            roth_conversion = optimal_amount
+            logger.info(f"BETR: {betr_results.betr:.2%}, Conversion: ${optimal_amount:,.0f}")
+        else:
+            roth_conversion = 0
+            logger.info(f"BETR: {betr_results.betr:.2%}, Conversion not recommended")
+        
+      tax_calculation: |
+        total_income = ltcg_harvested + roth_conversion
+        agi = total_income - std_deduction
+        federal_tax = calculate_taxable_income(agi, tax_brackets)
+        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        total_tax = federal_tax + cg_tax
+        
+      withdrawal_logic: |
+        total_outflow = expenses + total_tax
+        cash_withdrawal = min(total_outflow, cash_balance)
+        remaining = total_outflow - cash_withdrawal
+        taxable_withdrawal = min(remaining, ltcg_harvested, taxable_balance)
+        remaining -= taxable_withdrawal
+        roth_withdrawal = min(remaining, roth_balance)
+        
+      buffer_building: |
+        cash_need, taxable_need = calculate_buffer_ramp_up(year, start_year, targets, current)
+        traditional_withdrawal = min(cash_need + taxable_need, traditional - roth_conversion)
+        
+    balance_updates:
+      cash: "cash - cash_withdrawal"
+      taxable: "taxable + traditional_withdrawal + ltcg_harvested - taxable_withdrawal"
+      traditional: "traditional - traditional_withdrawal - roth_conversion"
+      roth: "roth + roth_conversion - roth_withdrawal"
+      growth: "Apply growth_rate to taxable, traditional, roth"
+
+# ==============================================================================
+# STAGE 3: MEDICARE
+# ==============================================================================
+
+stage_3_medicare:
+  name: "Stage 3: Medicare"
+  description: "On Medicare, optimizing for IRMAA while continuing conversions"
+  
+  trigger_conditions:
+    - has_wages: false
+    - has_ss: false
+    - age_primary: ">= 65"
+    - age_spouse: ">= 65"
+    - age_primary: "< 73"
+    
+  objectives:
+    primary: "Balance Roth conversions with IRMAA penalties"
+    secondary:
+      - "Avoid crossing IRMAA thresholds"
+      - "Continue tax-efficient conversions"
+      - "Maintain cash buffers"
+      - "Plan for 2-year MAGI lookback"
+      
+  strategy:
+    irmaa_management:
+      lookback_period: "2 years"
+      description: "IRMAA based on MAGI from 2 years prior"
+      thresholds_2024:
+        tier_1: "$103,000 - $129,000: +$69.90/month"
+        tier_2: "$129,000 - $161,000: +$174.70/month"
+        tier_3: "$161,000 - $193,000: +$279.50/month"
+        tier_4: "$193,000+: Higher penalties"
+      people_on_medicare: "1 or 2 (affects total penalty)"
+      
+    conversion_strategy:
+      approach: "Use BETR algorithm with IRMAA penalty consideration"
+      methodology: "BETR analysis adjusted for IRMAA impact"
+      decision_logic: |
+        # Use BETR with IRMAA adjustment
+        from betr_roth_conversion import optimize_conversion_amount, calculate_betr
+        
+        # Calculate optimal conversion using BETR
+        optimal_amount, betr_results = optimize_conversion_amount(
+            traditional_ira_balance=traditional_balance,
+            current_agi=current_income,
+            target_tax_bracket=target_rate,
+            year=current_year,
+            pay_from_taxable=True,
+            taxable_account_balance=taxable_balance,
+            years_to_withdrawal=(73 - age_primary)
+        )
+        
+        # Check IRMAA impact of proposed conversion
+        proposed_magi = current_income + optimal_amount
+        future_irmaa = calculate_irmma_penalty(proposed_magi, year + 2, people_on_medicare)
+        
+        # Adjust conversion if IRMAA penalty too high
+        if future_irmaa > (optimal_amount * 0.02):  # If IRMAA > 2% of conversion
+            # Reduce conversion to stay below IRMAA threshold
+            irmaa_safe_amount = find_amount_below_irmaa_threshold()
+            
+            # Recalculate BETR with reduced amount
+            reduced_inputs = BETRInputs(...)
+            reduced_results = calculate_betr(reduced_inputs)
+            
+            if reduced_results.conversion_recommended:
+                roth_conversion = irmaa_safe_amount
+            else:
+                roth_conversion = 0
+        else:
+            roth_conversion = optimal_amount if betr_results.conversion_recommended else 0
+      target: "Maximize conversions while managing IRMAA using BETR"
+      
+    withdrawal_sequence:
+      same_as: "Stage 2 (Cash → Taxable → Roth)"
+      additions:
+        - "Monitor MAGI for IRMAA impact"
+        - "May use Roth earlier to avoid IRMAA"
+        
+  implementation_details:
+    key_calculations:
+      irmaa_check: |
+        magi_2_years_ago = get from historical tracking
+        people_on_medicare = count(age >= 65)
+        irmaa_penalty = calculate_irmma_penalty(magi_2_years_ago, year, people_on_medicare)
+        
+      conversion_optimization: |
+        # Use BETR algorithm with IRMAA consideration
+        from betr_roth_conversion import optimize_conversion_amount
+        
+        # Calculate optimal conversion using BETR
+        optimal_amount, betr_results = optimize_conversion_amount(
+            traditional_ira_balance=traditional_balance,
+            current_agi=current_income,
+            target_tax_bracket=target_rate,
+            year=current_year,
+            pay_from_taxable=True,
+            taxable_account_balance=taxable_balance,
+            years_to_withdrawal=(73 - age_primary)
+        )
+        
+        # Check IRMAA impact
+        proposed_magi = current_income + optimal_amount
+        future_irmaa = calculate_irmma_penalty(proposed_magi, year + 2, people_on_medicare)
+        
+        # BETR-based decision with IRMAA adjustment
+        if betr_results.conversion_recommended and future_irmaa < (optimal_amount * 0.02):
+            roth_conversion = optimal_amount
+        else:
+            # Find IRMAA-safe amount and verify with BETR
+            irmaa_safe_amount = find_amount_below_irmaa_threshold()
+            # Recalculate BETR for reduced amount
+            # Only convert if still beneficial per BETR
+            
+    magi_tracking:
+      purpose: "Track MAGI for 2-year IRMAA lookback"
+      storage: "magi_history dictionary keyed by year"
+      usage: "irmaa_penalty = calculate from magi_history[year - 2]"
+
+# ==============================================================================
+# STAGE 4: SOCIAL SECURITY
+# ==============================================================================
+
+stage_4_social_security:
+  name: "Stage 4: Social Security"
+  description: "Collecting SS benefits with Medicare, pre-RMD"
+  
+  trigger_conditions:
+    - has_ss: true
+    - age_primary: "< 73"
+    
+  objectives:
+    primary: "Optimize taxation of SS benefits"
+    secondary:
+      - "Manage IRMAA with SS income"
+      - "Limited Roth conversions"
+      - "Supplement with portfolio withdrawals"
+      
+  strategy:
+    ss_taxation:
+      taxable_percentage: "Up to 85% of benefits"
+      calculation: "Based on combined income (AGI + 50% SS + tax-exempt interest)"
+      thresholds:
+        tier_1: "$32,000 - $44,000: 50% taxable"
+        tier_2: "> $44,000: 85% taxable"
+        
+    conversion_constraints:
+      limitation: "SS income reduces conversion room"
+      calculation: "conversion_room = bracket_upper - std_deduction - ss_benefits - other_income"
+      trade_off: "SS + conversions can trigger higher IRMAA"
+      
+    withdrawal_strategy:
+      primary_income: "Social Security benefits"
+      supplemental: "Portfolio withdrawals as needed"
+      sequence: "Cash → Taxable → Roth (same as earlier stages)"
+      
+  implementation_details:
+    key_calculations:
+      ss_benefits: |
+        ss_benefits = get_monthly_benefit(person_name, year, claiming_age) * 12
+        taxable_ss = ss_benefits * 0.85  # Assume 85% taxable at higher incomes
+        
+      conversion_with_ss: |
+        # Use BETR algorithm with Social Security income
+        from betr_roth_conversion import optimize_conversion_amount
+        
+        current_income = ss_benefits + ltcg_harvested
+        
+        # Calculate optimal conversion using BETR
+        optimal_amount, betr_results = optimize_conversion_amount(
+            traditional_ira_balance=traditional_balance,
+            current_agi=current_income,
+            target_tax_bracket=target_rate,
+            year=current_year,
+            pay_from_taxable=True,
+            taxable_account_balance=taxable_balance,
+            years_to_withdrawal=(73 - age_primary)
+        )
+        
+        # BETR analysis accounts for SS income in current AGI
+        # Only convert if BETR indicates benefit despite SS income
+        if betr_results.conversion_recommended:
+            roth_conversion = optimal_amount
+        else:
+            roth_conversion = 0
+        # Likely much smaller than Stage 2/3 due to SS income
+        
+      irmaa_impact: |
+        magi = ss_benefits + conversions + other_income
+        # Track for 2-year lookback
+        magi_history[year] = magi
+
+# ==============================================================================
+# STAGE 5: RMD
+# ==============================================================================
+
+stage_5_rmd:
+  name: "Stage 5: RMD"
+  description: "Required Minimum Distributions with full retirement income"
+  
+  trigger_conditions:
+    - age_primary: ">= 73"
+    
+  objectives:
+    primary: "RMD compliance"
+    secondary:
+      - "Minimize tax impact of forced distributions"
+      - "Optimize withdrawal sequencing"
+      - "Manage IRMAA with RMD income"
+      
+  strategy:
+    rmd_calculation:
+      formula: "Traditional IRA balance ÷ Life Expectancy Factor"
+      table: "IRS Uniform Lifetime Table"
+      deadline: "December 31 each year"
+      penalty: "50% of shortfall if missed"
+      age_start: "73 (SECURE Act 2.0)"
+      
+    tax_management:
+      challenge: "RMDs may fill lower tax brackets"
+      opportunity: "Limited Roth conversion room"
+      approach: "Use RMD to fund expenses first"
+      
+    withdrawal_sequence:
+      1: "RMD (required)"
+      2: "Cash (for additional needs)"
+      3: "Taxable (LTCG if needed)"
+      4: "Roth (preserve for last)"
+      
+    irmaa_consideration:
+      impact: "RMDs increase MAGI"
+      strategy: "May need to use Roth to avoid IRMAA thresholds"
+      planning: "Consider QCDs (Qualified Charitable Distributions)"
+      
+  implementation_details:
+    key_calculations:
+      rmd_amount: |
+        rmd_amount = get_rmd_value(traditional_balance, age_primary, year)
+        # Must withdraw this amount minimum
+        
+      tax_calculation: |
+        total_income = ss_benefits + rmd_amount + other_income
+        agi = total_income - std_deduction
+        federal_tax = calculate_taxable_income(agi, tax_brackets)
+        
+      conversion_opportunity: |
+        # Very limited due to RMD income
+        current_income = ss_benefits + rmd_amount
+        conversion_room = target_bracket_upper - std_deduction - current_income
+        # Often zero or minimal
+        
+    balance_updates:
+      traditional: "traditional - rmd_amount - additional_withdrawals"
+      cash: "cash + rmd_amount - expenses"
+      # RMD goes to cash first, then used for expenses
+
+# ==============================================================================
+# TAX PLANNING: STATE TAXES
+# ==============================================================================
+
+state_tax_planning:
+  overview:
+    description: |
+      State income tax planning is critical for retirement optimization as state tax rates
+      can significantly impact net withdrawal amounts. Some states have no income tax,
+      while others tax retirement income at rates up to 13.3%. Strategic planning includes
+      residency optimization, timing of income recognition, and state-specific deductions.
+      
+  key_considerations:
+    residency:
+      importance: "State residency determines which state's tax laws apply"
+      factors:
+        - "Physical presence (typically 183+ days)"
+        - "Domicile intent (voter registration, driver's license)"
+        - "Property ownership and location"
+        - "Family and business ties"
+      strategy: "Consider relocating to low/no tax states before retirement"
+      
+    state_categories:
+      no_income_tax_states:
+        states: ["Alaska", "Florida", "Nevada", "South Dakota", "Tennessee", "Texas", "Washington", "Wyoming"]
+        benefit: "No state income tax on any income source"
+        considerations: "May have higher property or sales taxes"
+        
+      retirement_friendly_states:
+        description: "States that don't tax Social Security or have favorable retirement income treatment"
+        examples:
+          - "Pennsylvania: No tax on retirement income (SS, pensions, IRA/401k)"
+          - "Mississippi: No tax on retirement income"
+          - "Illinois: No tax on retirement income"
+        strategy: "Maximize retirement account withdrawals in these states"
+        
+      high_tax_states:
+        examples:
+          - "California: Up to 13.3% (but doesn't tax SS)"
+          - "New York: Up to 10.9%"
+          - "New Jersey: Up to 10.75%"
+          - "Oregon: Up to 9.9%"
+        strategy: "Aggressive Roth conversions before moving or while in lower brackets"
+        
+  state_specific_strategies:
+    roth_conversion_timing:
+      high_tax_state_resident:
+        strategy: "Delay conversions until moving to low-tax state"
+        exception: "Convert if federal bracket opportunity outweighs state tax"
+        calculation: "net_benefit = federal_tax_savings - state_tax_cost"
+        
+      planning_to_relocate:
+        strategy: "Accelerate conversions after establishing residency in low-tax state"
+        timing: "Wait until domicile clearly established (6-12 months)"
+        documentation: "Maintain records proving new state residency"
+        
+    withdrawal_sequencing:
+      high_tax_state:
+        priority:
+          1: "Roth withdrawals (tax-free at state level)"
+          2: "Long-term capital gains (often lower state rate)"
+          3: "Traditional IRA (fully taxed by state)"
+        rationale: "Minimize state taxable income"
+        
+      no_tax_state:
+        priority: "Follow federal optimization only"
+        benefit: "More flexibility in withdrawal sequencing"
+        
+    social_security_optimization:
+      states_that_tax_ss:
+        list: ["Colorado", "Connecticut", "Kansas", "Minnesota", "Missouri", "Montana", 
+               "Nebraska", "New Mexico", "Rhode Island", "Utah", "Vermont", "West Virginia"]
+        strategy: "Consider delaying SS if in high-tax state and planning to move"
+        
+      states_with_ss_exemptions:
+        description: "Many states have income thresholds for SS taxation"
+        strategy: "Manage other income to stay below exemption thresholds"
+        
+  implementation_approach:
+    data_requirements:
+      - state_of_residence: "Current and projected future state"
+      - state_tax_rates: "Marginal rates by income bracket"
+      - state_standard_deduction: "State-specific deductions"
+      - retirement_income_exemptions: "State-specific retirement income treatment"
+      - ss_taxation_rules: "Whether state taxes Social Security"
+      
+    calculation_method:
+      state_taxable_income: |
+        # Start with federal AGI
+        state_agi = federal_agi
+        
+        # Apply state-specific adjustments
+        state_agi += state_additions  # (e.g., municipal bond interest from other states)
+        state_agi -= state_subtractions  # (e.g., retirement income exemptions)
+        
+        # Apply state standard deduction
+        state_taxable_income = max(0, state_agi - state_standard_deduction)
+        
+        # Calculate state tax
+        state_tax = calculate_state_tax(state_taxable_income, state_brackets)
+        
+    integration_points:
+      stage_2_early_retirement:
+        consideration: "Factor state tax into Roth conversion decisions"
+        calculation: "total_tax = federal_tax + state_tax"
+        optimization: "May reduce conversion amount if state tax is high"
+        
+      stage_3_medicare:
+        consideration: "State tax on conversions vs future IRMAA penalties"
+        trade_off: "High state tax now vs federal IRMAA later"
+        
+      stage_4_social_security:
+        consideration: "State taxation of SS benefits"
+        strategy: "Supplement with Roth if state taxes SS heavily"
+        
+      stage_5_rmd:
+        consideration: "State tax on RMDs"
+        strategy: "QCDs to reduce state taxable income"
+  
+  state_tax_implementation:
+    status: "Ready for Implementation"
+    priority: "HIGH"
+    
+    data_files_required:
+      state_tax_brackets_csv:
+        description: "State income tax brackets by state and filing status"
+        columns:
+          - "state: Two-letter state code"
+          - "filing_status: married_filing_jointly, single, etc."
+          - "year: Tax year"
+          - "bracket_min: Lower bound of bracket"
+          - "bracket_max: Upper bound of bracket"
+          - "rate: Marginal tax rate"
+        example_rows:
+          - "CA,married_filing_jointly,2024,0,20198,0.01"
+          - "CA,married_filing_jointly,2024,20198,47884,0.02"
+          - "FL,married_filing_jointly,2024,0,999999999,0.00"
+          - "TX,married_filing_jointly,2024,0,999999999,0.00"
+          
+      state_deductions_csv:
+        description: "State standard deductions by state and filing status"
+        columns:
+          - "state: Two-letter state code"
+          - "filing_status: Filing status"
+          - "year: Tax year"
+          - "standard_deduction: Standard deduction amount"
+        example_rows:
+          - "CA,married_filing_jointly,2024,10404"
+          - "NY,married_filing_jointly,2024,16050"
+          
+      state_retirement_exemptions_csv:
+        description: "State-specific retirement income exemptions"
+        columns:
+          - "state: Two-letter state code"
+          - "retirement_income_exempt: Boolean or amount"
+          - "ss_taxable: Boolean"
+          - "pension_exempt_amount: Dollar amount exempt"
+          - "age_threshold: Age when exemption applies"
+        example_rows:
+          - "PA,true,false,999999999,0"
+          - "IL,true,false,999999999,0"
+          - "MS,true,false,999999999,0"
+    
+    implementation_functions:
+      load_state_tax_data:
+        signature: |
+          def load_state_tax_data(state: str, year: int) -> Dict:
+              """
+              Load state tax data from CSV files
+              
+              Args:
+                  state: Two-letter state code
+                  year: Tax year
+              
+              Returns:
+                  Dictionary with brackets, deductions, and exemptions
+              """
+        implementation: |
+          def load_state_tax_data(state: str, year: int) -> Dict:
+              """Load state tax data from CSV files"""
+              
+              # Load tax brackets
+              brackets_df = pd.read_csv('state_tax_brackets.csv')
+              brackets = brackets_df[
+                  (brackets_df['state'] == state) & 
+                  (brackets_df['year'] == year)
+              ]
+              
+              # Load deductions
+              deductions_df = pd.read_csv('state_deductions.csv')
+              deduction = deductions_df[
+                  (deductions_df['state'] == state) & 
+                  (deductions_df['year'] == year)
+              ]['standard_deduction'].iloc[0]
+              
+              # Load retirement exemptions
+              exemptions_df = pd.read_csv('state_retirement_exemptions.csv')
+              exemptions = exemptions_df[exemptions_df['state'] == state].iloc[0]
+              
+              return {
+                  'brackets': brackets,
+                  'standard_deduction': deduction,
+                  'retirement_exempt': exemptions['retirement_income_exempt'],
+                  'ss_taxable': exemptions['ss_taxable'],
+                  'pension_exempt_amount': exemptions['pension_exempt_amount']
+              }
+      
+      calculate_state_tax_full:
+        signature: |
+          def calculate_state_tax(state_agi: float, state: str, year: int,
+                                 filing_status: str = "married_filing_jointly",
+                                 retirement_income: float = 0,
+                                 ss_benefits: float = 0) -> Tuple[float, Dict]:
+              """
+              Calculate state income tax with retirement exemptions
+              
+              Args:
+                  state_agi: State Adjusted Gross Income
+                  state: Two-letter state code
+                  year: Tax year
+                  filing_status: Filing status
+                  retirement_income: IRA/401k distributions
+                  ss_benefits: Social Security benefits
+              
+              Returns:
+                  Tuple of (state_tax, calculation_details)
+              """
+        implementation: |
+          def calculate_state_tax(state_agi: float, state: str, year: int,
+                                 filing_status: str = "married_filing_jointly",
+                                 retirement_income: float = 0,
+                                 ss_benefits: float = 0) -> Tuple[float, Dict]:
+              """Calculate state income tax with retirement exemptions"""
+              
+              # Load state data
+              state_data = load_state_tax_data(state, year)
+              
+              # No-tax states
+              if state in ['FL', 'TX', 'WA', 'NV', 'SD', 'WY', 'AK', 'TN', 'NH']:
+                  return 0.0, {'state': state, 'note': 'No state income tax'}
+              
+              # Apply retirement income exemptions
+              adjusted_agi = state_agi
+              
+              if state_data['retirement_exempt']:
+                  # States like PA, IL, MS exempt all retirement income
+                  adjusted_agi -= min(retirement_income, state_data['pension_exempt_amount'])
+              
+              if not state_data['ss_taxable']:
+                  # State doesn't tax Social Security
+                  adjusted_agi -= ss_benefits
+              
+              # Apply standard deduction
+              taxable_income = max(0, adjusted_agi - state_data['standard_deduction'])
+              
+              # Calculate tax using brackets
+              state_tax = 0.0
+              brackets = state_data['brackets']
+              
+              for _, bracket in brackets.iterrows():
+                  bracket_min = bracket['bracket_min']
+                  bracket_max = bracket['bracket_max']
+                  rate = bracket['rate']
+                  
+                  if taxable_income > bracket_min:
+                      taxable_in_bracket = min(taxable_income, bracket_max) - bracket_min
+                      state_tax += taxable_in_bracket * rate
+              
+              details = {
+                  'state': state,
+                  'state_agi': state_agi,
+                  'retirement_exemption': state_agi - adjusted_agi,
+                  'standard_deduction': state_data['standard_deduction'],
+                  'taxable_income': taxable_income,
+                  'state_tax': state_tax
+              }
+              
+              return state_tax, details
+      
+      integrate_state_tax_with_stages:
+        description: "Add state tax calculations to all stage strategies"
+        changes_required:
+          - "Import calculate_state_tax() in withdrawal_strategy.py"
+          - "Add state parameter to YearlyStrategy dataclass"
+          - "Calculate state tax in each stage's calculate_strategy()"
+          - "Add state_tax field to YearlyStrategy output"
+          - "Include state tax in total_tax calculations"
+        
+        example_integration: |
+          # In each stage's calculate_strategy() method:
+          
+          # Calculate federal tax (existing)
+          federal_tax = calculate_taxable_income(...)
+          
+          # NEW: Calculate state tax
+          state = config.get('personal_info', 'state_of_residence', 'CA')
+          state_tax, state_details = calculate_state_tax(
+              state_agi=agi,
+              state=state,
+              year=year,
+              filing_status='married_filing_jointly',
+              retirement_income=traditional_withdrawal + roth_conversion,
+              ss_benefits=ss_benefits
+          )
+          
+          # Total tax includes state
+          total_tax = federal_tax + state_tax
+          
+          # Add to YearlyStrategy
+          return YearlyStrategy(
+              # ... existing fields ...
+              federal_tax=federal_tax,
+              state_tax=state_tax,
+              total_tax=total_tax,
+              state_details=state_details
+          )
+    
+    testing_requirements:
+      unit_tests:
+        - "test_load_state_tax_data() - Verify CSV loading"
+        - "test_calculate_state_tax_no_tax_states() - FL, TX, etc."
+        - "test_calculate_state_tax_high_tax_states() - CA, NY, NJ"
+        - "test_calculate_state_tax_retirement_friendly() - PA, IL, MS"
+        - "test_state_tax_with_ss_exemption()"
+        - "test_state_tax_with_retirement_exemption()"
+        
+      integration_tests:
+        - "test_state_tax_in_stage_2_early_retirement()"
+        - "test_state_tax_impact_on_roth_conversions()"
+        - "test_state_tax_with_irmaa_optimization()"
+        - "test_multi_year_projection_with_state_tax()"
+    
+    estimated_effort:
+      data_file_creation: "4-6 hours (research and compile state tax data)"
+      function_implementation: "3-4 hours"
+      integration: "2-3 hours"
+      testing: "2-3 hours"
+      total: "11-16 hours"
+
+
+# ==============================================================================
+# TAX PLANNING: ALTERNATIVE MINIMUM TAX (AMT)
+# ==============================================================================
+
+amt_planning:
+  overview:
+    description: |
+      The Alternative Minimum Tax (AMT) is a parallel tax system designed to ensure
+      high-income taxpayers pay a minimum amount of tax. While less common in retirement,
+      AMT can be triggered by large Roth conversions, exercise of incentive stock options,
+      or high state tax deductions. Understanding AMT is crucial for optimizing retirement
+      income strategies.
+      
+  amt_basics:
+    purpose: "Prevent high-income taxpayers from using deductions to avoid taxes"
+    mechanism: "Calculate tax under both regular and AMT systems, pay the higher amount"
+    
+    exemption_amounts_2024:
+      single: "$85,700"
+      married_filing_jointly: "$133,300"
+      phase_out_threshold_single: "$609,350"
+      phase_out_threshold_mfj: "$1,218,700"
+      
+    amt_rates:
+      rate_1: "26% on AMTI up to $220,700 (MFJ)"
+      rate_2: "28% on AMTI above $220,700 (MFJ)"
+      
+  amt_triggers_in_retirement:
+    common_triggers:
+      - trigger: "Large Roth conversions"
+        reason: "Increases income without increasing deductions"
+        threshold: "Conversions pushing income above AMT exemption"
+        
+      - trigger: "High state and local tax (SALT) deductions"
+        reason: "SALT deductions limited under regular tax but added back for AMT"
+        impact: "Pre-TCJA concern, less relevant with $10K SALT cap"
+        
+      - trigger: "Large capital gains"
+        reason: "Increases AMTI"
+        context: "Especially when combined with conversions"
+        
+      - trigger: "Incentive Stock Options (ISOs)"
+        reason: "ISO spread added to AMTI"
+        relevance: "Early retirees with unvested ISOs"
+        
+      - trigger: "Private activity bond interest"
+        reason: "Tax-exempt for regular tax but taxable for AMT"
+        strategy: "Avoid these bonds if near AMT threshold"
+        
+    less_common_in_retirement:
+      - "Depreciation differences (rental properties)"
+      - "Passive activity losses"
+      - "Miscellaneous itemized deductions (eliminated by TCJA)"
+      
+  amt_calculation_process:
+    step_1_calculate_amti:
+      description: "Alternative Minimum Taxable Income"
+      formula: |
+        AMTI = Regular Taxable Income
+             + AMT Adjustments
+             + AMT Preferences
+             - AMT Exemption (if applicable)
+             
+    step_2_amt_adjustments:
+      common_adjustments:
+        - "Add back: State and local taxes (pre-TCJA)"
+        - "Add back: Miscellaneous itemized deductions"
+        - "Add back: Standard deduction (use itemized for AMT)"
+        - "Adjust: Depreciation differences"
+        
+    step_3_amt_preferences:
+      items:
+        - "Private activity bond interest"
+        - "ISO spread (exercise price - FMV)"
+        - "Percentage depletion"
+        
+    step_4_apply_exemption:
+      formula: |
+        if AMTI <= phase_out_threshold:
+            amt_exemption = full_exemption
+        else:
+            reduction = (AMTI - phase_out_threshold) * 0.25
+            amt_exemption = max(0, full_exemption - reduction)
+            
+    step_5_calculate_amt:
+      formula: |
+        tentative_amt = (AMTI - amt_exemption) * amt_rate
+        amt_owed = max(0, tentative_amt - regular_tax)
+        
+  retirement_specific_strategies:
+    roth_conversion_optimization:
+      issue: "Large conversions can trigger AMT"
+      strategy: "Split conversions across multiple years"
+      calculation: |
+        # Calculate AMT impact of proposed conversion
+        regular_tax_with_conversion = calculate_regular_tax(income + conversion)
+        amt_with_conversion = calculate_amt(income + conversion)
+        
+        if amt_with_conversion > regular_tax_with_conversion:
+            # In AMT - consider reducing conversion
+  
+  amt_implementation:
+    status: "Ready for Implementation"
+    priority: "MEDIUM"
+    
+    data_files_required:
+      amt_parameters_csv:
+        description: "AMT exemption amounts, phase-out thresholds, and rates by year"
+        note: "Can use existing atm.csv file or create new amt_parameters.csv"
+        columns:
+          - "year: Tax year"
+          - "filing_status: Filing status"
+          - "exemption_amount: AMT exemption"
+          - "phase_out_threshold: Income level where exemption starts phasing out"
+          - "phase_out_rate: Rate at which exemption phases out (typically 0.25)"
+          - "rate_1: First AMT rate (26%)"
+          - "rate_1_threshold: Income threshold for rate_1"
+          - "rate_2: Second AMT rate (28%)"
+        example_rows:
+          - "2024,married_filing_jointly,133300,1218700,0.25,0.26,220700,0.28"
+          - "2024,single,85700,609350,0.25,0.26,220700,0.28"
+    
+    implementation_functions:
+      load_amt_parameters:
+        signature: |
+          def load_amt_parameters(year: int, filing_status: str = "married_filing_jointly") -> Dict:
+              """
+              Load AMT parameters from CSV file
+              
+              Args:
+                  year: Tax year
+                  filing_status: Filing status
+              
+              Returns:
+                  Dictionary with AMT parameters
+              """
+        implementation: |
+          def load_amt_parameters(year: int, filing_status: str = "married_filing_jointly") -> Dict:
+              """Load AMT parameters from CSV file"""
+              
+              # Try existing atm.csv first, fall back to amt_parameters.csv
+              try:
+                  df = pd.read_csv('atm.csv')
+              except FileNotFoundError:
+                  df = pd.read_csv('amt_parameters.csv')
+              
+              params = df[
+                  (df['year'] == year) & 
+                  (df['filing_status'] == filing_status)
+              ].iloc[0]
+              
+              return {
+                  'exemption_amount': params['exemption_amount'],
+                  'phase_out_threshold': params['phase_out_threshold'],
+                  'phase_out_rate': params['phase_out_rate'],
+                  'rate_1': params['rate_1'],
+                  'rate_1_threshold': params['rate_1_threshold'],
+                  'rate_2': params['rate_2']
+              }
+      
+      calculate_amt_full:
+        signature: |
+          def calculate_amt(income: float, conversions: float, deductions: float,
+                           state_taxes: float, year: int,
+                           filing_status: str = "married_filing_jointly",
+                           iso_spread: float = 0,
+                           private_activity_bonds: float = 0) -> Tuple[float, float, float, Dict]:
+              """
+              Calculate Alternative Minimum Tax
+              
+              Args:
+                  income: Regular taxable income
+                  conversions: Roth conversion amount
+                  deductions: Regular tax deductions
+                  state_taxes: State and local taxes paid
+                  year: Tax year
+                  filing_status: Filing status
+                  iso_spread: ISO exercise spread (if applicable)
+                  private_activity_bonds: Private activity bond interest
+              
+              Returns:
+                  Tuple of (amt_owed, tentative_amt, regular_tax, details)
+              """
+        implementation: |
+          def calculate_amt(income: float, conversions: float, deductions: float,
+                           state_taxes: float, year: int,
+                           filing_status: str = "married_filing_jointly",
+                           iso_spread: float = 0,
+                           private_activity_bonds: float = 0) -> Tuple[float, float, float, Dict]:
+              """Calculate Alternative Minimum Tax"""
+              
+              # Load AMT parameters
+              amt_params = load_amt_parameters(year, filing_status)
+              
+              # Step 1: Calculate regular tax (use existing function)
+              regular_tax = calculate_taxable_income(
+                  income + conversions,
+                  deductions,
+                  year,
+                  filing_status
+              )
+              
+              # Step 2: Calculate AMTI (Alternative Minimum Taxable Income)
+              amti = income + conversions
+              
+              # Add back AMT adjustments
+              amti += state_taxes  # State taxes added back for AMT
+              # Note: Post-TCJA, standard deduction is same for AMT
+              
+              # Add AMT preferences
+              amti += iso_spread  # ISO exercise spread
+              amti += private_activity_bonds  # Private activity bond interest
+              
+              # Step 3: Calculate AMT exemption (with phase-out)
+              if amti <= amt_params['phase_out_threshold']:
+                  amt_exemption = amt_params['exemption_amount']
+              else:
+                  excess = amti - amt_params['phase_out_threshold']
+                  reduction = excess * amt_params['phase_out_rate']
+                  amt_exemption = max(0, amt_params['exemption_amount'] - reduction)
+              
+              # Step 4: Calculate tentative AMT
+              amti_after_exemption = max(0, amti - amt_exemption)
+              
+              if amti_after_exemption <= amt_params['rate_1_threshold']:
+                  tentative_amt = amti_after_exemption * amt_params['rate_1']
+              else:
+                  tentative_amt = (
+                      amt_params['rate_1_threshold'] * amt_params['rate_1'] +
+                      (amti_after_exemption - amt_params['rate_1_threshold']) * amt_params['rate_2']
+                  )
+              
+              # Step 5: AMT owed is excess over regular tax
+              amt_owed = max(0, tentative_amt - regular_tax)
+              
+              # Calculation details
+              details = {
+                  'amti': amti,
+                  'amt_exemption': amt_exemption,
+                  'amti_after_exemption': amti_after_exemption,
+                  'tentative_amt': tentative_amt,
+                  'regular_tax': regular_tax,
+                  'amt_owed': amt_owed,
+                  'in_amt': amt_owed > 0,
+                  'adjustments': {
+                      'state_taxes': state_taxes,
+                      'iso_spread': iso_spread,
+                      'private_activity_bonds': private_activity_bonds
+                  }
+              }
+              
+              logger.debug(f"AMT Calculation: AMTI=${amti:,.0f}, "
+                          f"Exemption=${amt_exemption:,.0f}, "
+                          f"Tentative AMT=${tentative_amt:,.0f}, "
+                          f"Regular Tax=${regular_tax:,.0f}, "
+                          f"AMT Owed=${amt_owed:,.0f}")
+              
+              return amt_owed, tentative_amt, regular_tax, details
+      
+      optimize_conversion_to_avoid_amt:
+        signature: |
+          def optimize_conversion_to_avoid_amt(base_income: float,
+                                               max_conversion: float,
+                                               year: int,
+                                               filing_status: str = "married_filing_jointly") -> Tuple[float, Dict]:
+              """
+              Find optimal Roth conversion amount that avoids triggering AMT
+              
+              Args:
+                  base_income: Income before conversion
+                  max_conversion: Maximum desired conversion amount
+                  year: Tax year
+                  filing_status: Filing status
+              
+              Returns:
+                  Tuple of (optimal_conversion, analysis)
+              """
+        implementation: |
+          def optimize_conversion_to_avoid_amt(base_income: float,
+                                               max_conversion: float,
+                                               year: int,
+                                               filing_status: str = "married_filing_jointly") -> Tuple[float, Dict]:
+              """Find optimal Roth conversion that avoids AMT"""
+              
+              # Binary search for conversion amount that stays below AMT
+              low = 0
+              high = max_conversion
+              optimal = 0
+              
+              while high - low > 100:  # $100 precision
+                  mid = (low + high) / 2
+                  
+                  amt_owed, _, _, _ = calculate_amt(
+                      income=base_income,
+                      conversions=mid,
+                      deductions=0,  # Simplified
+                      state_taxes=0,
+                      year=year,
+                      filing_status=filing_status
+                  )
+                  
+                  if amt_owed > 0:
+                      # In AMT, reduce conversion
+                      high = mid
+                  else:
+                      # Not in AMT, can increase conversion
+                      optimal = mid
+                      low = mid
+              
+              # Calculate final AMT status
+              amt_owed, tentative_amt, regular_tax, details = calculate_amt(
+                  income=base_income,
+                  conversions=optimal,
+                  deductions=0,
+                  state_taxes=0,
+                  year=year,
+                  filing_status=filing_status
+              )
+              
+              analysis = {
+                  'optimal_conversion': optimal,
+                  'max_conversion_requested': max_conversion,
+                  'conversion_reduced_by': max_conversion - optimal,
+                  'amt_avoided': amt_owed == 0,
+                  'regular_tax': regular_tax,
+                  'tentative_amt': tentative_amt,
+                  'details': details
+              }
+              
+              return optimal, analysis
+      
+      integrate_amt_with_stages:
+        description: "Add AMT calculations to stage strategies"
+        changes_required:
+          - "Import calculate_amt() in withdrawal_strategy.py"
+          - "Calculate AMT in each stage's calculate_strategy()"
+          - "Add amt_owed field to YearlyStrategy dataclass"
+          - "Integrate with BETR algorithm for conversion optimization"
+          - "Add AMT avoidance logic to Stage 2 (Early Retirement)"
+        
+        example_integration: |
+          # In Stage 2 Early Retirement calculate_strategy():
+          
+          # Calculate proposed Roth conversion (existing BETR logic)
+          proposed_conversion = optimize_conversion_amount(...)
+          
+          # NEW: Check AMT impact
+          amt_owed, tentative_amt, regular_tax, amt_details = calculate_amt(
+              income=base_income,
+              conversions=proposed_conversion,
+              deductions=std_deduction,
+              state_taxes=state_tax,
+              year=year,
+              filing_status='married_filing_jointly'
+          )
+          
+          # If AMT triggered, optimize conversion to avoid it
+          if amt_owed > 0:
+              logger.warning(f"Year {year}: Proposed conversion triggers AMT (${amt_owed:,.0f})")
+              
+              # Find conversion amount that avoids AMT
+              optimal_conversion, amt_analysis = optimize_conversion_to_avoid_amt(
+                  base_income=base_income,
+                  max_conversion=proposed_conversion,
+                  year=year
+              )
+              
+              logger.info(f"Year {year}: Reduced conversion from ${proposed_conversion:,.0f} "
+                         f"to ${optimal_conversion:,.0f} to avoid AMT")
+              
+              roth_conversion = optimal_conversion
+          else:
+              roth_conversion = proposed_conversion
+          
+          # Add to YearlyStrategy
+          return YearlyStrategy(
+              # ... existing fields ...
+              roth_conversion=roth_conversion,
+              amt_owed=amt_owed,
+              amt_details=amt_details,
+              total_tax=regular_tax + amt_owed + state_tax
+          )
+    
+    testing_requirements:
+      unit_tests:
+        - "test_load_amt_parameters() - Verify CSV loading"
+        - "test_calculate_amt_no_trigger() - Below AMT threshold"
+        - "test_calculate_amt_with_trigger() - Large conversion triggers AMT"
+        - "test_amt_exemption_phase_out() - High income phase-out"
+        - "test_optimize_conversion_to_avoid_amt()"
+        - "test_amt_with_iso_spread()"
+        
+      integration_tests:
+        - "test_amt_in_stage_2_with_large_conversion()"
+        - "test_amt_optimization_reduces_conversion()"
+        - "test_amt_vs_irmaa_trade_off()"
+        - "test_multi_year_amt_avoidance_strategy()"
+    
+    estimated_effort:
+      data_file_setup: "1-2 hours (AMT parameters by year)"
+      function_implementation: "4-5 hours"
+      integration: "3-4 hours"
+      testing: "2-3 hours"
+      total: "10-14 hours"
+
+            amt_penalty = amt_with_conversion - regular_tax_with_conversion
+            
+            # Find optimal conversion amount that stays below AMT
+            optimal_conversion = find_conversion_below_amt_threshold()
+            
+      example: |
+        Scenario: $200K conversion triggers AMT
+        Solution: Split into $100K/year for 2 years
+        Benefit: Avoid AMT while still converting
+        
+    capital_gains_timing:
+      strategy: "Coordinate capital gains with Roth conversions"
+      approach: |
+        # If planning large conversion
+        if large_roth_conversion_planned:
+            # Defer capital gains to avoid AMT
+            defer_capital_gains_harvesting()
+        else:
+            # Harvest gains in years without large conversions
+            harvest_capital_gains()
+            
+    iso_exercise_planning:
+      relevance: "Early retirees with unvested ISOs"
+      strategy: "Exercise ISOs in years without large conversions"
+      calculation: |
+        iso_spread = (FMV_at_exercise - exercise_price) * shares
+        # ISO spread added to AMTI
+        # Plan exercises to avoid AMT
+        
+  amt_credit:
+    description: "AMT paid can generate credits for future years"
+    mechanism: "Credits from timing differences (not exclusion items)"
+    usage: "Credit applied when regular tax exceeds AMT in future years"
+    
+    tracking:
+      purpose: "Track AMT credits for future use"
+      calculation: |
+        amt_credit = amt_paid_from_timing_differences
+        # Carry forward indefinitely
+        # Apply when regular_tax > amt in future year
+        
+    retirement_relevance:
+      scenario: "AMT paid during large conversion year"
+      benefit: "Credit may be usable in later years with lower income"
+      strategy: "Track credits and plan to utilize them"
+      
+  implementation_approach:
+    data_requirements:
+      - amt_exemption_amounts: "By year and filing status"
+      - amt_rates: "26% and 28% brackets"
+      - amt_adjustments: "State taxes, ISO spreads, etc."
+      - amt_preferences: "Private activity bonds, etc."
+      
+    calculation_integration:
+      stage_2_early_retirement:
+        check: "Calculate AMT impact of proposed Roth conversions"
+        action: "Reduce conversion if AMT triggered"
+        threshold: "Stay below AMT exemption phase-out"
+        
+      stage_3_medicare:
+        consideration: "AMT vs IRMAA trade-off"
+        analysis: "AMT now vs IRMAA penalties later"
+        
+      stage_4_social_security:
+        check: "AMT impact of SS + conversions + capital gains"
+        strategy: "Coordinate income sources to avoid AMT"
+        
+    calculation_method: |
+      def calculate_amt_impact(income, conversions, deductions):
+          # Calculate regular tax
+          regular_tax = calculate_regular_tax(income + conversions, deductions)
+          
+          # Calculate AMTI
+          amti = income + conversions
+          amti += amt_adjustments  # Add back state taxes, etc.
+          amti += amt_preferences  # Add private activity bond interest, etc.
+          
+          # Apply AMT exemption
+          amt_exemption = get_amt_exemption(amti, filing_status, year)
+          amti_after_exemption = max(0, amti - amt_exemption)
+          
+          # Calculate tentative AMT
+          if amti_after_exemption <= 220700:  # 2024 threshold for MFJ
+              tentative_amt = amti_after_exemption * 0.26
+          else:
+              tentative_amt = 220700 * 0.26 + (amti_after_exemption - 220700) * 0.28
+              
+          # AMT owed is excess over regular tax
+          amt_owed = max(0, tentative_amt - regular_tax)
+          
+          return amt_owed, tentative_amt, regular_tax
+
+# ==============================================================================
+# TAX PLANNING: NET INVESTMENT INCOME TAX (NIIT)
+# ==============================================================================
+
+niit_planning:
+  overview:
+    description: |
+      The Net Investment Income Tax (NIIT) is a 3.8% surtax on net investment income
+      for high-income taxpayers. Enacted as part of the Affordable Care Act, NIIT applies
+      to the lesser of net investment income or the amount by which MAGI exceeds threshold
+      amounts. Strategic planning can minimize or avoid this additional tax burden.
+      
+  niit_basics:
+    rate: "3.8%"
+    applies_to: "Lesser of (1) Net Investment Income or (2) Excess MAGI over threshold"
+    
+    thresholds_2024:
+      married_filing_jointly: "$250,000"
+      single: "$200,000"
+      married_filing_separately: "$125,000"
+      head_of_household: "$200,000"
+      
+    note: "Thresholds are NOT indexed for inflation"
+    
+  net_investment_income_definition:
+    included:
+      - type: "Interest income"
+        examples: "Bonds, CDs, savings accounts"
+        exception: "Interest from tax-exempt municipal bonds"
+        
+      - type: "Dividend income"
+        examples: "Qualified and non-qualified dividends"
+        note: "Both types subject to NIIT"
+        
+      - type: "Capital gains"
+        examples: "Long-term and short-term capital gains"
+        source: "Sale of stocks, bonds, mutual funds"
+        
+      - type: "Rental income"
+        condition: "If passive activity"
+        exception: "Active real estate professionals exempt"
+        
+      - type: "Royalty income"
+        examples: "Oil/gas royalties, intellectual property"
+        
+      - type: "Annuity income"
+        condition: "Non-qualified annuities only"
+        exception: "Qualified annuities (IRA, 401k) exempt"
+        
+    excluded:
+      - "Wages and self-employment income"
+      - "Social Security benefits"
+      - "Tax-exempt interest (municipal bonds)"
+      - "Distributions from qualified retirement plans (IRA, 401k, Roth IRA)"
+      - "Active business income (if materially participating)"
+      - "Life insurance proceeds"
+      - "Veterans benefits"
+      - "Alimony (pre-2019 divorces)"
+      
+  retirement_implications:
+    key_insight: "Retirement account distributions are NOT subject to NIIT"
+    
+    strategic_advantage:
+      traditional_ira_roth_ira:
+        niit_status: "Distributions NOT subject to NIIT"
+        benefit: "Can withdraw large amounts without triggering NIIT"
+        strategy: "Prefer retirement account withdrawals over taxable account"
+        
+      taxable_account:
+        niit_status: "Interest, dividends, capital gains ARE subject to NIIT"
+        impact: "Effective tax rate can be 23.8% (20% + 3.8%) on LTCG"
+        strategy: "Minimize taxable account income when near threshold"
+        
+    roth_conversion_impact:
+      direct_effect: "Roth conversions increase MAGI"
+      indirect_effect: "Higher MAGI can trigger NIIT on investment income"
+      calculation: |
+        # Conversion increases MAGI
+        magi_with_conversion = base_magi + roth_conversion
+        
+        # If MAGI exceeds threshold, NIIT applies
+        if magi_with_conversion > niit_threshold:
+            excess_magi = magi_with_conversion - niit_threshold
+            niit_owed = min(net_investment_income, excess_magi) * 0.038
+            
+      strategy: "Consider NIIT impact when sizing Roth conversions"
+      
+  niit_calculation_process:
+    step_1_calculate_net_investment_income:
+      formula: |
+        Net Investment Income = 
+            Interest Income
+          + Dividend Income  
+          + Capital Gains
+          + Rental Income (if passive)
+          + Royalty Income
+          + Annuity Income (non-qualified)
+          - Investment Expenses (limited by TCJA)
+          
+    step_2_calculate_magi:
+      formula: |
+        MAGI = AGI + Foreign Earned Income Exclusion
+        # For most retirees, MAGI = AGI
+        
+    step_3_determine_excess_magi:
+      formula: |
+        Excess MAGI = max(0, MAGI - NIIT_Threshold)
+        
+    step_4_calculate_niit:
+      formula: |
+        NIIT = min(Net_Investment_Income, Excess_MAGI) * 0.038
+        
+    example_calculation:
+      scenario: |
+        Married Filing Jointly
+        MAGI: $300,000
+        Net Investment Income: $75,000
+        
+      calculation: |
+        NIIT_Threshold = $250,000
+        Excess_MAGI = $300,000 - $250,000 = $50,000
+        
+        NIIT = min($75,000, $50,000) * 0.038
+        NIIT = $50,000 * 0.038 = $1,900
+        
+  strategic_planning_approaches:
+    threshold_management:
+      objective: "Keep MAGI below $250,000 (MFJ) to avoid NIIT entirely"
+  
+  niit_implementation:
+    status: "Ready for Implementation"
+    priority: "MEDIUM"
+    
+    data_files_required:
+      niit_thresholds_csv:
+        description: "NIIT thresholds by filing status (NOT indexed for inflation)"
+        columns:
+          - "filing_status: Filing status"
+          - "threshold: MAGI threshold for NIIT"
+          - "rate: NIIT rate (always 0.038)"
+        example_rows:
+          - "married_filing_jointly,250000,0.038"
+          - "single,200000,0.038"
+          - "married_filing_separately,125000,0.038"
+          - "head_of_household,200000,0.038"
+        note: "Thresholds have NOT changed since 2013 and are NOT indexed"
+    
+    implementation_functions:
+      load_niit_thresholds:
+        signature: |
+          def load_niit_thresholds(filing_status: str = "married_filing_jointly") -> Dict:
+              """
+              Load NIIT thresholds from CSV file
+              
+              Args:
+                  filing_status: Filing status
+              
+              Returns:
+                  Dictionary with NIIT threshold and rate
+              """
+        implementation: |
+          def load_niit_thresholds(filing_status: str = "married_filing_jointly") -> Dict:
+              """Load NIIT thresholds from CSV file"""
+              
+              # Hardcoded thresholds (not indexed for inflation)
+              thresholds = {
+                  'married_filing_jointly': 250000,
+                  'single': 200000,
+                  'married_filing_separately': 125000,
+                  'head_of_household': 200000
+              }
+              
+              return {
+                  'threshold': thresholds.get(filing_status, 250000),
+                  'rate': 0.038
+              }
+      
+      calculate_net_investment_income:
+        signature: |
+          def calculate_net_investment_income(interest: float,
+                                              dividends: float,
+                                              capital_gains: float,
+                                              rental_income: float = 0,
+                                              royalties: float = 0) -> float:
+              """
+              Calculate Net Investment Income for NIIT
+              
+              Args:
+                  interest: Interest income (taxable)
+                  dividends: Dividend income (qualified and non-qualified)
+                  capital_gains: Capital gains (long-term and short-term)
+                  rental_income: Passive rental income
+                  royalties: Royalty income
+              
+              Returns:
+                  Total net investment income
+              
+              Note:
+                  Excludes: Wages, SS benefits, IRA/401k distributions, tax-exempt interest
+              """
+        implementation: |
+          def calculate_net_investment_income(interest: float,
+                                              dividends: float,
+                                              capital_gains: float,
+                                              rental_income: float = 0,
+                                              royalties: float = 0) -> float:
+              """Calculate Net Investment Income for NIIT"""
+              
+              # Sum all investment income sources
+              nii = interest + dividends + capital_gains + rental_income + royalties
+              
+              logger.debug(f"Net Investment Income: Interest=${interest:,.0f}, "
+                          f"Dividends=${dividends:,.0f}, "
+                          f"Capital Gains=${capital_gains:,.0f}, "
+                          f"Total NII=${nii:,.0f}")
+              
+              return nii
+      
+      calculate_niit_full:
+        signature: |
+          def calculate_niit(net_investment_income: float,
+                            magi: float,
+                            filing_status: str = "married_filing_jointly") -> Tuple[float, Dict]:
+              """
+              Calculate Net Investment Income Tax (3.8% surtax)
+              
+              Args:
+                  net_investment_income: Total investment income
+                  magi: Modified Adjusted Gross Income
+                  filing_status: Filing status
+              
+              Returns:
+                  Tuple of (niit_amount, calculation_details)
+              
+              Formula:
+                  NIIT = min(NII, max(0, MAGI - threshold)) * 0.038
+              """
+        implementation: |
+          def calculate_niit(net_investment_income: float,
+                            magi: float,
+                            filing_status: str = "married_filing_jointly") -> Tuple[float, Dict]:
+              """Calculate Net Investment Income Tax"""
+              
+              # Load thresholds
+              niit_params = load_niit_thresholds(filing_status)
+              threshold = niit_params['threshold']
+              rate = niit_params['rate']
+              
+              # Calculate excess MAGI over threshold
+              excess_magi = max(0, magi - threshold)
+              
+              # NIIT applies to lesser of NII or excess MAGI
+              niit_base = min(net_investment_income, excess_magi)
+              
+              # Calculate NIIT
+              niit_amount = niit_base * rate
+              
+              # Calculation details
+              details = {
+                  'net_investment_income': net_investment_income,
+                  'magi': magi,
+                  'threshold': threshold,
+                  'excess_magi': excess_magi,
+                  'niit_base': niit_base,
+                  'niit_rate': rate,
+                  'niit_amount': niit_amount,
+                  'subject_to_niit': niit_amount > 0
+              }
+              
+              if niit_amount > 0:
+                  logger.info(f"NIIT Triggered: MAGI=${magi:,.0f} exceeds threshold=${threshold:,.0f}, "
+                             f"NIIT=${niit_amount:,.0f}")
+              else:
+                  logger.debug(f"No NIIT: MAGI=${magi:,.0f} below threshold=${threshold:,.0f}")
+              
+              return niit_amount, details
+      
+      optimize_withdrawals_for_niit:
+        signature: |
+          def optimize_withdrawals_for_niit(base_magi: float,
+                                           net_investment_income: float,
+                                           traditional_withdrawal: float,
+                                           filing_status: str = "married_filing_jointly") -> Dict:
+              """
+              Analyze NIIT impact and suggest withdrawal optimization
+              
+              Args:
+                  base_magi: MAGI before additional withdrawals
+                  net_investment_income: Investment income from taxable accounts
+                  traditional_withdrawal: Proposed Traditional IRA withdrawal
+                  filing_status: Filing status
+              
+              Returns:
+                  Dictionary with NIIT analysis and recommendations
+              """
+        implementation: |
+          def optimize_withdrawals_for_niit(base_magi: float,
+                                           net_investment_income: float,
+                                           traditional_withdrawal: float,
+                                           filing_status: str = "married_filing_jointly") -> Dict:
+              """Analyze NIIT impact and suggest optimization"""
+              
+              niit_params = load_niit_thresholds(filing_status)
+              threshold = niit_params['threshold']
+              
+              # Calculate NIIT with current plan
+              current_magi = base_magi + traditional_withdrawal
+              current_niit, current_details = calculate_niit(
+                  net_investment_income,
+                  current_magi,
+                  filing_status
+              )
+              
+              # Key insight: Traditional IRA withdrawals increase MAGI but are NOT subject to NIIT
+              # However, higher MAGI can trigger NIIT on investment income
+              
+              analysis = {
+                  'current_magi': current_magi,
+                  'threshold': threshold,
+                  'distance_to_threshold': threshold - current_magi,
+                  'over_threshold': current_magi > threshold,
+                  'current_niit': current_niit,
+                  'net_investment_income': net_investment_income,
+                  'traditional_withdrawal': traditional_withdrawal
+              }
+              
+              # Recommendations
+              if current_magi < threshold:
+                  # Below threshold - no NIIT concern
+                  analysis['recommendation'] = "Below NIIT threshold - no optimization needed"
+                  analysis['optimal_strategy'] = "Continue with planned withdrawals"
+                  
+              elif current_magi > threshold and net_investment_income > 0:
+                  # Over threshold with investment income - NIIT applies
+                  # Prefer retirement account withdrawals over taxable account
+                  analysis['recommendation'] = "Prefer Traditional IRA withdrawals over taxable account"
+                  analysis['rationale'] = (
+                      "Traditional IRA withdrawals increase MAGI but are NOT subject to NIIT. "
+                      "Taxable account gains ARE subject to NIIT (effective rate up to 23.8%)."
+                  )
+                  analysis['optimal_strategy'] = (
+                      "Maximize Traditional IRA withdrawals, minimize taxable account gains"
+                  )
+                  
+                  # Calculate potential savings
+                  if net_investment_income > 0:
+                      potential_niit_on_gains = net_investment_income * 0.038
+                      analysis['potential_niit_savings'] = potential_niit_on_gains
+                      
+              return analysis
+      
+      integrate_niit_with_stages:
+        description: "Add NIIT calculations to stage strategies"
+        changes_required:
+          - "Import calculate_niit() and calculate_net_investment_income()"
+          - "Calculate NII from taxable account activity"
+          - "Calculate NIIT in each stage's calculate_strategy()"
+          - "Add niit_amount field to YearlyStrategy dataclass"
+          - "Optimize withdrawal sequencing to minimize NIIT"
+        
+        example_integration: |
+          # In each stage's calculate_strategy():
+          
+          # Calculate net investment income from taxable account
+          net_investment_income = calculate_net_investment_income(
+              interest=taxable_interest,
+              dividends=taxable_dividends,
+              capital_gains=ltcg_harvested,
+              rental_income=0,
+              royalties=0
+          )
+          
+          # Calculate MAGI
+          magi = (
+              wages +
+              ss_benefits * 0.85 +  # Simplified SS taxation
+              traditional_withdrawal +
+              roth_conversion +
+              net_investment_income
+          )
+          
+          # Calculate NIIT
+          niit_amount, niit_details = calculate_niit(
+              net_investment_income=net_investment_income,
+              magi=magi,
+              filing_status='married_filing_jointly'
+          )
+          
+          # Optimize withdrawals if near NIIT threshold
+          if magi > 240000:  # Within $10K of threshold
+              niit_analysis = optimize_withdrawals_for_niit(
+                  base_magi=magi - traditional_withdrawal,
+                  net_investment_income=net_investment_income,
+                  traditional_withdrawal=traditional_withdrawal,
+                  filing_status='married_filing_jointly'
+              )
+              
+              logger.info(f"Year {year}: {niit_analysis['recommendation']}")
+          
+          # Add to YearlyStrategy
+          return YearlyStrategy(
+              # ... existing fields ...
+              net_investment_income=net_investment_income,
+              niit_amount=niit_amount,
+              niit_details=niit_details,
+              total_tax=federal_tax + state_tax + amt_owed + niit_amount
+          )
+    
+    stage_specific_strategies:
+      stage_2_early_retirement:
+        niit_consideration: "High risk - large Roth conversions increase MAGI"
+        strategy: |
+          # Balance Roth conversions with NIIT impact
+          if magi_with_conversion > niit_threshold:
+              # Consider reducing conversion to stay below threshold
+              # OR accept NIIT as cost of conversion opportunity
+              niit_cost = calculate_niit(nii, magi_with_conversion)
+              conversion_benefit = calculate_conversion_benefit(conversion_amount)
+              
+              if conversion_benefit > niit_cost:
+                  # Proceed with conversion despite NIIT
+                  logger.info("Conversion benefit exceeds NIIT cost")
+              else:
+                  # Reduce conversion to avoid NIIT
+                  optimal_conversion = find_conversion_below_niit_threshold()
+        
+      stage_3_medicare:
+        niit_consideration: "Coordinate with IRMAA thresholds"
+        strategy: |
+          # IRMAA thresholds often align with NIIT considerations
+          # Optimize for both simultaneously
+          if magi > niit_threshold:
+              # Prefer Traditional withdrawals over taxable gains
+              # Reduces NIIT while managing IRMAA
+              withdrawal_sequence = ['Traditional', 'Roth', 'Taxable']
+        
+      stage_4_social_security:
+        niit_consideration: "SS benefits increase MAGI but not subject to NIIT"
+        strategy: |
+          # SS increases MAGI, potentially triggering NIIT on investment income
+          # Prefer retirement account withdrawals over taxable
+          if magi_with_ss > niit_threshold:
+              minimize_taxable_account_gains()
+              maximize_traditional_withdrawals()
+        
+      stage_5_rmd:
+        niit_consideration: "RMDs increase MAGI but not subject to NIIT"
+        strategy: |
+          # Large RMDs may push MAGI over threshold
+          # Use QCDs to reduce MAGI and avoid NIIT
+          if magi_with_rmd > niit_threshold:
+              qcd_amount = min(rmd_amount, charitable_intent)
+              magi_after_qcd = magi_with_rmd - qcd_amount
+              niit_savings = calculate_niit_savings(qcd_amount)
+    
+    testing_requirements:
+      unit_tests:
+        - "test_load_niit_thresholds() - Verify thresholds"
+        - "test_calculate_net_investment_income() - Sum NII components"
+        - "test_calculate_niit_below_threshold() - No NIIT"
+        - "test_calculate_niit_above_threshold() - NIIT applies"
+        - "test_niit_with_large_conversion() - Conversion triggers NIIT"
+        - "test_optimize_withdrawals_for_niit()"
+        
+      integration_tests:
+        - "test_niit_in_stage_2_with_conversions()"
+        - "test_niit_coordination_with_irmaa()"
+        - "test_niit_with_ss_benefits_stage_4()"
+        - "test_niit_avoidance_with_qcds_stage_5()"
+        - "test_multi_year_niit_optimization()"
+    
+    estimated_effort:
+      data_file_setup: "1 hour (simple thresholds)"
+      function_implementation: "3-4 hours"
+      integration: "2-3 hours"
+      testing: "2-3 hours"
+      total: "8-11 hours"
+
+      
+      strategies:
+        - strategy: "Use Roth IRA withdrawals instead of taxable account"
+          benefit: "Roth withdrawals don't increase MAGI"
+          application: "When near threshold, prefer Roth over taxable"
+          
+        - strategy: "Defer capital gains harvesting"
+          benefit: "Avoid increasing net investment income"
+          timing: "Harvest gains in years with lower MAGI"
+          
+        - strategy: "Manage Roth conversion amounts"
+          benefit: "Keep MAGI below threshold"
+          trade_off: "May limit conversion opportunities"
+          
+        - strategy: "Bunch deductions"
+          benefit: "Lower AGI/MAGI in alternating years"
+          method: "Charitable contributions, medical expenses"
+          
+    income_source_optimization:
+      hierarchy_when_near_threshold:
+        1: "Roth IRA withdrawals (no MAGI impact, no NIIT)"
+        2: "Traditional IRA withdrawals (MAGI impact but no NIIT)"
+        3: "Capital gains from taxable (MAGI impact AND NIIT)"
+        
+      rationale: |
+        Even though Traditional IRA increases MAGI, the distribution itself
+        is not subject to NIIT. Only the investment income in taxable accounts
+        is subject to NIIT.
+        
+    roth_conversion_optimization:
+      consideration: "Conversions increase MAGI, potentially triggering NIIT"
+      
+      calculation_approach: |
+        # Calculate total tax impact including NIIT
+        base_magi = ss_benefits + other_income
+        proposed_conversion = 100000
+        
+        magi_with_conversion = base_magi + proposed_conversion
+        
+        # Calculate NIIT impact
+        if magi_with_conversion > niit_threshold:
+            excess = magi_with_conversion - niit_threshold
+            niit_on_investment_income = min(net_investment_income, excess) * 0.038
+        else:
+            niit_on_investment_income = 0
+            
+        # Total tax = regular tax + NIIT
+        total_tax = federal_income_tax + niit_on_investment_income
+        
+      optimization: |
+        # Find conversion amount that maximizes benefit
+        # while considering NIIT impact
+        optimal_conversion = find_conversion_minimizing_total_tax(
+            base_magi,
+            net_investment_income,
+            niit_threshold,
+            tax_brackets
+        )
+        
+    capital_gains_harvesting:
+      issue: "LTCG harvesting increases both MAGI and net investment income"
+      
+      strategy: "Harvest gains only when MAGI well below threshold"
+      
+      calculation: |
+        # Check if harvesting would trigger NIIT
+        current_magi = base_income
+        proposed_harvest = 50000
+        
+        if current_magi + proposed_harvest > niit_threshold:
+            # Calculate NIIT cost
+            excess = (current_magi + proposed_harvest) - niit_threshold
+            niit_cost = min(proposed_harvest, excess) * 0.038
+            
+            # Compare to benefit of 0% LTCG rate
+            if niit_cost > 0:
+                # May not be worth harvesting
+                reduce_or_defer_harvest()
+                
+  stage_specific_strategies:
+    stage_2_early_retirement:
+      typical_situation: "MAGI often below threshold due to no wages"
+      opportunity: "Aggressive LTCG harvesting without NIIT concern"
+      strategy: |
+        # Harvest gains up to threshold
+        available_room = niit_threshold - current_magi
+        harvest_amount = min(available_room, desired_harvest)
+        
+    stage_3_medicare:
+      consideration: "Balance NIIT with IRMAA penalties"
+      complexity: "Both triggered by high MAGI"
+      strategy: |
+        # Find sweet spot that minimizes total cost
+        # IRMAA penalties vs NIIT vs conversion benefits
+        optimal_magi = optimize_for_irmaa_and_niit(
+            base_income,
+            irmaa_thresholds,
+            niit_threshold,
+            conversion_opportunities
+        )
+        
+    stage_4_social_security:
+      challenge: "SS benefits increase MAGI"
+      strategy: "Use Roth withdrawals to supplement SS"
+      benefit: "Avoid both NIIT and additional SS taxation"
+      
+    stage_5_rmd:
+      situation: "RMDs increase MAGI but not subject to NIIT"
+      strategy: "RMDs may push into NIIT territory for investment income"
+      approach: |
+        # Use RMDs to fund expenses
+        # Minimize taxable account withdrawals
+        # Preserve Roth for years with high RMDs
+        
+  implementation_approach:
+    data_requirements:
+      - niit_thresholds: "By filing status and year"
+      - net_investment_income: "Interest, dividends, capital gains from taxable accounts"
+      - magi: "Modified Adjusted Gross Income"
+      - filing_status: "Determines threshold"
+      
+    calculation_integration:
+      calculate_niit: |
+        def calculate_niit(magi, net_investment_income, filing_status, year):
+            threshold = get_niit_threshold(filing_status, year)
+            
+            if magi <= threshold:
+                return 0
+                
+            excess_magi = magi - threshold
+            niit_base = min(net_investment_income, excess_magi)
+            niit = niit_base * 0.038
+            
+            return niit
+            
+      integrate_with_strategy: |
+        # In each stage calculation
+        total_tax = federal_income_tax + state_tax + niit + irmaa_penalty
+        
+        # Optimize considering all tax components
+        optimal_strategy = minimize_total_tax(
+            withdrawal_options,
+            conversion_options,
+            harvest_options
+
+# ==============================================================================
+# HEALTHCARE COST PROJECTIONS
+# ==============================================================================
+
+healthcare_cost_projections:
+  overview:
+    description: |
+      Healthcare costs are one of the largest and most unpredictable expenses in retirement.
+      This module provides comprehensive healthcare cost modeling including Medicare premiums,
+      out-of-pocket expenses, long-term care costs, and IRMAA penalties. Proper healthcare
+      cost planning is essential for accurate retirement projections.
+      
+    key_components:
+      - "Medicare Part B and Part D premiums (with IRMAA)"
+      - "Medicare Supplement (Medigap) or Medicare Advantage premiums"
+      - "Out-of-pocket medical expenses (deductibles, copays, prescriptions)"
+      - "Long-term care insurance premiums"
+      - "Long-term care costs (nursing home, assisted living, home care)"
+      - "Pre-Medicare healthcare costs (ACA marketplace or COBRA)"
+      - "Dental and vision expenses (not covered by Medicare)"
+      
+    importance:
+      - "Healthcare costs grow faster than general inflation (typically 5-7% annually)"
+      - "IRMAA penalties can significantly increase Medicare costs"
+      - "Long-term care can deplete retirement savings rapidly"
+      - "Pre-Medicare coverage (age 62-65) can be very expensive"
+  
+  medicare_costs:
+    part_b_premiums:
+      standard_premium_2024: "$174.70/month ($2,096/year per person)"
+      irmaa_surcharges:
+        description: "Income-Related Monthly Adjustment Amount based on MAGI from 2 years prior"
+        brackets_2024_mfj:
+          - income: "$206,000 or less"
+            monthly_premium: "$174.70"
+            annual_premium: "$2,096"
+            
+          - income: "$206,001 - $258,000"
+            monthly_premium: "$244.60"
+            annual_premium: "$2,935"
+            irmaa_penalty: "$839/year"
+            
+          - income: "$258,001 - $322,000"
+            monthly_premium: "$349.40"
+            annual_premium: "$4,193"
+            irmaa_penalty: "$2,097/year"
+            
+          - income: "$322,001 - $386,000"
+            monthly_premium: "$454.20"
+            annual_premium: "$5,450"
+            irmaa_penalty: "$3,354/year"
+            
+          - income: "$386,001 - $750,000"
+            monthly_premium: "$559.00"
+            annual_premium: "$6,708"
+            irmaa_penalty: "$4,612/year"
+            
+          - income: "$750,001 or more"
+            monthly_premium: "$594.00"
+            annual_premium: "$7,128"
+            irmaa_penalty: "$5,032/year"
+      
+      inflation_adjustment: "Typically 3-5% annually"
+      
+    part_d_premiums:
+      standard_premium_2024: "$35-$50/month (varies by plan)"
+      irmaa_surcharges:
+        description: "Additional Part D IRMAA based on same income brackets"
+        brackets_2024_mfj:
+          - income: "$206,000 or less"
+            monthly_irmaa: "$0"
+            
+          - income: "$206,001 - $258,000"
+            monthly_irmaa: "$12.90"
+            annual_irmaa: "$155"
+            
+          - income: "$258,001 - $322,000"
+            monthly_irmaa: "$33.30"
+            annual_irmaa: "$400"
+            
+          - income: "$322,001 - $386,000"
+            monthly_irmaa: "$53.80"
+            annual_irmaa: "$646"
+            
+          - income: "$386,001 - $750,000"
+            monthly_irmaa: "$74.20"
+            annual_irmaa: "$890"
+            
+          - income: "$750,001 or more"
+            monthly_irmaa: "$81.00"
+            annual_irmaa: "$972"
+    
+    supplemental_coverage:
+      medigap_plans:
+        description: "Medicare Supplement Insurance to cover gaps"
+        typical_cost: "$150-$300/month per person"
+        factors: "Age, location, plan type (Plan G most popular)"
+        inflation: "5-7% annually"
+        
+      medicare_advantage:
+        description: "Alternative to Original Medicare + Medigap"
+        typical_cost: "$0-$100/month (often lower than Medigap)"
+        trade_offs: "Lower premiums but higher out-of-pocket maximums"
+        out_of_pocket_max: "$8,850/year (2024)"
+  
+  out_of_pocket_expenses:
+    typical_annual_costs:
+      healthy_retiree: "$3,000-$5,000/year"
+      average_retiree: "$5,000-$8,000/year"
+      chronic_conditions: "$8,000-$15,000/year"
+      
+    components:
+      - "Deductibles and copays"
+      - "Prescription drugs"
+      - "Dental care (not covered by Medicare)"
+      - "Vision care (not covered by Medicare)"
+      - "Hearing aids (not covered by Medicare)"
+      - "Over-the-counter medications"
+      
+    inflation_rate: "5-7% annually (higher than general inflation)"
+  
+  pre_medicare_costs:
+    age_62_to_65:
+      description: "Healthcare costs before Medicare eligibility"
+      
+      aca_marketplace:
+        description: "Affordable Care Act marketplace plans"
+        typical_cost: "$500-$1,500/month per person (before subsidies)"
+        subsidies: "Available based on income (see ACA subsidy optimization)"
+        strategy: "Manage MAGI to maximize subsidies"
+        
+      cobra:
+        description: "Continuation of employer coverage"
+        typical_cost: "$600-$1,200/month per person"
+        duration: "18 months maximum"
+        note: "Expensive but comprehensive coverage"
+        
+      spouse_coverage:
+        description: "Coverage through working spouse"
+        typical_cost: "$200-$600/month for family coverage"
+        best_option: "Often most cost-effective if available"
+  
+  long_term_care:
+    overview:
+      description: |
+        Long-term care (LTC) costs can be catastrophic to retirement plans.
+        70% of people over 65 will need some form of long-term care.
+        
+    costs_2024:
+      home_health_aide:
+        hourly_rate: "$30-$35/hour"
+        annual_cost_full_time: "$70,000-$80,000/year"
+        
+      assisted_living:
+        monthly_cost: "$4,500-$6,500/month"
+        annual_cost: "$54,000-$78,000/year"
+        
+      nursing_home:
+        semi_private_room: "$8,000-$9,500/month"
+        private_room: "$9,500-$11,000/month"
+        annual_cost: "$96,000-$132,000/year"
+        
+      memory_care:
+        monthly_cost: "$6,000-$8,500/month"
+        annual_cost: "$72,000-$102,000/year"
+    
+    inflation_rate: "4-6% annually"
+    
+    duration_statistics:
+      average_duration: "3-4 years"
+      median_duration: "2 years"
+      long_duration_risk: "20% need care for 5+ years"
+      
+    insurance_options:
+      traditional_ltc_insurance:
+        typical_premium: "$2,500-$5,000/year per person (age 60)"
+        coverage: "$150-$300/day benefit"
+        inflation_protection: "3-5% compound inflation rider recommended"
+        
+      hybrid_life_ltc:
+        description: "Life insurance with LTC rider"
+        typical_premium: "$5,000-$10,000/year"
+        benefit: "Death benefit OR LTC benefit"
+        
+      self_insurance:
+        description: "Set aside dedicated LTC fund"
+        recommended_amount: "$200,000-$400,000 per person"
+        strategy: "Invest conservatively, plan for 3-5 years of care"
+  
+  healthcare_cost_implementation:
+    status: "Ready for Implementation"
+    priority: "HIGH"
+    
+    data_files_required:
+      medicare_costs_csv:
+        description: "Medicare premiums and IRMAA brackets by year"
+        note: "Use existing get_medicare_costs(year) function from load_data module"
+        source: "load_data.get_medicare_costs(year)"
+        returns: "DataFrame with Medicare premium data including IRMAA brackets"
+        columns:
+          - "year: Tax year"
+          - "filing_status: Filing status"
+          - "income_min: Lower bound of IRMAA bracket"
+          - "income_max: Upper bound of IRMAA bracket"
+          - "part_b_premium: Monthly Part B premium"
+          - "part_d_irmaa: Monthly Part D IRMAA"
+        
+      healthcare_inflation_csv:
+        description: "Healthcare cost inflation rates by category"
+        columns:
+          - "category: Cost category"
+          - "base_year: Base year for costs"
+          - "annual_inflation_rate: Expected inflation rate"
+        example_rows:
+          - "medicare_premiums,2024,0.04"
+          - "out_of_pocket,2024,0.06"
+          - "long_term_care,2024,0.05"
+          - "medigap,2024,0.06"
+    
+    implementation_functions:
+      calculate_medicare_costs:
+        signature: |
+          def calculate_medicare_costs(age_primary: int,
+                                      age_spouse: int,
+                                      magi_two_years_ago: float,
+                                      year: int,
+                                      filing_status: str = "married_filing_jointly",
+                                      has_medigap: bool = True) -> Tuple[float, Dict]:
+              """
+              Calculate total Medicare costs including IRMAA
+              
+              Uses existing get_medicare_costs(year) function from load_data module
+              to retrieve Medicare premium data and IRMAA brackets.
+              
+              Args:
+                  age_primary: Primary person's age
+                  age_spouse: Spouse's age
+                  magi_two_years_ago: MAGI from 2 years prior (for IRMAA)
+                  year: Current year
+                  filing_status: Filing status
+                  has_medigap: Whether they have Medigap coverage
+              
+              Returns:
+                  Tuple of (total_medicare_cost, cost_breakdown)
+              """
+        implementation: |
+          def calculate_medicare_costs(age_primary: int,
+                                      age_spouse: int,
+                                      magi_two_years_ago: float,
+                                      year: int,
+                                      filing_status: str = "married_filing_jointly",
+                                      has_medigap: bool = True) -> Tuple[float, Dict]:
+              """Calculate total Medicare costs including IRMAA"""
+              
+              from load_data import get_medicare_costs
+              
+              total_cost = 0.0
+              breakdown = {
+                  'part_b_primary': 0.0,
+                  'part_b_spouse': 0.0,
+                  'part_d_primary': 0.0,
+                  'part_d_spouse': 0.0,
+                  'medigap_primary': 0.0,
+                  'medigap_spouse': 0.0,
+                  'irmaa_penalty': 0.0
+              }
+              
+              # Get Medicare costs data using existing function
+              medicare_data = get_medicare_costs(year - 2)  # IRMAA based on 2 years prior
+              
+              # Alternative: Use existing calculate_irmma_penalty function
+              irmaa_penalty, irmaa_details = calculate_irmma_penalty(
+                  magi_two_years_ago,
+                  year - 2,  # IRMAA based on 2 years prior
+                  filing_status
+              )
+              
+              # Part B costs
+              if age_primary >= 65:
+                  breakdown['part_b_primary'] = irmaa_details['part_b_premium'] * 12
+                  total_cost += breakdown['part_b_primary']
+              
+              if age_spouse >= 65:
+                  breakdown['part_b_spouse'] = irmaa_details['part_b_premium'] * 12
+                  total_cost += breakdown['part_b_spouse']
+              
+              # Part D costs (base premium + IRMAA)
+              part_d_base = 480  # $40/month average
+              if age_primary >= 65:
+                  breakdown['part_d_primary'] = part_d_base + (irmaa_details.get('part_d_irmaa', 0) * 12)
+                  total_cost += breakdown['part_d_primary']
+              
+              if age_spouse >= 65:
+                  breakdown['part_d_spouse'] = part_d_base + (irmaa_details.get('part_d_irmaa', 0) * 12)
+                  total_cost += breakdown['part_d_spouse']
+              
+              # Medigap costs
+              if has_medigap:
+                  medigap_annual = 2400  # $200/month average
+                  if age_primary >= 65:
+                      breakdown['medigap_primary'] = medigap_annual
+                      total_cost += medigap_annual
+                  if age_spouse >= 65:
+                      breakdown['medigap_spouse'] = medigap_annual
+                      total_cost += medigap_annual
+              
+              breakdown['irmaa_penalty'] = irmaa_penalty
+              breakdown['total_medicare_cost'] = total_cost
+              
+              logger.info(f"Year {year}: Medicare costs = ${total_cost:,.0f} "
+                         f"(IRMAA penalty: ${irmaa_penalty:,.0f})")
+              
+              return total_cost, breakdown
+      
+      calculate_total_healthcare_costs:
+        signature: |
+          def calculate_total_healthcare_costs(age_primary: int,
+                                               age_spouse: int,
+                                               magi_two_years_ago: float,
+                                               year: int,
+                                               filing_status: str = "married_filing_jointly",
+                                               health_status: str = "average",
+                                               has_ltc_insurance: bool = False) -> Tuple[float, Dict]:
+              """
+              Calculate comprehensive healthcare costs for the year
+              
+              Args:
+                  age_primary: Primary person's age
+                  age_spouse: Spouse's age
+                  magi_two_years_ago: MAGI from 2 years prior
+                  year: Current year
+                  filing_status: Filing status
+                  health_status: "healthy", "average", or "chronic"
+                  has_ltc_insurance: Whether they have LTC insurance
+              
+              Returns:
+                  Tuple of (total_healthcare_cost, cost_breakdown)
+              """
+        implementation: |
+          def calculate_total_healthcare_costs(age_primary: int,
+                                               age_spouse: int,
+                                               magi_two_years_ago: float,
+                                               year: int,
+                                               filing_status: str = "married_filing_jointly",
+                                               health_status: str = "average",
+                                               has_ltc_insurance: bool = False) -> Tuple[float, Dict]:
+              """Calculate comprehensive healthcare costs"""
+              
+              total_cost = 0.0
+              breakdown = {}
+              
+              # Medicare costs (if age 65+)
+              if age_primary >= 65 or age_spouse >= 65:
+                  medicare_cost, medicare_breakdown = calculate_medicare_costs(
+                      age_primary, age_spouse, magi_two_years_ago, year, filing_status
+                  )
+                  total_cost += medicare_cost
+                  breakdown['medicare'] = medicare_breakdown
+              
+              # Pre-Medicare costs (if under 65)
+              if age_primary < 65 or age_spouse < 65:
+                  # Simplified: Use ACA marketplace estimate
+                  people_under_65 = (1 if age_primary < 65 else 0) + (1 if age_spouse < 65 else 0)
+                  aca_cost = people_under_65 * 12000  # $1,000/month per person
+                  total_cost += aca_cost
+                  breakdown['pre_medicare'] = aca_cost
+              
+              # Out-of-pocket expenses
+              oop_costs = {
+                  'healthy': 4000,
+                  'average': 6500,
+                  'chronic': 12000
+              }
+              oop_cost = oop_costs.get(health_status, 6500)
+              total_cost += oop_cost
+              breakdown['out_of_pocket'] = oop_cost
+              
+              # Long-term care insurance premiums
+              if has_ltc_insurance:
+                  ltc_premium = 3500  # $3,500/year per person average
+                  people_count = 2 if age_spouse > 0 else 1
+                  ltc_cost = ltc_premium * people_count
+                  total_cost += ltc_cost
+                  breakdown['ltc_insurance'] = ltc_cost
+              
+              breakdown['total_healthcare_cost'] = total_cost
+              
+              logger.info(f"Year {year}: Total healthcare cost = ${total_cost:,.0f}")
+              
+              return total_cost, breakdown
+      
+      project_healthcare_costs:
+        signature: |
+          def project_healthcare_costs(start_year: int,
+                                      end_year: int,
+                                      age_primary_start: int,
+                                      age_spouse_start: int,
+                                      magi_projections: List[float],
+                                      health_status: str = "average") -> pd.DataFrame:
+              """
+              Project healthcare costs over retirement period
+              
+              Args:
+                  start_year: Starting year
+                  end_year: Ending year
+                  age_primary_start: Primary person's starting age
+                  age_spouse_start: Spouse's starting age
+                  magi_projections: List of projected MAGI values
+                  health_status: Health status assumption
+              
+              Returns:
+                  DataFrame with yearly healthcare cost projections
+              """
+        implementation: |
+          def project_healthcare_costs(start_year: int,
+                                      end_year: int,
+                                      age_primary_start: int,
+                                      age_spouse_start: int,
+                                      magi_projections: List[float],
+                                      health_status: str = "average") -> pd.DataFrame:
+              """Project healthcare costs over retirement"""
+              
+              projections = []
+              
+              for i, year in enumerate(range(start_year, end_year + 1)):
+                  age_primary = age_primary_start + i
+                  age_spouse = age_spouse_start + i
+                  
+                  # Get MAGI from 2 years ago for IRMAA
+                  magi_idx = max(0, i - 2)
+                  magi_two_years_ago = magi_projections[magi_idx] if magi_idx < len(magi_projections) else 0
+                  
+                  # Calculate costs
+                  total_cost, breakdown = calculate_total_healthcare_costs(
+                      age_primary=age_primary,
+                      age_spouse=age_spouse,
+                      magi_two_years_ago=magi_two_years_ago,
+                      year=year,
+                      health_status=health_status
+                  )
+                  
+                  projections.append({
+                      'year': year,
+                      'age_primary': age_primary,
+                      'age_spouse': age_spouse,
+                      'total_healthcare_cost': total_cost,
+                      **breakdown
+                  })
+              
+              return pd.DataFrame(projections)
+      
+      integrate_healthcare_with_stages:
+        description: "Add healthcare cost calculations to withdrawal strategy"
+        changes_required:
+          - "Import healthcare cost functions"
+          - "Calculate healthcare costs in each stage"
+          - "Add healthcare_cost field to YearlyStrategy"
+          - "Subtract healthcare costs from available expenses"
+          - "Track IRMAA impact on Medicare costs"
+        
+        example_integration: |
+          # In each stage's calculate_strategy():
+          
+          # Calculate healthcare costs
+          healthcare_cost, healthcare_breakdown = calculate_total_healthcare_costs(
+              age_primary=age_primary,
+              age_spouse=age_spouse,
+              magi_two_years_ago=magi_history[year-2] if year >= start_year+2 else 0,
+              year=year,
+              health_status='average'
+          )
+          
+          # Adjust available expenses
+          non_healthcare_expenses = expenses - healthcare_cost
+          
+          # Add to YearlyStrategy
+          return YearlyStrategy(
+              # ... existing fields ...
+              healthcare_cost=healthcare_cost,
+              healthcare_breakdown=healthcare_breakdown,
+              non_healthcare_expenses=non_healthcare_expenses,
+              total_expenses=expenses
+          )
+    
+    testing_requirements:
+      unit_tests:
+        - "test_calculate_medicare_costs_no_irmaa()"
+        - "test_calculate_medicare_costs_with_irmaa()"
+        - "test_calculate_total_healthcare_costs_pre_medicare()"
+        - "test_calculate_total_healthcare_costs_post_medicare()"
+        - "test_project_healthcare_costs_25_years()"
+        
+      integration_tests:
+        - "test_healthcare_costs_in_stage_2_early_retirement()"
+        - "test_healthcare_costs_in_stage_3_medicare()"
+        - "test_irmaa_impact_on_healthcare_costs()"
+        - "test_healthcare_cost_inflation_over_time()"
+    
+    estimated_effort:
+      function_implementation: "4-5 hours"
+      integration: "2-3 hours"
+      testing: "2-3 hours"
+      total: "8-11 hours"
+  
+  future_enhancements:
+    - "Long-term care event modeling (probability-based)"
+    - "Health Savings Account (HSA) integration"
+    - "Medicare Advantage vs Medigap comparison"
+    - "Prescription drug cost optimization"
+    - "Dental and vision cost projections"
+    - "Healthcare cost regional variations"
+
+        )
+        
+    reporting_requirements:
+      form: "Form 8960 - Net Investment Income Tax"
+      filing: "Required if NIIT owed"
+      tracking: "Track net investment income separately"
+      
+  coordination_with_other_taxes:
+    niit_plus_irmaa:
+      issue: "Both triggered by high MAGI"
+      strategy: "Find optimal MAGI that balances both"
+      calculation: |
+        # Total cost function
+        total_cost = federal_tax + state_tax + niit + irmaa
+        
+        # Find MAGI that minimizes total cost
+        optimal_magi = minimize(total_cost, magi_range)
+        
+    niit_plus_amt:
+      interaction: "AMT can be triggered by same income that causes NIIT"
+      strategy: "Coordinate Roth conversions to avoid both"
+      complexity: "AMT and NIIT have different triggers and calculations"
+      
+    niit_plus_aca_subsidies:
+      issue: "NIIT threshold ($250K) well above ACA cliff ($100K-$150K)"
+      strategy: "ACA optimization takes priority in early retirement"
+      note: "NIIT rarely an issue during ACA subsidy years"
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+
+helper_functions:
+  calculate_cash_buffer_targets:
+    purpose: "Calculate target buffer amounts"
+    parameters:
+      - expenses: "Annual expenses"
+    returns:
+      - cash_target: "2 years of expenses"
+      - taxable_target: "3 years of expenses"
+    formula: |
+      cash_target = expenses * 2.0
+      taxable_target = expenses * 3.0
+      
+  calculate_buffer_ramp_up:
+    purpose: "Calculate buffer additions during 3-year ramp-up"
+    parameters:
+      - current_year: "Current projection year"
+      - start_year: "Year strategy started"
+      - cash_target: "Target cash buffer"
+      - taxable_target: "Target taxable buffer"
+      - current_cash: "Current cash balance"
+      - current_taxable: "Current taxable balance"
+    returns:
+      - cash_needed: "Amount to add to cash this year"
+      - taxable_needed: "Amount to add to taxable this year"
+    logic: |
+      years_elapsed = current_year - start_year
+      if years_elapsed >= 3:
+          # Maintain targets
+          cash_needed = max(0, cash_target - current_cash)
+          taxable_needed = max(0, taxable_target - current_taxable)
+      else:
+          # Ramp up proportionally
+          progress_ratio = (years_elapsed + 1) / 3
+          cash_needed = max(0, cash_target * progress_ratio - current_cash)
+          taxable_needed = max(0, taxable_target * progress_ratio - current_taxable)
+          
+  get_target_conversion_bracket:
+    purpose: "Find optimal tax bracket for Roth conversions"
+    parameters:
+      - max_rate: "Maximum tax rate from user config (e.g., 0.24)"
+      - tax_brackets: "DataFrame with tax bracket data"
+    returns:
+      - target_rate: "Selected tax rate for conversions"
+      - upper_limit: "Upper income limit of that bracket"
+    logic: |
+      # Get all rates up to max_rate
+      available_rates = tax_brackets[rate <= max_rate]['rate'].unique()
+      available_rates = sorted(available_rates, reverse=True)
+      # Remove 0% bracket
+      available_rates = [r for r in available_rates if r > 0]
+      # Try each rate from highest to lowest
+      for rate in available_rates:
+          try:
+              upper_limit = getUpperIncomeRate(rate, tax_brackets)
+              return rate, upper_limit
+          except ValueError:
+              continue
+              
+  calculate_aca_subsidy:
+    purpose: "Calculate ACA marketplace subsidies"
+    parameters:
+      - magi: "Modified Adjusted Gross Income"
+      - year: "Tax year"
+      - household_size: "Number in household"
+    returns:
+      - subsidy_amount: "Annual subsidy"
+      - net_premium: "Net premium after subsidy"
+    logic: |
+      fpl = get_federal_poverty_level(year, household_size)
+      fpl_percentage = (magi / fpl) * 100
+      
+      if fpl_percentage <= 150:
+          # Free coverage
+          return benchmark_premium, 0
+      elif fpl_percentage <= 400:
+          # Sliding scale subsidy
+          max_contribution = calculate_max_contribution(fpl_percentage)
+          subsidy = benchmark_premium - max_contribution
+          return subsidy, max_contribution
+      else:
+          # No subsidy
+          return 0, benchmark_premium
+            
+  optimize_rmd_lookback:
+    purpose: "Review projected RMDs and optimize earlier conversions/withdrawals"
+    description: |
+      After initial strategy calculation, analyze Stage 5 RMDs to determine if they
+      exceed expenses. If so, increase Roth conversions or Traditional withdrawals
+      in earlier stages (2-4) to reduce future RMD burden and improve tax efficiency.
+    parameters:
+      - strategies: "List of YearlyStrategy objects from initial calculation"
+      - traditional_balance_by_year: "Dictionary of Traditional IRA balances by year"
+      - expenses_by_year: "Dictionary of annual expenses by year"
+      - rmd_start_year: "Year when RMDs begin (typically age 73)"
+    returns:
+      - adjusted_strategies: "Optimized strategy list with increased early conversions"
+      - optimization_report: "Summary of adjustments made"
+    logic: |
+      # Step 1: Analyze Stage 5 RMDs
+      rmd_years = [s for s in strategies if s.stage == "Stage 5: RMD"]
+      
+      if not rmd_years:
+          return strategies, "No RMD years to optimize"
+      
+      # Step 2: Calculate average RMD excess over expenses
+      total_rmd_excess = 0
+      rmd_count = 0
+      
+      for year_strategy in rmd_years:
+          rmd_excess = year_strategy.rmd_amount - year_strategy.expenses
+          if rmd_excess > 0:
+              total_rmd_excess += rmd_excess
+              rmd_count += 1
+      
+      if rmd_count == 0 or total_rmd_excess <= 0:
+          return strategies, "RMDs do not exceed expenses - no optimization needed"
+      
+      avg_rmd_excess = total_rmd_excess / rmd_count
+      
+      # Step 3: Calculate additional conversions needed in earlier years
+      # Distribute excess RMD reduction across pre-RMD years
+      pre_rmd_years = [s for s in strategies if s.stage in [
+          "Stage 2: Early Retirement",
+          "Stage 3: Medicare", 
+          "Stage 4: Social Security"
+      ]]
+      
+      if not pre_rmd_years:
+          return strategies, "No pre-RMD years available for optimization"
+      
+      # Target: Reduce Traditional IRA to minimize future RMDs
+      # Additional annual conversion = avg_rmd_excess / years_available
+      years_available = len(pre_rmd_years)
+      additional_conversion_per_year = avg_rmd_excess / years_available
+      
+      # Step 4: Adjust strategies for each pre-RMD year
+      adjusted_strategies = []
+      total_additional_conversions = 0
+      
+      for year_strategy in strategies:
+          if year_strategy.stage in ["Stage 2: Early Retirement", 
+                                      "Stage 3: Medicare",
+                                      "Stage 4: Social Security"]:
+              # Increase Roth conversion
+              original_conversion = year_strategy.roth_conversion
+              
+              # Check if additional conversion fits within tax bracket and BETR
+              max_additional = min(
+                  additional_conversion_per_year,
+                  year_strategy.balances.traditional * 0.15  # Max 15% of balance per year
+              )
+              
+              # Recalculate with BETR to verify benefit
+              from betr_roth_conversion import calculate_betr, BETRInputs
+              
+              betr_inputs = BETRInputs(
+                  current_marginal_rate=year_strategy.federal_tax / year_strategy.agi if year_strategy.agi > 0 else 0.24,
+                  expected_future_rate=0.24,  # Assume 24% in RMD years
+                  conversion_amount=original_conversion + max_additional,
+                  traditional_ira_balance=year_strategy.balances.traditional,
+                  pay_from_taxable=True,
+                  taxable_account_balance=year_strategy.balances.taxable,
+                  years_to_withdrawal=(73 - year_strategy.age_primary)
+              )
+              
+              betr_results = calculate_betr(betr_inputs)
+              
+              if betr_results.conversion_recommended:
+                  year_strategy.roth_conversion += max_additional
+                  total_additional_conversions += max_additional
+                  logger.info(f"Year {year_strategy.year}: Increased conversion by ${max_additional:,.0f} to reduce future RMDs")
+          
+          adjusted_strategies.append(year_strategy)
+      
+      # Step 5: Generate optimization report
+      optimization_report = {
+          "avg_rmd_excess": avg_rmd_excess,
+          "years_optimized": years_available,
+          "additional_conversions_per_year": additional_conversion_per_year,
+          "total_additional_conversions": total_additional_conversions,
+          "estimated_rmd_reduction": total_additional_conversions * 0.04  # Approximate RMD reduction
+      }
+      
+      return adjusted_strategies, optimization_report
+    
+    usage: |
+      # After initial strategy calculation
+      initial_strategies = calculate_multi_year_strategy(...)
+      
+      # Optimize based on RMD lookback
+      optimized_strategies, report = optimize_rmd_lookback(
+          strategies=initial_strategies,
+          traditional_balance_by_year={s.year: s.balances.traditional for s in initial_strategies},
+          expenses_by_year={s.year: s.expenses for s in initial_strategies},
+          rmd_start_year=2049  # Year when primary reaches age 73
+      )
+      
+      # Log optimization results
+      logger.info(f"RMD Optimization Report:")
+      logger.info(f"  Average RMD excess: ${report['avg_rmd_excess']:,.0f}")
+      logger.info(f"  Additional conversions: ${report['total_additional_conversions']:,.0f}")
+      logger.info(f"  Estimated RMD reduction: ${report['estimated_rmd_reduction']:,.0f}")
+      
+      return optimized_strategies
+
+
+# ==============================================================================
+# MAIN ENGINE
+# ==============================================================================
+
+withdrawal_strategy_engine:
+  class: "WithdrawalStrategyEngine"
+  
+  initialization:
+    stages:
+      - Stage1Accumulation()
+      - Stage2EarlyRetirement()
+      - Stage3Medicare()
+      - Stage4SocialSecurity()
+      - Stage5RMD()
+    magi_history: "Dictionary to track MAGI for IRMAA lookback"
+    
+  determine_stage:
+    purpose: "Select applicable life stage for current year"
+    logic: |
+      for stage in self.stages:
+          if stage.applies(age_primary, age_spouse, year, has_wages, has_ss):
+              return stage
+      # Default to Stage 2 if no match
+      return Stage2EarlyRetirement()
+      
+  calculate_multi_year_strategy:
+    purpose: "Project strategy across multiple years"
+    parameters:
+      - start_year: "Starting year"
+      - end_year: "Ending year"
+      - initial_balances: "PortfolioBalances"
+      - initial_expenses: "Annual expenses"
+      - person1_name: "Primary person name"
+      - person2_name: "Spouse name"
+      - growth_rate: "Annual portfolio growth (default 1.07)"
+      - expense_inflation_rate: "Annual expense inflation (default 0.993)"
+      - ss_claiming_age: "SS claiming age (default 67)"
+      - retirement_year: "Year of retirement"
+      - has_wages: "Whether still earning wages"
+    
+    process:
+      1: "Initialize tracking variables"
+      2: "Loop through each year from start to end"
+      3: "Calculate ages for both people"
+      4: "Determine if collecting SS benefits"
+      5: "Select applicable life stage"
+      6: "Calculate yearly strategy using stage logic"
+      7: "Track MAGI for IRMAA lookback"
+      8: "Update balances for next year"
+      9: "Inflate expenses for next year"
+      10: "Collect all yearly strategies"
+      11: "Perform RMD lookback optimization"
+      12: "Adjust earlier year conversions if RMDs exceed expenses"
+      13: "Convert to DataFrame"
+      
+    rmd_lookback_optimization:
+      description: "After initial calculation, review Stage 5 RMDs and optimize earlier stages"
+      trigger: "If any RMD year has RMD > expenses"
+      action: "Increase Roth conversions in Stages 2-4 to reduce future Traditional IRA balance"
+      verification: "Use BETR algorithm to verify additional conversions are beneficial"
+      
+    returns:
+      - strategies: "List of YearlyStrategy objects (optimized for RMDs)"
+      
+  _strategies_to_dataframe:
+    purpose: "Convert strategy list to pandas DataFrame"
+    columns:
+      - Year
+      - Age (formatted as "primary/spouse")
+      - Stage
+      - Wages
+      - SS Benefits
+      - RMD
+      - Traditional Withdrawal
+      - Taxable Withdrawal
+      - Roth Withdrawal
+      - Roth Conversion
+      - LTCG Harvested
+      - DAF Contribution
+      - Expenses
+      - Federal Tax
+      - IRMAA Penalty
+      - ACA Premium
+      - Cash Balance
+      - Taxable Balance
+      - Traditional Balance
+      - Roth Balance
+      - DAF Balance
+      - Total Portfolio
+
+# ==============================================================================
+# PUBLIC API FUNCTIONS
+# ==============================================================================
+
+public_api:
+  build_withdrawal_strategy_display:
+    purpose: "Main entry point for strategy calculation"
+    parameters:
+      - start_year: "int (default: current year)"
+      - end_year: "int (default: 2051)"
+      - initial_balances: "PortfolioBalances"
+      - initial_expenses: "float"
+      - person1_name: "str"
+      - person2_name: "str"
+      - growth_rate: "float (default: 1.07)"
+      - expense_inflation_rate: "float (default: 0.993)"
+      - ss_claiming_age: "int (default: 67)"
+      - retirement_year: "int"
+      - has_wages: "bool"
+    returns:
+      - strategy_df: "DataFrame with yearly strategies"
+      - balances_df: "DataFrame with account balances"
+    usage: |
+      strategy_df, balances_df = build_withdrawal_strategy_display(
+          start_year=2026,
+          end_year=2051,
+          initial_balances=PortfolioBalances(...),
+          initial_expenses=120000,
+          ...
+      )
+      
+  generate_strategy_summary:
+    purpose: "Generate summary statistics from strategy DataFrame"
+    parameters:
+      - strategy_df: "DataFrame from build_withdrawal_strategy_display"
+    returns:
+      dictionary_with:
+        - total_years: "Number of years analyzed"
+        - years_in_each_stage: "Count per stage"
+        - total_roth_conversions: "Sum of all conversions"
+        - total_taxes_paid: "Sum of all federal taxes"
+        - total_irmaa_penalties: "Sum of all IRMAA"
+        - initial_portfolio_value: "Starting portfolio"
+        - final_portfolio_value: "Ending portfolio"
+        - portfolio_growth: "Net growth"
+        - roth_percentage_initial: "Starting Roth %"
+        - roth_percentage_final: "Ending Roth %"
+        
+  print_strategy_report:
+    purpose: "Print formatted report to console"
+    parameters:
+      - strategy_df: "DataFrame"
+      - summary: "Dictionary from generate_strategy_summary"
+    output:
+      - Overview statistics
+      - Life stage breakdown
+      - Roth conversion summary
+      - Tax efficiency metrics
+      - Year-by-year details
+      
+  create_example_scenario:
+    purpose: "Create pre-built example scenarios"
+    parameters:
+      - scenario_name: "str ('default', 'early_retire', 'high_income')"
+    returns:
+      - dictionary: "Complete parameters for build_withdrawal_strategy_display"
+    scenarios:
+      default:
+        portfolio: "$1.1M"
+        expenses: "$120K"
+        description: "Standard retirement"
+      early_retire:
+        portfolio: "$1.5M"
+        expenses: "$150K"
+        ss_age: 70
+        description: "Early retirement with delayed SS"
+      high_income:
+        portfolio: "$3.7M"
+        expenses: "$200K"
+        description: "High net worth with IRMAA concerns"
+
+# ==============================================================================
+# DEPENDENCIES
+# ==============================================================================
+
+dependencies:
+  external_modules:
+    - pandas: "DataFrame operations"
+    - numpy: "Numerical calculations"
+    - logging: "Debug and error logging"
+    
+  internal_modules:
+    load_data:
+      - get_income_tax_brackets(): "Federal tax brackets by year"
+      - get_cap_gains_brackets(): "Capital gains brackets by year"
+      - get_std_deduction(): "Standard deduction by year"
+      - get_medicare_costs(): "Medicare premium costs"
+      - get_atm_costs(): "Alternative Minimum Tax data"
+      - get_networth_by_month(): "Portfolio data"
+      
+    calculations:
+      - calculate_taxable_income(): "Federal income tax calculation"
+      - calculate_cap_gains(): "Capital gains tax calculation"
+      - calculate_irmma_penalty(): "IRMAA penalty calculation"
+      - calc_roth_conversions(): "Roth conversion optimization (legacy)"
+      - calc_roth_conversions_tax(): "Tax on conversions"
+      - calc_agi(): "Adjusted Gross Income"
+      - get_rmd_value(): "Required Minimum Distribution"
+      - getUpperIncomeRate(): "Upper limit of tax bracket"
+      
+    betr_roth_conversion:
+      - calculate_betr(): "Calculate Break-Even Tax Rate for conversion"
+      - optimize_conversion_amount(): "Find optimal conversion amount using BETR"
+      - analyze_conversion_scenarios(): "Compare multiple conversion scenarios"
+      - BETRInputs: "Dataclass for BETR input parameters"
+      - BETRResults: "Dataclass for BETR calculation results"
+      - note: "Primary module for Roth conversion decisions based on Vanguard research (July 2025)"
+      - reference: "https://corporate.vanguard.com/content/dam/corp/research/pdf/a_betr_approach_to_roth_conversions_072025.pdf"
+      
+    ssibenefits:
+      - get_age(): "Calculate age from birth date"
+      - get_monthly_benefit(): "SS benefit amount"
+      - get_claiming_age(): "SS claiming age"
+      
+  data_files:
+    - income_rates.csv: "Federal tax brackets"
+    - cap_gains.csv: "Capital gains tax brackets"
+    - standard.csv: "Standard deduction amounts"
+    - irmaa.csv: "Medicare IRMAA brackets"
+    - atm.csv: "Alternative Minimum Tax data"
+    - ssincome.csv: "Social Security benefit data"
+    - rmd.csv: "RMD distribution factors"
+    - portfolio_data_truth.csv: "Portfolio holdings"
+
+# ==============================================================================
+# CONSTANTS
+# ==============================================================================
+
+constants:
+  WITHDRAWAL_RATE: 0.04  # 4% sustainable withdrawal rate
+  MEDICARE_AGE: 65  # Medicare eligibility age
+  RMD_AGE: 73  # RMD age (SECURE Act 2.0)
+  ACA_SUBSIDY_THRESHOLD: 400  # % of FPL for max subsidies
+  TAXABLE_SS_RATE: 0.85  # 85% of SS taxable at higher incomes
+
+# ==============================================================================
+# TESTING
+# ==============================================================================
+
+testing:
+  test_file: "test_withdrawal_strategy.py"
+  
+  test_coverage:
+    - test_portfolio_balances(): "PortfolioBalances dataclass"
+    - test_life_stages(): "Stage determination logic"
+    - test_aca_subsidy(): "ACA subsidy calculations"
+    - test_withdrawal_engine(): "Engine initialization and stage selection"
+    - test_strategy_calculation(): "Full strategy calculation"
+    - test_yearly_strategy_structure(): "YearlyStrategy dataclass"
+    
+  example_file: "example_withdrawal_strategy.py"
+  
+  examples:
+    - example_1_basic_strategy(): "Basic 25-year projection"
+    - example_2_early_retirement(): "Early retirement with aggressive conversions"
+    - example_3_high_income(): "High income with IRMAA optimization"
+    - example_4_custom_scenario(): "Custom parameters"
+    - compare_scenarios(): "Side-by-side comparison"
+
+# ==============================================================================
+# INTEGRATION
+# ==============================================================================
+
+integration:
+  streamlit_app: "planning_app.py"
+  
+  usage_in_app:
+    import: |
+      from withdrawal_strategy import build_withdrawal_strategy_display
+      
+    calculation: |
+      strategy_df, balances_df = build_withdrawal_strategy_display(
+          start_year=current_year,
+          end_year=2051,
+          initial_balances=get_current_balances(),
+          initial_expenses=config.get('financial_assumptions', 'expected_annual_expenses'),
+          ...
+      )
+      
+    display: |
+      st.dataframe(strategy_df)
+      st.line_chart(balances_df.set_index('Year'))
+      
+  configuration: "config.py"
+  
+  config_integration:
+    - personal_info: "Names, birth dates, retirement ages"
+    - financial_assumptions: "Expenses, inflation, returns"
+    - social_security: "SS claiming ages and amounts"
+    - healthcare: "ACA and Medicare settings"
+    - tax_strategy: "Roth conversion preferences"
+
+# ==============================================================================
+# PERFORMANCE
+# ==============================================================================
+
+performance:
+  optimization_techniques:
+    - "Vectorized pandas operations"
+    - "Efficient DataFrame construction"
+    - "Minimal data copying"
+    - "Cached tax bracket lookups"
+    
+  scalability:
+    - "Handles 25+ year projections efficiently"
+    - "Supports multiple scenarios in parallel"
+    - "Memory-efficient balance tracking"
+    
+  caching:
+    - "Use @st.cache_data for expensive calculations"
+    - "Cache tax bracket data"
+    - "Cache portfolio data fetches"
+
+# ==============================================================================
+# LIMITATIONS & FUTURE ENHANCEMENTS
+# ==============================================================================
+
+limitations:
+  current:
+    - "Constant growth rate assumption"
+    - "Fixed expense inflation"
+    - "No estate planning"
+    - "No pension income"
+    - "No long-term care costs"
+    
+  assumptions:
+    - "85% of SS benefits taxable (simplified)"
+    - "Constant portfolio growth rate"
+    - "No market volatility modeling"
+    - "Fixed expense patterns"
+    
+  tax_planning_status:
+    implemented_in_plan:
+      - "State tax planning framework (implementation pending)"
+      - "Alternative Minimum Tax (AMT) planning (implementation pending)"
+      - "Net Investment Income Tax (NIIT) planning (implementation pending)"
+      - "Account rebalancing logic (documented in v2.0, implementation pending)"
+    note: "Tax planning sections and account rebalancing added to plan but require implementation in code"
+
+# ==============================================================================
+# ACCOUNT REBALANCING IMPLEMENTATION (NEW FEATURE)
+# ==============================================================================
+
+account_rebalancing:
+  priority: "CRITICAL"
+  status: "Documented - Ready for Implementation"
+  version: "2.0"
+  
+  overview:
+    description: |
+      Comprehensive account rebalancing logic that implements actual fund movements
+      between portfolio accounts to maintain buffer targets and execute withdrawal/
+      conversion strategies. This feature addresses the critical gap where the module
+      calculates taxes and conversions but does not move funds between accounts.
+      
+    key_objectives:
+      - Maintain 2-year cash buffer for expense coverage
+      - Maintain 3-year taxable (brokerage) buffer for medium-term needs
+      - Execute Roth conversions with actual fund transfers
+      - Implement tax-efficient withdrawal sequencing
+      - Track all fund movements for reporting and tax calculations
+      - Ensure conservation of funds (all movements balance to zero)
+      
+    integration_points:
+      - All 5 life stage calculate_strategy() methods
+      - YearlyStrategy dataclass (add tracking fields)
+      - Tax calculation functions (reflect actual distributions)
+      - Multi-year projection engine
+      - Streamlit reporting and visualization
+  
+  buffer_maintenance:
+    cash_buffer:
+      target: "2 years of annual expenses"
+      trigger: "cash < expenses * 2.0"
+      priority: "HIGH - Critical for expense coverage"
+      
+      replenishment_sequence:
+        step_1:
+          source: "Taxable (Brokerage)"
+          destination: "Cash"
+          amount: "min(cash_deficit, brokerage_available)"
+          tax_impact: "None (already in taxable account)"
+          notes: "Preferred source - no tax impact, liquid assets"
+          
+        step_2:
+          source: "Traditional IRA/401k"
+          destination: "Cash"
+          amount: "min(cash_deficit, traditional_available)"
+          tax_impact: "Ordinary income tax on distribution"
+          notes: "Secondary source - triggers income tax"
+          considerations:
+            - "Check if distribution pushes into higher tax bracket"
+            - "Consider IRMAA impact (2-year lookback)"
+            - "Coordinate with Roth conversion strategy"
+            
+        step_3:
+          source: "Roth IRA"
+          destination: "Cash"
+          amount: "cash_deficit (emergency only)"
+          tax_impact: "None (tax-free qualified distribution after 59.5)"
+          notes: "Last resort - preserve Roth for heirs and tax-free growth"
+          conditions:
+            - "Only if Traditional and Taxable depleted"
+            - "Age 59.5+ for qualified distributions"
+            - "Log warning when Roth used for expenses"
+      
+      implementation_logic: |
+        def replenish_cash_buffer(balances: PortfolioBalances, 
+                                 expenses: float,
+                                 age_primary: int,
+                                 year: int) -> Tuple[PortfolioBalances, Dict]:
+            """
+            Replenish cash buffer to 2-year target
+            
+            Returns:
+                Tuple of (updated_balances, transaction_log)
+            """
+            cash_target = expenses * 2.0
+            cash_deficit = max(0, cash_target - balances.cash)
+            
+            if cash_deficit < 100:  # Ignore trivial amounts
+                return balances, {}
+            
+            transactions = {
+                'brokerage_to_cash': 0.0,
+                'traditional_to_cash': 0.0,
+                'roth_to_cash': 0.0,
+                'total_replenished': 0.0
+            }
+            
+            # Step 1: Transfer from Brokerage (tax-free)
+            if cash_deficit > 0 and balances.taxable > 0:
+                transfer = min(cash_deficit, balances.taxable)
+                balances.taxable -= transfer
+                balances.cash += transfer
+                transactions['brokerage_to_cash'] = transfer
+                cash_deficit -= transfer
+                logger.info(f"Year {year}: Transferred ${transfer:,.0f} from Brokerage to Cash")
+            
+            # Step 2: Distribute from Traditional (taxable)
+            if cash_deficit > 0 and balances.traditional > 0:
+                distribution = min(cash_deficit, balances.traditional * 0.10)  # Max 10% per year
+                balances.traditional -= distribution
+                balances.cash += distribution
+                transactions['traditional_to_cash'] = distribution
+                cash_deficit -= distribution
+                logger.info(f"Year {year}: Distributed ${distribution:,.0f} from Traditional to Cash (taxable)")
+            
+            # Step 3: Emergency Roth distribution (tax-free if qualified)
+            if cash_deficit > 0 and balances.roth > 0 and age_primary >= 59.5:
+                distribution = min(cash_deficit, balances.roth * 0.05)  # Max 5% per year
+                balances.roth -= distribution
+                balances.cash += distribution
+                transactions['roth_to_cash'] = distribution
+                logger.warning(f"Year {year}: EMERGENCY - Distributed ${distribution:,.0f} from Roth to Cash")
+            
+            transactions['total_replenished'] = sum([
+                transactions['brokerage_to_cash'],
+                transactions['traditional_to_cash'],
+                transactions['roth_to_cash']
+            ])
+            
+            return balances, transactions
+    
+    brokerage_buffer:
+      target: "3 years of annual expenses"
+      trigger: "taxable < expenses * 3.0"
+      priority: "MEDIUM - Important for medium-term liquidity"
+      
+      replenishment_sequence:
+        step_1:
+          source: "Traditional IRA/401k"
+          destination: "Taxable (Brokerage)"
+          amount: "min(brokerage_deficit, traditional_available)"
+          tax_impact: "Ordinary income tax on distribution"
+          notes: "Primary source for brokerage replenishment"
+          strategy: "Coordinate with Roth conversion strategy to optimize taxes"
+          
+        step_2:
+          source: "Roth IRA"
+          destination: "Taxable (Brokerage)"
+          amount: "brokerage_deficit (emergency only)"
+          tax_impact: "None (tax-free qualified distribution)"
+          notes: "Emergency only - preserve Roth growth"
+          conditions:
+            - "Only if Traditional depleted"
+            - "Age 59.5+ for qualified distributions"
+      
+      implementation_logic: |
+        def replenish_brokerage_buffer(balances: PortfolioBalances,
+                                       expenses: float,
+                                       age_primary: int,
+                                       year: int) -> Tuple[PortfolioBalances, Dict]:
+            """
+            Replenish brokerage buffer to 3-year target
+            
+            Returns:
+                Tuple of (updated_balances, transaction_log)
+            """
+            brokerage_target = expenses * 3.0
+            brokerage_deficit = max(0, brokerage_target - balances.taxable)
+            
+            if brokerage_deficit < 100:
+                return balances, {}
+            
+            transactions = {
+                'traditional_to_brokerage': 0.0,
+                'roth_to_brokerage': 0.0,
+                'total_replenished': 0.0
+            }
+            
+            # Step 1: Distribute from Traditional (taxable)
+            if brokerage_deficit > 0 and balances.traditional > 0:
+                distribution = min(brokerage_deficit, balances.traditional * 0.15)  # Max 15% per year
+                balances.traditional -= distribution
+                balances.taxable += distribution
+                transactions['traditional_to_brokerage'] = distribution
+                brokerage_deficit -= distribution
+                logger.info(f"Year {year}: Distributed ${distribution:,.0f} from Traditional to Brokerage (taxable)")
+            
+            # Step 2: Emergency Roth distribution (tax-free if qualified)
+            if brokerage_deficit > 0 and balances.roth > 0 and age_primary >= 59.5:
+                distribution = min(brokerage_deficit, balances.roth * 0.05)  # Max 5% per year
+                balances.roth -= distribution
+                balances.taxable += distribution
+                transactions['roth_to_brokerage'] = distribution
+                logger.warning(f"Year {year}: EMERGENCY - Distributed ${distribution:,.0f} from Roth to Brokerage")
+            
+            transactions['total_replenished'] = sum([
+                transactions['traditional_to_brokerage'],
+                transactions['roth_to_brokerage']
+            ])
+            
+            return balances, transactions
+  
+  roth_conversion_execution:
+    description: |
+      Execute actual fund transfers for Roth conversions calculated by BETR algorithm.
+      Currently, the module calculates optimal conversion amounts but does not move funds.
+      
+    current_issue:
+      problem: "Conversion amount calculated but funds not transferred"
+      example: |
+        # Current (INCORRECT):
+        roth_conversion = 50000  # Calculated by BETR
+        new_balances = PortfolioBalances(
+            traditional=balances.traditional,  # Should be -= 50000
+            roth=balances.roth,                # Should be += 50000
+            ...
+        )
+        
+        # Fixed (CORRECT):
+        roth_conversion = 50000
+        new_balances = PortfolioBalances(
+            traditional=balances.traditional - roth_conversion,
+            roth=balances.roth + roth_conversion,
+            ...
+        )
+    
+    implementation:
+      function_name: "execute_roth_conversion()"
+      parameters:
+        - "balances: PortfolioBalances"
+        - "conversion_amount: float"
+        - "year: int"
+      returns: "Updated PortfolioBalances"
+      
+      logic: |
+        def execute_roth_conversion(balances: PortfolioBalances,
+                                   conversion_amount: float,
+                                   year: int) -> PortfolioBalances:
+            """
+            Execute Roth conversion by moving funds from Traditional to Roth
+            
+            Args:
+                balances: Current portfolio balances
+                conversion_amount: Amount to convert (from BETR algorithm)
+                year: Current year
+            
+            Returns:
+                Updated balances with conversion executed
+            """
+            if conversion_amount <= 0:
+                return balances
+            
+            # Verify sufficient Traditional balance
+            if balances.traditional < conversion_amount:
+                logger.warning(f"Year {year}: Insufficient Traditional balance for conversion "
+                             f"(requested: ${conversion_amount:,.0f}, available: ${balances.traditional:,.0f})")
+                conversion_amount = balances.traditional
+            
+            # Execute conversion
+            balances.traditional -= conversion_amount
+            balances.roth += conversion_amount
+            
+            logger.info(f"Year {year}: Converted ${conversion_amount:,.0f} from Traditional to Roth")
+            logger.debug(f"  Traditional: ${balances.traditional:,.0f}, Roth: ${balances.roth:,.0f}")
+            
+            return balances
+      
+      tax_implications:
+        - "Conversion amount added to ordinary income"
+        - "May push into higher tax bracket"
+        - "IRMAA impact (2-year lookback for Medicare)"
+        - "ACA subsidy impact (if applicable)"
+        - "Tax paid from taxable account (preferred) or cash"
+  
+  withdrawal_sequencing:
+    description: |
+      Implement tax-efficient withdrawal sequencing across all account types.
+      Order of withdrawals optimized for tax efficiency and buffer maintenance.
+      
+    general_sequence:
+      priority_1:
+        account: "Cash"
+        reason: "No tax impact, immediate liquidity"
+        limit: "Down to 1-year expenses (maintain minimum buffer)"
+        
+      priority_2:
+        account: "Taxable (Brokerage)"
+        reason: "Preferential LTCG rates, no RMD impact"
+        limit: "Down to 2-year expenses (maintain buffer)"
+        tax: "Long-term capital gains (0%, 15%, or 20%)"
+        
+      priority_3:
+        account: "Traditional IRA/401k"
+        reason: "Ordinary income tax, reduces future RMDs"
+        limit: "Up to top of target tax bracket"
+        tax: "Ordinary income tax"
+        considerations:
+          - "IRMAA thresholds (Medicare)"
+          - "ACA subsidy cliffs (early retirement)"
+          - "Social Security taxation"
+          
+      priority_4:
+        account: "Roth IRA"
+        reason: "Tax-free, preserve for heirs"
+        limit: "Emergency only"
+        tax: "None (qualified distributions)"
+        notes: "Last resort - maximize tax-free growth"
+    
+    stage_specific_sequences:
+      stage_1_accumulation:
+        focus: "Build buffers, maximize contributions"
+        sequence:
+          - "Contribute to 401k/IRA (tax-deferred)"
+          - "Max out Roth contributions"
+          - "Build cash buffer (2 years)"
+          - "Build taxable buffer (3 years)"
+          - "Consider Roth conversions if in low tax bracket"
+          
+      stage_2_early_retirement:
+        focus: "Aggressive Roth conversions, ACA optimization"
+        sequence:
+          - "Maintain cash buffer from taxable"
+          - "Harvest LTCG at 0% rate"
+          - "Aggressive Roth conversions (BETR-optimized)"
+          - "Minimize MAGI for ACA subsidies"
+          - "Distribute from Traditional to fund lifestyle"
+          
+      stage_3_medicare:
+        focus: "IRMAA optimization, continued conversions"
+        sequence:
+          - "Maintain buffers"
+          - "Roth conversions below IRMAA thresholds"
+          - "Harvest LTCG strategically"
+          - "Balance Traditional withdrawals with IRMAA"
+          
+      stage_4_social_security:
+        focus: "Balance SS taxation with conversions"
+        sequence:
+          - "Maintain buffers"
+          - "Coordinate SS benefits with other income"
+          - "Continue Roth conversions (BETR-optimized)"
+          - "Manage IRMAA with 2-year lookback"
+          
+      stage_5_rmd:
+        focus: "RMD compliance, tax-efficient distributions"
+        sequence:
+          - "Satisfy RMD requirements"
+          - "Distribute excess RMD to taxable"
+          - "QCD for charitable giving (if applicable)"
+          - "Maintain buffers from RMD distributions"
+  
+  fund_movement_tracking:
+    description: |
+      Track all fund movements for reporting, tax calculations, and audit trail.
+      Add new fields to YearlyStrategy dataclass to capture all transactions.
+      
+    new_fields:
+      cash_replenishment:
+        type: "float"
+        description: "Total amount added to cash buffer this year"
+        components:
+          - "brokerage_to_cash"
+          - "traditional_to_cash"
+          - "roth_to_cash"
+          
+      brokerage_replenishment:
+        type: "float"
+        description: "Total amount added to brokerage buffer this year"
+        components:
+          - "traditional_to_brokerage"
+          - "roth_to_brokerage"
+          
+      traditional_to_cash:
+        type: "float"
+        description: "Traditional IRA distributions to cash"
+        tax_impact: "Ordinary income"
+        
+      traditional_to_brokerage:
+        type: "float"
+        description: "Traditional IRA distributions to brokerage"
+        tax_impact: "Ordinary income"
+        
+      brokerage_to_cash:
+        type: "float"
+        description: "Brokerage transfers to cash"
+        tax_impact: "None (already taxable)"
+        
+      roth_to_cash:
+        type: "float"
+        description: "Roth IRA distributions to cash (emergency)"
+        tax_impact: "None (qualified)"
+        
+      roth_to_brokerage:
+        type: "float"
+        description: "Roth IRA distributions to brokerage (emergency)"
+        tax_impact: "None (qualified)"
+        
+      conversion_executed:
+        type: "float"
+        description: "Actual Roth conversion executed (Traditional → Roth)"
+        tax_impact: "Ordinary income"
+        
+      total_fund_movements:
+        type: "float"
+        description: "Sum of all fund movements (should net to zero)"
+        validation: "Ensure conservation of funds"
+    
+    dataclass_update: |
+      @dataclass
+      class YearlyStrategy:
+          """Container for a year's withdrawal strategy"""
+          # ... existing fields ...
+          
+          # NEW: Fund movement tracking
+          cash_replenishment: float = 0.0
+          brokerage_replenishment: float = 0.0
+          traditional_to_cash: float = 0.0
+          traditional_to_brokerage: float = 0.0
+          brokerage_to_cash: float = 0.0
+          roth_to_cash: float = 0.0
+          roth_to_brokerage: float = 0.0
+          conversion_executed: float = 0.0
+          
+          def validate_fund_conservation(self) -> bool:
+              """
+              Verify that all fund movements balance to zero
+              (what leaves one account enters another)
+              """
+              # Outflows (negative)
+              outflows = (
+                  self.traditional_to_cash +
+                  self.traditional_to_brokerage +
+                  self.brokerage_to_cash +
+                  self.roth_to_cash +
+                  self.roth_to_brokerage +
+                  self.conversion_executed  # Traditional → Roth
+              )
+              
+              # Inflows (positive)
+              inflows = (
+                  self.cash_replenishment +
+                  self.brokerage_replenishment +
+                  self.conversion_executed  # → Roth
+              )
+              
+              # Should balance (within rounding)
+              balance = abs(outflows - inflows)
+              if balance > 1.0:  # Allow $1 rounding error
+                  logger.error(f"Fund conservation violated: ${balance:,.2f} imbalance")
+                  return False
+              
+              return True
+  
+  helper_function:
+    name: "rebalance_accounts()"
+    purpose: "Centralized account rebalancing logic"
+    location: "Add to withdrawal_strategy.py after calculate_niit()"
+    
+    signature: |
+      def rebalance_accounts(balances: PortfolioBalances,
+                            expenses: float,
+                            roth_conversion: float,
+                            year: int,
+                            age_primary: int,
+                            stage: str) -> Tuple[PortfolioBalances, Dict[str, float]]:
+          """
+          Execute all account rebalancing operations for a given year
+          
+          This function orchestrates:
+          1. Cash buffer maintenance (2-year target)
+          2. Brokerage buffer maintenance (3-year target)
+          3. Roth conversion execution
+          4. Fund movement tracking
+          
+          Args:
+              balances: Current portfolio balances
+              expenses: Annual expenses for this year
+              roth_conversion: Roth conversion amount (from BETR algorithm)
+              year: Current year
+              age_primary: Primary person's age
+              stage: Current life stage
+          
+          Returns:
+              Tuple of (updated_balances, transaction_log)
+              - updated_balances: PortfolioBalances after all movements
+              - transaction_log: Dict with all fund movements for reporting
+          """
+    
+    implementation: |
+      def rebalance_accounts(balances: PortfolioBalances,
+                            expenses: float,
+                            roth_conversion: float,
+                            year: int,
+                            age_primary: int,
+                            stage: str) -> Tuple[PortfolioBalances, Dict[str, float]]:
+          """Execute all account rebalancing operations"""
+          
+          logger.info(f"Year {year} ({stage}): Starting account rebalancing")
+          logger.debug(f"  Initial balances: Cash=${balances.cash:,.0f}, "
+                      f"Taxable=${balances.taxable:,.0f}, "
+                      f"Traditional=${balances.traditional:,.0f}, "
+                      f"Roth=${balances.roth:,.0f}")
+          
+          # Initialize transaction log
+          transactions = {
+              'brokerage_to_cash': 0.0,
+              'traditional_to_cash': 0.0,
+              'traditional_to_brokerage': 0.0,
+              'roth_to_cash': 0.0,
+              'roth_to_brokerage': 0.0,
+              'conversion_executed': 0.0,
+              'cash_replenishment': 0.0,
+              'brokerage_replenishment': 0.0
+          }
+          
+          # Step 1: Execute Roth conversion
+          if roth_conversion > 0:
+              balances = execute_roth_conversion(balances, roth_conversion, year)
+              transactions['conversion_executed'] = roth_conversion
+          
+          # Step 2: Replenish cash buffer
+          balances, cash_txns = replenish_cash_buffer(balances, expenses, age_primary, year)
+          transactions.update(cash_txns)
+          
+          # Step 3: Replenish brokerage buffer
+          balances, brokerage_txns = replenish_brokerage_buffer(balances, expenses, age_primary, year)
+          transactions.update(brokerage_txns)
+          
+          # Step 4: Validate fund conservation
+          total_movements = sum([
+              transactions['brokerage_to_cash'],
+              transactions['traditional_to_cash'],
+              transactions['traditional_to_brokerage'],
+              transactions['roth_to_cash'],
+              transactions['roth_to_brokerage']
+          ])
+          
+          logger.info(f"Year {year}: Rebalancing complete - ${total_movements:,.0f} total movements")
+          logger.debug(f"  Final balances: Cash=${balances.cash:,.0f}, "
+                      f"Taxable=${balances.taxable:,.0f}, "
+                      f"Traditional=${balances.traditional:,.0f}, "
+                      f"Roth=${balances.roth:,.0f}")
+          
+          return balances, transactions
+  
+  stage_integration:
+    description: |
+      Update all 5 life stage calculate_strategy() methods to call rebalance_accounts()
+      and incorporate fund movements into balance calculations and tax reporting.
+      
+    changes_required:
+      all_stages:
+        - "Import rebalance_accounts() function"
+        - "Call rebalance_accounts() after calculating conversions/withdrawals"
+        - "Update balance calculations to use returned balances"
+        - "Add transaction log fields to YearlyStrategy"
+        - "Update tax calculations to include distribution taxes"
+        
+      example_integration: |
+        def calculate_strategy(self, year: int, balances: PortfolioBalances,
+                              expenses: float, ...) -> YearlyStrategy:
+            """Calculate strategy for this stage"""
+            
+            # ... existing logic to calculate roth_conversion ...
+            
+            # NEW: Execute account rebalancing
+            updated_balances, transactions = rebalance_accounts(
+                balances=balances,
+                expenses=expenses,
+                roth_conversion=roth_conversion,
+                year=year,
+                age_primary=age_primary,
+                stage=self.name
+            )
+            
+            # NEW: Create strategy with fund movement tracking
+            return YearlyStrategy(
+                year=year,
+                # ... existing fields ...
+                roth_conversion=roth_conversion,
+                balances=updated_balances,  # Use updated balances
+                
+                # NEW: Fund movement tracking
+                cash_replenishment=transactions['cash_replenishment'],
+                brokerage_replenishment=transactions['brokerage_replenishment'],
+                traditional_to_cash=transactions['traditional_to_cash'],
+                traditional_to_brokerage=transactions['traditional_to_brokerage'],
+                brokerage_to_cash=transactions['brokerage_to_cash'],
+                roth_to_cash=transactions['roth_to_cash'],
+                roth_to_brokerage=transactions['roth_to_brokerage'],
+                conversion_executed=transactions['conversion_executed']
+            )
+  
+  testing_requirements:
+    unit_tests:
+      - name: "test_replenish_cash_buffer"
+        description: "Verify cash buffer replenishment from all sources"
+        scenarios:
+          - "Sufficient brokerage balance"
+          - "Insufficient brokerage, use Traditional"
+          - "Emergency Roth distribution"
+          - "Multiple sources in sequence"
+          
+      - name: "test_replenish_brokerage_buffer"
+        description: "Verify brokerage buffer replenishment"
+        scenarios:
+          - "Traditional distribution to brokerage"
+          - "Emergency Roth distribution"
+          - "Insufficient Traditional balance"
+          
+      - name: "test_execute_roth_conversion"
+        description: "Verify Roth conversion fund movement"
+        scenarios:
+          - "Normal conversion"
+          - "Insufficient Traditional balance"
+          - "Zero conversion amount"
+          
+      - name: "test_rebalance_accounts"
+        description: "Verify complete rebalancing orchestration"
+        scenarios:
+          - "All operations in sequence"
+          - "Fund conservation validation"
+          - "Transaction log accuracy"
+          
+      - name: "test_fund_conservation"
+        description: "Verify all fund movements balance to zero"
+        scenarios:
+          - "Single year validation"
+          - "Multi-year projection validation"
+          - "All stages validation"
+    
+    integration_tests:
+      - name: "test_25_year_projection_with_rebalancing"
+        description: "Full projection with account rebalancing"
+        validates:
+          - "Buffers maintained throughout projection"
+          - "Conversions executed correctly"
+          - "Balances decrease realistically"
+          - "No negative balances"
+          - "Fund conservation across all years"
+          
+      - name: "test_stage_transitions_with_rebalancing"
+        description: "Verify rebalancing across stage transitions"
+        validates:
+          - "Stage 2 → Stage 3 transition"
+          - "Stage 3 → Stage 4 transition"
+          - "Stage 4 → Stage 5 transition"
+          - "Buffer maintenance during transitions"
+          
+      - name: "test_account_depletion_scenarios"
+        description: "Test behavior when accounts run low"
+        scenarios:
+          - "Traditional depleted first"
+          - "Taxable depleted first"
+          - "Emergency Roth distributions"
+          - "Graceful degradation"
+    
+    test_file: "test_withdrawal_strategy.py"
+    new_test_section: "Account Rebalancing Tests"
+  
+  documentation_updates:
+    readme_sections:
+      - "Account Rebalancing Overview"
+      - "Buffer Maintenance Strategy"
+      - "Fund Movement Tracking"
+      - "Tax Implications of Distributions"
+      - "Emergency Distribution Protocols"
+      
+    code_comments:
+      - "Add docstrings to all new functions"
+      - "Document transaction log structure"
+      - "Explain fund conservation validation"
+      - "Document emergency distribution logic"
+      
+    examples:
+      - "Example with cash buffer replenishment"
+      - "Example with brokerage buffer replenishment"
+      - "Example with emergency Roth distribution"
+      - "Example showing fund movement tracking"
+  
+  success_criteria:
+    functional:
+      - "Cash buffer maintained at 2x expenses throughout projection"
+      - "Brokerage buffer maintained at 3x expenses throughout projection"
+      - "Roth conversions move funds from Traditional to Roth"
+      - "Distributions reduce source account and increase target account"
+      - "All balance changes sum to zero (fund conservation)"
+      - "Tax calculations reflect actual distributions"
+      - "Portfolio depletion modeled realistically"
+      
+    testing:
+      - "All unit tests passing"
+      - "All integration tests passing"
+      - "25-year projection completes without errors"
+      - "No negative account balances"
+      - "Fund conservation validated for all years"
+      
+    performance:
+      - "No significant performance degradation"
+      - "Rebalancing completes in < 100ms per year"
+      - "Memory usage remains reasonable"
+      
+    documentation:
+      - "All functions have docstrings"
+      - "README updated with new features"
+      - "Examples demonstrate new functionality"
+      - "Test coverage documented"
+
+future_enhancements:
+  planned:
+    - "Implement account rebalancing logic (DOCUMENTED in v2.0 - Ready for code implementation)"
+    - "Implement state tax calculations in code"
+    - "Implement AMT calculations in code"
+    - "Implement NIIT calculations in code"
+    - "Variable growth rates (Monte Carlo)"
+    - "Healthcare cost projections"
+    - "Estate planning strategies"
+    - "Pension income integration"
+    - "Charitable giving optimization"
+    - "Qualified Charitable Distributions (QCDs)"
+  
+  v2_0_additions:
+    account_rebalancing:
+      status: "Fully documented, ready for implementation"
+      priority: "CRITICAL"
+      documentation_location: "account_rebalancing section"
+      includes:
+        - "Complete buffer maintenance logic (cash and brokerage)"
+        - "Roth conversion execution with fund transfers"
+        - "Tax-efficient withdrawal sequencing"
+        - "Fund movement tracking fields"
+        - "Helper function specifications with implementation code"
+        - "Stage integration guidelines"
+        - "Comprehensive testing requirements"
+        - "Success criteria and validation"
+      estimated_implementation_time: "12-17 hours"
+      
+    state_tax_planning:
+      status: "Fully documented, ready for implementation"
+      priority: "HIGH"
+      documentation_location: "state_tax_implementation section"
+      includes:
+        - "State tax data file specifications (3 CSV files)"
+        - "load_state_tax_data() function with implementation"
+        - "calculate_state_tax() function with full implementation"
+        - "No-tax state handling (FL, TX, WA, etc.)"
+        - "Retirement-friendly state exemptions (PA, IL, MS)"
+        - "Stage integration examples"
+        - "Testing requirements"
+      estimated_implementation_time: "11-16 hours"
+      
+    amt_planning:
+      status: "Fully documented, ready for implementation"
+      priority: "MEDIUM"
+      documentation_location: "amt_implementation section"
+      includes:
+        - "AMT parameters data file specification"
+        - "load_amt_parameters() function"
+        - "calculate_amt() function with full implementation"
+        - "optimize_conversion_to_avoid_amt() function"
+        - "AMT exemption phase-out logic"
+        - "Stage integration with BETR algorithm"
+        - "Testing requirements"
+      estimated_implementation_time: "10-14 hours"
+      
+    niit_planning:
+      status: "Fully documented, ready for implementation"
+      priority: "MEDIUM"
+      documentation_location: "niit_implementation section"
+      includes:
+        - "NIIT thresholds (not indexed for inflation)"
+        - "calculate_net_investment_income() function"
+        - "calculate_niit() function with full implementation"
+        - "optimize_withdrawals_for_niit() function"
+        - "Stage-specific NIIT strategies"
+        - "Coordination with IRMAA and QCDs"
+        - "Testing requirements"
+      estimated_implementation_time: "8-11 hours"
+      
+    healthcare_cost_projections:
+      status: "Fully documented, ready for implementation"
+      priority: "HIGH"
+      documentation_location: "healthcare_cost_projections section"
+      includes:
+        - "Medicare costs with IRMAA integration"
+        - "Pre-Medicare (ACA) cost modeling"
+        - "Out-of-pocket expense projections"
+        - "Long-term care cost modeling"
+        - "calculate_medicare_costs() function"
+        - "calculate_total_healthcare_costs() function"
+        - "project_healthcare_costs() function"
+        - "Stage integration examples"
+        - "Testing requirements"
+      estimated_implementation_time: "8-11 hours"
+    
+    total_estimated_effort: "49-69 hours for all features"
+  
+  account_rebalancing_implementation:
+    priority: "CRITICAL"
+    status: "Documented - Implementation Pending"
+    description: |
+      Implement actual fund movement between accounts to maintain buffer targets
+      and execute withdrawal/conversion strategies. Currently, the module calculates
+      taxes and conversions but does not move funds between accounts.
+    
+    required_functionality:
+      cash_buffer_maintenance:
+        trigger: "cash < expenses * 2"
+        actions:
+          - "Transfer from Brokerage to Cash (tax-free, already in taxable account)"
+          - "Distribute from Traditional to Cash (ordinary income tax)"
+          - "Emergency: Distribute from Roth to Cash (tax-free qualified distribution)"
+        implementation: "Add to all stage calculate_strategy() methods"
+      
+      brokerage_buffer_maintenance:
+        trigger: "brokerage < expenses * 3"
+        actions:
+          - "Sell stocks/securities (LTCG tax on gains)"
+          - "Distribute from Traditional to Brokerage (ordinary income tax)"
+          - "Emergency: Distribute from Roth to Brokerage (tax-free)"
+        implementation: "Add to all stage calculate_strategy() methods"
+      
+      traditional_to_roth_conversions:
+        current: "Calculates conversion amount using BETR algorithm"
+        missing: "Actual fund movement: traditional -= amount; roth += amount"
+        tax: "Ordinary income tax on conversion amount"
+        implementation: "Update balance calculations in all stages"
+      
+      traditional_to_brokerage_distributions:
+        current: "Not implemented"
+        needed: "traditional -= distribution; brokerage += distribution"
+        tax: "Ordinary income tax on distribution"
+        use_cases:
+          - "Fund brokerage buffer when below target"
+          - "Cover expenses when cash/brokerage depleted"
+          - "RMD distributions in Stage 5"
+      
+      brokerage_to_cash_transfers:
+        current: "Not implemented"
+        needed: "brokerage -= amount; cash += amount"
+        tax: "None (already in taxable account)"
+        use_cases:
+          - "Replenish cash buffer when below 2x expenses"
+          - "Regular expense funding"
+      
+      roth_emergency_distributions:
+        current: "Not implemented"
+        needed: "roth -= amount; cash += amount (or brokerage)"
+        tax: "None (tax-free qualified distributions after age 59.5)"
+        use_cases:
+          - "Last resort when other accounts depleted"
+          - "Emergency expenses"
+          - "Preserve Roth for heirs if possible"
+    
+    implementation_approach:
+      step_1_add_helper_function:
+        name: "rebalance_accounts()"
+        purpose: "Centralized logic for account rebalancing"
+        parameters:
+          - "current_balances: PortfolioBalances"
+          - "expenses: float"
+          - "cash_target: float"
+          - "taxable_target: float"
+          - "year: int"
+          - "age_primary: int"
+        returns: "Updated PortfolioBalances with fund movements"
+        logic:
+          - "Check cash buffer (< 2x expenses)"
+          - "Check brokerage buffer (< 3x expenses)"
+          - "Execute transfers in priority order"
+          - "Track tax implications"
+          - "Return updated balances"
+      
+      step_2_update_stage_methods:
+        stages_to_update:
+          - "Stage1Accumulation.calculate_strategy()"
+          - "Stage2EarlyRetirement.calculate_strategy()"
+          - "Stage3Medicare.calculate_strategy()"
+          - "Stage4SocialSecurity.calculate_strategy()"
+          - "Stage5RMD.calculate_strategy()"
+        changes:
+          - "Call rebalance_accounts() before returning YearlyStrategy"
+          - "Update balance calculations to reflect actual fund movements"
+          - "Track withdrawals by account type"
+          - "Update tax calculations to include distribution taxes"
+      
+      step_3_update_balance_tracking:
+        current_issue: "Balances updated but funds not moved"
+        fix: "Ensure all balance changes reflect actual transactions"
+        example: |
+          # Current (incorrect):
+          roth_conversion = 50000
+          new_balances = PortfolioBalances(
+              traditional=balances.traditional,  # Should be -= roth_conversion
+              roth=balances.roth,  # Should be += roth_conversion
+              ...
+          )
+          
+          # Fixed (correct):
+          roth_conversion = 50000
+          new_balances = PortfolioBalances(
+              traditional=balances.traditional - roth_conversion,
+              roth=balances.roth + roth_conversion,
+              ...
+          )
+      
+      step_4_add_withdrawal_tracking:
+        purpose: "Track all fund movements for reporting"
+        fields_to_add:
+          - "cash_replenishment: float"
+          - "brokerage_replenishment: float"
+          - "traditional_to_cash: float"
+          - "traditional_to_brokerage: float"
+          - "brokerage_to_cash: float"
+          - "roth_to_cash: float"
+        update: "YearlyStrategy dataclass"
+      
+      step_5_testing:
+        unit_tests:
+          - "Test cash buffer replenishment"
+          - "Test brokerage buffer replenishment"
+          - "Test Traditional → Roth conversions"
+          - "Test Traditional → Brokerage distributions"
+          - "Test Brokerage → Cash transfers"
+          - "Test Roth emergency distributions"
+          - "Test balance consistency across years"
+        integration_tests:
+          - "Test 25-year projection with account depletion"
+          - "Test buffer maintenance across all stages"
+          - "Test tax calculations with distributions"
+        file: "test_withdrawal_strategy.py (expand existing tests)"
+    
+    estimated_effort:
+      analysis: "2 hours"
+      implementation: "6-8 hours"
+      testing: "3-4 hours"
+      documentation: "1-2 hours"
+      total: "12-17 hours"
+    
+    dependencies:
+      - "Existing BETR algorithm (working)"
+      - "Tax calculation functions (working)"
+      - "Buffer target calculations (working)"
+      - "Stage determination logic (working)"
+    
+    success_criteria:
+      - "Cash buffer maintained at 2x expenses throughout projection"
+      - "Brokerage buffer maintained at 3x expenses throughout projection"
+      - "Roth conversions actually move funds from Traditional to Roth"
+      - "Distributions actually reduce source account and increase target account"
+      - "All balance changes sum to zero (conservation of funds)"
+      - "Tax calculations reflect actual distributions"
+      - "Portfolio depletion modeled realistically"
+      - "All tests passing"
+    
+  advanced_features:
+    - "Market volatility simulation"
+    - "Sequence of returns risk analysis"
+    - "Dynamic asset allocation"
+    - "Tax loss harvesting"
+    - "Backdoor Roth strategies"
+    - "Mega backdoor Roth"
+
+# ==============================================================================
+# DOCUMENTATION
+# ==============================================================================
+
+documentation:
+  readme: "WITHDRAWAL_STRATEGY_README.md"
+  
+  sections:
+    - Overview
+    - Key Features
+    - Installation
+    - Quick Start
+    - Module Components
+    - Strategy Details by Stage
+    - Tax Optimization Strategies
+    - Output DataFrame Columns
+    - Examples
+    - Integration with Streamlit
+    - Customization
+    - Performance Considerations
+    - Limitations
+    - Troubleshooting
+    - Contributing
+    - References
+    
+  references:
+    - "IRS Publication 590-B (RMD rules)"
+    - "IRS Publication 915 (SS taxation)"
+    - "Medicare IRMAA documentation"
+    - "ACA subsidy guidelines"
+    - "SECURE Act 2.0 changes"
+
+# ==============================================================================
+# LOGGING
+# ==============================================================================
+
+logging:
+  configuration:
+    level: "Controlled by LOG_LEVEL environment variable"
+    default: "WARNING"
+    format: "%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+    
+  log_points:
+    - "Stage initialization"
+    - "Stage determination"
+    - "Roth conversion calculations"
+    - "Tax calculations"
+    - "IRMAA penalty calculations"
+    - "Buffer management"
+    - "Withdrawal sequencing"
+    
+  debug_usage: |
+    export LOG_LEVEL=DEBUG
+    python example_withdrawal_strategy.py
+
+# ==============================================================================
+# VERSION HISTORY
+# ==============================================================================
+
+version_history:
+  v1.0:
+    date: "2026-02-22"
+    author: "IBM Bob"
+    changes:
+      - "Initial implementation"
+      - "5-stage lifecycle approach"
+      - "Roth conversion optimization"
+      - "IRMAA management"
+      - "ACA subsidy optimization"
+      - "Cash buffer management"
+      - "Comprehensive testing"
+      - "Example scenarios"
+      - "Full documentation"
+  
+  v2.0:
+    date: "2026-02-24"
+    author: "IBM Bob"
+    status: "Planning Complete - Implementation Pending"
+    summary: "Major feature additions: Account Rebalancing + Tax Planning (State/AMT/NIIT) + Healthcare Cost Projections"
+    
+    changes:
+      account_rebalancing:
+        lines_added: "650+ lines"
+        includes:
+          - "Comprehensive account rebalancing documentation"
+          - "Cash buffer maintenance logic (2-year target)"
+          - "Brokerage buffer maintenance logic (3-year target)"
+          - "rebalance_accounts() helper function with full implementation"
+          - "replenish_cash_buffer() with implementation code"
+          - "replenish_brokerage_buffer() with implementation code"
+          - "execute_roth_conversion() with implementation code"
+          - "Fund movement tracking fields for YearlyStrategy dataclass"
+          - "Tax-efficient withdrawal sequencing by stage"
+          - "Stage integration guidelines for all 5 stages"
+          - "Comprehensive testing requirements (unit and integration)"
+          - "Success criteria and validation rules"
+          - "Fund conservation validation logic"
+          - "Emergency distribution protocols"
+        
+      state_tax_planning:
+        lines_added: "200+ lines"
+        includes:
+          - "State tax implementation section with full specifications"
+          - "State tax data file requirements (3 CSV files)"
+          - "load_state_tax_data() function with implementation"
+          - "calculate_state_tax() function with full implementation"
+          - "No-tax state handling (FL, TX, WA, NV, SD, WY, AK, TN, NH)"
+          - "Retirement-friendly state exemptions (PA, IL, MS)"
+          - "High-tax state strategies (CA, NY, NJ)"
+          - "Stage integration examples"
+          - "Testing requirements (6 unit tests, 4 integration tests)"
+        
+      amt_planning:
+        lines_added: "250+ lines"
+        includes:
+          - "AMT implementation section with full specifications"
+          - "AMT parameters data file specification"
+          - "load_amt_parameters() function"
+          - "calculate_amt() function with full implementation"
+          - "optimize_conversion_to_avoid_amt() function with binary search"
+          - "AMT exemption phase-out logic"
+          - "Stage integration with BETR algorithm"
+          - "AMT credit tracking framework"
+          - "Testing requirements (6 unit tests, 4 integration tests)"
+        
+      niit_planning:
+        lines_added: "300+ lines"
+        includes:
+          - "NIIT implementation section with full specifications"
+          - "NIIT thresholds (not indexed for inflation)"
+          - "calculate_net_investment_income() function"
+          - "calculate_niit() function with full implementation"
+          - "optimize_withdrawals_for_niit() function"
+          - "Stage-specific NIIT strategies (all 5 stages)"
+          - "Coordination with IRMAA and QCDs"
+          - "Retirement account vs taxable account optimization"
+          - "Testing requirements (6 unit tests, 5 integration tests)"
+        
+      healthcare_cost_projections:
+        lines_added: "400+ lines"
+        includes:
+          - "Healthcare cost projections section with comprehensive modeling"
+          - "Medicare Part B and Part D costs with IRMAA integration"
+          - "Medigap and Medicare Advantage cost modeling"
+          - "Pre-Medicare (ACA) cost projections"
+          - "Out-of-pocket expense modeling by health status"
+          - "Long-term care cost projections (home care, assisted living, nursing home)"
+          - "calculate_medicare_costs() function with implementation"
+          - "calculate_total_healthcare_costs() function with implementation"
+          - "project_healthcare_costs() function for multi-year projections"
+          - "Stage integration examples"
+          - "Testing requirements (5 unit tests, 4 integration tests)"
+    
+    features_ready_for_implementation:
+      - "Account rebalancing with actual fund movements (CRITICAL)"
+      - "State tax calculations with retirement exemptions (HIGH)"
+      - "AMT calculations with conversion optimization (MEDIUM)"
+      - "NIIT calculations with withdrawal optimization (MEDIUM)"
+      - "Healthcare cost projections with IRMAA integration (HIGH)"
+    
+    estimated_implementation_effort:
+      account_rebalancing: "12-17 hours"
+      state_tax_planning: "11-16 hours"
+      amt_planning: "10-14 hours"
+      niit_planning: "8-11 hours"
+      healthcare_cost_projections: "8-11 hours"
+      total: "49-69 hours for all features"
+    
+    priority: "CRITICAL for Account Rebalancing, HIGH for State Tax and Healthcare, MEDIUM for AMT/NIIT"
+    total_lines_added: "1,800+ lines of detailed specifications and implementation code"
+
+# Made with Bob

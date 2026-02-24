@@ -17,9 +17,12 @@ DEFAULT_CONFIG = {
         "person1_name": "Tom",
         "person1_birth_date": "1965-01-01",
         "person1_retirement_age": 62,
+        "person1_retirement_year": 2026,  # Year of retirement
         "person2_name": "Sarah",
         "person2_birth_date": "1967-01-01",
         "person2_retirement_age": 62,
+        "person2_retirement_year": 2028,  # Year of retirement
+        "retirement_state": "FL",  # State for retirement (affects state tax calculations)
     },
     "financial_assumptions": {
         "expected_annual_expenses": 50000,
@@ -38,6 +41,7 @@ DEFAULT_CONFIG = {
         "aca_start_age": 62,
         "aca_end_age": 65,
         "medicare_start_age": 65,
+        "aca_marketplace_enrolled": False,  # Whether enrolled in ACA marketplace (affects subsidy optimization)
     },
     "tax_strategy": {
         "roth_conversion_at_ssi_age": 5000,

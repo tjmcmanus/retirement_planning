@@ -3,10 +3,16 @@ import streamlit as st
 import yfinance as yf
 from datetime import datetime
 import logging
+import os
 from typing import Optional
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -237,7 +243,7 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, Optional[float]]:
     
     for symbol in symbols:
         try:
-            hist = tickers.tickers[symbol].history(period='1d')
+            hist = tickers.tickers[symbol].history(period='4d')
             if not hist.empty and 'Close' in hist.columns:
                 price_map[symbol] = float(hist['Close'].iloc[-1])
             else:

@@ -50,6 +50,31 @@ Complete retirement withdrawal strategy implementation covering all life phases:
 
 See [`WITHDRAWAL_STRATEGY_README.md`](WITHDRAWAL_STRATEGY_README.md) for complete documentation.
 
+### 🆕 NEW: Advanced Tax Planning & Healthcare Features
+Comprehensive tax optimization and healthcare cost modeling in [`withdrawal_strategy.py`](withdrawal_strategy.py):
+- **State Tax Planning**: Multi-state calculations with retirement-friendly state handling
+  - No-tax states (FL, TX, WA, NV, SD, WY, AK, TN, NH)
+  - Retirement-friendly states with full exemptions (PA, IL, MS)
+  - Progressive brackets for high-tax states (CA, NY, NJ, MA, CO, NC)
+  - Automatic integration with `retirement_state` from config.py
+- **AMT Calculation**: Full Alternative Minimum Tax with exemption phase-out
+  - 26%/28% AMT rate structure
+  - State tax add-back and ISO spread handling
+  - Exemption phase-out at high income levels
+- **NIIT Planning**: Net Investment Income Tax (3.8% surtax) calculation
+  - Applies to investment income above MAGI thresholds
+  - MFJ: $250,000 | Single: $200,000 | MFS: $125,000
+  - Strategic planning to minimize surtax exposure
+- **Healthcare Cost Projections**: Comprehensive medical expense modeling
+  - Medicare Part B/D with IRMAA surcharges (2-year lookback)
+  - Medigap supplemental coverage
+  - Pre-Medicare ACA marketplace costs (ages 62-65)
+  - Out-of-pocket expenses by health status
+  - Long-term care insurance premiums
+  - Multi-year projections with age transitions
+
+See [`withdrawal_strategy_plan.yaml`](withdrawal_strategy_plan.yaml) for detailed specifications.
+
 ### 🔧 Enhanced Logging System
 Configurable debug logging throughout [`calculations.py`](calculations.py):
 - Environment variable control (`LOG_LEVEL=DEBUG`)
@@ -371,7 +396,9 @@ retirement_planning/
 ## Key Modules & Functions
 
 ### Withdrawal Strategy ([`withdrawal_strategy.py`](withdrawal_strategy.py))
-**NEW: Complete 5-stage retirement withdrawal engine**
+**NEW: Complete 5-stage retirement withdrawal engine with advanced tax planning**
+
+**Core Strategy Engine:**
 - `PortfolioBalances` - Portfolio account container
 - `WithdrawalStrategyEngine` - Main calculation engine
 - `Stage1Accumulation` - Working years strategy
@@ -383,6 +410,44 @@ retirement_planning/
 - `calculate_aca_subsidy()` - ACA marketplace subsidies
 - `generate_strategy_summary()` - Summary statistics
 - `print_strategy_report()` - Formatted reporting
+
+**🆕 State Tax Planning:**
+- `calculate_state_tax()` - Multi-state income tax calculation
+  - Handles no-tax states (FL, TX, WA, NV, SD, WY, AK, TN, NH)
+  - Retirement-friendly states with exemptions (PA, IL, MS)
+  - Progressive brackets for high-tax states (CA, NY, NJ, MA, CO, NC)
+  - Automatic config integration with `retirement_state` parameter
+  - Returns (state_tax, calculation_details)
+
+**🆕 AMT Planning:**
+- `calculate_amt()` - Alternative Minimum Tax calculation
+  - Full AMT calculation with exemption phase-out
+  - 26%/28% AMT rate structure
+  - State tax add-back, ISO spread, private activity bonds
+  - Returns (amt_owed, tentative_amt, regular_tax, details)
+
+**🆕 NIIT Planning:**
+- `calculate_net_investment_income()` - Net Investment Income calculation
+  - Aggregates interest, dividends, capital gains, rental income, royalties
+  - Excludes retirement account distributions
+- `calculate_niit()` - Net Investment Income Tax (3.8% surtax)
+  - Applies to lesser of NII or excess MAGI over thresholds
+  - MFJ: $250,000 | Single: $200,000 | MFS: $125,000
+  - Returns (niit_amount, calculation_details)
+
+**🆕 Healthcare Cost Projections:**
+- `calculate_medicare_costs()` - Medicare Part B/D with IRMAA
+  - Integrates with existing `calculate_irmma_penalty()` function
+  - 2-year MAGI lookback for IRMAA surcharges
+  - Optional Medigap supplemental coverage
+- `calculate_total_healthcare_costs()` - Comprehensive medical expenses
+  - Medicare or pre-Medicare ACA costs
+  - Out-of-pocket expenses by health status (healthy/average/chronic)
+  - Long-term care insurance premiums
+- `project_healthcare_costs()` - Multi-year healthcare projections
+  - Handles age transitions (pre-Medicare → Medicare)
+  - IRMAA lookback with MAGI projections
+  - Returns DataFrame with year-by-year breakdown
 ### BETR Roth Conversion ([`betr_roth_conversion.py`](betr_roth_conversion.py))
 **NEW: Advanced Roth conversion analysis based on Vanguard research**
 - `BETRInputs` - Input parameters dataclass
@@ -707,11 +772,15 @@ This project uses code from Stack Overflow (CC BY-SA 4.0) as noted in [`portfoli
 - ✅ **Portfolio Data Entry**: Interactive editor with validation and automatic backups
 - ✅ **Account Management**: Define and organize investment accounts by type
 - ✅ **5-Stage Withdrawal Strategy**: Complete life-cycle planning engine
+- ✅ **State Tax Planning**: Multi-state calculations with config integration
+- ✅ **AMT Calculation**: Full Alternative Minimum Tax with exemption phase-out
+- ✅ **NIIT Planning**: Net Investment Income Tax (3.8% surtax) calculation
+- ✅ **Healthcare Cost Projections**: Medicare, IRMAA, pre-Medicare ACA, out-of-pocket expenses
 - ✅ **Enhanced Logging**: Configurable debug output throughout
 - ✅ **Example Scenarios**: 4 pre-built retirement strategies
 - ✅ **Test Suite**: Comprehensive validation (all tests passing)
 - ✅ **Bug Fixes**: Resolved f-string syntax error
-- ✅ **Documentation**: 5 comprehensive guides (1,800+ lines)
+- ✅ **Documentation**: 6 comprehensive guides (3,800+ lines total)
 - ✅ **Run Scripts**: Automated setup for app and strategies
 
 ### Previous Features
@@ -791,17 +860,29 @@ For issues or questions:
   - Downloadable Monte Carlo reports
 
 #### 3. Advanced Tax Optimization
-**Priority: High - Significant financial impact**
+**Status: ✅ PARTIALLY IMPLEMENTED - Core features complete, advanced strategies pending**
+
+**✅ Implemented (February 2026):**
+- **State Tax Integration** - `calculate_state_tax()` function
+  - Multi-state tax calculations (no-tax, retirement-friendly, high-tax states)
+  - Retirement income exemptions and SS benefit exclusions
+  - Progressive brackets for CA, NY, NJ, MA, CO, NC
+  - Automatic config integration with `retirement_state` parameter
+- **AMT Calculation** - `calculate_amt()` function
+  - Full Alternative Minimum Tax with exemption phase-out
+  - 26%/28% AMT rate structure
+  - State tax add-back, ISO spread, private activity bonds
+- **NIIT Planning** - `calculate_niit()` function
+  - Net Investment Income Tax (3.8% surtax) calculation
+  - Strategic planning to minimize surtax exposure
+  - Integration with MAGI thresholds by filing status
+
+**🔄 Still Pending:**
 - **Multi-Year Tax Planning**
   - 5-year rolling tax optimization window
   - Bracket management across multiple years
   - Capital loss harvesting strategies
   - Qualified Business Income (QBI) deduction planning
-- **State Tax Integration**
-  - State-specific tax calculations (all 50 states)
-  - Multi-state retirement scenarios
-  - State tax migration strategies
-  - Property tax considerations
 - **Advanced Strategies**
   - Backdoor Roth IRA contribution tracking
   - Mega backdoor Roth strategies
@@ -812,17 +893,25 @@ For issues or questions:
 ### Medium Priority Enhancements
 
 #### 4. Healthcare Cost Modeling
-**Priority: Medium - Major retirement expense**
-- **Comprehensive Medical Expenses**
-  - Medicare Part A/B/D premium projections
-  - Medigap policy cost modeling
-  - Out-of-pocket expense estimates by health status
-  - Prescription drug cost tracking
-  - Long-term care insurance integration
+**Status: ✅ IMPLEMENTED (February 2026)**
+
+**✅ Implemented:**
+- **Comprehensive Medical Expenses** - `calculate_medicare_costs()`, `calculate_total_healthcare_costs()`
+  - Medicare Part B/D premium projections with IRMAA integration
+  - Medigap policy cost modeling ($2,400/year per person)
+  - Out-of-pocket expense estimates by health status (healthy/average/chronic)
+  - Long-term care insurance integration ($3,500/year per person)
+  - Pre-Medicare ACA marketplace costs (ages 62-65)
+- **Multi-Year Projections** - `project_healthcare_costs()`
+  - Year-by-year healthcare cost projections
+  - Age transition handling (pre-Medicare → Medicare)
+  - IRMAA 2-year lookback with MAGI projections
+  - Returns detailed DataFrame with cost breakdowns
+
+**🔄 Still Pending:**
 - **Long-Term Care Planning**
   - Nursing home cost projections by state
   - Home health care expense modeling
-  - Long-term care insurance benefit calculations
   - Medicaid spend-down strategies
   - Self-insurance vs. LTC insurance analysis
 - **HSA Integration**

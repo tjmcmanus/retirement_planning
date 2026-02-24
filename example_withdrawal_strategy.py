@@ -47,7 +47,7 @@ def example_1_basic_strategy():
         person1_name="Tom",
         person2_name="Sarah",
         growth_rate=1.06,
-        expense_inflation=0.993,
+        expense_inflation_rate=0.03,  # 3% inflation rate
         ss_claiming_age=67,
         retirement_year=2027,
         has_wages=True
@@ -175,7 +175,7 @@ def example_4_custom_scenario():
         person1_name="Tom",
         person2_name="Sarah",
         growth_rate=1.06,  # Conservative 6% growth
-        expense_inflation=1.02,  # 2% inflation
+        expense_inflation_rate=0.02,  # 2% inflation rate
         ss_claiming_age=70,  # Delay SS for maximum benefit
         retirement_year=2026,
         has_wages=False

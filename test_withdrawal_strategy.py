@@ -137,7 +137,7 @@ def test_strategy_calculation():
             person1_name="Tom",
             person2_name="Sarah",
             growth_rate=1.05,
-            expense_inflation=1.0,
+            expense_inflation_rate=0.0,  # 0% inflation for test
             ss_claiming_age=67,
             retirement_year=2026,
             has_wages=False

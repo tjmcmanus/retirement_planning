@@ -29,9 +29,8 @@ def get_current_price(symbol):
 #@st.cache_data()
 def get_qty(symbol, month=None, year=None):
     df = getPortfolioData(month=month, year=year)
-    quanity = df.loc[df['symbol'] == symbol, 'qty'].iloc[0]
-    #print(f"quantity is: {quanity}")
-    return quanity
+    quantity = df.loc[df['symbol'] == symbol, 'qty'].iloc[0]
+    return quantity
 
 #@st.cache_data()
 def get_purchase_price(symbol, month=None, year=None):
@@ -225,25 +224,27 @@ def build_portfolio_display(month=None, year=None):
         display_ticker = "Cash" if symbol == "MF:CASH" else symbol
         
         # Get current price and calculate values
-        price = get_current_price(symbol)
+        pricef = get_current_price(symbol)
         sector = get_sector(symbol, month=month, year=year)
         name = get_ticker_name(symbol, month=month, year=year)
         
         # Calculate values using the specific qty and purchase_price from this row
-        current_value = qty * price
+        current_value = qty * pricef
         cost_basis = qty * purchase_price
         net_return = current_value - cost_basis
         
         # Get dividend information
-        divy_date, divy_amt, annual_divy_amount = get_current_dividend(symbol, month=month, year=year)
+        divy_date, divy_amtf, annual_divy_amountf = get_current_dividend(symbol, month=month, year=year)
         
         # Calculate dividend yield
-        divy_yield = annual_divy_amount/cost_basis if cost_basis > 0 else 0
+        divy_yield = annual_divy_amountf/cost_basis if cost_basis > 0 else 0
         
         # Format quantity: whole number if no decimal, otherwise 2 decimal places
         formatted_qty = format_quantity(qty)
-        
-        portdf.loc[len(portdf)] = [account_name, tax_type, display_ticker, name, sector, formatted_qty, price, current_value, cost_basis, net_return, divy_date, divy_amt, annual_divy_amount, divy_yield]
+        price = str(pricef)
+        divy_amt = str(divy_amtf)
+        #annual_divy_amount = str(annual_divy_amountf)
+        portdf.loc[len(portdf)] = [account_name, tax_type, display_ticker, name, sector, formatted_qty, price, current_value, cost_basis, net_return, divy_date, divy_amt, annual_divy_amountf, divy_yield]
 
     # Add totals row at the bottom
     if not portdf.empty:

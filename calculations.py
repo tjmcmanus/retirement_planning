@@ -1,4 +1,3 @@
-from matplotlib.pylab import f
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -204,8 +203,11 @@ def getUpperIncomeRate(taxrate, year_tax_brackets_df):
     
     logger.debug(f"Querying upper limit for tax rate: {rate_to_query:.2%}")
     
-    # Query the DataFrame directly without creating a new DataFrame
-    result = year_tax_brackets_df.query(f"rate == {rate_to_query}")
+    # Use numpy isclose for floating-point comparison to handle precision issues
+    # This handles cases like 0.24 vs 0.24000000000000002
+    import numpy as np
+    mask = np.isclose(year_tax_brackets_df['rate'], rate_to_query, rtol=1e-9, atol=1e-9)
+    result = year_tax_brackets_df[mask]
     
     if result.empty:
         logger.warning(f"Tax rate {rate_to_query:.2%} not found in brackets")

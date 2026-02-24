@@ -52,9 +52,32 @@ else
 fi
 echo ""
 
-# Check for required CSV files
+# Check for required Python module files
+echo "Checking for required Python modules..."
+REQUIRED_MODULES=(
+    "planning_app.py"
+    "load_data.py"
+    "calculations.py"
+    "portfolio.py"
+    "portfolio_data_entry.py"
+    "income_expense.py"
+    "withdrawal_strategy.py"
+    "betr_roth_conversion.py"
+    "ssibenefits.py"
+    "config.py"
+    "components/sidebar.py"
+)
+
+MISSING_FILES=()
+for file in "${REQUIRED_MODULES[@]}"; do
+    if [ ! -f "$file" ]; then
+        MISSING_FILES+=("$file")
+    fi
+done
+
+# Check for required CSV data files
 echo "Checking for required data files..."
-REQUIRED_FILES=(
+REQUIRED_CSV_FILES=(
     "income_rates.csv"
     "cap_gains.csv"
     "standard.csv"
@@ -64,20 +87,16 @@ REQUIRED_FILES=(
     "ssincome.csv"
 )
 
-MISSING_FILES=()
-for file in "${REQUIRED_FILES[@]}"; do
+for file in "${REQUIRED_CSV_FILES[@]}"; do
     if [ ! -f "$file" ]; then
         MISSING_FILES+=("$file")
     fi
 done
 
-# Check for at least one of the financial data files
-if [ ! -f "financial_data.csv" ] && [ ! -f "financial_data_sample.csv" ]; then
-    MISSING_FILES+=("financial_data.csv or financial_data_sample.csv")
-fi
-
-if [ ! -f "portfolio.csv" ] && [ ! -f "portfolio_sample.csv" ]; then
-    MISSING_FILES+=("portfolio.csv or portfolio_sample.csv")
+# Check for portfolio data file (optional but recommended)
+if [ ! -f "portfolio_data_truth.csv" ]; then
+    echo "⚠ Warning: portfolio_data_truth.csv not found"
+    echo "  You can create this file using the Portfolio Data Entry page in the app"
 fi
 
 if [ ${#MISSING_FILES[@]} -gt 0 ]; then

@@ -790,7 +790,7 @@ with tab5:
         expense_multiplier = float(st.session_state.get("EXPENSE_MULITPLIER", 4))
         rate_of_return = float(st.session_state.get("RATE", 6)) / 100
         daf_rate = float(st.session_state.get("DAF_RATE", 25)) / 100
-        planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", 75000))
+        planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", 5000))
     except (ValueError, TypeError) as e:
         st.error(f"Error reading sidebar parameters: {e}. Using default values.")
         ssi_age = 70
@@ -822,14 +822,30 @@ with tab5:
     
     # Calculate withdrawal strategy
     try:
+        # Get max conversion rate from sidebar (convert from percentage string to decimal)
+        max_conversion_rate_str = st.session_state.get("CONV_TAX_RATE", "24")
+        try:
+            max_conversion_rate = float(max_conversion_rate_str) / 100.0
+        except (ValueError, TypeError):
+            max_conversion_rate = 0.24  # Default to 24%
+        
+        # Get ACA marketplace enrollment and expense inflation from config
+        from config import get_config_manager
+        config_mgr = get_config_manager()
+        aca_marketplace_enrolled = config_mgr.get("healthcare", "aca_marketplace_enrolled", False)
+        expense_inflation_rate = config_mgr.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100.0
+        
         with st.spinner("Calculating withdrawal strategy..."):
             strategy_df, balances_df = build_withdrawal_strategy_display(
                 start_year=curr_year,
                 end_year=2051,
                 growth_rate=rate_of_return,
-                expense_inflation=0.03,
+                expense_inflation_rate=expense_inflation_rate,
                 person1_name="Tom",
-                person2_name="Sarah"
+                person2_name="Sarah",
+                max_conversion_rate=max_conversion_rate,
+                aca_optimize=aca_marketplace_enrolled,
+                ss_claiming_age=ssi_age
             )
         
         # Display strategy results in tabs
@@ -839,31 +855,54 @@ with tab5:
             st.subheader("Year-by-Year Withdrawal Strategy")
             
             # Format the strategy dataframe for display
+            # Order: Wages, SS Benefits, RMD, Traditional Withdrawal, Roth Conversion, Expenses, IRMAA, Taxes, Cash Balance
             display_cols = [
-                'Year', 'Stage', 'Age Primary', 'Age Spouse',
-                'Expenses', 'Wages', 'Social Security',
-                'Roth Conversion', 'RMD', 'Portfolio Withdrawal',
-                'Total Income', 'Federal Tax', 'IRMAA Penalty'
+                'Year', 'Age', 'Stage',
+                'Wages',
+                'SS Benefits',
+                'RMD',
+                'Traditional Withdrawal',
+                'Roth Conversion',
+                'Expenses',
+                'IRMAA Penalty',
+                'Federal Tax',
+                'Cash Balance'
             ]
             
             available_cols = [col for col in display_cols if col in strategy_df.columns]
             display_df = strategy_df[available_cols].copy()
             
-            # Configure column formatting
+            # Format numeric columns: show 2 decimals only if not a whole number
+            def format_currency(val):
+                """Format currency: whole numbers without decimals, non-whole with 2 decimals"""
+                if pd.isna(val):
+                    return ""
+                if val == int(val):
+                    return f"${int(val):,}"
+                else:
+                    return f"${val:,.2f}"
+            
+            # Apply formatting to numeric columns (excluding Year, Age, Stage)
+            numeric_cols = ['Wages', 'SS Benefits', 'RMD', 'Traditional Withdrawal', 'Roth Conversion',
+                          'Expenses', 'IRMAA Penalty', 'Federal Tax', 'Cash Balance']
+            for col in numeric_cols:
+                if col in display_df.columns:
+                    display_df[col] = display_df[col].apply(format_currency)
+            
+            # Configure column formatting (now treating formatted columns as text)
             column_config = {
                 "Year": st.column_config.NumberColumn("Year", format="%d"),
+                "Age": st.column_config.TextColumn("Age"),
                 "Stage": st.column_config.TextColumn("Life Stage"),
-                "Age Primary": st.column_config.NumberColumn("Age (Primary)", format="%d"),
-                "Age Spouse": st.column_config.NumberColumn("Age (Spouse)", format="%d"),
-                "Expenses": st.column_config.NumberColumn("Expenses", format="$%,.0f"),
-                "Wages": st.column_config.NumberColumn("Wages", format="$%,.0f"),
-                "Social Security": st.column_config.NumberColumn("Social Security", format="$%,.0f"),
-                "Roth Conversion": st.column_config.NumberColumn("Roth Conversion", format="$%,.0f"),
-                "RMD": st.column_config.NumberColumn("RMD", format="$%,.0f"),
-                "Portfolio Withdrawal": st.column_config.NumberColumn("Portfolio Withdrawal", format="$%,.0f"),
-                "Total Income": st.column_config.NumberColumn("Total Income", format="$%,.0f"),
-                "Federal Tax": st.column_config.NumberColumn("Federal Tax", format="$%,.0f"),
-                "IRMAA Penalty": st.column_config.NumberColumn("IRMAA Penalty", format="$%,.0f")
+                "Wages": st.column_config.TextColumn("Wages"),
+                "SS Benefits": st.column_config.TextColumn("Social Security"),
+                "RMD": st.column_config.TextColumn("Required Minimum Distribution"),
+                "Traditional Withdrawal": st.column_config.TextColumn("Traditional Withdrawal"),
+                "Roth Conversion": st.column_config.TextColumn("Roth Conversion"),
+                "Expenses": st.column_config.TextColumn("Expenses"),
+                "IRMAA Penalty": st.column_config.TextColumn("Medicare (IRMAA)"),
+                "Federal Tax": st.column_config.TextColumn("Taxes"),
+                "Cash Balance": st.column_config.TextColumn("Cash Drawdown")
             }
             
             st.dataframe(display_df, column_config=column_config, hide_index=True, width='stretch')
@@ -871,18 +910,24 @@ with tab5:
         with balances_tab:
             st.subheader("Account Balances Over Time")
             
+            # Ensure all numeric columns are properly typed
+            balances_display = balances_df.copy()
+            for col in ['Cash Balance', 'Taxable Balance', 'Traditional Balance', 'Roth Balance', 'DAF Balance', 'Total Portfolio']:
+                if col in balances_display.columns:
+                    balances_display[col] = pd.to_numeric(balances_display[col], errors='coerce')
+            
             # Configure column formatting for balances
             balance_column_config = {
                 "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "Cash Balance": st.column_config.NumberColumn("Cash", format="$%,.0f"),
-                "Taxable Balance": st.column_config.NumberColumn("Taxable", format="$%,.0f"),
-                "Traditional Balance": st.column_config.NumberColumn("Traditional", format="$%,.0f"),
-                "Roth Balance": st.column_config.NumberColumn("Roth", format="$%,.0f"),
-                "DAF Balance": st.column_config.NumberColumn("DAF", format="$%,.0f"),
-                "Total Portfolio": st.column_config.NumberColumn("Total Portfolio", format="$%,.0f")
+                "Cash Balance": st.column_config.NumberColumn("Cash", format="$%,.2f"),
+                "Taxable Balance": st.column_config.NumberColumn("Taxable", format="$%,.2f"),
+                "Traditional Balance": st.column_config.NumberColumn("Traditional", format="$%,.2f"),
+                "Roth Balance": st.column_config.NumberColumn("Roth", format="$%,.2f"),
+                "DAF Balance": st.column_config.NumberColumn("DAF", format="$%,.2f"),
+                "Total Portfolio": st.column_config.NumberColumn("Total Portfolio", format="$%,.2f")
             }
             
-            st.dataframe(balances_df, column_config=balance_column_config, hide_index=True, width='stretch')
+            st.dataframe(balances_display, column_config=balance_column_config, hide_index=True, use_container_width=True)
         
         with charts_tab:
             st.subheader("Portfolio Balance Projections")
