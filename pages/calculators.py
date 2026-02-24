@@ -17,9 +17,12 @@ from planning_app import clear_submit
 st.set_page_config(page_title="Caclculators", page_icon="😊", layout="wide")
 
 # Configure logging
+import os
+log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=log_level,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 

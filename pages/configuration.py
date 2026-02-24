@@ -60,7 +60,7 @@ with tab1:
             "Planned Retirement Age",
             min_value=50,
             max_value=75,
-            value=config_mgr.get("personal_info", "person1_retirement_age", 62),
+            value=config_mgr.get("personal_info", "person1_retirement_age", 67),
             key="person1_retirement_age"
         )
         
@@ -94,6 +94,34 @@ with tab1:
         # Display current age
         current_age_2 = config_mgr.calculate_age(person2_birth_date.strftime("%Y-%m-%d"))
         st.info(f"Current Age: {current_age_2} years")
+    
+    # Retirement Location
+    st.subheader("Retirement Location")
+    
+    # List of US states (abbreviated)
+    us_states = [
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+        "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+        "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+        "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+    ]
+    
+    current_state = config_mgr.get("personal_info", "retirement_state", "FL")
+    try:
+        state_index = us_states.index(current_state)
+    except ValueError:
+        state_index = us_states.index("FL")  # Default to Florida
+    
+    retirement_state = st.selectbox(
+        "Retirement State",
+        options=us_states,
+        index=state_index,
+        help="State where you plan to retire (affects state tax calculations)",
+        key="retirement_state"
+    )
+    
+    st.info(f"Selected state: {retirement_state} - State tax calculations will be applied based on this selection.")
 
 # Financial Assumptions Tab
 with tab2:
@@ -157,13 +185,21 @@ with tab3:
     
     with col1:
         st.subheader("ACA Insurance (Pre-Medicare)")
+        
+        aca_marketplace_enrolled = st.checkbox(
+            "Enrolled in ACA Marketplace",
+            value=config_mgr.get("healthcare", "aca_marketplace_enrolled", False),
+            help="Check if you plan to purchase insurance from the ACA marketplace. This affects withdrawal strategy optimization for subsidy eligibility.",
+            key="aca_marketplace_enrolled"
+        )
+        
         aca_insurance_monthly = st.number_input(
             "Monthly ACA Insurance Premium ($)",
             min_value=0,
             max_value=5000,
             value=config_mgr.get("healthcare", "aca_insurance_monthly", 0),
             step=50,
-            help="Monthly premium for ACA marketplace insurance",
+            help="Monthly premium for ACA marketplace insurance (before subsidies)",
             key="aca_insurance_monthly"
         )
         
@@ -184,6 +220,9 @@ with tab3:
             help="Age when ACA coverage ends (typically when Medicare starts)",
             key="aca_end_age"
         )
+        
+        if aca_marketplace_enrolled:
+            st.info("💡 Withdrawal strategy will optimize income to maximize ACA subsidies (typically keeping MAGI below 400% FPL)")
     
     with col2:
         st.subheader("Medicare")
@@ -355,7 +394,7 @@ with tab6:
         st.markdown("**Your Accounts:**")
     
     with col_acc2:
-        if st.button("➕ Add Account", use_container_width=True, key="add_account_btn"):
+        if st.button("➕ Add Account", width='stretch', key="add_account_btn"):
             new_account = pd.DataFrame({
                 'account_name': ['New Account'],
                 'account_type': ['Brokerage']
@@ -365,7 +404,7 @@ with tab6:
             st.rerun()
     
     with col_acc3:
-        if st.button("💾 Save Accounts", use_container_width=True, key="save_accounts_btn"):
+        if st.button("💾 Save Accounts", width='stretch', key="save_accounts_btn"):
             config_mgr.update_section("portfolio_accounts", {
                 "accounts": st.session_state['accounts_list']
             })
@@ -385,7 +424,7 @@ with tab6:
         accounts_df,
         column_config=accounts_column_config,
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         key="accounts_editor"
     )
@@ -415,7 +454,7 @@ with tab6:
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📂 Load Current Data", use_container_width=True):
+        if st.button("📂 Load Current Data", width='stretch'):
             if os.path.exists('portfolio_data_truth.csv'):
                 try:
                     st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
@@ -426,7 +465,7 @@ with tab6:
                 st.warning("portfolio_data_truth.csv not found")
     
     with col2:
-        if st.button("➕ Add Empty Row", use_container_width=True):
+        if st.button("➕ Add Empty Row", width='stretch'):
             new_row = pd.DataFrame({
                 'month': [datetime.now().month],
                 'year': [datetime.now().year],
@@ -442,7 +481,7 @@ with tab6:
             st.rerun()
     
     with col3:
-        if st.button("🗑️ Clear All", use_container_width=True):
+        if st.button("🗑️ Clear All", width='stretch'):
             st.session_state['portfolio_df'] = pd.DataFrame(columns=[
                 'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
             ])
@@ -471,7 +510,7 @@ with tab6:
         st.session_state['portfolio_df'],
         column_config=column_config,
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         key="portfolio_editor"
     )
@@ -496,13 +535,13 @@ with tab6:
             if len(invalid_df) > 0:
                 st.warning(f"⚠️ {len(invalid_df)} rows have validation errors")
                 with st.expander("View Validation Errors"):
-                    st.dataframe(invalid_df[['month', 'year', 'symbol', 'validation_error']], use_container_width=True)
+                    st.dataframe(invalid_df[['month', 'year', 'symbol', 'validation_error']], width='stretch')
             
             if len(valid_df) > 0:
                 st.success(f"✅ {len(valid_df)} rows are valid and ready to save")
     
     with col_save2:
-        if st.button("💾 Save Portfolio Data", type="primary", use_container_width=True, disabled=len(edited_df) == 0):
+        if st.button("💾 Save Portfolio Data", type="primary", width='stretch', disabled=len(edited_df) == 0):
             # Validate the data
             valid_df, invalid_df = validate_portfolio_dataframe(edited_df)
             
@@ -553,7 +592,7 @@ with tab6:
             'qty': [100.0, 50000.0],
             'purchase_price': [150.0, 1.0]
         })
-        st.dataframe(sample_data, use_container_width=True)
+        st.dataframe(sample_data, width='stretch')
 
 # Advanced Tab
 with tab7:
@@ -564,7 +603,7 @@ with tab7:
     with col1:
         st.subheader("Configuration Management")
         
-        if st.button("💾 Save All Changes", type="primary", use_container_width=True):
+        if st.button("💾 Save All Changes", type="primary", width='stretch'):
             # Update all configuration values
             config_mgr.update_section("personal_info", {
                 "person1_name": person1_name,
@@ -573,6 +612,7 @@ with tab7:
                 "person2_name": person2_name,
                 "person2_birth_date": person2_birth_date.strftime("%Y-%m-%d"),
                 "person2_retirement_age": person2_retirement_age,
+                "retirement_state": retirement_state,
             })
             
             config_mgr.update_section("financial_assumptions", {
@@ -587,6 +627,7 @@ with tab7:
                 "aca_start_age": aca_start_age,
                 "aca_end_age": aca_end_age,
                 "medicare_start_age": medicare_start_age,
+                "aca_marketplace_enrolled": aca_marketplace_enrolled,
             })
             
             config_mgr.update_section("social_security", {
@@ -609,7 +650,7 @@ with tab7:
             else:
                 st.error("❌ Error saving configuration. Please try again.")
         
-        if st.button("🔄 Reset to Defaults", use_container_width=True):
+        if st.button("🔄 Reset to Defaults", width='stretch'):
             config_mgr.reset_to_defaults()
             if config_mgr.save_config():
                 st.success("Configuration reset to defaults. Please refresh the page.")
@@ -617,7 +658,7 @@ with tab7:
             else:
                 st.error("Error resetting configuration.")
         
-        if st.button("♻️ Reload from File", use_container_width=True):
+        if st.button("♻️ Reload from File", width='stretch'):
             reload_config()
             st.success("Configuration reloaded from file. Please refresh the page.")
             st.rerun()
@@ -633,7 +674,7 @@ with tab7:
                 data=config_json,
                 file_name=f"retirement_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
-                use_container_width=True
+                width='stretch'
             )
         
         # Import configuration

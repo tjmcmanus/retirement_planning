@@ -22,6 +22,7 @@ import pandas as pd
 import numpy as np
 import logging
 import os
+from datetime import datetime
 from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass
 
@@ -44,6 +45,11 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+# BETR adjustment factors (empirical values based on Vanguard research)
+# These factors adjust the break-even tax rate to account for additional benefits
+NONTAXABLE_BASIS_ADJUSTMENT_FACTOR = 0.05  # 5% adjustment per 100% nontaxable basis
+BACKDOOR_ROTH_BENEFIT_FACTOR = 0.02  # 2% benefit per 10 years of backdoor contributions
 
 
 @dataclass
@@ -71,6 +77,9 @@ class BETRInputs:
     # Future planning
     future_backdoor_roth: bool = False  # Planning future backdoor Roth contributions
     backdoor_contribution_years: int = 0  # Years of future backdoor contributions
+    
+    # Tax year for bracket lookups (optional, defaults to current year)
+    tax_year: Optional[int] = None  # Year for tax bracket data lookup
 
 
 @dataclass
@@ -92,6 +101,32 @@ class BETRResults:
     analysis_notes: List[str]      # Detailed notes about the analysis
 
 
+def _get_ltcg_rate(income: float, year: int) -> float:
+    """
+    Get the long-term capital gains tax rate based on income level.
+    
+    Args:
+        income: Income level (AGI or taxable income)
+        year: Tax year for bracket lookup
+        
+    Returns:
+        LTCG rate (0.0, 0.15, or 0.20)
+    """
+    try:
+        cap_gains_df = get_cap_gains_brackets(year)
+        
+        # Find the applicable bracket
+        for _, row in cap_gains_df.iterrows():
+            if row['lower'] <= income < row['upper']:
+                return float(row['rate'])
+        
+        # If income exceeds all brackets, return highest rate
+        return 0.20
+    except Exception as e:
+        logger.warning(f"Could not lookup LTCG rate for year {year}, using 15% default: {e}")
+        return 0.15  # Conservative default
+
+
 def calculate_betr(inputs: BETRInputs) -> BETRResults:
     """
     Calculate the Break-Even Tax Rate (BETR) for a Roth conversion.
@@ -110,10 +145,56 @@ def calculate_betr(inputs: BETRInputs) -> BETRResults:
         
     Returns:
         BETRResults dataclass with BETR and detailed analysis
+        
+    Raises:
+        ValueError: If input parameters are invalid
     """
+    # Input validation
+    if inputs.conversion_amount <= 0:
+        raise ValueError(f"Conversion amount must be positive, got ${inputs.conversion_amount:,.2f}")
+    
+    if inputs.traditional_ira_balance <= 0:
+        raise ValueError(f"Traditional IRA balance must be positive, got ${inputs.traditional_ira_balance:,.2f}")
+    
+    if inputs.conversion_amount > inputs.traditional_ira_balance:
+        raise ValueError(
+            f"Conversion amount (${inputs.conversion_amount:,.2f}) cannot exceed "
+            f"Traditional IRA balance (${inputs.traditional_ira_balance:,.2f})"
+        )
+    
+    if not 0 <= inputs.current_marginal_rate <= 1:
+        raise ValueError(f"Current marginal rate must be between 0 and 1, got {inputs.current_marginal_rate}")
+    
+    if not 0 <= inputs.expected_future_rate <= 1:
+        raise ValueError(f"Expected future rate must be between 0 and 1, got {inputs.expected_future_rate}")
+    
+    if inputs.nontaxable_basis < 0:
+        raise ValueError(f"Nontaxable basis cannot be negative, got ${inputs.nontaxable_basis:,.2f}")
+    
+    if inputs.nontaxable_basis > inputs.traditional_ira_balance:
+        raise ValueError(
+            f"Nontaxable basis (${inputs.nontaxable_basis:,.2f}) cannot exceed "
+            f"Traditional IRA balance (${inputs.traditional_ira_balance:,.2f})"
+        )
+    
+    if inputs.pay_from_taxable and inputs.taxable_account_balance < 0:
+        raise ValueError(f"Taxable account balance cannot be negative, got ${inputs.taxable_account_balance:,.2f}")
+    
+    if inputs.years_to_withdrawal <= 0:
+        raise ValueError(f"Years to withdrawal must be positive, got {inputs.years_to_withdrawal}")
+    
+    if not -1 <= inputs.annual_return <= 1:
+        raise ValueError(f"Annual return must be between -1 and 1, got {inputs.annual_return}")
+    
+    if inputs.backdoor_contribution_years < 0:
+        raise ValueError(f"Backdoor contribution years cannot be negative, got {inputs.backdoor_contribution_years}")
+    
     logger.info(f"Calculating BETR for ${inputs.conversion_amount:,.0f} conversion")
     
     analysis_notes = []
+    
+    # Determine tax year for lookups
+    tax_year = inputs.tax_year if inputs.tax_year is not None else datetime.now().year
     
     # Step 1: Calculate conversion tax
     conversion_tax = inputs.conversion_amount * inputs.current_marginal_rate
@@ -145,7 +226,9 @@ def calculate_betr(inputs: BETRInputs) -> BETRResults:
         
         # Calculate opportunity cost of using taxable funds for tax payment
         # These funds could have grown in taxable account (with capital gains tax)
-        taxable_growth_factor = 1 + (inputs.annual_return * (1 - 0.15))  # Assume 15% LTCG rate
+        # Look up actual LTCG rate based on income level
+        ltcg_rate = _get_ltcg_rate(inputs.conversion_amount, tax_year)
+        taxable_growth_factor = 1 + (inputs.annual_return * (1 - ltcg_rate))
         taxable_opportunity_cost = conversion_tax * (taxable_growth_factor ** inputs.years_to_withdrawal)
         
         # Net Roth value after accounting for taxable account impact
@@ -183,15 +266,20 @@ def calculate_betr(inputs: BETRInputs) -> BETRResults:
     # Step 5: Adjust BETR for nontaxable basis
     if inputs.nontaxable_basis > 0:
         # Higher nontaxable basis increases BETR (makes conversion more attractive)
-        basis_adjustment = (inputs.nontaxable_basis / inputs.traditional_ira_balance) * 0.05
+        # The adjustment is proportional to the percentage of nontaxable basis
+        basis_percentage = inputs.nontaxable_basis / inputs.traditional_ira_balance
+        basis_adjustment = basis_percentage * NONTAXABLE_BASIS_ADJUSTMENT_FACTOR
         betr += basis_adjustment
-        analysis_notes.append(f"BETR increased by {basis_adjustment:.2%} due to nontaxable basis")
+        analysis_notes.append(
+            f"BETR increased by {basis_adjustment:.2%} due to {basis_percentage:.1%} nontaxable basis"
+        )
     
     # Step 6: Adjust BETR for future backdoor Roth contributions
     if inputs.future_backdoor_roth and inputs.backdoor_contribution_years > 0:
-        # Converting now enables future backdoor Roth contributions
+        # Converting now enables future backdoor Roth contributions by eliminating pro-rata rule
         # This increases the BETR (makes conversion more attractive)
-        backdoor_benefit = 0.02 * (inputs.backdoor_contribution_years / 10)  # ~2% per 10 years
+        # Benefit scales with number of years of future contributions
+        backdoor_benefit = BACKDOOR_ROTH_BENEFIT_FACTOR * (inputs.backdoor_contribution_years / 10)
         betr += backdoor_benefit
         analysis_notes.append(
             f"BETR increased by {backdoor_benefit:.2%} due to {inputs.backdoor_contribution_years} "

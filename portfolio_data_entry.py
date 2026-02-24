@@ -5,7 +5,7 @@ Handles manual entry, validation, and saving of portfolio data to portfolio_data
 
 import pandas as pd
 import yfinance as yf
-import streamlit as st
+#import streamlit as st
 from datetime import datetime
 from typing import Tuple, Optional
 import logging
@@ -14,7 +14,12 @@ import shutil
 import glob
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 # Constants
