@@ -667,7 +667,7 @@ with tab7:
         st.subheader("Export/Import")
         
         # Export configuration
-        if st.button("📤 Export Configuration", use_container_width=True):
+        if st.button("📤 Export Configuration", width='stretch'):
             config_json = config_mgr.export_config()
             st.download_button(
                 label="Download Configuration JSON",
