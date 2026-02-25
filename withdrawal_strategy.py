@@ -245,12 +245,35 @@ def optimize_rmd_lookback(strategies: list,
                     betr_results = calculate_betr(betr_inputs)
                     
                     if betr_results.conversion_recommended:
+                        # Log balances before adjustment
+                        logger.info(f"Year {year_strategy.year}: Before optimization adjustment:")
+                        logger.info(f"  Traditional: ${year_strategy.balances.traditional:,.2f}")
+                        logger.info(f"  Roth: ${year_strategy.balances.roth:,.2f}")
+                        logger.info(f"  Taxable: ${year_strategy.balances.taxable:,.2f}")
+                        logger.info(f"  Original conversion: ${year_strategy.roth_conversion:,.2f}")
+                        
                         # Increase conversion
                         year_strategy.roth_conversion += max_additional
+                        
+                        # CRITICAL: Recalculate balances to reflect the increased conversion
+                        # The additional conversion reduces Traditional and increases Roth
+                        year_strategy.balances = PortfolioBalances(
+                            cash=year_strategy.balances.cash,
+                            taxable=year_strategy.balances.taxable,
+                            traditional=year_strategy.balances.traditional - max_additional,
+                            roth=year_strategy.balances.roth + max_additional,
+                            daf=year_strategy.balances.daf
+                        )
+                        
                         total_additional_conversions += max_additional
                         years_adjusted += 1
-                        logger.info(f"Year {year_strategy.year}: Increased conversion by ${max_additional:,.0f} "
-                                  f"(BETR: {betr_results.betr:.2%})")
+                        
+                        # Log balances after adjustment
+                        logger.info(f"  After optimization adjustment:")
+                        logger.info(f"  Traditional: ${year_strategy.balances.traditional:,.2f} (reduced by ${max_additional:,.2f})")
+                        logger.info(f"  Roth: ${year_strategy.balances.roth:,.2f} (increased by ${max_additional:,.2f})")
+                        logger.info(f"  New conversion total: ${year_strategy.roth_conversion:,.2f}")
+                        logger.info(f"  BETR: {betr_results.betr:.2%}")
                     else:
                         logger.debug(f"Year {year_strategy.year}: BETR {betr_results.betr:.2%} - "
                                    f"additional conversion not recommended")
@@ -937,13 +960,32 @@ class YearlyStrategy:
             self.conversion_executed  # → Roth
         )
         
+        # Log fund conservation details at INFO level
+        logger.info(f"Year {self.year}: Fund Conservation Check")
+        logger.info(f"  OUTFLOWS (money leaving accounts):")
+        logger.info(f"    Traditional → Cash: ${self.traditional_to_cash:,.2f}")
+        logger.info(f"    Traditional → Brokerage: ${self.traditional_to_brokerage:,.2f}")
+        logger.info(f"    Brokerage → Cash: ${self.brokerage_to_cash:,.2f}")
+        logger.info(f"    Roth → Cash: ${self.roth_to_cash:,.2f}")
+        logger.info(f"    Roth → Brokerage: ${self.roth_to_brokerage:,.2f}")
+        logger.info(f"    Conversion Executed (Trad→Roth): ${self.conversion_executed:,.2f}")
+        logger.info(f"    TOTAL OUTFLOWS: ${outflows:,.2f}")
+        logger.info(f"  INFLOWS (money entering accounts):")
+        logger.info(f"    Cash Replenishment: ${self.cash_replenishment:,.2f}")
+        logger.info(f"    Brokerage Replenishment: ${self.brokerage_replenishment:,.2f}")
+        logger.info(f"    Conversion Executed (→Roth): ${self.conversion_executed:,.2f}")
+        logger.info(f"    TOTAL INFLOWS: ${inflows:,.2f}")
+        
         # Should balance (within rounding)
         balance = abs(outflows - inflows)
+        logger.info(f"  NET BALANCE: ${balance:,.2f} (should be ~$0)")
+        
         if balance > 1.0:  # Allow $1 rounding error
-            logger.error(f"Year {self.year}: Fund conservation violated: ${balance:,.2f} imbalance")
+            logger.error(f"Year {self.year}: Fund conservation VIOLATED: ${balance:,.2f} imbalance")
             logger.error(f"  Outflows: ${outflows:,.2f}, Inflows: ${inflows:,.2f}")
             return False
         
+        logger.info(f"  Fund conservation: ✓ PASSED")
         return True
 
 
@@ -986,8 +1028,14 @@ def replenish_cash_buffer(balances: PortfolioBalances,
             'cash_replenishment': 0.0
         }
     
-    logger.info(f"Year {year}: Cash buffer below target (${balances.cash:,.0f} < ${cash_target:,.0f})")
-    logger.info(f"  Cash deficit: ${cash_deficit:,.0f}")
+    logger.warning(f"Year {year}: Cash buffer below target (${balances.cash:,.0f} < ${cash_target:,.0f})")
+    logger.warning(f"  Cash deficit: ${cash_deficit:,.0f}")
+    logger.warning(f"  Current account balances:")
+    logger.warning(f"    Cash: ${balances.cash:,.2f}")
+    logger.warning(f"    Taxable (Brokerage): ${balances.taxable:,.2f}")
+    logger.warning(f"    Traditional: ${balances.traditional:,.2f}")
+    logger.warning(f"    Roth: ${balances.roth:,.2f}")
+    logger.warning(f"    DAF: ${balances.daf:,.2f}")
     
     transactions = {
         'brokerage_to_cash': 0.0,
@@ -1200,7 +1248,7 @@ def rebalance_accounts(balances: PortfolioBalances,
         - transaction_log: Dict with all fund movements for reporting
     """
     logger.info(f"Year {year} ({stage}): Starting account rebalancing")
-    logger.debug(f"  Initial balances: Cash=${balances.cash:,.0f}, "
+    logger.info(f"  Initial balances: Cash=${balances.cash:,.0f}, "
                 f"Taxable=${balances.taxable:,.0f}, "
                 f"Traditional=${balances.traditional:,.0f}, "
                 f"Roth=${balances.roth:,.0f}")
@@ -1217,12 +1265,23 @@ def rebalance_accounts(balances: PortfolioBalances,
         'brokerage_replenishment': 0.0
     }
     
-    # Step 1: Execute Roth conversion
-    if roth_conversion > 0:
-        balances = execute_roth_conversion(balances, roth_conversion, year)
-        transactions['conversion_executed'] = roth_conversion
+    # Step 1: Deduct expenses from cash account FIRST
+    logger.info(f"Year {year}: Deducting expenses from cash")
+    logger.info(f"  Cash before expenses: ${balances.cash:,.2f}")
+    logger.info(f"  Annual expenses: ${expenses:,.2f}")
     
-    # Step 2: Replenish cash buffer
+    balances = PortfolioBalances(
+        cash=balances.cash - expenses,
+        taxable=balances.taxable,
+        traditional=balances.traditional,
+        roth=balances.roth,
+        daf=balances.daf
+    )
+    transactions['expenses_paid'] = expenses
+    
+    logger.info(f"  Cash after expenses: ${balances.cash:,.2f}")
+    
+    # Step 2: Replenish cash buffer (after expenses paid)
     balances, cash_txns = replenish_cash_buffer(balances, expenses, age_primary, year)
     transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
     transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
@@ -1235,7 +1294,25 @@ def rebalance_accounts(balances: PortfolioBalances,
     transactions['roth_to_brokerage'] = brokerage_txns['roth_to_brokerage']
     transactions['brokerage_replenishment'] = brokerage_txns['brokerage_replenishment']
     
-    # Step 4: Validate fund conservation
+    # Step 4: Execute Roth conversion (after buffers are replenished)
+    if roth_conversion > 0:
+        balances = execute_roth_conversion(balances, roth_conversion, year)
+        transactions['conversion_executed'] = roth_conversion
+    
+    # Step 5: Log all fund movements
+    logger.info(f"Year {year}: Transaction Summary")
+    logger.info(f"  Expenses paid: ${transactions.get('expenses_paid', 0):,.2f}")
+    logger.info(f"  Fund Movements:")
+    logger.info(f"    Brokerage → Cash: ${transactions['brokerage_to_cash']:,.2f}")
+    logger.info(f"    Traditional → Cash: ${transactions['traditional_to_cash']:,.2f}")
+    logger.info(f"    Roth → Cash: ${transactions['roth_to_cash']:,.2f}")
+    logger.info(f"    Traditional → Brokerage: ${transactions['traditional_to_brokerage']:,.2f}")
+    logger.info(f"    Roth → Brokerage: ${transactions['roth_to_brokerage']:,.2f}")
+    logger.info(f"    Roth Conversion (Trad→Roth): ${transactions.get('conversion_executed', 0):,.2f}")
+    logger.info(f"  Buffer Replenishments:")
+    logger.info(f"    Cash replenishment: ${transactions['cash_replenishment']:,.2f}")
+    logger.info(f"    Brokerage replenishment: ${transactions['brokerage_replenishment']:,.2f}")
+    
     total_movements = sum([
         transactions['brokerage_to_cash'],
         transactions['traditional_to_cash'],
@@ -1244,11 +1321,11 @@ def rebalance_accounts(balances: PortfolioBalances,
         transactions['roth_to_brokerage']
     ])
     
-    logger.info(f"Year {year}: Rebalancing complete - ${total_movements:,.0f} total movements")
-    logger.debug(f"  Final balances: Cash=${balances.cash:,.0f}, "
-                f"Taxable=${balances.taxable:,.0f}, "
-                f"Traditional=${balances.traditional:,.0f}, "
-                f"Roth=${balances.roth:,.0f}")
+    logger.info(f"  Total fund movements: ${total_movements:,.2f}")
+    logger.info(f"  Final balances: Cash=${balances.cash:,.2f}, "
+                f"Taxable=${balances.taxable:,.2f}, "
+                f"Traditional=${balances.traditional:,.2f}, "
+                f"Roth=${balances.roth:,.2f}")
     
     return balances, transactions
 
@@ -1334,6 +1411,7 @@ class Stage1Accumulation(LifeStage):
         # Consider Roth conversions during accumulation using BETR
         # Only convert if in favorable tax bracket (≤ max_conversion_rate)
         roth_conversion = 0
+        #print(f"calculate_strategy: balances.traditional equals {balances.traditional}")
         if balances.traditional > 0 and max_rate <= max_conversion_rate:
             try:
                 # Use BETR to determine optimal conversion amount
@@ -2307,7 +2385,8 @@ class WithdrawalStrategyEngine:
         results = []
         balances = initial_balances
         expenses = initial_expenses
-        
+        #print(f"Engine: Initial balances trad {balances.traditional}")
+       
         # Get parameters
         growth_rate = kwargs.get('growth_rate', 1.07)
         expense_inflation_rate = kwargs.get('expense_inflation_rate', 0.03)  # 3% inflation rate
@@ -2346,6 +2425,15 @@ class WithdrawalStrategyEngine:
             # Get prior MAGI for IRMAA
             prior_magi = magi_history.get(year - 2, 0)
             
+            # Log starting balances for this year
+            logger.info(f"=== Year {year} Starting Balances ===")
+            logger.info(f"  Cash: ${balances.cash:,.2f}")
+            logger.info(f"  Taxable: ${balances.taxable:,.2f}")
+            logger.info(f"  Traditional: ${balances.traditional:,.2f}")
+            logger.info(f"  Roth: ${balances.roth:,.2f}")
+            logger.info(f"  Total: ${balances.total():,.2f}")
+            logger.info(f"  Expenses for year: ${expenses:,.2f}")
+            
             # Determine stage
             stage = self.determine_stage(age_primary, age_spouse, year, has_wages, has_ss)
             
@@ -2361,6 +2449,14 @@ class WithdrawalStrategyEngine:
                 start_year=start_year,
                 **kwargs
             )
+            
+            # Log ending balances for this year
+            logger.info(f"=== Year {year} Ending Balances (after strategy) ===")
+            logger.info(f"  Cash: ${strategy.balances.cash:,.2f}")
+            logger.info(f"  Taxable: ${strategy.balances.taxable:,.2f}")
+            logger.info(f"  Traditional: ${strategy.balances.traditional:,.2f}")
+            logger.info(f"  Roth: ${strategy.balances.roth:,.2f}")
+            logger.info(f"  Total: ${strategy.balances.total():,.2f}")
             
             # Store MAGI for future IRMAA calculations
             current_magi = (strategy.ss_benefits * TAXABLE_SS_RATE + 
@@ -2381,7 +2477,18 @@ class WithdrawalStrategyEngine:
                         f"Total balance=${balances.total():,.2f}")
         
         # Apply RMD lookback optimization
-        logger.info("Applying RMD lookback optimization...")
+        logger.info("=" * 80)
+        logger.info("APPLYING RMD LOOKBACK OPTIMIZATION")
+        logger.info("=" * 80)
+        logger.info(f"Total years in initial strategy: {len(results)}")
+        
+        # Log a few sample years before optimization
+        for i, s in enumerate(results[:3]):
+            logger.info(f"Before optimization - Year {s.year}:")
+            logger.info(f"  Traditional: ${s.balances.traditional:,.2f}")
+            logger.info(f"  Roth: ${s.balances.roth:,.2f}")
+            logger.info(f"  Roth Conversion: ${s.roth_conversion:,.2f}")
+        
         optimized_results, optimization_report = optimize_rmd_lookback(
             results,
             initial_balances,
@@ -2390,6 +2497,7 @@ class WithdrawalStrategyEngine:
         )
         
         # Log optimization results
+        logger.info("=" * 80)
         if optimization_report.get('status') == 'Optimization complete':
             logger.info(f"RMD Lookback Optimization Report:")
             logger.info(f"  RMD years analyzed: {optimization_report['rmd_years_analyzed']}")
@@ -2400,6 +2508,16 @@ class WithdrawalStrategyEngine:
                 logger.info(f"  Average per adjusted year: ${optimization_report['avg_additional_per_adjusted_year']:,.2f}")
         else:
             logger.info(f"  {optimization_report.get('status', 'No optimization needed')}")
+        
+        # Log a few sample years after optimization
+        logger.info("=" * 80)
+        logger.info("AFTER OPTIMIZATION - Sample Years:")
+        for i, s in enumerate(optimized_results[:3]):
+            logger.info(f"After optimization - Year {s.year}:")
+            logger.info(f"  Traditional: ${s.balances.traditional:,.2f}")
+            logger.info(f"  Roth: ${s.balances.roth:,.2f}")
+            logger.info(f"  Roth Conversion: ${s.roth_conversion:,.2f}")
+        logger.info("=" * 80)
         
         # Convert to DataFrame
         return self._strategies_to_dataframe(optimized_results)
@@ -2440,15 +2558,15 @@ class WithdrawalStrategyEngine:
         return pd.DataFrame(data)
 
 
-def build_withdrawal_strategy_display(start_year: int = None, 
-                                      end_year: int = 2051,
+def build_withdrawal_strategy_display(start_year: int = None,
+                                      end_year: int = None,
                                       **kwargs) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Build withdrawal strategy display for years current through 2051
+    Build withdrawal strategy display for 3 years by default
     
     Args:
         start_year: Starting year (defaults to current year)
-        end_year: Ending year (default 2051)
+        end_year: Ending year (defaults to start_year + 2, for 3-year forecast)
         **kwargs: Additional parameters
     
     Returns:
@@ -2457,13 +2575,16 @@ def build_withdrawal_strategy_display(start_year: int = None,
     if start_year is None:
         start_year = datetime.now().year
     
+    if end_year is None:
+        end_year = start_year + 2  # 3-year forecast by default
+    
     logger.info(f"Building withdrawal strategy display: {start_year}-{end_year}")
     
     # Get initial balances from current portfolio
     try:
         current_month = datetime.now().month
         detailed_df, summary_df = get_networth_by_month(current_month, start_year)
-        
+       
         if summary_df.empty:
             logger.warning("No portfolio data found, using default values")
             initial_balances = PortfolioBalances(
@@ -2474,12 +2595,26 @@ def build_withdrawal_strategy_display(start_year: int = None,
                 daf=0
             )
         else:
+            cash_balance = float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum())
+            taxable_balance = float(summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum())
+            traditional_balance = float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum())
+            roth_balance = float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum())
+            daf_balance = 0
+            
+            logger.info(f"Initial account balances loaded:")
+            logger.info(f"  Cash: ${cash_balance:,.2f}")
+            logger.info(f"  Taxable (Brokerage): ${taxable_balance:,.2f}")
+            logger.info(f"  Traditional: ${traditional_balance:,.2f}")
+            logger.info(f"  Roth: ${roth_balance:,.2f}")
+            logger.info(f"  DAF: ${daf_balance:,.2f}")
+            logger.info(f"  Total: ${cash_balance + taxable_balance + traditional_balance + roth_balance + daf_balance:,.2f}")
+            
             initial_balances = PortfolioBalances(
-                cash=float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum()),
-                taxable=float(summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum()),
-                traditional=float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum()),
-                roth=float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum()),
-                daf=0
+                cash=cash_balance,
+                taxable=taxable_balance,
+                traditional=traditional_balance,
+                roth=roth_balance,
+                daf=daf_balance
             )
     except Exception as e:
         logger.error(f"Error loading portfolio data: {e}")
@@ -2490,7 +2625,9 @@ def build_withdrawal_strategy_display(start_year: int = None,
             roth=150000,
             daf=0
         )
-    
+    #print(f" Initial balances trad {initial_balances.traditional}")
+#     p
+#     # Log first 4 years of data at INFO level for planning_app.py visibility
     # Get initial expenses from session state or use default
     try:
         import streamlit as st
@@ -2516,6 +2653,7 @@ def build_withdrawal_strategy_display(start_year: int = None,
         'Year', 'Cash Balance', 'Taxable Balance',
         'Traditional Balance', 'Roth Balance', 'DAF Balance', 'Total Portfolio'
     ]].copy()
+    #print(balances_df)
     
     # Log first 4 years of data at INFO level for planning_app.py visibility
     logger.info("=" * 80)
@@ -2645,7 +2783,7 @@ def create_example_scenario(scenario_name: str = "default") -> Dict:
             "initial_balances": PortfolioBalances(
                 cash=100000,
                 taxable=400000,
-                traditional=800000,
+                traditional=1000000,
                 roth=200000,
                 daf=50000
             ),

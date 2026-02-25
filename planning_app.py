@@ -24,6 +24,28 @@ hide_st_style = """
             [data-testid="stMetricValue"] {
               font-size: 24px;
             }
+            /* Center align all dataframe columns - comprehensive selectors */
+            [data-testid="stDataFrame"] td,
+            [data-testid="stDataFrame"] th,
+            [data-testid="stDataFrameResizable"] td,
+            [data-testid="stDataFrameResizable"] th,
+            div[data-testid="stDataFrame"] table td,
+            div[data-testid="stDataFrame"] table th,
+            div[data-testid="stDataFrameResizable"] table td,
+            div[data-testid="stDataFrameResizable"] table th,
+            .stDataFrame td,
+            .stDataFrame th,
+            .dataframe td,
+            .dataframe th {
+              text-align: center !important;
+            }
+            /* Override any inline styles */
+            [data-testid="stDataFrame"] [data-testid="StyledDataFrameRowHeaderCell"],
+            [data-testid="stDataFrame"] [data-testid="StyledDataFrameDataCell"],
+            [data-testid="stDataFrameResizable"] [data-testid="StyledDataFrameRowHeaderCell"],
+            [data-testid="stDataFrameResizable"] [data-testid="StyledDataFrameDataCell"] {
+              text-align: center !important;
+            }
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
@@ -409,7 +431,9 @@ with tab3:
             ),"dividend yield": st.column_config.NumberColumn(
             "Yield", # Column header name in UI
             format="percent")
-        },hide_index=True)
+        },hide_index=True,
+        width='stretch',
+        column_order=None)
 
     with update_tab:
         st.title('Manual Portfolio Data Entry')
@@ -452,6 +476,7 @@ with tab3:
         edited_df = st.data_editor(
             st.session_state.portfolio_entries,
             num_rows="dynamic",
+            width='stretch',
             column_config={
                 "month": st.column_config.NumberColumn(
                     "Month",
@@ -529,8 +554,7 @@ with tab3:
                     required=True
                 )
             },
-            hide_index=True,
-            width='stretch'
+            hide_index=True
         )
         
         # Update session state
@@ -724,59 +748,61 @@ with tab4:
         st.dataframe(inflow_outflow_df,    column_config={
             "SSI Flows": st.column_config.NumberColumn(
                "Social Security", # Column header name in UI
-                format="dollar"     
+                format="dollar"
             ),
             "Planned Distribution": st.column_config.NumberColumn(
                 "Planned Distribution", # Column header name in UI
-                format="dollar"     
+                format="dollar"
             ),
             "Roth Conversions": st.column_config.NumberColumn(
                "Roth Conversions", # Column header name in UI
-                format="dollar"     
+                format="dollar"
           ),
             "RMD": st.column_config.NumberColumn(
                 "Req Min Distributions", # Column header name in UI
-                format="dollar"     
+                format="dollar"
             ),
             "Portfolio Withdrawl": st.column_config.NumberColumn(
                 "Cash Needs", # Column header name in UI
-                 format="dollar"     
+                 format="dollar"
             ),
             "Total Inflows": st.column_config.NumberColumn(
                 "Annual Total Income", # Column header name in UI
-                format="dollar"     
+                format="dollar"
             ),
             "Taxes Owed": st.column_config.NumberColumn(
                 "Taxes Owed", # Column header name in UI
-                format="dollar"     
-            ),  
+                format="dollar"
+            ),
             "Expenses": st.column_config.NumberColumn(
                 "Expenses", # Column header name in UI
-                format="dollar"     
-            ),       
+                format="dollar"
+            ),
         },
-        hide_index=True)
+        hide_index=True,
+        width='stretch')
         
     with portfolio_tab:
         st.dataframe(port_review_df,    column_config={
             "Cash": st.column_config.NumberColumn(
             "PNC Accounts", # Column header name in UI
-            format="dollar"     
+            format="dollar"
             ),"Taxable": st.column_config.NumberColumn(
             "Total Brokerage", # Column header name in UI
-            format="dollar"     
+            format="dollar"
             ),"Tax Deferred": st.column_config.NumberColumn(
             "Total 401k and IRAs", # Column header name in UI
-            format="dollar"     
+            format="dollar"
             ),"Tax Free": st.column_config.NumberColumn(
             "Total Roth", # Column header name in UI
-            format="dollar"     
+            format="dollar"
             ),"Donor Advised Fund": st.column_config.NumberColumn(
             "Remaining Donor Advised Fund", # Column header name in UI
-            format="dollar"     
+            format="dollar"
             ),
-        },  
-        hide_index=True)
+        },
+        hide_index=True,
+        width='stretch')
 
 with tab5:
     st.header("Withdrawal Strategy Analysis")
@@ -838,8 +864,8 @@ with tab5:
         with st.spinner("Calculating withdrawal strategy..."):
             strategy_df, balances_df = build_withdrawal_strategy_display(
                 start_year=curr_year,
-                end_year=2051,
-                growth_rate=rate_of_return,
+                end_year=2050,
+                growth_rate=1 + rate_of_return,
                 expense_inflation_rate=expense_inflation_rate,
                 person1_name="Tom",
                 person2_name="Sarah",
@@ -914,20 +940,21 @@ with tab5:
             balances_display = balances_df.copy()
             for col in ['Cash Balance', 'Taxable Balance', 'Traditional Balance', 'Roth Balance', 'DAF Balance', 'Total Portfolio']:
                 if col in balances_display.columns:
-                    balances_display[col] = pd.to_numeric(balances_display[col], errors='coerce')
+                    balances_display[col] = pd.to_numeric(balances_display[col], errors='coerce').apply(format_currency)
+        
             
             # Configure column formatting for balances
             balance_column_config = {
                 "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "Cash Balance": st.column_config.NumberColumn("Cash", format="$%,.2f"),
-                "Taxable Balance": st.column_config.NumberColumn("Taxable", format="$%,.2f"),
-                "Traditional Balance": st.column_config.NumberColumn("Traditional", format="$%,.2f"),
-                "Roth Balance": st.column_config.NumberColumn("Roth", format="$%,.2f"),
-                "DAF Balance": st.column_config.NumberColumn("DAF", format="$%,.2f"),
-                "Total Portfolio": st.column_config.NumberColumn("Total Portfolio", format="$%,.2f")
+                "Cash Balance": st.column_config.TextColumn("Cash"),
+                "Taxable Balance": st.column_config.TextColumn("Taxable"),
+                "Traditional Balance": st.column_config.TextColumn("Traditional"),
+                "Roth Balance": st.column_config.TextColumn("Roth"),
+                "DAF Balance": st.column_config.TextColumn("DAF"),
+                "Total Portfolio": st.column_config.TextColumn("Total Portfolio")
             }
             
-            st.dataframe(balances_display, column_config=balance_column_config, hide_index=True, use_container_width=True)
+            st.dataframe(balances_display, column_config=balance_column_config, hide_index=True, width='stretch')
         
         with charts_tab:
             st.subheader("Portfolio Balance Projections")
