@@ -191,7 +191,7 @@ def build_income_expenses_display():
     #print(f"Looping from {current_year} to 2050:")
     # Iterate through the years
     #i_e_df = pd.DataFrame(columns=['Year', 'Age', 'Income Flows', 'Planned Distribution', "Dividends", "Total Inflows","Expenses","Tax payment","Total Outflows"])
-    i_e_df = pd.DataFrame(columns=['Year', 'Age', 'SSI Flows', 'Planned Distribution','Roth Conversions','RMD','Total Inflows','Taxes Owed',"Expenses",'Portfolio Withdrawl']) 
+    i_e_df = pd.DataFrame(columns=['Year', 'Age', 'SSI Flows', 'Planned Distribution','Roth Conversions','RMD','Total Inflows','Taxes Owed',"Expenses",'Portfolio Withdrawal'])
     #print("i_e_df")
     port_draw_df = pd.DataFrame(columns=['Year', 'Cash','Taxable','Tax Deferred', 'Tax Free','Donor Advised Fund'])
     #print("port_draw_df")

@@ -67,11 +67,16 @@ def calculate_cash_buffer_targets(expenses: float) -> Tuple[float, float]:
     
     Returns:
         Tuple of (cash_target, taxable_target)
-        - cash_target: 2 years of expenses
-        - taxable_target: 3 years of expenses
+        - cash_target: Half of configured years in Cash
+        - taxable_target: Half of configured years in Taxable
     """
-    cash_target = expenses * 2.0  # 2 years in Cash
-    taxable_target = expenses * 3.0  # 3 years in Taxable
+    config_mgr = get_config_manager()
+    years_of_expenses = config_mgr.get("financial_assumptions", "years_of_expenses_in_cash", 4)
+    
+    # Split the total years between cash and taxable accounts
+    years_per_account = years_of_expenses / 2.0
+    cash_target = expenses * years_per_account
+    taxable_target = expenses * years_per_account
     return cash_target, taxable_target
 
 
@@ -223,18 +228,18 @@ def optimize_rmd_lookback(strategies: list,
                                    "Stage 3: Medicare",
                                    "Stage 4: Social Security"]:
             # Calculate maximum additional conversion (limit to 15% of Traditional balance)
-            max_additional = min(
+            max_additional_conversion = min(
                 additional_conversion_per_year,
                 year_strategy.balances.traditional * 0.15
             )
             
-            if max_additional > 1000:  # Only adjust if meaningful amount
+            if max_additional_conversion > 1000:  # Only adjust if meaningful amount
                 # Verify with BETR that additional conversion is beneficial
                 try:
                     betr_inputs = BETRInputs(
                         current_marginal_rate=0.24,  # Assume 24% bracket
                         expected_future_rate=0.24,   # Assume same in RMD years
-                        conversion_amount=year_strategy.roth_conversion + max_additional,
+                        conversion_amount=year_strategy.roth_conversion + max_additional_conversion,
                         traditional_ira_balance=year_strategy.balances.traditional,
                         pay_from_taxable=True,
                         taxable_account_balance=year_strategy.balances.taxable,
@@ -253,25 +258,32 @@ def optimize_rmd_lookback(strategies: list,
                         logger.info(f"  Original conversion: ${year_strategy.roth_conversion:,.2f}")
                         
                         # Increase conversion
-                        year_strategy.roth_conversion += max_additional
+                        year_strategy.roth_conversion += max_additional_conversion
+                        
+                        # Validate that we have sufficient traditional balance
+                        if year_strategy.balances.traditional < max_additional_conversion:
+                            logger.warning(f"Year {year_strategy.year}: Insufficient traditional balance "
+                                         f"(${year_strategy.balances.traditional:,.2f}) for additional conversion "
+                                         f"(${max_additional_conversion:,.2f}). Skipping adjustment.")
+                            continue
                         
                         # CRITICAL: Recalculate balances to reflect the increased conversion
                         # The additional conversion reduces Traditional and increases Roth
                         year_strategy.balances = PortfolioBalances(
                             cash=year_strategy.balances.cash,
                             taxable=year_strategy.balances.taxable,
-                            traditional=year_strategy.balances.traditional - max_additional,
-                            roth=year_strategy.balances.roth + max_additional,
+                            traditional=year_strategy.balances.traditional - max_additional_conversion,
+                            roth=year_strategy.balances.roth + max_additional_conversion,
                             daf=year_strategy.balances.daf
                         )
                         
-                        total_additional_conversions += max_additional
+                        total_additional_conversions += max_additional_conversion
                         years_adjusted += 1
                         
                         # Log balances after adjustment
                         logger.info(f"  After optimization adjustment:")
-                        logger.info(f"  Traditional: ${year_strategy.balances.traditional:,.2f} (reduced by ${max_additional:,.2f})")
-                        logger.info(f"  Roth: ${year_strategy.balances.roth:,.2f} (increased by ${max_additional:,.2f})")
+                        logger.info(f"  Traditional: ${year_strategy.balances.traditional:,.2f} (reduced by ${max_additional_conversion:,.2f})")
+                        logger.info(f"  Roth: ${year_strategy.balances.roth:,.2f} (increased by ${max_additional_conversion:,.2f})")
                         logger.info(f"  New conversion total: ${year_strategy.roth_conversion:,.2f}")
                         logger.info(f"  BETR: {betr_results.betr:.2%}")
                     else:
@@ -285,6 +297,7 @@ def optimize_rmd_lookback(strategies: list,
     
     # Step 6: Generate optimization report
     estimated_rmd_reduction = total_additional_conversions * 0.04  # Approximate RMD % reduction
+    avg_additional_per_adjusted_year = total_additional_conversions / years_adjusted if years_adjusted > 0 else 0
     
     optimization_report = {
         "status": "Optimization complete",
@@ -295,7 +308,7 @@ def optimize_rmd_lookback(strategies: list,
         "additional_conversion_per_year_target": additional_conversion_per_year,
         "total_additional_conversions": total_additional_conversions,
         "estimated_rmd_reduction": estimated_rmd_reduction,
-        "avg_additional_per_adjusted_year": total_additional_conversions / years_adjusted if years_adjusted > 0 else 0
+        "avg_additional_per_adjusted_year": avg_additional_per_adjusted_year
     }
     
     logger.info(f"RMD Optimization Complete:")
@@ -764,15 +777,34 @@ def project_healthcare_costs(start_year: int,
     """
     logger.info(f"Projecting healthcare costs from {start_year} to {end_year}")
     
+    # Input validation
+    if start_year > end_year:
+        raise ValueError(f"start_year ({start_year}) must be <= end_year ({end_year})")
+    
+    if not magi_projections:
+        raise ValueError("magi_projections cannot be empty")
+    
+    expected_years = end_year - start_year + 1
+    if len(magi_projections) < expected_years:
+        logger.warning(
+            f"MAGI projections ({len(magi_projections)}) shorter than year range "
+            f"({expected_years}). Padding with last value."
+        )
+        # Pad with last value if needed
+        magi_projections = list(magi_projections) + [magi_projections[-1]] * (expected_years - len(magi_projections))
+    
+    # Precompute MAGI lookback values (2 years prior for IRMAA)
+    # For first 2 years, use the initial MAGI value since no prior data exists
+    magi_lookback = [magi_projections[0]] * 2 + magi_projections
+    
     projections = []
     
     for i, year in enumerate(range(start_year, end_year + 1)):
         age_primary = age_primary_start + i
         age_spouse = age_spouse_start + i
         
-        # Get MAGI from 2 years ago for IRMAA
-        magi_idx = max(0, i - 2)
-        magi_two_years_ago = magi_projections[magi_idx] if magi_idx < len(magi_projections) else 0
+        # Get MAGI from 2 years ago for IRMAA (precomputed)
+        magi_two_years_ago = magi_lookback[i]
         
         # Calculate costs
         total_cost, breakdown = calculate_total_healthcare_costs(
@@ -877,6 +909,10 @@ MEDICARE_AGE = 65
 RMD_AGE = 73  # Updated for 2023+ (SECURE Act 2.0)
 ACA_SUBSIDY_THRESHOLD = 400  # % of Federal Poverty Level for max subsidies
 TAXABLE_SS_RATE = 0.85  # 85% of SS benefits are taxable at higher incomes
+
+# Buffer target constants (years of expenses to maintain in liquid accounts)
+CASH_BUFFER_YEARS = 2.0  # Years of expenses to maintain in cash for immediate liquidity
+TAXABLE_BUFFER_YEARS = 3.0  # Years of expenses to maintain in taxable brokerage for near-term needs
 
 
 @dataclass
@@ -1017,7 +1053,7 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         - updated_balances: PortfolioBalances after replenishment
         - transaction_log: Dict with all fund movements
     """
-    cash_target = expenses * 2.0
+    cash_target = expenses * CASH_BUFFER_YEARS
     cash_deficit = max(0, cash_target - balances.cash)
     
     if cash_deficit < 100:  # Ignore trivial amounts
@@ -1120,7 +1156,7 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
         - updated_balances: PortfolioBalances after replenishment
         - transaction_log: Dict with all fund movements
     """
-    brokerage_target = expenses * 3.0
+    brokerage_target = expenses * TAXABLE_BUFFER_YEARS
     brokerage_deficit = max(0, brokerage_target - balances.taxable)
     
     if brokerage_deficit < 100:
@@ -1411,7 +1447,6 @@ class Stage1Accumulation(LifeStage):
         # Consider Roth conversions during accumulation using BETR
         # Only convert if in favorable tax bracket (≤ max_conversion_rate)
         roth_conversion = 0
-        #print(f"calculate_strategy: balances.traditional equals {balances.traditional}")
         if balances.traditional > 0 and max_rate <= max_conversion_rate:
             try:
                 # Use BETR to determine optimal conversion amount
@@ -1552,7 +1587,7 @@ class Stage2EarlyRetirement(LifeStage):
         std_deduction_df = get_std_deduction(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
-        # NEW STRATEGY: Maintain cash buffer (2 years in Cash, 3 years in Taxable)
+        # NEW STRATEGY: Maintain cash buffer using configured target values
         start_year = kwargs.get('start_year', year)
         cash_target, taxable_target = calculate_cash_buffer_targets(expenses)
         
@@ -2385,8 +2420,7 @@ class WithdrawalStrategyEngine:
         results = []
         balances = initial_balances
         expenses = initial_expenses
-        #print(f"Engine: Initial balances trad {balances.traditional}")
-       
+
         # Get parameters
         growth_rate = kwargs.get('growth_rate', 1.07)
         expense_inflation_rate = kwargs.get('expense_inflation_rate', 0.03)  # 3% inflation rate
@@ -2625,9 +2659,7 @@ def build_withdrawal_strategy_display(start_year: int = None,
             roth=150000,
             daf=0
         )
-    #print(f" Initial balances trad {initial_balances.traditional}")
-#     p
-#     # Log first 4 years of data at INFO level for planning_app.py visibility
+    # Log first 4 years of data at INFO level for planning_app.py visibility
     # Get initial expenses from session state or use default
     try:
         import streamlit as st
@@ -2653,8 +2685,7 @@ def build_withdrawal_strategy_display(start_year: int = None,
         'Year', 'Cash Balance', 'Taxable Balance',
         'Traditional Balance', 'Roth Balance', 'DAF Balance', 'Total Portfolio'
     ]].copy()
-    #print(balances_df)
-    
+
     # Log first 4 years of data at INFO level for planning_app.py visibility
     logger.info("=" * 80)
     logger.info("WITHDRAWAL STRATEGY - First 4 Years Preview")

@@ -171,10 +171,59 @@ with tab2:
             key="years_of_expenses_in_cash"
         )
     
+    # Income Section
+    st.markdown("---")
+    st.subheader("Income (Pre-Retirement)")
+    st.markdown("Enter annual wages/salary for each person. These will be used in withdrawal strategy calculations for pre-retirement years.")
+    
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        st.markdown(f"**{person1_name}'s Income**")
+        person1_annual_wages = st.number_input(
+            "Annual Wages/Salary ($)",
+            min_value=0,
+            max_value=1000000,
+            value=config_mgr.get("income", "person1_annual_wages", 0),
+            step=5000,
+            help=f"Annual wages/salary for {person1_name} (used until retirement year)",
+            key="person1_annual_wages"
+        )
+    
+    with col4:
+        st.markdown(f"**{person2_name}'s Income**")
+        person2_annual_wages = st.number_input(
+            "Annual Wages/Salary ($)",
+            min_value=0,
+            max_value=1000000,
+            value=config_mgr.get("income", "person2_annual_wages", 0),
+            step=5000,
+            help=f"Annual wages/salary for {person2_name} (used until retirement year)",
+            key="person2_annual_wages"
+        )
+    
+    wage_inflation_rate = st.number_input(
+        "Wage Inflation Rate (%)",
+        min_value=0.0,
+        max_value=10.0,
+        value=config_mgr.get("income", "wage_inflation_rate", 3.0),
+        step=0.1,
+        help="Expected annual increase in wages/salary",
+        key="wage_inflation_rate"
+    )
+    
     # Display calculated values
+    st.markdown("---")
     st.subheader("Calculated Values")
-    cash_reserve = expected_annual_expenses * years_of_expenses_in_cash
-    st.metric("Recommended Cash Reserve", f"${cash_reserve:,.0f}")
+    
+    col_calc1, col_calc2 = st.columns(2)
+    with col_calc1:
+        cash_reserve = expected_annual_expenses * years_of_expenses_in_cash
+        st.metric("Recommended Cash Reserve", f"${cash_reserve:,.0f}")
+    
+    with col_calc2:
+        total_household_income = person1_annual_wages + person2_annual_wages
+        st.metric("Total Household Income", f"${total_household_income:,.0f}")
 
 # Healthcare Tab
 with tab3:
