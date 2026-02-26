@@ -81,7 +81,7 @@ except Exception as e:
     })
 conversion_tab, something_tab = st.tabs(["Tax planner","something"])
 with conversion_tab:
-    st.header("Withdrawl and Conversion calculator")
+    st.header("Withdrawal and Conversion calculator")
    # add_vertical_space(2)
     
     # Display net worth metrics with exception handling

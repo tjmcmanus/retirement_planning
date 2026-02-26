@@ -62,64 +62,66 @@ def build_historical_networth(num_months=12):
         num_months: Number of months of historical data to fetch (default: 12)
     
     Returns:
-        pd.DataFrame: Historical net worth with columns: date, cash, taxable, tax_deferred, tax_free, total
+        pd.DataFrame: Historical net worth with datetime index and columns:
+                     cash, taxable, tax_deferred, tax_free, total
     """
-    currentDate = datetime.date.today()
-    curr_year = currentDate.year
-    curr_month = currentDate.month
+    # Generate date range using pandas date_range (more efficient and reliable)
+    end_date = pd.Timestamp.today().normalize()
+    start_date = end_date - pd.DateOffset(months=num_months - 1)
+    date_range = pd.date_range(start=start_date, end=end_date, freq='MS')
     
-    # Build list of (month, year) tuples for the last num_months
-    months_data = []
-    for i in range(num_months, 0, -1):
-        # Calculate month and year going backwards
-        target_month = curr_month - i + 1
-        target_year = curr_year
-        
-        # Handle year rollover
-        while target_month <= 0:
-            target_month += 12
-            target_year -= 1
-        
-        months_data.append((target_month, target_year))
+    # Account type mapping for cleaner aggregation
+    ACCOUNT_TYPE_MAP = {
+        'Cash': 'cash',
+        'Brokerage': 'taxable',
+        'Traditional': 'tax_deferred',
+        'Roth': 'tax_free'
+    }
     
-    # Fetch net worth for each month
     networth_rows = []
-    for month, year in months_data:
+    
+    for date in date_range:
         try:
-            _, summary_df = get_networth_by_month(month, year)
+            _, summary_df = get_networth_by_month(date.month, date.year)
             
-            if not summary_df.empty:
-                # Extract values by account_type
-                cash = summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum()
-                taxable = summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum()
-                tax_deferred = summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum()
-                tax_free = summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum()
-                
-                # Get total (excluding the 'Total' row to avoid double counting)
-                total = summary_df[summary_df['account_type'] != 'Total']['market_value'].sum()
-                
-                # Create date string (using first day of month for consistency)
-                date_str = f"{month:02d}/01/{year}"
-                
-                networth_rows.append({
-                    'date': date_str,
-                    'cash': cash,
-                    'taxable': taxable,
-                    'tax_deferred': tax_deferred,
-                    'tax_free': tax_free,
-                    'total': total
-                })
-        except Exception as e:
-            st.warning(f"Could not fetch data for {month}/{year}: {e}")
+            if summary_df.empty:
+                continue
+            
+            # Single-pass aggregation: group by account_type and sum
+            account_totals = (
+                summary_df[summary_df['account_type'].isin(ACCOUNT_TYPE_MAP.keys())]
+                .groupby('account_type')['market_value']
+                .sum()
+            )
+            
+            # Map to column names with default 0.0 for missing account types
+            row_data = {
+                col: account_totals.get(acct_type, 0.0)
+                for acct_type, col in ACCOUNT_TYPE_MAP.items()
+            }
+            
+            # Calculate total from the four account types
+            row_data['total'] = sum(row_data.values())
+            row_data['date'] = date
+            
+            networth_rows.append(row_data)
+            
+        except (ValueError, RuntimeError) as e:
+            # Only catch expected exceptions from get_networth_by_month
+            st.warning(f"Could not fetch data for {date.strftime('%m/%Y')}: {e}")
             continue
     
-    # Create DataFrame
+    # Create DataFrame with datetime index
     if networth_rows:
         networth_df = pd.DataFrame(networth_rows)
+        networth_df.set_index('date', inplace=True)
+        networth_df.sort_index(inplace=True)
         return networth_df
     else:
-        # Return empty DataFrame with correct structure if no data
-        return pd.DataFrame(columns=['date', 'cash', 'taxable', 'tax_deferred', 'tax_free', 'total'])
+        # Return empty DataFrame with correct structure and datetime index
+        return pd.DataFrame(
+            columns=['cash', 'taxable', 'tax_deferred', 'tax_free', 'total']
+        ).set_index(pd.DatetimeIndex([], name='date'))
 
 currentDate = datetime.date.today()
 curr_year = currentDate.year
@@ -195,7 +197,7 @@ with tab1:
    row2_col1, row2_col2, row2_col3 = st.columns(3)
    with row2_col1:
        st.markdown('<h4 style="text-align: center;">Total Net Worth</h4>', unsafe_allow_html=True)
-       fig2 = px.histogram(networth, x='date', y='total', nbins=10, color="total", color_discrete_sequence=color_palette)
+       fig2 = px.histogram(networth, x=networth.index, y='total', nbins=10, color="total", color_discrete_sequence=color_palette)
        
        # Calculate y-axis range with 10% padding
        y_min = networth['total'].min()
@@ -241,28 +243,28 @@ with tab1:
       
       # Create bar traces with consistent styling
       trace1 = go.Bar(
-          x=networth.date,
+          x=networth.index,
           y=networth.cash,
           name='Cash',
           legendgroup='1',
           marker_color='rgb(246, 207, 113)'
       )
       trace2 = go.Bar(
-          x=networth.date,
+          x=networth.index,
           y=networth.taxable,
           name='Broker',
           legendgroup='2',
           marker_color='rgb(254, 136, 177)'
       )
       trace3 = go.Bar(
-          x=networth.date,
+          x=networth.index,
           y=networth.tax_deferred,
           name='Traditional',
           legendgroup='3',
           marker_color='rgb(139, 224, 164)'
       )
       trace4 = go.Bar(
-          x=networth.date,
+          x=networth.index,
           y=networth.tax_free,
           name='Roth',
           legendgroup='4',
@@ -762,7 +764,7 @@ with tab4:
                 "Req Min Distributions", # Column header name in UI
                 format="dollar"
             ),
-            "Portfolio Withdrawl": st.column_config.NumberColumn(
+            "Portfolio Withdrawal": st.column_config.NumberColumn(
                 "Cash Needs", # Column header name in UI
                  format="dollar"
             ),

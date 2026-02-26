@@ -20,11 +20,13 @@ Date: 2026-02-23
 
 import pandas as pd
 import numpy as np
+import numbers
 import logging
 import os
 from datetime import datetime
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional, List, NamedTuple
 from dataclasses import dataclass
+from functools import lru_cache
 
 from load_data import (
     get_income_tax_brackets,
@@ -50,6 +52,20 @@ logger = logging.getLogger(__name__)
 # These factors adjust the break-even tax rate to account for additional benefits
 NONTAXABLE_BASIS_ADJUSTMENT_FACTOR = 0.05  # 5% adjustment per 100% nontaxable basis
 BACKDOOR_ROTH_BENEFIT_FACTOR = 0.02  # 2% benefit per 10 years of backdoor contributions
+DEFAULT_BACKDOOR_CONTRIBUTION_YEARS = 10  # Default years for backdoor Roth planning
+
+
+class ConversionAfterTaxResult(NamedTuple):
+    """Result of after-tax future value calculation for Roth conversion.
+    
+    Attributes:
+        conversion_fv: Future value of conversion amount (grows tax-free in Roth)
+        tax_fv: Future value of tax payment (opportunity cost in taxable account)
+        after_tax_fv: Net after-tax future value (conversion_fv - tax_fv)
+    """
+    conversion_fv: float
+    tax_fv: float
+    after_tax_fv: float
 
 
 @dataclass
@@ -101,6 +117,40 @@ class BETRResults:
     # Analysis details
     analysis_notes: List[str]      # Detailed notes about the analysis
 
+def _validate_numeric_input(
+    value,
+    name: str,
+    allow_negative: bool = False,
+    integer_only: bool = False,
+    min_value: Optional[float] = None
+) -> None:
+    """
+    Validate numeric input parameters.
+    
+    Args:
+        value: The value to validate
+        name: Parameter name for error messages
+        allow_negative: Whether negative values are allowed
+        integer_only: Whether only integers are accepted
+        min_value: Optional minimum value constraint
+        
+    Raises:
+        TypeError: If value is not of the correct numeric type
+        ValueError: If value violates constraints
+    """
+    expected_type = numbers.Integral if integer_only else numbers.Real
+    if not isinstance(value, expected_type):
+        type_name = "integer" if integer_only else "numeric"
+        raise TypeError(f"{name} must be {type_name}, got {type(value).__name__}")
+    
+    if not allow_negative and value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    
+    if min_value is not None and value < min_value:
+        raise ValueError(f"{name} must be >= {min_value}, got {value}")
+
+
+
 
 def calculate_conversion_future_value(
     conversion_amount: float,
@@ -132,16 +182,20 @@ def calculate_conversion_future_value(
         Future value after compound growth
         
     Raises:
+        TypeError: If inputs are not of the correct type
         ValueError: If inputs are invalid
     """
-    if conversion_amount < 0:
-        raise ValueError(f"Conversion amount must be non-negative, got ${conversion_amount:,.2f}")
+    # Type and value validation using helper function
+    _validate_numeric_input(conversion_amount, "conversion_amount")
+    _validate_numeric_input(annual_return, "annual_return", allow_negative=True, min_value=-1)
+    _validate_numeric_input(years, "years", integer_only=True)
     
-    if years < 0:
-        raise ValueError(f"Years must be non-negative, got {years}")
-    
-    if annual_return < -1:
-        raise ValueError(f"Annual return must be >= -1 (cannot lose more than 100%), got {annual_return}")
+    # Short-circuit for zero years or zero growth
+    if years <= 0 or annual_return == 0:
+        logger.debug(
+            f"No growth period or zero rate: returning conversion amount ${conversion_amount:,.2f}"
+        )
+        return conversion_amount
     
     # Calculate compound growth: FV = PV × (1 + r)^n
     growth_factor = (1 + annual_return) ** years
@@ -149,7 +203,7 @@ def calculate_conversion_future_value(
     
     logger.debug(
         f"Conversion FV calculation: ${conversion_amount:,.2f} × {growth_factor:.6f} "
-        f"({annual_return:.2%} over {years} years) = ${future_value:,.2f}"
+        f"({annual_return * 100:.2f}% over {years} years) = ${future_value:,.2f}"
     )
     
     return future_value
@@ -202,12 +256,45 @@ def calculate_conversion_tax(
     return conversion_tax
 
 
+def _validate_conversion_inputs(
+    conversion_amount: float,
+    years: int,
+    annual_return: float,
+    ordinary_income_tax_rate: float
+) -> None:
+    """
+    Validate inputs for conversion calculations.
+    
+    Args:
+        conversion_amount: Amount being converted
+        years: Number of years
+        annual_return: Annual rate of return
+        ordinary_income_tax_rate: Tax rate as decimal
+        
+    Raises:
+        ValueError: If any input is invalid
+    """
+    if conversion_amount < 0:
+        raise ValueError(f"Conversion amount must be non-negative, got ${conversion_amount:,.2f}")
+    
+    if years < 0:
+        raise ValueError(f"Years must be non-negative, got {years}")
+    
+    if annual_return < -1:
+        raise ValueError(f"Annual return must be >= -1 (cannot lose more than 100%), got {annual_return}")
+    
+    if not 0 <= ordinary_income_tax_rate <= 1:
+        raise ValueError(
+            f"Ordinary income tax rate must be between 0 and 1, got {ordinary_income_tax_rate}"
+        )
+
+
 def calculate_conversion_after_tax_future_value(
     conversion_amount: float,
     annual_return: float,
     years: int,
     ordinary_income_tax_rate: float
-) -> Tuple[float, float, float]:
+) -> ConversionAfterTaxResult:
     """
     Calculate the future after-tax value of a Roth conversion.
     
@@ -246,51 +333,44 @@ def calculate_conversion_after_tax_future_value(
         ordinary_income_tax_rate: Current marginal tax rate as decimal (e.g., 0.35 for 35%)
         
     Returns:
-        Tuple of (conversion_future_value, tax_future_value, after_tax_future_value)
+        ConversionAfterTaxResult with conversion_fv, tax_fv, and after_tax_fv
         
     Raises:
         ValueError: If inputs are invalid
     """
-    # Validate inputs
-    if conversion_amount < 0:
-        raise ValueError(f"Conversion amount must be non-negative, got ${conversion_amount:,.2f}")
+    # Validate inputs using helper function
+    _validate_conversion_inputs(conversion_amount, years, annual_return, ordinary_income_tax_rate)
     
-    if years < 0:
-        raise ValueError(f"Years must be non-negative, got {years}")
-    
-    if annual_return < -1:
-        raise ValueError(f"Annual return must be >= -1 (cannot lose more than 100%), got {annual_return}")
-    
-    if not 0 <= ordinary_income_tax_rate <= 1:
-        raise ValueError(
-            f"Ordinary income tax rate must be between 0 and 1, got {ordinary_income_tax_rate}"
-        )
+    # Early return for zero cases (optimization)
+    if conversion_amount == 0 or years == 0:
+        return ConversionAfterTaxResult(conversion_amount, 0.0, conversion_amount)
     
     # Calculate future value of conversion (grows tax-free in Roth)
-    conversion_fv = calculate_conversion_future_value(conversion_amount, annual_return, years)
+    # Inlined: FV = PV × (1 + r)^n
+    growth_factor: float = (1 + annual_return) ** years
+    conversion_fv: float = conversion_amount * growth_factor
     
-    # Calculate conversion tax
-    tax_amount = calculate_conversion_tax(conversion_amount, ordinary_income_tax_rate)
+    # Calculate conversion tax amount
+    # Inlined: Tax = Amount × Rate
+    tax_amount: float = conversion_amount * ordinary_income_tax_rate
     
     # Calculate future value of tax using AFTER-TAX return
     # The tax payment would be in a taxable account, so it grows at an after-tax rate
     # After-tax return = r × (1 - tax_rate)
-    after_tax_return = annual_return * (1 - ordinary_income_tax_rate)
-    tax_fv = tax_amount * ((1 + after_tax_return) ** years)
+    after_tax_return: float = annual_return * (1 - ordinary_income_tax_rate)
+    after_tax_growth_factor: float = (1 + after_tax_return) ** years
+    tax_fv: float = tax_amount * after_tax_growth_factor
     
     # Calculate net after-tax future value
-    after_tax_fv = conversion_fv - tax_fv
+    after_tax_fv: float = conversion_fv - tax_fv
     
-    logger.info(
-        f"Conversion after-tax FV: ${conversion_amount:,.2f} conversion over {years} years at {annual_return:.2%}"
+    logger.debug(
+        f"Conversion after-tax FV: ${conversion_amount:,.2f} over {years} years at {annual_return * 100:.2f}% | "
+        f"Conversion FV: ${conversion_fv:,.2f} | Tax: ${tax_amount:,.2f} ({ordinary_income_tax_rate * 100:.2f}%) | "
+        f"After-tax return: {after_tax_return * 100:.4f}% | Tax FV: ${tax_fv:,.2f} | After-tax FV: ${after_tax_fv:,.2f}"
     )
-    logger.info(f"  Conversion FV: ${conversion_fv:,.2f}")
-    logger.info(f"  Tax amount: ${tax_amount:,.2f} ({ordinary_income_tax_rate:.2%})")
-    logger.info(f"  After-tax return for tax payment: {after_tax_return:.4%}")
-    logger.info(f"  Tax FV (opportunity cost): ${tax_fv:,.2f}")
-    logger.info(f"  After-tax FV: ${after_tax_fv:,.2f}")
     
-    return conversion_fv, tax_fv, after_tax_fv
+    return ConversionAfterTaxResult(conversion_fv, tax_fv, after_tax_fv)
 
 
 def calculate_betr_rate(
@@ -340,6 +420,9 @@ def calculate_betr_rate(
     Raises:
         ValueError: If inputs are invalid or if conversion_fv is zero
     """
+    # Validate inputs explicitly for defense-in-depth
+    _validate_conversion_inputs(conversion_amount, years, annual_return, ordinary_income_tax_rate)
+    
     # Calculate the after-tax future value components
     conversion_fv, tax_fv, after_tax_fv = calculate_conversion_after_tax_future_value(
         conversion_amount, annual_return, years, ordinary_income_tax_rate
@@ -347,16 +430,22 @@ def calculate_betr_rate(
     
     # Validate that conversion_fv is not zero to avoid division by zero
     if conversion_fv == 0:
-        raise ValueError("Conversion future value cannot be zero")
+        raise ValueError(
+            "Cannot calculate BETR: conversion amount is zero. "
+            "A non-zero conversion amount is required."
+        )
     
     # Calculate BETR: 1 - (After-Tax FV / Conversion FV)
     betr = 1 - (after_tax_fv / conversion_fv)
     
-    logger.info(f"BETR calculation:")
-    logger.info(f"  After-Tax FV: ${after_tax_fv:,.2f}")
-    logger.info(f"  Conversion FV: ${conversion_fv:,.2f}")
-    logger.info(f"  BETR: 1 - ({after_tax_fv:,.2f} / {conversion_fv:,.2f}) = {betr:.4%}")
-    logger.info(f"  Interpretation: Convert if future tax rate > {betr:.2%}")
+    # Log consolidated calculation details
+    logger.info(
+        f"BETR calculation:\n"
+        f"  After-Tax FV: ${after_tax_fv:,.2f}\n"
+        f"  Conversion FV: ${conversion_fv:,.2f}\n"
+        f"  BETR: 1 - ({after_tax_fv:,.2f} / {conversion_fv:,.2f}) = {betr:.4%}\n"
+        f"  Interpretation: Convert if future tax rate > {betr:.2%}"
+    )
     
     return betr
 
@@ -641,6 +730,231 @@ def calculate_betr(inputs: BETRInputs) -> BETRResults:
     )
 
 
+@lru_cache(maxsize=10)
+def _get_cached_tax_brackets(year: int) -> pd.DataFrame:
+    """
+    Cache tax brackets by year to avoid repeated lookups.
+    
+    Args:
+        year: Tax year for bracket lookup
+        
+    Returns:
+        DataFrame containing tax brackets for the specified year
+    """
+    return get_income_tax_brackets(year)
+
+
+@lru_cache(maxsize=128)
+def _get_bracket_upper_limit(target_rate: float, year: int) -> Optional[float]:
+    """
+    Get upper income limit for target tax bracket.
+    
+    This function is cached since tax brackets are deterministic for a given year.
+    
+    Args:
+        target_rate: Target marginal tax rate (e.g., 0.24 for 24%)
+        year: Tax year for bracket lookup
+        
+    Returns:
+        Upper income limit for the bracket, or None if bracket not found
+    """
+    try:
+        tax_brackets_df = _get_cached_tax_brackets(year)
+        return getUpperIncomeRate(target_rate, tax_brackets_df)
+    except ValueError:
+        logger.error(f"Target tax bracket {target_rate:.2%} not found")
+        return None
+
+
+def _create_empty_betr_result(error_message: str) -> BETRResults:
+    """
+    Create an empty BETR result for error cases.
+    
+    Args:
+        error_message: Error message to include in analysis notes
+        
+    Returns:
+        BETRResults with zero values and error message
+    """
+    return BETRResults(
+        betr=0.0,
+        conversion_recommended=False,
+        conversion_tax=0.0,
+        net_benefit=0.0,
+        traditional_future_value=0.0,
+        roth_future_value=0.0,
+        taxable_account_impact=0.0,
+        analysis_notes=[error_message]
+    )
+
+
+def _calculate_max_conversion_amount(
+    bracket_upper_limit: float,
+    current_agi: float,
+    traditional_ira_balance: float
+) -> float:
+    """
+    Calculate maximum conversion amount to stay within target bracket.
+    
+    Returns the lesser of:
+    - Available room in tax bracket (bracket limit - current AGI)
+    - Traditional IRA balance
+    
+    Args:
+        bracket_upper_limit: Upper income limit of target tax bracket
+        current_agi: Current Adjusted Gross Income
+        traditional_ira_balance: Total Traditional IRA balance
+        
+    Returns:
+        Maximum conversion amount that stays within bracket
+    """
+    available_room = max(0.0, bracket_upper_limit - current_agi)
+    return min(available_room, traditional_ira_balance)
+
+
+def _build_betr_inputs(
+    target_tax_bracket: float,
+    optimal_conversion: float,
+    traditional_ira_balance: float,
+    nontaxable_basis: float,
+    pay_from_taxable: bool,
+    taxable_account_balance: float,
+    years_to_withdrawal: int,
+    annual_return: float,
+    future_backdoor_roth: bool
+) -> BETRInputs:
+    """
+    Build BETRInputs for BETR validation.
+    
+    Args:
+        target_tax_bracket: Target marginal tax rate
+        optimal_conversion: Calculated optimal conversion amount
+        traditional_ira_balance: Total Traditional IRA balance
+        nontaxable_basis: Nontaxable basis in Traditional IRA
+        pay_from_taxable: Whether to pay conversion tax from taxable account
+        taxable_account_balance: Balance in taxable account
+        years_to_withdrawal: Years until withdrawal
+        annual_return: Expected annual return
+        future_backdoor_roth: Planning future backdoor Roth contributions
+        
+    Returns:
+        BETRInputs configured for BETR analysis
+    """
+    return BETRInputs(
+        current_marginal_rate=target_tax_bracket,
+        expected_future_rate=target_tax_bracket,  # Conservative: assume same rate
+        conversion_amount=optimal_conversion,
+        traditional_ira_balance=traditional_ira_balance,
+        nontaxable_basis=nontaxable_basis,
+        pay_from_taxable=pay_from_taxable,
+        taxable_account_balance=taxable_account_balance,
+        years_to_withdrawal=years_to_withdrawal,
+        annual_return=annual_return,
+        future_backdoor_roth=future_backdoor_roth,
+        backdoor_contribution_years=DEFAULT_BACKDOOR_CONTRIBUTION_YEARS if future_backdoor_roth else 0
+    )
+
+
+def _validate_taxable_account_sufficiency(
+    optimal_conversion: float,
+    target_tax_bracket: float,
+    taxable_account_balance: float
+) -> Optional[str]:
+    """
+    Validate that taxable account has sufficient balance to pay conversion tax.
+    
+    Args:
+        optimal_conversion: Calculated optimal conversion amount
+        target_tax_bracket: Target marginal tax rate for tax estimation
+        taxable_account_balance: Balance in taxable account
+        
+    Returns:
+        Error message if validation fails, None if sufficient balance
+    """
+    if optimal_conversion <= 0:
+        return None
+    
+    estimated_tax = optimal_conversion * target_tax_bracket
+    if estimated_tax > taxable_account_balance:
+        logger.warning(
+            f"Insufficient taxable account balance: ${taxable_account_balance:,.0f} "
+            f"< estimated tax ${estimated_tax:,.0f}"
+        )
+        return "Error: Insufficient taxable account balance to pay conversion tax"
+    
+    return None
+
+
+def _validate_optimization_inputs(
+    traditional_ira_balance: float,
+    current_agi: float,
+    target_tax_bracket: float,
+    nontaxable_basis: float,
+    pay_from_taxable: bool,
+    taxable_account_balance: float,
+    years_to_withdrawal: int,
+    annual_return: float
+) -> Optional[str]:
+    """
+    Validate inputs for optimize_conversion_amount.
+    
+    Args:
+        traditional_ira_balance: Total Traditional IRA balance
+        current_agi: Current Adjusted Gross Income
+        target_tax_bracket: Target marginal tax rate
+        nontaxable_basis: Nontaxable basis in Traditional IRA
+        pay_from_taxable: Whether to pay conversion tax from taxable account
+        taxable_account_balance: Balance in taxable account
+        years_to_withdrawal: Years until withdrawal
+        annual_return: Expected annual return
+        
+    Returns:
+        Error message if validation fails, None if all inputs are valid
+    """
+    # Early exit: Logical consistency checks (most likely to fail)
+    if years_to_withdrawal <= 0:
+        return "Error: Years to withdrawal must be positive"
+    
+    if nontaxable_basis > traditional_ira_balance:
+        return "Error: Nontaxable basis cannot exceed Traditional IRA balance"
+    
+    # Negative value checks
+    negative_checks = [
+        ('Traditional IRA balance', traditional_ira_balance),
+        ('Current AGI', current_agi),
+        ('Nontaxable basis', nontaxable_basis),
+        *([('Taxable account balance', taxable_account_balance)] if pay_from_taxable else [])
+    ]
+    
+    if error := next((f"Error: {name} cannot be negative"
+                      for name, value in negative_checks if value < 0), None):
+        return error
+    
+    # Range checks
+    range_checks = [
+        ('tax bracket', target_tax_bracket),
+        ('annual return', annual_return)
+    ]
+    if invalid := next((f"Error: Invalid {name} {value:.2%} (must be between 0 and 1)"
+                        for name, value in range_checks if not (0 < value < 1)), None):
+        return invalid
+    
+    return None
+
+
+def _optimization_error(message: str) -> Tuple[float, BETRResults]:
+    """
+    Return standard error response for optimization failures.
+    
+    Args:
+        message: Error message to include in result
+        
+    Returns:
+        Tuple of (0.0, empty BETRResults with error message)
+    """
+    return 0.0, _create_empty_betr_result(message)
+
+
 def optimize_conversion_amount(
     traditional_ira_balance: float,
     current_agi: float,
@@ -674,52 +988,40 @@ def optimize_conversion_amount(
     Returns:
         Tuple of (optimal_conversion_amount, BETRResults)
     """
+    # Validate all inputs
+    if validation_error := _validate_optimization_inputs(
+        traditional_ira_balance, current_agi, target_tax_bracket,
+        nontaxable_basis, pay_from_taxable, taxable_account_balance,
+        years_to_withdrawal, annual_return
+    ):
+        return _optimization_error(validation_error)
+    
     logger.info(f"Optimizing conversion for target bracket: {target_tax_bracket:.2%}")
     
-    # Get tax brackets for the year
-    tax_brackets_df = get_income_tax_brackets(year)
+    # Get bracket upper limit (cached for performance)
+    bracket_upper_limit = _get_bracket_upper_limit(target_tax_bracket, year)
+    if bracket_upper_limit is None:
+        return _optimization_error("Error: Target tax bracket not found")
     
-    # Find the upper limit of the target tax bracket
-    try:
-        bracket_upper_limit = getUpperIncomeRate(target_tax_bracket, tax_brackets_df)
-    except ValueError:
-        logger.error(f"Target tax bracket {target_tax_bracket:.2%} not found")
-        # Return empty result
-        empty_result = BETRResults(
-            betr=0.0,
-            conversion_recommended=False,
-            conversion_tax=0.0,
-            net_benefit=0.0,
-            traditional_future_value=0.0,
-            roth_future_value=0.0,
-            taxable_account_impact=0.0,
-            analysis_notes=["Error: Target tax bracket not found"]
-        )
-        return 0.0, empty_result
+    # Calculate optimal conversion amount
+    optimal_conversion = _calculate_max_conversion_amount(
+        bracket_upper_limit, current_agi, traditional_ira_balance
+    )
     
-    # Calculate maximum conversion to stay within bracket
-    # Conversion amount = (Bracket Upper Limit - Current AGI)
-    max_conversion = max(0, bracket_upper_limit - current_agi)
-    
-    # Cap at Traditional IRA balance
-    optimal_conversion = min(max_conversion, traditional_ira_balance)
+    # Verify taxable account sufficiency if paying from taxable
+    if pay_from_taxable:
+        if error := _validate_taxable_account_sufficiency(
+            optimal_conversion, target_tax_bracket, taxable_account_balance
+        ):
+            return _optimization_error(error)
     
     logger.info(f"Optimal conversion amount: ${optimal_conversion:,.0f}")
     
-    # Validate with BETR analysis
-    # Assume future rate is same as target bracket (conservative estimate)
-    betr_inputs = BETRInputs(
-        current_marginal_rate=target_tax_bracket,
-        expected_future_rate=target_tax_bracket,  # Conservative: assume same rate
-        conversion_amount=optimal_conversion,
-        traditional_ira_balance=traditional_ira_balance,
-        nontaxable_basis=nontaxable_basis,
-        pay_from_taxable=pay_from_taxable,
-        taxable_account_balance=taxable_account_balance,
-        years_to_withdrawal=years_to_withdrawal,
-        annual_return=annual_return,
-        future_backdoor_roth=future_backdoor_roth,
-        backdoor_contribution_years=10 if future_backdoor_roth else 0
+    # Build inputs and validate with BETR analysis
+    betr_inputs = _build_betr_inputs(
+        target_tax_bracket, optimal_conversion, traditional_ira_balance,
+        nontaxable_basis, pay_from_taxable, taxable_account_balance,
+        years_to_withdrawal, annual_return, future_backdoor_roth
     )
     
     betr_results = calculate_betr(betr_inputs)
@@ -757,15 +1059,44 @@ def analyze_conversion_scenarios(
         
     Returns:
         DataFrame with scenario analysis results
+        
+    Raises:
+        TypeError: If conversion_amounts is not a list or tuple
+        ValueError: If conversion_amounts contains invalid values
     """
-    logger.info(f"Analyzing {len(conversion_amounts)} conversion scenarios")
+    # Input validation
+    if not isinstance(conversion_amounts, (list, tuple)):
+        raise TypeError(
+            f"conversion_amounts must be a list or tuple, got {type(conversion_amounts).__name__}"
+        )
+    
+    if any(not isinstance(amt, numbers.Real) or amt <= 0
+           for amt in conversion_amounts):
+        raise ValueError("All conversion amounts must be positive numbers")
+    
+    # Early return for empty list
+    if not conversion_amounts:
+        logger.warning("No conversion amounts provided")
+        return pd.DataFrame()
+    
+    # Pre-filter invalid amounts
+    valid_amounts = [amt for amt in conversion_amounts if amt <= traditional_ira_balance]
+    invalid_count = len(conversion_amounts) - len(valid_amounts)
+    
+    if invalid_count > 0:
+        logger.warning(
+            f"Skipping {invalid_count} amount(s) exceeding IRA balance of ${traditional_ira_balance:,.0f}"
+        )
+    
+    if not valid_amounts:
+        logger.warning("No valid conversion amounts to analyze")
+        return pd.DataFrame()
+    
+    logger.info(f"Analyzing {len(valid_amounts)} conversion scenarios")
     
     results = []
     
-    for amount in conversion_amounts:
-        if amount > traditional_ira_balance:
-            logger.warning(f"Skipping ${amount:,.0f} - exceeds IRA balance")
-            continue
+    for amount in valid_amounts:
         
         inputs = BETRInputs(
             current_marginal_rate=current_marginal_rate,

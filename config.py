@@ -30,6 +30,11 @@ DEFAULT_CONFIG = {
         "expected_rate_of_return": 6.0,
         "years_of_expenses_in_cash": 4,
     },
+    "income": {
+        "person1_annual_wages": 0,  # Annual wages/salary for person 1
+        "person2_annual_wages": 0,  # Annual wages/salary for person 2
+        "wage_inflation_rate": 3.0,  # Annual wage increase percentage
+    },
     "social_security": {
         "person1_ssi_age": 70,
         "person1_ssi_amount": 0,
@@ -241,6 +246,54 @@ class ConfigManager:
         if birth_date:
             return self.calculate_age(birth_date, as_of_date)
         return 0
+    
+    def get_annual_wages(self, year: int) -> float:
+        """
+        Get total annual wages for both persons in a given year.
+        
+        Wages are only counted if the person has not yet retired.
+        Applies wage inflation from current year to target year.
+        
+        Args:
+            year: Year to calculate wages for
+            
+        Returns:
+            Total annual wages for both persons
+        """
+        current_year = datetime.now().year
+        wage_inflation_rate = self.get("income", "wage_inflation_rate", 3.0) / 100.0
+        
+        total_wages = 0.0
+        
+        # Check person 1
+        person1_retirement_year = self.get("personal_info", "person1_retirement_year", current_year)
+        if year < person1_retirement_year:
+            person1_base_wages = self.get("income", "person1_annual_wages", 0)
+            years_diff = year - current_year
+            person1_wages = person1_base_wages * ((1 + wage_inflation_rate) ** years_diff)
+            total_wages += person1_wages
+        
+        # Check person 2
+        person2_retirement_year = self.get("personal_info", "person2_retirement_year", current_year)
+        if year < person2_retirement_year:
+            person2_base_wages = self.get("income", "person2_annual_wages", 0)
+            years_diff = year - current_year
+            person2_wages = person2_base_wages * ((1 + wage_inflation_rate) ** years_diff)
+            total_wages += person2_wages
+        
+        return total_wages
+    
+    def has_wages_in_year(self, year: int) -> bool:
+        """
+        Check if either person has wages in a given year.
+        
+        Args:
+            year: Year to check
+            
+        Returns:
+            True if either person has wages in that year
+        """
+        return self.get_annual_wages(year) > 0
 
 
 # Global configuration instance
