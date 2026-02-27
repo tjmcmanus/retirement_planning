@@ -72,6 +72,26 @@ def _calculate_roth_percentage(strategy_df: pd.DataFrame, year: int) -> float:
     return (roth / total * 100) if total > 0 else 0.0
 
 
+def _print_roth_conversion_impact(
+    strategy_df: pd.DataFrame,
+    start_year: int,
+    end_year: int,
+) -> None:
+    """Print Roth conversion impact between two milestone years.
+
+    Args:
+        strategy_df: DataFrame containing withdrawal strategy data
+        start_year: First year to measure Roth percentage
+        end_year: Final year to measure Roth percentage
+    """
+    roth_pct_start = _calculate_roth_percentage(strategy_df, start_year)
+    roth_pct_end = _calculate_roth_percentage(strategy_df, end_year)
+    print(f"\n💰 Roth Conversion Impact:")
+    print(f"   Starting Roth %: {roth_pct_start:.1f}%")
+    print(f"   Ending Roth %: {roth_pct_end:.1f}%")
+    print(f"   Change: {roth_pct_end - roth_pct_start:+.1f} percentage points")
+
+
 def example_1_basic_strategy():
     """Example 1: Basic withdrawal strategy from 2026-2051"""
     print("\n" + "="*80)
@@ -192,6 +212,31 @@ def example_3_high_income():
     return strategy_df, balances_df
 
 
+EXAMPLE4_CSV_OUTPUT = "example4_custom.csv"
+
+
+def _display_custom_scenario_results(
+    strategy_df: pd.DataFrame,
+    start_year: int,
+    end_year: int,
+    csv_output: str,
+) -> None:
+    """Display results and save CSV for the custom scenario.
+
+    Args:
+        strategy_df: DataFrame containing withdrawal strategy data
+        start_year: First year of the planning horizon
+        end_year: Final year of the planning horizon
+        csv_output: File path to write the CSV output
+    """
+    mid_year = (start_year + end_year) // 2
+    _print_portfolio_evolution(strategy_df, [start_year, mid_year, end_year])
+    _print_roth_conversion_impact(strategy_df, start_year=start_year, end_year=end_year)
+    with open(csv_output, "w", encoding="utf-8", newline="") as f:
+        strategy_df.to_csv(f, index=False)
+    print(f"\n✅ Results saved to {csv_output}")
+
+
 def example_4_custom_scenario() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Example 4: Custom scenario with specific parameters
     
@@ -235,22 +280,9 @@ def example_4_custom_scenario() -> tuple[pd.DataFrame, pd.DataFrame]:
         has_wages=False
     )
     
-    # Show portfolio evolution at key milestones
-    _print_portfolio_evolution(strategy_df, [2026, 2035, 2045])
-    
-    # Roth percentage over time
-    roth_pct_start = _calculate_roth_percentage(strategy_df, 2026)
-    roth_pct_end = _calculate_roth_percentage(strategy_df, 2045)
-    
-    print(f"\n💰 Roth Conversion Impact:")
-    print(f"   Starting Roth %: {roth_pct_start:.1f}%")
-    print(f"   Ending Roth %: {roth_pct_end:.1f}%")
-    print(f"   Change: {roth_pct_end - roth_pct_start:+.1f} percentage points")
-    
-    strategy_df.to_csv("example4_custom.csv", index=False)
-    print("\n✅ Results saved to example4_custom.csv")
-    
-    return strategy_df, balances_df
+    # Show portfolio evolution at key milestones and save results
+    _display_custom_scenario_results(strategy_df, 2026, 2045, EXAMPLE4_CSV_OUTPUT)
+
     return strategy_df, balances_df
 
 
@@ -368,7 +400,7 @@ def main():
     print("  - example1_strategy.csv")
     print("  - example2_early_retire.csv")
     print("  - example3_high_income.csv")
-    print("  - example4_custom.csv")
+    print(f"  - {EXAMPLE4_CSV_OUTPUT}")
     print("\nUse these CSV files for further analysis in Excel or other tools.")
     print("="*80 + "\n")
 

@@ -27,7 +27,7 @@ import numpy as np
 import logging
 import os
 from datetime import datetime
-from typing import Dict, Tuple, Optional, List, Any, Union
+from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -73,6 +73,25 @@ from betr_roth_conversion import (
 # - 40% of withdrawal is long-term capital gains (taxable)
 BROKERAGE_COST_BASIS_RATIO = 0.60
 BROKERAGE_LTCG_RATIO = 0.40
+
+# Default columns shown in the year-by-year section of the strategy report.
+# Stored as an immutable tuple so callers can reference it without risk of
+# mutation and to avoid re-constructing the sequence on every call.
+_REPORT_DEFAULT_DISPLAY_COLS: tuple = (
+    'Year', 'Age', 'Stage', 'Roth Conversion',
+    'Federal Tax', 'IRMAA Penalty', 'Total Portfolio',
+)
+
+# Net Investment Income Tax rate (IRC §1411, fixed since 2013)
+NIIT_RATE: float = 0.038
+
+# NIIT thresholds (not indexed for inflation since 2013, per IRC §1411)
+NIIT_THRESHOLDS: Dict[str, int] = {
+    'married_filing_jointly':    250_000,
+    'single':                    200_000,
+    'married_filing_separately': 125_000,
+    'head_of_household':         200_000,
+}
 
 
 def calculate_ssi_benefits_dynamic(year: int, person_name: str, birth_year: int,
@@ -226,7 +245,7 @@ def get_target_conversion_bracket(max_rate: float, tax_brackets: pd.DataFrame) -
         ValueError: If no suitable bracket is found
     """
     # Get all available rates up to and including max_rate
-    available_rates = tax_brackets[tax_brackets['rate'] <= max_rate]['rate'].unique()
+    available_rates = pd.unique(tax_brackets[tax_brackets['rate'] <= max_rate]['rate'])
     available_rates = sorted(available_rates, reverse=True)  # Highest first
     
     # Remove 0% bracket (not useful for conversions)
@@ -238,7 +257,7 @@ def get_target_conversion_bracket(max_rate: float, tax_brackets: pd.DataFrame) -
     # Try each rate from highest to lowest until we find one that exists
     for rate in available_rates:
         try:
-            upper_limit = getUpperIncomeRate(rate, tax_brackets)
+            upper_limit = float(getUpperIncomeRate(rate, tax_brackets))
             logger.debug(f"Using {rate:.2%} bracket (upper: ${upper_limit:,.2f}) for conversions")
             return rate, upper_limit
         except ValueError:
@@ -414,7 +433,7 @@ def optimize_rmd_lookback(strategies: list,
     return adjusted_strategies, optimization_report
 
 
-def calculate_state_tax(state_agi: float, state: str = None, year: int = 2024,
+def calculate_state_tax(state_agi: float, state: Optional[str] = None, year: int = 2024,
                        filing_status: str = "married_filing_jointly",
                        retirement_income: float = 0,
                        ss_benefits: float = 0) -> Tuple[float, Dict]:
@@ -506,7 +525,7 @@ def calculate_state_tax(state_agi: float, state: str = None, year: int = 2024,
     }
     
     # Apply standard deduction
-    std_deduction = STANDARD_DEDUCTIONS.get(state, 0)
+    std_deduction = STANDARD_DEDUCTIONS.get(state or '', 0)
     taxable_income = max(0, adjusted_agi - std_deduction)
     
     # Calculate tax using brackets
@@ -587,14 +606,14 @@ def calculate_amt(income: float, conversions: float, deductions: float,
     
     # Step 1: Calculate regular tax (simplified - use existing function)
     try:
-        regular_tax = calculate_taxable_income(
-            income + conversions,
-            deductions,
-            year,
-            filing_status
+        _tax_brackets = get_income_tax_brackets(year)
+        regular_tax, _, _ = calculate_taxable_income(
+            income + conversions - deductions,
+            pd.DataFrame(_tax_brackets)
         )
-    except:
+    except (ValueError, TypeError, KeyError) as e:
         # Fallback to simple calculation
+        logging.warning(f"calculate_taxable_income failed, using fallback: {e}")
         regular_tax = (income + conversions - deductions) * 0.24
     
     # Step 2: Calculate AMTI (Alternative Minimum Taxable Income)
@@ -926,20 +945,21 @@ def project_healthcare_costs(start_year: int,
 
 
 def calculate_niit(net_investment_income: float, magi: float,
-                  filing_status: str = "married_filing_jointly") -> Tuple[float, Dict]:
+                  filing_status: str = "married_filing_jointly") -> Tuple[float, Dict[str, Any]]:
     """
     Calculate Net Investment Income Tax (3.8% surtax)
     
     Args:
-        net_investment_income: Total investment income
-        magi: Modified Adjusted Gross Income
-        filing_status: Filing status
-    
+        net_investment_income: Total investment income (must be non-negative)
+        magi: Modified Adjusted Gross Income (must be non-negative)
+        filing_status: Filing status — must be a key in NIIT_THRESHOLDS;
+            raises ValueError for unrecognised values
+
     Returns:
         Tuple of (niit_amount, calculation_details)
-        
+
     Formula:
-        NIIT = min(NII, max(0, MAGI - threshold)) * 0.038
+        NIIT = min(NII, max(0, MAGI - threshold)) * NIIT_RATE
         
     Key Thresholds (NOT indexed for inflation since 2013):
         - Married Filing Jointly: $250,000
@@ -948,37 +968,38 @@ def calculate_niit(net_investment_income: float, magi: float,
         - Head of Household: $200,000
     """
     logger.debug(f"Calculating NIIT: NII=${net_investment_income:,.0f}, MAGI=${magi:,.0f}")
-    
-    # NIIT thresholds (not indexed for inflation)
-    NIIT_THRESHOLDS = {
-        'married_filing_jointly': 250000,
-        'single': 200000,
-        'married_filing_separately': 125000,
-        'head_of_household': 200000
-    }
-    
-    threshold = NIIT_THRESHOLDS.get(filing_status, 250000)
-    rate = 0.038  # 3.8% surtax
-    
+
+    if net_investment_income < 0:
+        raise ValueError(
+            f"net_investment_income must be non-negative, got {net_investment_income}"
+        )
+    if magi < 0:
+        raise ValueError(f"magi must be non-negative, got {magi}")
+
+    if filing_status not in NIIT_THRESHOLDS:
+        raise ValueError(
+            f"Unknown filing_status {filing_status!r}. "
+            f"Valid values: {sorted(NIIT_THRESHOLDS)}"
+        )
+    threshold = NIIT_THRESHOLDS[filing_status]
+
     # Calculate excess MAGI over threshold
     excess_magi = max(0, magi - threshold)
-    
+
     # NIIT applies to lesser of NII or excess MAGI
     niit_base = min(net_investment_income, excess_magi)
-    
-    # Calculate NIIT
-    niit_amount = niit_base * rate
-    
-    # Calculation details
-    details = {
+
+    niit_amount = niit_base * NIIT_RATE
+
+    details: Dict[str, Any] = {
         'net_investment_income': net_investment_income,
         'magi': magi,
         'threshold': threshold,
         'excess_magi': excess_magi,
         'niit_base': niit_base,
-        'niit_rate': rate,
+        'niit_rate': NIIT_RATE,
         'niit_amount': niit_amount,
-        'subject_to_niit': niit_amount > 0
+        'subject_to_niit': niit_base > 0,
     }
     
     if niit_amount > 0:
@@ -1640,7 +1661,7 @@ class Stage1Accumulation(LifeStage):
                 # Use BETR to determine optimal conversion amount
                 # During accumulation, we want to reduce future RMDs
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, tax_brackets
+                    max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
                 
                 # Calculate conversion room in current bracket
@@ -1815,9 +1836,9 @@ class Stage2EarlyRetirement(LifeStage):
         # Harvest LTCG from taxable account (preferably at 0% rate)
         
         # Determine optimal LTCG harvest (stay in 0% bracket if possible)
-        cg_0_percent = cg_brackets[cg_brackets['rate'] == 0]
+        cg_0_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0])
         if len(cg_0_percent) > 0:
-            cg_0_percent_limit = cg_0_percent['upper'].iloc[0]
+            cg_0_percent_limit = float(cg_0_percent['upper'].iloc[0])
         else:
             # Fallback: use standard deduction if no 0% bracket exists
             cg_0_percent_limit = std_deduction
@@ -1878,11 +1899,11 @@ class Stage2EarlyRetirement(LifeStage):
             # Fallback to original method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, tax_brackets
+                    max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
             except ValueError:
                 target_bracket_rate = 0.12
-                target_bracket_upper = getUpperIncomeRate(0.12, tax_brackets)
+                target_bracket_upper = float(getUpperIncomeRate(0.12, tax_brackets))
             
             conversion_room = max(0, target_bracket_upper - std_deduction - current_income)
             roth_conversion = min(conversion_room, balances.traditional)
@@ -2031,9 +2052,9 @@ class Stage3Medicare(LifeStage):
             if row['lower'] <= prior_magi <= row['upper']:
                 current_irmaa_bracket = row
                 # Find next bracket
-                next_brackets = irmaa_brackets[irmaa_brackets['lower'] > row['upper']]
+                next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] > row['upper']])
                 if not next_brackets.empty:
-                    next_irmaa_threshold = next_brackets.iloc[0]['lower']
+                    next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                 break
         
         logger.debug(f"Next IRMAA threshold: ${next_irmaa_threshold:,.2f}")
@@ -2054,9 +2075,9 @@ class Stage3Medicare(LifeStage):
         total_need = expenses + irmaa_penalty
         
         # Harvest LTCG for expenses
-        cg_0_percent = cg_brackets[cg_brackets['rate'] == 0]
+        cg_0_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0])
         if len(cg_0_percent) > 0:
-            cg_0_percent_limit = cg_0_percent['upper'].iloc[0]
+            cg_0_percent_limit = float(cg_0_percent['upper'].iloc[0])
         else:
             cg_0_percent_limit = std_deduction
             logger.warning(f"No 0% capital gains bracket found for year {year}, using standard deduction")
@@ -2137,11 +2158,11 @@ class Stage3Medicare(LifeStage):
             # Fallback to original IRMAA-aware method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, tax_brackets
+                    max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
             except ValueError:
                 target_bracket_rate = 0.12
-                target_bracket_upper = getUpperIncomeRate(0.12, tax_brackets)
+                target_bracket_upper = float(getUpperIncomeRate(0.12, tax_brackets))
             
             tax_headroom = target_bracket_upper - std_deduction - ltcg_harvested
             conversion_room = min(irmaa_headroom, tax_headroom)
@@ -2296,9 +2317,9 @@ class Stage4SocialSecurity(LifeStage):
         # Harvest LTCG if needed
         ltcg_harvested = 0
         if withdrawal_need > 0 and balances.taxable > 0:
-            cg_0_percent = cg_brackets[cg_brackets['rate'] == 0]
+            cg_0_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0])
             if len(cg_0_percent) > 0:
-                cg_0_percent_limit = cg_0_percent['upper'].iloc[0]
+                cg_0_percent_limit = float(cg_0_percent['upper'].iloc[0])
             else:
                 cg_0_percent_limit = std_deduction
                 logger.warning(f"No 0% capital gains bracket found for year {year}, using standard deduction")
@@ -2319,9 +2340,9 @@ class Stage4SocialSecurity(LifeStage):
         next_irmaa_threshold = float('inf')
         for _, row in irmaa_brackets.iterrows():
             if row['lower'] <= prior_magi <= row['upper']:
-                next_brackets = irmaa_brackets[irmaa_brackets['lower'] > row['upper']]
+                next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] > row['upper']])
                 if not next_brackets.empty:
-                    next_irmaa_threshold = next_brackets.iloc[0]['lower']
+                    next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                 break
         
         irmaa_headroom = next_irmaa_threshold - current_income - std_deduction
@@ -2389,11 +2410,11 @@ class Stage4SocialSecurity(LifeStage):
             # Fallback to original method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, tax_brackets
+                    max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
             except ValueError:
                 target_bracket_rate = 0.22
-                target_bracket_upper = getUpperIncomeRate(0.22, tax_brackets)
+                target_bracket_upper = float(getUpperIncomeRate(0.22, tax_brackets))
             
             tax_headroom = target_bracket_upper - std_deduction - current_income
             conversion_room = min(irmaa_headroom, tax_headroom)
@@ -2570,9 +2591,9 @@ class Stage5RMD(LifeStage):
         ltcg_harvested = 0
         if withdrawal_need > 0 and balances.taxable > 0:
             # Check if we can harvest at favorable rates
-            cg_15_percent = cg_brackets[cg_brackets['rate'] == 0.15]
+            cg_15_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0.15])
             if len(cg_15_percent) > 0:
-                cg_15_percent_limit = cg_15_percent['upper'].iloc[0]
+                cg_15_percent_limit = float(cg_15_percent['upper'].iloc[0])
                 ltcg_room = max(0, cg_15_percent_limit - total_income - std_deduction)
                 
                 # Calculate maximum withdrawal from brokerage (considering only 40% is taxable LTCG)
@@ -2589,7 +2610,7 @@ class Stage5RMD(LifeStage):
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
         try:
             target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                max_conversion_rate, tax_brackets
+                max_conversion_rate, pd.DataFrame(tax_brackets)
             )
             conversion_room = max(0, target_bracket_upper - total_income - std_deduction)
             
@@ -2598,9 +2619,9 @@ class Stage5RMD(LifeStage):
                 next_irmaa_threshold = float('inf')
                 for _, row in irmaa_brackets.iterrows():
                     if row['lower'] <= prior_magi <= row['upper']:
-                        next_brackets = irmaa_brackets[irmaa_brackets['lower'] > row['upper']]
+                        next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] > row['upper']])
                         if not next_brackets.empty:
-                            next_irmaa_threshold = next_brackets.iloc[0]['lower']
+                            next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                         break
                 
                 irmaa_headroom = next_irmaa_threshold - total_income - std_deduction
@@ -2739,8 +2760,8 @@ class WithdrawalStrategyEngine:
     def calculate_multi_year_strategy(self, start_year: int, end_year: int,
                                      initial_balances: PortfolioBalances,
                                      initial_expenses: float,
-                                     person1_name: str = None,
-                                     person2_name: str = None,
+                                     person1_name: Optional[str] = None,
+                                     person2_name: Optional[str] = None,
                                      **kwargs) -> pd.DataFrame:
         """
         Calculate withdrawal strategy for multiple years
@@ -2853,8 +2874,8 @@ class WithdrawalStrategyEngine:
                 ss_primary = 0
                 if person1_fra_benefit > 0 and age_primary >= person1_claiming_age:
                     ss_primary = calculate_ssi_benefits_dynamic(
-                        year=year,
-                        person_name=person1_name,
+                            year=year,
+                            person_name=person1_name or "Person 1",
                         birth_year=person1_birth_year,
                         claiming_age=person1_claiming_age,
                         fra_benefit=person1_fra_benefit,
@@ -2871,7 +2892,7 @@ class WithdrawalStrategyEngine:
                 if person2_fra_benefit > 0 and age_spouse >= person2_claiming_age:
                     ss_spouse = calculate_ssi_benefits_dynamic(
                         year=year,
-                        person_name=person2_name,
+                        person_name=person2_name or "Person 2",
                         birth_year=person2_birth_year,
                         claiming_age=person2_claiming_age,
                         fra_benefit=person2_fra_benefit,
@@ -3059,8 +3080,8 @@ class WithdrawalStrategyEngine:
         return pd.DataFrame(data)
 
 
-def build_withdrawal_strategy_display(start_year: int = None,
-                                      end_year: int = None,
+def build_withdrawal_strategy_display(start_year: Optional[int] = None,
+                                      end_year: Optional[int] = None,
                                       **kwargs) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Build withdrawal strategy display for 3 years by default
@@ -3198,7 +3219,7 @@ def build_withdrawal_strategy_display(start_year: int = None,
     logger.info(f"Total years calculated: {len(strategy_df)}")
     logger.info("=" * 80)
     
-    return strategy_df, balances_df
+    return strategy_df, pd.DataFrame(balances_df)
 
 
 def calculate_aca_subsidy(magi: float, year: int, household_size: int = 2) -> Tuple[float, float]:
@@ -3326,45 +3347,43 @@ def create_example_scenario(scenario_name: Union[str, ScenarioType] = "default")
     used to test withdrawal strategies under various conditions.
     
     Args:
-        scenario_name: Name of scenario. Can be:
-            - "default": Moderate portfolio with deflation
-            - "early_retire": Larger portfolio with delayed SS
-            - "high_income": Large portfolio with higher growth
-            Can also use ScenarioType enum values for type safety.
+        scenario_name: Scenario identifier. Accepts a :class:`ScenarioType` enum
+            member or its string value (e.g. ``"default"``, ``"early_retire"``,
+            ``"high_income"``). Unknown strings fall back to
+            ``ScenarioType.DEFAULT`` with a warning.
     
     Returns:
-        ScenarioConfig dataclass with scenario parameters including:
-        - start_year, end_year: Projection time range
-        - initial_balances: PortfolioBalances object
-        - initial_expenses: Annual expenses
-        - person1_name, person2_name: Names for reporting
-        - growth_rate: Annual portfolio growth rate
-        - expense_inflation: Annual expense inflation rate
-        - ss_claiming_age: Social Security claiming age
-        - retirement_year: Year of retirement
-        - has_wages: Whether wages are present
+        ScenarioConfig: Fully populated scenario configuration.
+        See ``ScenarioConfig`` for field descriptions.
     
     Example:
         >>> scenario = create_example_scenario("default")
         >>> scenario = create_example_scenario(ScenarioType.EARLY_RETIRE)
         >>> config_dict = scenario.to_dict()  # Convert to dict if needed
     """
-    # Convert string to ScenarioType if needed
-    if isinstance(scenario_name, ScenarioType):
-        scenario_key = scenario_name
-    else:
+    # Resolve scenario_name to a ScenarioType member using the enum's O(1)
+    # value map rather than a linear generator scan.
+    if not isinstance(scenario_name, ScenarioType):
         try:
             scenario_key = ScenarioType(scenario_name)
         except ValueError:
             logger.warning(f"Unknown scenario '{scenario_name}', using default")
             scenario_key = ScenarioType.DEFAULT
-    
-    # Get scenario-specific overrides
-    scenario_overrides = _SCENARIO_OVERRIDES.get(scenario_key, _SCENARIO_OVERRIDES[ScenarioType.DEFAULT])
-    
+    else:
+        scenario_key = scenario_name
+
+    # Guard against a newly added ScenarioType member with no corresponding
+    # entry in _SCENARIO_OVERRIDES, converting a silent KeyError into a
+    # graceful fallback consistent with the unknown-name path above.
+    if scenario_key not in _SCENARIO_OVERRIDES:
+        logger.warning(
+            f"No overrides defined for scenario '{scenario_key.value}', using default"
+        )
+        scenario_key = ScenarioType.DEFAULT
+
     # Merge base config with scenario-specific overrides
-    merged_config = {**_DEFAULT_SCENARIO_CONFIG, **scenario_overrides}
-    
+    merged_config = {**_DEFAULT_SCENARIO_CONFIG, **_SCENARIO_OVERRIDES[scenario_key]}
+
     # Return as ScenarioConfig dataclass for type safety
     return ScenarioConfig(**merged_config)
 
@@ -3462,13 +3481,13 @@ def _build_income_sources_section(summary: Dict) -> List[str]:
 
 
 def _build_year_summary_section(strategy_df: pd.DataFrame, first_n: int, last_n: int,
-                                display_cols: List[str]) -> List[str]:
+                                display_cols: Sequence[str]) -> List[str]:
     """Build year-by-year summary section lines"""
     lines = [
         "\n" + "="*80,
         f"YEAR-BY-YEAR SUMMARY (First {first_n} & Last {last_n} years)",
         "="*80,
-        "\nFirst 10 Years:",
+        f"\nFirst {first_n} Years:",
         strategy_df[display_cols].head(first_n).to_string(index=False),
         f"\nLast {last_n} Years:",
         strategy_df[display_cols].tail(last_n).to_string(index=False)
@@ -3476,27 +3495,23 @@ def _build_year_summary_section(strategy_df: pd.DataFrame, first_n: int, last_n:
     return lines
 
 
-def print_strategy_report(strategy_df: pd.DataFrame, summary: Optional[Dict] = None,
-                         first_n: int = 10, last_n: int = 5,
-                         display_cols: Optional[List[str]] = None) -> None:
-    """
-    Print a formatted report of the withdrawal strategy
-    
+def _resolve_display_bounds(first_n: int, last_n: int, total_rows: int) -> tuple:
+    """Validate and adjust first_n / last_n against the available row count.
+
     Args:
-        strategy_df: DataFrame from calculate_multi_year_strategy
-        summary: Optional pre-calculated summary dict
-        first_n: Number of initial years to display (default: 10)
-        last_n: Number of final years to display (default: 5)
-        display_cols: Columns to display in year summary (default: standard set)
-    
+        first_n: Requested number of initial rows to display.
+        last_n: Requested number of final rows to display.
+        total_rows: Total rows available in the strategy DataFrame.
+
+    Returns:
+        Adjusted (first_n, last_n) tuple guaranteed to fit within total_rows.
+
     Raises:
-        ValueError: If first_n or last_n are not positive integers
+        ValueError: If first_n or last_n are not positive integers.
     """
-    # Input validation
     if first_n < 1 or last_n < 1:
         raise ValueError("first_n and last_n must be positive integers")
-    
-    total_rows = len(strategy_df)
+
     if first_n + last_n > total_rows:
         logging.warning(
             f"Requested {first_n + last_n} rows but only {total_rows} available. "
@@ -3504,35 +3519,68 @@ def print_strategy_report(strategy_df: pd.DataFrame, summary: Optional[Dict] = N
         )
         first_n = min(first_n, total_rows)
         last_n = min(last_n, total_rows - first_n)
-    
-    # Generate summary if not provided
+
+    return first_n, last_n
+
+
+def _report_lines(summary: Dict, strategy_df: pd.DataFrame,
+                  first_n: int, last_n: int,
+                  display_cols: Sequence[str]) -> Iterator[str]:
+    """Yield each line of the strategy report without performing any I/O.
+
+    Separating content construction from output makes the report content
+    independently testable (``list(_report_lines(...))``) without capturing
+    stdout, and avoids building an intermediate list in memory.
+
+    Args:
+        summary: Pre-calculated summary dict from generate_strategy_summary.
+        strategy_df: DataFrame from calculate_multi_year_strategy.
+        first_n: Number of initial years to include.
+        last_n: Number of final years to include.
+        display_cols: Column names to render in the year-by-year table.
+
+    Yields:
+        Individual report lines (without a trailing newline each).
+    """
+    yield "\n" + "=" * 80
+    yield "RETIREMENT WITHDRAWAL STRATEGY REPORT"
+    yield "=" * 80
+
+    yield from _build_overview_section(summary)
+    yield from _build_life_stages_section(summary)
+    yield from _build_roth_conversion_section(summary)
+    yield from _build_taxes_costs_section(summary)
+    yield from _build_income_sources_section(summary)
+    yield from _build_year_summary_section(strategy_df, first_n, last_n, display_cols)
+
+
+def print_strategy_report(strategy_df: pd.DataFrame, summary: Optional[Dict] = None,
+                          first_n: int = 10, last_n: int = 5,
+                          display_cols: Optional[tuple] = None) -> None:
+    """
+    Print a formatted report of the withdrawal strategy.
+
+    Args:
+        strategy_df: DataFrame from calculate_multi_year_strategy.
+        summary: Optional pre-calculated summary dict.
+        first_n: Number of initial years to display (default: 10).
+        last_n: Number of final years to display (default: 5).
+        display_cols: Columns to display in year summary.
+            Defaults to _REPORT_DEFAULT_DISPLAY_COLS.
+
+    Raises:
+        ValueError: If first_n or last_n are not positive integers.
+    """
+    first_n, last_n = _resolve_display_bounds(first_n, last_n, len(strategy_df))
+
     if summary is None:
         summary = generate_strategy_summary(strategy_df)
-    
-    # Set default display columns if not provided
+
     if display_cols is None:
-        display_cols = ['Year', 'Age', 'Stage', 'Roth Conversion', 'Federal Tax',
-                       'IRMAA Penalty', 'Total Portfolio']
-    
-    # Build all output lines
-    lines = [
-        "\n" + "="*80,
-        "RETIREMENT WITHDRAWAL STRATEGY REPORT",
-        "="*80
-    ]
-    
-    # Add all sections
-    lines.extend(_build_overview_section(summary))
-    lines.extend(_build_life_stages_section(summary))
-    lines.extend(_build_roth_conversion_section(summary))
-    lines.extend(_build_taxes_costs_section(summary))
-    lines.extend(_build_income_sources_section(summary))
-    lines.extend(_build_year_summary_section(strategy_df, first_n, last_n, display_cols))
-    
-    # Single print operation
-    print("\n".join(lines))
-    
-    print("\n" + "="*80 + "\n")
+        display_cols = _REPORT_DEFAULT_DISPLAY_COLS
+
+    print("\n".join(_report_lines(summary, strategy_df, first_n, last_n, display_cols)))
+    print("\n" + "=" * 80 + "\n")
 
 
 # Example usage function

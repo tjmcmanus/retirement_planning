@@ -50,11 +50,45 @@ hide_st_style = """
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
+# Module-level constant for account type mapping
+ACCOUNT_TYPE_MAP: dict[str, str] = {
+    'Cash': 'cash',
+    'Brokerage': 'taxable',
+    'Traditional': 'tax_deferred',
+    'Roth': 'tax_free',
+}
+
 def clear_submit():
     st.session_state["submit"] = False
 
+def _build_networth_row(date: pd.Timestamp, summary_df: pd.DataFrame) -> dict:
+    """
+    Build a single net worth row dict from a monthly summary DataFrame.
+    
+    Args:
+        date: The date for this row
+        summary_df: Summary DataFrame with account_type and market_value columns
+    
+    Returns:
+        dict: Row data with keys: cash, taxable, tax_deferred, tax_free, total, date
+    """
+    # Single-pass aggregation with reindex to ensure all account types present
+    account_totals = (
+        summary_df[summary_df['account_type'].isin(ACCOUNT_TYPE_MAP.keys())]
+        .groupby('account_type')['market_value']
+        .sum()
+        .reindex(ACCOUNT_TYPE_MAP.keys(), fill_value=0.0)
+    )
+    
+    # Map account types to column names
+    row_data = {ACCOUNT_TYPE_MAP[k]: v for k, v in account_totals.items()}
+    row_data['total'] = account_totals.sum()
+    row_data['date'] = date
+    
+    return row_data
+
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def build_historical_networth(num_months=12):
+def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
     """
     Build historical net worth DataFrame using get_networth_by_month.
     
@@ -70,14 +104,6 @@ def build_historical_networth(num_months=12):
     start_date = end_date - pd.DateOffset(months=num_months - 1)
     date_range = pd.date_range(start=start_date, end=end_date, freq='MS')
     
-    # ACCOUNT_TYPE_MAP for cleaner aggregation
-    ACCOUNT_TYPE_MAP = {
-        'Cash': 'cash',
-        'Brokerage': 'taxable',
-        'Traditional': 'tax_deferred',
-        'Roth': 'tax_free'
-    }
-    
     networth_rows = []
     
     for date in date_range:
@@ -87,36 +113,23 @@ def build_historical_networth(num_months=12):
             if summary_df.empty:
                 continue
             
-            # Single-pass aggregation: group by account_type and sum
-            account_totals = (
-                summary_df[summary_df['account_type'].isin(ACCOUNT_TYPE_MAP.keys())]
-                .groupby('account_type')['market_value']
-                .sum()
-            )
-            
-            # Map to column names with default 0.0 for missing account types
-            row_data = {
-                col: account_totals.get(acct_type, 0.0)
-                for acct_type, col in ACCOUNT_TYPE_MAP.items()
-            }
-            
-            # Calculate total from the four account types
-            row_data['total'] = sum(row_data.values())
-            row_data['date'] = date
-            
-            networth_rows.append(row_data)
+            networth_rows.append(_build_networth_row(date, summary_df))
             
         except (ValueError, RuntimeError) as e:
-            # Catch expected exceptions from data processing
+            # Catch expected exceptions from get_networth_by_month
             st.warning(f"Could not fetch data for {date.strftime('%m/%Y')}: {e}")
             continue
     
     # Create DataFrame with datetime index
     if networth_rows:
-        networth_df = pd.DataFrame(networth_rows)
-        networth_df.set_index('date', inplace=True)
-        networth_df.sort_index(inplace=True)
-        return networth_df
+        return (
+            pd.DataFrame.from_records(
+                networth_rows,
+                index='date',
+                columns=['date', 'cash', 'taxable', 'tax_deferred', 'tax_free', 'total']
+            )
+            .sort_index()
+        )
     else:
         # Return empty DataFrame with correct structure and datetime index
         return pd.DataFrame(

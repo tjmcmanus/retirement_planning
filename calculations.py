@@ -213,7 +213,7 @@ def getUpperIncomeRate(taxrate, year_tax_brackets_df):
         logger.warning(f"Tax rate {rate_to_query:.2%} not found in brackets")
         raise ValueError(f"Tax rate {rate_to_query} not found in tax brackets")
     
-    uppervalue = result['upper'].squeeze()
+    uppervalue = float(result['upper'].squeeze())
     logger.debug(f"Upper limit for rate {rate_to_query:.2%}: ${uppervalue:,.2f}")
     
     return uppervalue
@@ -434,74 +434,40 @@ def calculate_irmma_penalty(income, irmaa_range, people):
     
     return annual_penalty
 
-def calculate_cap_gains(income, cg_range, cg_income):
+def calculate_cap_gains(income: float, cg_range: pd.DataFrame, cg_income: float) -> float:
     """
     Calculate capital gains tax using progressive tax brackets.
-    
-    Capital gains are taxed at different rates depending on total AGI (income + cap gains).
-    This function applies progressive taxation across multiple brackets.
-    
+
+    Ordinary income fills the lower brackets first; capital gains are taxed on the
+    remainder. Uses interval-overlap vectorization across brackets.
+
     Args:
-        income: Ordinary income amount
-        cg_range: DataFrame with capital gains brackets containing 'lower', 'upper', 'rate' columns
-        cg_income: Capital gains income amount
-        
+        income:    Ordinary income amount (fills brackets from the bottom).
+        cg_range:  DataFrame with capital gains brackets ('lower', 'upper', 'rate' columns).
+        cg_income: Capital gains income amount.
+
     Returns:
-        float: Total capital gains tax owed
+        float: Total capital gains tax owed.
     """
-    # Early return if no capital gains
     if cg_income <= 0:
         logger.debug(f"No capital gains to tax (cg_income={cg_income})")
         return 0.0
-    
+
     agi = income + cg_income
-    total_tax = 0.0
-    remaining_cg = cg_income
-    
-    logger.debug(f"calculate_cap_gains: income=${income:,.2f}, cg_income=${cg_income:,.2f}, AGI=${agi:,.2f}")
-    
-    # Process each capital gains bracket
-    for lower, upper, rate in cg_range[['lower', 'upper', 'rate']].values:
-        # Skip if AGI is below this bracket
-        if agi < lower:
-            logger.debug(f"AGI ${agi:,.2f} below bracket [${lower:,.2f}-${upper:,.2f}], skipping")
-            continue
-        
-        # Calculate taxable amount in this bracket
-        if lower <= agi <= upper:
-            # AGI falls within this bracket
-            taxed_cg = agi - lower - income
-            taxed_cg = max(0, min(taxed_cg, remaining_cg))
-            bracket_tax = round(taxed_cg * rate, 0)
-            remaining_cg -= taxed_cg
-            
-            logger.debug(f"AGI in bracket [${lower:,.2f}-${upper:,.2f}]: taxed_cg=${taxed_cg:,.2f}, rate={rate:.2%}, tax=${bracket_tax:,.2f}")
-        
-        elif agi > upper:
-            # AGI exceeds this bracket
-            if income > upper:
-                # Ordinary income already exceeds bracket, no CG taxed here
-                logger.debug(f"Income ${income:,.2f} exceeds bracket upper ${upper:,.2f}, no CG taxed in this bracket")
-                continue
-            else:
-                # Tax the portion of CG that fits in this bracket
-                taxed_cg = upper - income
-                taxed_cg = max(0, min(taxed_cg, remaining_cg))
-                bracket_tax = round(taxed_cg * rate, 0)
-                remaining_cg -= taxed_cg
-                
-                logger.debug(f"AGI exceeds bracket [${lower:,.2f}-${upper:,.2f}]: taxed_cg=${taxed_cg:,.2f}, rate={rate:.2%}, tax=${bracket_tax:,.2f}")
-        else:
-            bracket_tax = 0
-        
-        total_tax += bracket_tax
-        
-        # Stop if all capital gains have been taxed
-        if remaining_cg <= 0:
-            logger.debug(f"All capital gains taxed, stopping")
-            break
-    
-    logger.debug(f"Total capital gains tax: ${total_tax:,.2f}")
+
+    lower = cg_range['lower'].to_numpy()
+    upper = cg_range['upper'].to_numpy()
+    rate  = cg_range['rate'].to_numpy()
+
+    # Tax the CG falling in the overlap of [income, agi] and each bracket [lower, upper]
+    taxed_cg    = np.maximum(0.0, np.minimum(agi, upper) - np.maximum(income, lower))
+    bracket_tax = np.round(taxed_cg * rate, 0)
+    total_tax   = float(bracket_tax.sum())
+
+    logger.debug(
+        f"calculate_cap_gains: income=${income:,.2f}, cg_income=${cg_income:,.2f}, "
+        f"AGI=${agi:,.2f} → total_tax=${total_tax:,.2f}"
+    )
     return total_tax
 
     
@@ -522,38 +488,31 @@ def calculate_taxable_income(income, tax_brackets_df):
             - max_rate: Highest tax rate that applies to this income
             - upper_max: Upper limit of the highest bracket that applies
     """
-    total_tax = 0.0
-    max_rate = 0.0
-    upper_max = 0.0
-    
     logger.debug(f"calculate_taxable_income: income=${income:,.2f}")
-    
-    # Process each tax bracket
-    for lower, upper, rate in tax_brackets_df[['lower', 'upper', 'rate']].values:
-        # Skip if income is below this bracket
-        if income < lower:
-            logger.debug(f"Income ${income:,.2f} below bracket [${lower:,.2f}-${upper:,.2f}], skipping")
-            continue
-        
-        # Calculate taxable amount in this bracket
-        taxable_in_bracket = min(income, upper) - lower
-        bracket_tax = round(taxable_in_bracket * rate, 0)
-        total_tax += bracket_tax
-        
-        # Track the highest rate and bracket that applies
-        if income >= lower:
-            max_rate = rate
-            upper_max = upper
-        
-        logger.debug(f"Bracket [${lower:,.2f}-${upper:,.2f}]: rate={rate:.2%}, taxable=${taxable_in_bracket:,.2f}, tax=${bracket_tax:,.2f}")
-        
-        # Stop if we've processed the bracket containing the income
-        if income <= upper:
-            logger.debug(f"Income ${income:,.2f} within bracket, stopping")
-            break
-    
-    logger.debug(f"Total tax: ${total_tax:,.2f}, max_rate={max_rate:.2%}, upper_max=${upper_max:,.2f}")
-    
+
+    lower = tax_brackets_df['lower'].to_numpy()
+    upper = tax_brackets_df['upper'].to_numpy()
+    rate  = tax_brackets_df['rate'].to_numpy()
+
+    # Vectorized bracket calculation: amount of income falling in each bracket
+    taxable_in_bracket = np.maximum(0.0, np.minimum(income, upper) - lower)
+    bracket_tax        = np.round(taxable_in_bracket * rate, 0)
+    total_tax          = float(bracket_tax.sum())
+
+    # Highest bracket that income reaches (taxable_in_bracket > 0)
+    active = taxable_in_bracket > 0
+    if active.any():
+        last      = int(np.where(active)[0][-1])
+        max_rate  = float(rate[last])
+        upper_max = float(upper[last])
+    else:
+        max_rate  = 0.0
+        upper_max = 0.0
+
+    logger.debug(
+        f"Total tax: ${total_tax:,.2f}, max_rate={max_rate:.2%}, "
+        f"upper_max=${upper_max:,.2f}"
+    )
     return total_tax, max_rate, upper_max
 
 def get_rmd_value(age):
@@ -572,7 +531,7 @@ def get_rmd_value(age):
     rmddf = load_rmd_data()
     
     # Filter for the specific age
-    age_data = rmddf[rmddf['Age'] == age]
+    age_data = pd.DataFrame(rmddf[rmddf['Age'] == age])
     
     if age_data.empty:
         logger.warning(f"Age {age} not found in RMD data, returning 0")

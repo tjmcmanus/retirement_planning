@@ -38,7 +38,7 @@ def get_age(year, name):
             logger.warning(f"No data found for person={name} in year={year}")
             raise ValueError(f"No data found for person '{name}' in year {year}")
         
-        age = person_data['claiming_age'].iloc[0]
+        age = person_data['age'].iloc[0]
         logger.debug(f"Retrieved age={age} for person={name} in year={year}")
         return age
         
@@ -62,7 +62,7 @@ def get_year(age, name):
     try:
         datadf = load_ssi_data()
         # Filter by age and person in one operation
-        person_data = datadf[(datadf['claiming_age'] == age) & (datadf['person'] == name)]
+        person_data = datadf[(datadf['age'] == age) & (datadf['person'] == name)]
         
         if person_data.empty:
             logger.warning(f"No data found for person={name} at age={age}")

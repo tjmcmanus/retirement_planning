@@ -330,7 +330,7 @@ def get_value_with_session_override(section: str, key: str, session_key: str, de
         import streamlit as st
         if session_key in st.session_state:
             return st.session_state[session_key]
-    except:
+    except (ImportError, AttributeError, KeyError):
         pass
     
     config_mgr = get_config_manager()
