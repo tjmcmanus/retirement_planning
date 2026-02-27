@@ -49,7 +49,6 @@ DEFAULT_CONFIG = {
         "aca_marketplace_enrolled": False,  # Whether enrolled in ACA marketplace (affects subsidy optimization)
     },
     "tax_strategy": {
-        "roth_conversion_at_ssi_age": 5000,
         "max_roth_conversion_tax_rate": 12,
         "daf_disbursement_rate": 25,
         "planned_distribution_2027": 75000,
@@ -311,6 +310,31 @@ def get_config_manager() -> ConfigManager:
     if _config_manager is None:
         _config_manager = ConfigManager()
     return _config_manager
+
+
+def get_value_with_session_override(section: str, key: str, session_key: str, default: Any = None) -> Any:
+    """
+    Get a configuration value with session state override.
+    Checks session state first, then falls back to config.py.
+    
+    Args:
+        section: Configuration section
+        key: Configuration key
+        session_key: Session state key to check first
+        default: Default value if not found in either location
+        
+    Returns:
+        Value from session state if present, otherwise from config, otherwise default
+    """
+    try:
+        import streamlit as st
+        if session_key in st.session_state:
+            return st.session_state[session_key]
+    except:
+        pass
+    
+    config_mgr = get_config_manager()
+    return config_mgr.get(section, key, default)
 
 
 def reload_config() -> None:

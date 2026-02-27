@@ -11,11 +11,35 @@ import os
 import shutil
 from config import get_config_manager, reload_config
 from portfolio_data_entry import validate_portfolio_dataframe, VALID_ACCOUNT_TYPES, VALID_SECTORS
+from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
 
 # Initialize configuration manager
 config_mgr = get_config_manager()
+
+
+def sync_config_to_session_state():
+    """
+    Sync configuration values to session state for sidebar compatibility.
+    This ensures that changes made in the configuration page are immediately
+    available to other parts of the application that read from session state.
+    """
+    # Map configuration to session state keys used by sidebar
+    config_to_session_mappings = {
+        "SSI_AGE": ("social_security", "person1_ssi_age"),
+        "CONV_TAX_RATE": ("tax_strategy", "max_roth_conversion_tax_rate"),
+        "EXPENSE": ("financial_assumptions", "expected_annual_expenses"),
+        "EXPENSE_MULTIPLIER": ("financial_assumptions", "years_of_expenses_in_cash"),
+        "RATE": ("financial_assumptions", "expected_rate_of_return"),
+        "DAF_RATE": ("tax_strategy", "daf_disbursement_rate"),
+        "PLANNED_DIST_2027": ("tax_strategy", "planned_distribution_2027"),
+    }
+    
+    for session_key, (section, config_key) in config_to_session_mappings.items():
+        value = config_mgr.get(section, config_key)
+        if value is not None:
+            st.session_state[session_key] = str(value)
 
 st.title("⚙️ Retirement Planning Configuration")
 st.markdown("Configure your personal information, financial assumptions, and planning parameters.")
@@ -30,6 +54,9 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Portfolio Data",
     "🔧 Advanced"
 ])
+
+# Sync configuration to session state on page load
+sync_config_to_session_state()
 
 # Track if any changes were made
 changes_made = False
@@ -228,76 +255,150 @@ with tab2:
 # Healthcare Tab
 with tab3:
     st.header("Healthcare Costs")
-    st.markdown("Configure healthcare insurance and Medicare assumptions.")
+    st.markdown("Configure healthcare insurance and Medicare assumptions for both people.")
+    
+    # ACA Marketplace enrollment (household level)
+    aca_marketplace_enrolled = st.checkbox(
+        "Enrolled in ACA Marketplace",
+        value=config_mgr.get("healthcare", "aca_marketplace_enrolled", False),
+        help="Check if you plan to purchase insurance from the ACA marketplace. This affects withdrawal strategy optimization for subsidy eligibility.",
+        key="aca_marketplace_enrolled"
+    )
+    
+    if aca_marketplace_enrolled:
+        st.info("💡 Withdrawal strategy will optimize income to maximize ACA subsidies (typically keeping MAGI below 400% FPL)")
+    
+    st.markdown("---")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("ACA Insurance (Pre-Medicare)")
+        st.subheader(f"{person1_name}'s Healthcare")
         
-        aca_marketplace_enrolled = st.checkbox(
-            "Enrolled in ACA Marketplace",
-            value=config_mgr.get("healthcare", "aca_marketplace_enrolled", False),
-            help="Check if you plan to purchase insurance from the ACA marketplace. This affects withdrawal strategy optimization for subsidy eligibility.",
-            key="aca_marketplace_enrolled"
-        )
-        
-        aca_insurance_monthly = st.number_input(
-            "Monthly ACA Insurance Premium ($)",
+        st.markdown("**ACA Insurance (Pre-Medicare)**")
+        person1_aca_insurance_monthly = st.number_input(
+            "Monthly ACA Premium ($)",
             min_value=0,
             max_value=5000,
-            value=config_mgr.get("healthcare", "aca_insurance_monthly", 0),
+            value=config_mgr.get("healthcare", "person1_aca_insurance_monthly", 0),
             step=50,
-            help="Monthly premium for ACA marketplace insurance (before subsidies)",
-            key="aca_insurance_monthly"
+            help=f"Monthly premium for {person1_name}'s ACA marketplace insurance (before subsidies)",
+            key="person1_aca_insurance_monthly"
         )
         
-        aca_start_age = st.number_input(
+        person1_aca_start_age = st.number_input(
             "ACA Coverage Start Age",
             min_value=50,
             max_value=65,
-            value=config_mgr.get("healthcare", "aca_start_age", 62),
-            help="Age when ACA coverage begins (typically at retirement)",
-            key="aca_start_age"
+            value=config_mgr.get("healthcare", "person1_aca_start_age",
+                                config_mgr.get("personal_info", "person1_retirement_age", 62)),
+            help=f"Age when {person1_name}'s ACA coverage begins (typically at retirement)",
+            key="person1_aca_start_age"
         )
         
-        aca_end_age = st.number_input(
+        person1_aca_end_age = st.number_input(
             "ACA Coverage End Age",
             min_value=60,
             max_value=70,
-            value=config_mgr.get("healthcare", "aca_end_age", 65),
-            help="Age when ACA coverage ends (typically when Medicare starts)",
-            key="aca_end_age"
+            value=config_mgr.get("healthcare", "person1_aca_end_age", 65),
+            help=f"Age when {person1_name}'s ACA coverage ends (typically when Medicare starts)",
+            key="person1_aca_end_age"
         )
         
-        if aca_marketplace_enrolled:
-            st.info("💡 Withdrawal strategy will optimize income to maximize ACA subsidies (typically keeping MAGI below 400% FPL)")
-    
-    with col2:
-        st.subheader("Medicare")
-        medicare_start_age = st.number_input(
+        st.markdown("**Medicare**")
+        person1_medicare_start_age = st.number_input(
             "Medicare Start Age",
             min_value=60,
             max_value=70,
-            value=config_mgr.get("healthcare", "medicare_start_age", 65),
-            help="Age when Medicare coverage begins",
-            key="medicare_start_age"
+            value=config_mgr.get("healthcare", "person1_medicare_start_age", 65),
+            help=f"Age when {person1_name}'s Medicare coverage begins",
+            key="person1_medicare_start_age"
         )
         
-        # Display calculated annual ACA cost
-        if aca_insurance_monthly > 0:
-            annual_aca_cost = aca_insurance_monthly * 12
-            years_on_aca = max(0, aca_end_age - aca_start_age)
-            total_aca_cost = annual_aca_cost * years_on_aca
+        # Display calculated costs for person1
+        if person1_aca_insurance_monthly > 0:
+            annual_aca_cost_1 = person1_aca_insurance_monthly * 12
+            years_on_aca_1 = max(0, person1_aca_end_age - person1_aca_start_age)
+            total_aca_cost_1 = annual_aca_cost_1 * years_on_aca_1
             
-            st.metric("Annual ACA Cost", f"${annual_aca_cost:,.0f}")
-            st.metric("Total ACA Cost", f"${total_aca_cost:,.0f}", 
-                     help=f"Total cost for {years_on_aca} years on ACA")
+            st.metric("Annual ACA Cost", f"${annual_aca_cost_1:,.0f}")
+            st.metric("Total ACA Cost", f"${total_aca_cost_1:,.0f}",
+                     help=f"Total cost for {years_on_aca_1} years on ACA")
+    
+    with col2:
+        st.subheader(f"{person2_name}'s Healthcare")
+        
+        st.markdown("**ACA Insurance (Pre-Medicare)**")
+        person2_aca_insurance_monthly = st.number_input(
+            "Monthly ACA Premium ($)",
+            min_value=0,
+            max_value=5000,
+            value=config_mgr.get("healthcare", "person2_aca_insurance_monthly", 0),
+            step=50,
+            help=f"Monthly premium for {person2_name}'s ACA marketplace insurance (before subsidies)",
+            key="person2_aca_insurance_monthly"
+        )
+        
+        person2_aca_start_age = st.number_input(
+            "ACA Coverage Start Age",
+            min_value=50,
+            max_value=65,
+            value=config_mgr.get("healthcare", "person2_aca_start_age",
+                                config_mgr.get("personal_info", "person2_retirement_age", 62)),
+            help=f"Age when {person2_name}'s ACA coverage begins (typically at retirement)",
+            key="person2_aca_start_age"
+        )
+        
+        person2_aca_end_age = st.number_input(
+            "ACA Coverage End Age",
+            min_value=60,
+            max_value=70,
+            value=config_mgr.get("healthcare", "person2_aca_end_age", 65),
+            help=f"Age when {person2_name}'s ACA coverage ends (typically when Medicare starts)",
+            key="person2_aca_end_age"
+        )
+        
+        st.markdown("**Medicare**")
+        person2_medicare_start_age = st.number_input(
+            "Medicare Start Age",
+            min_value=60,
+            max_value=70,
+            value=config_mgr.get("healthcare", "person2_medicare_start_age", 65),
+            help=f"Age when {person2_name}'s Medicare coverage begins",
+            key="person2_medicare_start_age"
+        )
+        
+        # Display calculated costs for person2
+        if person2_aca_insurance_monthly > 0:
+            annual_aca_cost_2 = person2_aca_insurance_monthly * 12
+            years_on_aca_2 = max(0, person2_aca_end_age - person2_aca_start_age)
+            total_aca_cost_2 = annual_aca_cost_2 * years_on_aca_2
+            
+            st.metric("Annual ACA Cost", f"${annual_aca_cost_2:,.0f}")
+            st.metric("Total ACA Cost", f"${total_aca_cost_2:,.0f}",
+                     help=f"Total cost for {years_on_aca_2} years on ACA")
+    
+    # Display combined household costs
+    if person1_aca_insurance_monthly > 0 or person2_aca_insurance_monthly > 0:
+        st.markdown("---")
+        st.subheader("Combined Household Healthcare Costs")
+        
+        col_health1, col_health2 = st.columns(2)
+        
+        with col_health1:
+            total_monthly_aca = person1_aca_insurance_monthly + person2_aca_insurance_monthly
+            st.metric("Total Monthly ACA Premium", f"${total_monthly_aca:,.0f}")
+        
+        with col_health2:
+            total_annual_aca = total_monthly_aca * 12
+            st.metric("Total Annual ACA Cost", f"${total_annual_aca:,.0f}")
 
 # Social Security Tab
 with tab4:
     st.header("Social Security Benefits")
     st.markdown("Configure when you plan to start collecting Social Security.")
+    
+    st.info("💡 **Important:** Enter your estimated benefit at **Full Retirement Age (67)**. The system will automatically adjust for early or delayed claiming.")
     
     col1, col2 = st.columns(2)
     
@@ -308,23 +409,36 @@ with tab4:
             min_value=62,
             max_value=70,
             value=config_mgr.get("social_security", "person1_ssi_age", 70),
-            help="Age when you plan to start collecting Social Security",
+            help="Age when you plan to start collecting Social Security (62-70)",
             key="person1_ssi_age"
         )
         
         person1_ssi_amount = st.number_input(
-            "Estimated Annual Benefit ($)",
+            "Monthly Benefit at Age 67 ($)",
             min_value=0,
-            max_value=100000,
+            max_value=10000,
             value=config_mgr.get("social_security", "person1_ssi_amount", 0),
-            step=1000,
-            help="Estimated annual Social Security benefit",
+            step=100,
+            help="Your estimated MONTHLY benefit at Full Retirement Age (67). The system will adjust for your claiming age.",
             key="person1_ssi_amount"
         )
         
         if person1_ssi_amount > 0:
-            monthly_benefit_1 = person1_ssi_amount / 12
-            st.info(f"Monthly Benefit: ${monthly_benefit_1:,.0f}")
+            # Calculate adjusted benefit based on claiming age
+            from ssi_calculator import calculate_benefit_at_claiming_age
+            adjusted_benefit = calculate_benefit_at_claiming_age(person1_ssi_amount, person1_ssi_age)
+            annual_benefit = adjusted_benefit * 12
+            
+            if person1_ssi_age < 67:
+                reduction_pct = ((adjusted_benefit / person1_ssi_amount) - 1) * 100
+                st.warning(f"📉 Early claiming at {person1_ssi_age}: ${adjusted_benefit:,.0f}/mo ({reduction_pct:.1f}%)")
+            elif person1_ssi_age > 67:
+                increase_pct = ((adjusted_benefit / person1_ssi_amount) - 1) * 100
+                st.success(f"📈 Delayed claiming at {person1_ssi_age}: ${adjusted_benefit:,.0f}/mo (+{increase_pct:.1f}%)")
+            else:
+                st.info(f"Monthly Benefit at FRA: ${adjusted_benefit:,.0f}/mo")
+            
+            st.metric("Annual Benefit", f"${annual_benefit:,.0f}")
     
     with col2:
         st.subheader(f"{person2_name}'s Social Security")
@@ -333,34 +447,57 @@ with tab4:
             min_value=62,
             max_value=70,
             value=config_mgr.get("social_security", "person2_ssi_age", 70),
-            help="Age when you plan to start collecting Social Security",
+            help="Age when you plan to start collecting Social Security (62-70)",
             key="person2_ssi_age"
         )
         
         person2_ssi_amount = st.number_input(
-            "Estimated Annual Benefit ($)",
+            "Monthly Benefit at Age 67 ($)",
             min_value=0,
-            max_value=100000,
+            max_value=10000,
             value=config_mgr.get("social_security", "person2_ssi_amount", 0),
-            step=1000,
-            help="Estimated annual Social Security benefit",
+            step=100,
+            help="Your estimated MONTHLY benefit at Full Retirement Age (67). The system will adjust for your claiming age.",
             key="person2_ssi_amount"
         )
         
         if person2_ssi_amount > 0:
-            monthly_benefit_2 = person2_ssi_amount / 12
-            st.info(f"Monthly Benefit: ${monthly_benefit_2:,.0f}")
+            # Calculate adjusted benefit based on claiming age
+            from ssi_calculator import calculate_benefit_at_claiming_age
+            adjusted_benefit = calculate_benefit_at_claiming_age(person2_ssi_amount, person2_ssi_age)
+            annual_benefit = adjusted_benefit * 12
+            
+            if person2_ssi_age < 67:
+                reduction_pct = ((adjusted_benefit / person2_ssi_amount) - 1) * 100
+                st.warning(f"📉 Early claiming at {person2_ssi_age}: ${adjusted_benefit:,.0f}/mo ({reduction_pct:.1f}%)")
+            elif person2_ssi_age > 67:
+                increase_pct = ((adjusted_benefit / person2_ssi_amount) - 1) * 100
+                st.success(f"📈 Delayed claiming at {person2_ssi_age}: ${adjusted_benefit:,.0f}/mo (+{increase_pct:.1f}%)")
+            else:
+                st.info(f"Monthly Benefit at FRA: ${adjusted_benefit:,.0f}/mo")
+            
+            st.metric("Annual Benefit", f"${annual_benefit:,.0f}")
     
     # Display combined benefits
     if person1_ssi_amount > 0 or person2_ssi_amount > 0:
+        st.markdown("---")
         st.subheader("Combined Benefits")
-        total_annual = person1_ssi_amount + person2_ssi_amount
-        total_monthly = total_annual / 12
+        
+        from ssi_calculator import calculate_benefit_at_claiming_age
+        
+        person1_adjusted = calculate_benefit_at_claiming_age(person1_ssi_amount, person1_ssi_age) if person1_ssi_amount > 0 else 0
+        person2_adjusted = calculate_benefit_at_claiming_age(person2_ssi_amount, person2_ssi_age) if person2_ssi_amount > 0 else 0
+        
+        total_monthly = person1_adjusted + person2_adjusted
+        total_annual = total_monthly * 12
+        
         col_a, col_b = st.columns(2)
         with col_a:
-            st.metric("Total Annual Benefits", f"${total_annual:,.0f}")
-        with col_b:
             st.metric("Total Monthly Benefits", f"${total_monthly:,.0f}")
+        with col_b:
+            st.metric("Total Annual Benefits", f"${total_annual:,.0f}")
+        
+        st.info("💡 These benefits will be automatically calculated with COLA adjustments in the withdrawal strategy.")
 
 # Tax Strategy Tab
 with tab5:
@@ -371,21 +508,13 @@ with tab5:
     
     with col1:
         st.subheader("Roth Conversions")
-        roth_conversion_at_ssi_age = st.number_input(
-            "Annual Roth Conversion at SSI Age ($)",
-            min_value=0,
-            max_value=100000,
-            value=config_mgr.get("tax_strategy", "roth_conversion_at_ssi_age", 5000),
-            step=1000,
-            help="Amount to convert to Roth annually when Social Security starts",
-            key="roth_conversion_at_ssi_age"
-        )
+        st.info("ℹ️ Roth conversions are now automatically optimized using the BETR (Better Efficient Tax Rate) algorithm based on your maximum tax rate preference.")
         
         max_roth_conversion_tax_rate = st.number_input(
             "Maximum Tax Rate for Conversions (%)",
             min_value=0,
             max_value=37,
-            value=config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12),
+            value=int(config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)),
             help="Maximum marginal tax rate you're willing to pay for Roth conversions",
             key="max_roth_conversion_tax_rate"
         )
@@ -410,6 +539,108 @@ with tab5:
             help="Specific planned distribution amount for 2027",
             key="planned_distribution_2027"
         )
+    
+    # Charitable Giving Section
+    st.markdown("---")
+    st.subheader("🎁 Charitable Giving")
+    st.markdown("Configure your charitable giving strategy and Donor Advised Fund (DAF) contributions.")
+    
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        st.markdown("**Annual Charitable Contributions**")
+        annual_charitable_giving = st.number_input(
+            "Annual Charitable Giving Goal ($)",
+            min_value=0,
+            max_value=1000000,
+            value=config_mgr.get("charitable_giving", "annual_charitable_giving", 0),
+            step=1000,
+            help="Your target annual charitable giving amount",
+            key="annual_charitable_giving"
+        )
+        
+        charitable_giving_start_age = st.number_input(
+            "Start Age for Charitable Giving",
+            min_value=50,
+            max_value=100,
+            value=config_mgr.get("charitable_giving", "charitable_giving_start_age", 65),
+            help="Age when you plan to start regular charitable giving",
+            key="charitable_giving_start_age"
+        )
+        
+        charitable_giving_inflation_rate = st.number_input(
+            "Charitable Giving Inflation Rate (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=config_mgr.get("charitable_giving", "charitable_giving_inflation_rate", 2.0),
+            step=0.1,
+            help="Expected annual increase in charitable giving",
+            key="charitable_giving_inflation_rate"
+        )
+    
+    with col4:
+        st.markdown("**Donor Advised Fund (DAF)**")
+        daf_initial_contribution = st.number_input(
+            "Initial DAF Contribution ($)",
+            min_value=0,
+            max_value=10000000,
+            value=config_mgr.get("charitable_giving", "daf_initial_contribution", 0),
+            step=5000,
+            help="One-time initial contribution to establish your DAF",
+            key="daf_initial_contribution"
+        )
+        
+        daf_annual_contribution = st.number_input(
+            "Annual DAF Contribution ($)",
+            min_value=0,
+            max_value=1000000,
+            value=config_mgr.get("charitable_giving", "daf_annual_contribution", 0),
+            step=1000,
+            help="Annual contribution to your DAF (in addition to initial contribution)",
+            key="daf_annual_contribution"
+        )
+        
+        daf_contribution_start_age = st.number_input(
+            "DAF Contribution Start Age",
+            min_value=50,
+            max_value=100,
+            value=config_mgr.get("charitable_giving", "daf_contribution_start_age", 60),
+            help="Age when you plan to start making annual DAF contributions",
+            key="daf_contribution_start_age"
+        )
+        
+        daf_contribution_end_age = st.number_input(
+            "DAF Contribution End Age",
+            min_value=50,
+            max_value=100,
+            value=config_mgr.get("charitable_giving", "daf_contribution_end_age", 75),
+            help="Age when you plan to stop making annual DAF contributions",
+            key="daf_contribution_end_age"
+        )
+    
+    # Display calculated charitable giving metrics
+    if annual_charitable_giving > 0 or daf_initial_contribution > 0 or daf_annual_contribution > 0:
+        st.markdown("---")
+        st.subheader("Charitable Giving Summary")
+        
+        col_char1, col_char2, col_char3 = st.columns(3)
+        
+        with col_char1:
+            st.metric("Annual Charitable Goal", f"${annual_charitable_giving:,.0f}")
+        
+        with col_char2:
+            total_daf_contributions = daf_initial_contribution + (daf_annual_contribution * max(0, daf_contribution_end_age - daf_contribution_start_age))
+            st.metric("Total DAF Contributions", f"${total_daf_contributions:,.0f}",
+                     help=f"Initial contribution plus annual contributions from age {daf_contribution_start_age} to {daf_contribution_end_age}")
+        
+        with col_char3:
+            # Calculate lifetime charitable giving (30 years from start age)
+            years_of_giving = 30
+            lifetime_giving = annual_charitable_giving * years_of_giving
+            st.metric("Projected Lifetime Giving", f"${lifetime_giving:,.0f}",
+                     help=f"Based on {years_of_giving} years of giving (not including inflation)")
+        
+        st.info("💡 **Tax Benefits:** Charitable contributions and DAF contributions may provide significant tax deductions. Consult with a tax advisor to optimize your giving strategy.")
 
 # Portfolio Data Tab
 with tab6:
@@ -672,11 +903,15 @@ with tab7:
             })
             
             config_mgr.update_section("healthcare", {
-                "aca_insurance_monthly": aca_insurance_monthly,
-                "aca_start_age": aca_start_age,
-                "aca_end_age": aca_end_age,
-                "medicare_start_age": medicare_start_age,
                 "aca_marketplace_enrolled": aca_marketplace_enrolled,
+                "person1_aca_insurance_monthly": person1_aca_insurance_monthly,
+                "person1_aca_start_age": person1_aca_start_age,
+                "person1_aca_end_age": person1_aca_end_age,
+                "person1_medicare_start_age": person1_medicare_start_age,
+                "person2_aca_insurance_monthly": person2_aca_insurance_monthly,
+                "person2_aca_start_age": person2_aca_start_age,
+                "person2_aca_end_age": person2_aca_end_age,
+                "person2_medicare_start_age": person2_medicare_start_age,
             })
             
             config_mgr.update_section("social_security", {
@@ -686,15 +921,59 @@ with tab7:
                 "person2_ssi_amount": person2_ssi_amount,
             })
             
+            config_mgr.update_section("income", {
+                "person1_annual_wages": person1_annual_wages,
+                "person2_annual_wages": person2_annual_wages,
+                "wage_inflation_rate": wage_inflation_rate,
+            })
+            
             config_mgr.update_section("tax_strategy", {
-                "roth_conversion_at_ssi_age": roth_conversion_at_ssi_age,
                 "max_roth_conversion_tax_rate": max_roth_conversion_tax_rate,
                 "daf_disbursement_rate": daf_disbursement_rate,
                 "planned_distribution_2027": planned_distribution_2027,
             })
             
+            config_mgr.update_section("charitable_giving", {
+                "annual_charitable_giving": annual_charitable_giving,
+                "charitable_giving_start_age": charitable_giving_start_age,
+                "charitable_giving_inflation_rate": charitable_giving_inflation_rate,
+                "daf_initial_contribution": daf_initial_contribution,
+                "daf_annual_contribution": daf_annual_contribution,
+                "daf_contribution_start_age": daf_contribution_start_age,
+                "daf_contribution_end_age": daf_contribution_end_age,
+            })
+            
             if config_mgr.save_config():
+                # Sync configuration to session state for sidebar compatibility
+                sync_config_to_session_state()
                 st.success("✅ Configuration saved successfully!")
+                
+                # Generate SSI schedule if SSI amounts are configured
+                if person1_ssi_amount > 0 or person2_ssi_amount > 0:
+                    try:
+                        with st.spinner("Generating SSI schedule..."):
+                            # Generate schedule from current year to 30 years out
+                            from datetime import datetime
+                            start_year = datetime.now().year
+                            end_year = start_year + 30
+                            
+                            ssi_schedule = generate_ssi_schedule_from_config(
+                                config_manager=config_mgr,
+                                start_year=start_year,
+                                end_year=end_year,
+                                cola_rate=0.02  # 2% COLA
+                            )
+                            
+                            if not ssi_schedule.empty:
+                                export_ssi_schedule_to_csv(ssi_schedule, "ssincome.csv")
+                                st.success(f"✅ Generated SSI schedule for {start_year}-{end_year} → ssincome.csv")
+                                st.info(f"📊 Schedule contains {len(ssi_schedule)} rows covering both persons")
+                            else:
+                                st.warning("⚠️ No SSI schedule generated (check that SSI amounts are > 0)")
+                    except Exception as e:
+                        st.error(f"❌ Error generating SSI schedule: {e}")
+                        st.info("💡 You can manually generate the schedule using: python generate_ssi_schedule.py")
+                
                 st.balloons()
             else:
                 st.error("❌ Error saving configuration. Please try again.")

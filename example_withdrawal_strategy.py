@@ -23,6 +23,55 @@ from withdrawal_strategy import (
 import pandas as pd
 
 
+def _print_portfolio_balances(balances: PortfolioBalances, title: str = "Portfolio") -> None:
+    """Print formatted portfolio balance details.
+    
+    Args:
+        balances: PortfolioBalances object containing account balances
+        title: Title to display above the balance details
+    """
+    print(f"\n{title}:")
+    print(f"  Cash: ${balances.cash:,.0f}")
+    print(f"  Taxable: ${balances.taxable:,.0f}")
+    print(f"  Traditional: ${balances.traditional:,.0f}")
+    print(f"  Roth: ${balances.roth:,.0f}")
+    print(f"  DAF: ${balances.daf:,.0f}")
+    print(f"  Total: ${balances.total():,.0f}")
+
+
+def _print_portfolio_evolution(strategy_df: pd.DataFrame, years: list[int]) -> None:
+    """Print portfolio values at specific milestone years.
+    
+    Args:
+        strategy_df: DataFrame containing withdrawal strategy data
+        years: List of years to display portfolio values for
+    """
+    print(f"\n📊 Portfolio Evolution:")
+    for year in years:
+        year_data = strategy_df.loc[strategy_df['Year'] == year]
+        if not year_data.empty:
+            total = year_data['Total Portfolio'].iloc[0]
+            print(f"   Year {year}: ${total:,.0f}")
+
+
+def _calculate_roth_percentage(strategy_df: pd.DataFrame, year: int) -> float:
+    """Calculate Roth balance as percentage of total portfolio for a given year.
+    
+    Args:
+        strategy_df: DataFrame containing withdrawal strategy data
+        year: Year to calculate Roth percentage for
+        
+    Returns:
+        Roth balance as percentage of total portfolio (0.0 if year not found)
+    """
+    year_data = strategy_df.loc[strategy_df['Year'] == year]
+    if year_data.empty:
+        return 0.0
+    roth = year_data['Roth Balance'].iloc[0]
+    total = year_data['Total Portfolio'].iloc[0]
+    return (roth / total * 100) if total > 0 else 0.0
+
+
 def example_1_basic_strategy():
     """Example 1: Basic withdrawal strategy from 2026-2051"""
     print("\n" + "="*80)
@@ -74,13 +123,13 @@ def example_2_early_retirement():
     scenario = create_example_scenario("early_retire")
     
     print(f"\nScenario Details:")
-    print(f"  Initial Portfolio: ${scenario['initial_balances'].total():,.0f}")
-    print(f"  Annual Expenses: ${scenario['initial_expenses']:,.0f}")
-    print(f"  SS Claiming Age: {scenario['ss_claiming_age']}")
-    print(f"  Growth Rate: {(scenario['growth_rate']-1)*100:.1f}%")
+    print(f"  Initial Portfolio: ${scenario.initial_balances.total():,.0f}")
+    print(f"  Annual Expenses: ${scenario.initial_expenses:,.0f}")
+    print(f"  SS Claiming Age: {scenario.ss_claiming_age}")
+    print(f"  Growth Rate: {(scenario.growth_rate-1)*100:.1f}%")
     
     # Calculate strategy
-    strategy_df, balances_df = build_withdrawal_strategy_display(**scenario)
+    strategy_df, balances_df = build_withdrawal_strategy_display(**scenario.to_dict())
     
     # Analyze Roth conversion opportunities
     conversion_years = strategy_df[strategy_df['Roth Conversion'] > 0]
@@ -112,11 +161,11 @@ def example_3_high_income():
     scenario = create_example_scenario("high_income")
     
     print(f"\nScenario Details:")
-    print(f"  Initial Portfolio: ${scenario['initial_balances'].total():,.0f}")
-    print(f"  Traditional IRA: ${scenario['initial_balances'].traditional:,.0f}")
-    print(f"  Annual Expenses: ${scenario['initial_expenses']:,.0f}")
+    print(f"  Initial Portfolio: ${scenario.initial_balances.total():,.0f}")
+    print(f"  Traditional IRA: ${scenario.initial_balances.traditional:,.0f}")
+    print(f"  Annual Expenses: ${scenario.initial_expenses:,.0f}")
     
-    strategy_df, balances_df = build_withdrawal_strategy_display(**scenario)
+    strategy_df, balances_df = build_withdrawal_strategy_display(**scenario.to_dict())
     
     # Analyze IRMAA impact
     irmaa_years = strategy_df[strategy_df['IRMAA Penalty'] > 0]
@@ -143,8 +192,19 @@ def example_3_high_income():
     return strategy_df, balances_df
 
 
-def example_4_custom_scenario():
-    """Example 4: Custom scenario with specific parameters"""
+def example_4_custom_scenario() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Example 4: Custom scenario with specific parameters
+    
+    Demonstrates a custom retirement scenario with:
+    - Large traditional IRA ($5.5M) requiring strategic Roth conversions
+    - Substantial taxable account ($1.25M) for tax-efficient withdrawals
+    - Delayed Social Security claiming (age 70) for maximum benefits
+    - Conservative growth assumptions (6% annual return)
+    - 20-year planning horizon (2026-2045)
+    
+    Returns:
+        tuple: (strategy_df, balances_df) containing withdrawal strategy and balance evolution
+    """
     print("\n" + "="*80)
     print("EXAMPLE 4: Custom Scenario")
     print("="*80)
@@ -158,13 +218,7 @@ def example_4_custom_scenario():
         daf=25000
     )
     
-    print(f"\nCustom Portfolio:")
-    print(f"  Cash: ${custom_balances.cash:,.0f}")
-    print(f"  Taxable: ${custom_balances.taxable:,.0f}")
-    print(f"  Traditional: ${custom_balances.traditional:,.0f}")
-    print(f"  Roth: ${custom_balances.roth:,.0f}")
-    print(f"  DAF: ${custom_balances.daf:,.0f}")
-    print(f"  Total: ${custom_balances.total():,.0f}")
+    _print_portfolio_balances(custom_balances, "Custom Portfolio")
     
     # Calculate with custom parameters
     strategy_df, balances_df = build_withdrawal_strategy_display(
@@ -181,15 +235,12 @@ def example_4_custom_scenario():
         has_wages=False
     )
     
-    # Show portfolio evolution
-    print(f"\n📊 Portfolio Evolution:")
-    print(f"   Year 2026: ${strategy_df.iloc[0]['Total Portfolio']:,.0f}")
-    print(f"   Year 2035: ${strategy_df.iloc[9]['Total Portfolio']:,.0f}")
-    print(f"   Year 2045: ${strategy_df.iloc[-1]['Total Portfolio']:,.0f}")
+    # Show portfolio evolution at key milestones
+    _print_portfolio_evolution(strategy_df, [2026, 2035, 2045])
     
     # Roth percentage over time
-    roth_pct_start = (strategy_df.iloc[0]['Roth Balance'] / strategy_df.iloc[0]['Total Portfolio'] * 100)
-    roth_pct_end = (strategy_df.iloc[-1]['Roth Balance'] / strategy_df.iloc[-1]['Total Portfolio'] * 100)
+    roth_pct_start = _calculate_roth_percentage(strategy_df, 2026)
+    roth_pct_end = _calculate_roth_percentage(strategy_df, 2045)
     
     print(f"\n💰 Roth Conversion Impact:")
     print(f"   Starting Roth %: {roth_pct_start:.1f}%")
@@ -200,66 +251,100 @@ def example_4_custom_scenario():
     print("\n✅ Results saved to example4_custom.csv")
     
     return strategy_df, balances_df
+    return strategy_df, balances_df
 
 
-def compare_scenarios():
-    """Compare different scenarios side-by-side"""
+# Comparison metric configuration: (display_name, summary_key, formatter_function)
+COMPARISON_METRICS = [
+    ('Initial Portfolio', 'initial_portfolio_value', lambda v: f"${v:,.0f}"),
+    ('Final Portfolio', 'final_portfolio_value', lambda v: f"${v:,.0f}"),
+    ('Portfolio Growth', 'portfolio_growth', lambda v: f"${v:,.0f}"),
+    ('Total Roth Conversions', 'total_roth_conversions', lambda v: f"${v:,.0f}"),
+    ('Total Taxes Paid', 'total_taxes_paid', lambda v: f"${v:,.0f}"),
+    ('Total IRMAA', 'total_irmaa_penalties', lambda v: f"${v:,.0f}"),
+    ('Final Roth %', 'roth_percentage_final', lambda v: f"{v:.1f}%")
+]
+
+# Scenario display name mapping
+SCENARIO_DISPLAY_NAMES = {
+    'default': 'Default',
+    'early_retire': 'Early Retire',
+    'high_income': 'High Income'
+}
+
+
+def _collect_scenario_results(scenarios: list) -> dict:
+    """Collect summary results for all scenarios.
+    
+    Args:
+        scenarios: List of scenario names to process
+        
+    Returns:
+        Dictionary mapping scenario names to their summary results
+    """
+    results = {}
+    for scenario_name in scenarios:
+        scenario = create_example_scenario(scenario_name)
+        strategy_df, _ = build_withdrawal_strategy_display(**scenario.to_dict())
+        summary = generate_strategy_summary(strategy_df)
+        results[scenario_name] = summary
+    return results
+
+
+def _build_comparison_dataframe(results: dict, scenarios: list) -> pd.DataFrame:
+    """Build comparison DataFrame from scenario results.
+    
+    Args:
+        results: Dictionary of scenario summaries
+        scenarios: List of scenario names in desired order
+        
+    Returns:
+        DataFrame with formatted comparison data
+    """
+    data = {'Metric': [metric[0] for metric in COMPARISON_METRICS]}
+    
+    for scenario_name in scenarios:
+        display_name = SCENARIO_DISPLAY_NAMES.get(scenario_name) or scenario_name.title()
+        data[display_name] = [
+            formatter(results[scenario_name][key])
+            for _, key, formatter in COMPARISON_METRICS
+        ]
+    
+    return pd.DataFrame(data)
+
+
+def _print_comparison_header():
+    """Print comparison section header."""
     print("\n" + "="*80)
     print("SCENARIO COMPARISON")
     print("="*80)
+
+
+def _print_comparison_table(comparison_df: pd.DataFrame):
+    """Print formatted comparison table.
+    
+    Args:
+        comparison_df: DataFrame containing comparison data
+    """
+    print("\n")
+    print(comparison_df.to_string(index=False))
+    print("\n")
+
+
+def compare_scenarios():
+    """Compare different scenarios side-by-side.
+    
+    Generates a comparison table showing key metrics across multiple
+    retirement scenarios including portfolio values, conversions, taxes,
+    and IRMAA penalties.
+    """
+    _print_comparison_header()
     
     scenarios = ["default", "early_retire", "high_income"]
-    results = {}
+    results = _collect_scenario_results(scenarios)
+    comparison_df = _build_comparison_dataframe(results, scenarios)
     
-    for scenario_name in scenarios:
-        scenario = create_example_scenario(scenario_name)
-        strategy_df, _ = build_withdrawal_strategy_display(**scenario)
-        summary = generate_strategy_summary(strategy_df)
-        results[scenario_name] = summary
-    
-    # Create comparison table
-    comparison = pd.DataFrame({
-        'Metric': [
-            'Initial Portfolio',
-            'Final Portfolio',
-            'Portfolio Growth',
-            'Total Roth Conversions',
-            'Total Taxes Paid',
-            'Total IRMAA',
-            'Final Roth %'
-        ],
-        'Default': [
-            f"${results['default']['initial_portfolio_value']:,.0f}",
-            f"${results['default']['final_portfolio_value']:,.0f}",
-            f"${results['default']['portfolio_growth']:,.0f}",
-            f"${results['default']['total_roth_conversions']:,.0f}",
-            f"${results['default']['total_taxes_paid']:,.0f}",
-            f"${results['default']['total_irmaa_penalties']:,.0f}",
-            f"{results['default']['roth_percentage_final']:.1f}%"
-        ],
-        'Early Retire': [
-            f"${results['early_retire']['initial_portfolio_value']:,.0f}",
-            f"${results['early_retire']['final_portfolio_value']:,.0f}",
-            f"${results['early_retire']['portfolio_growth']:,.0f}",
-            f"${results['early_retire']['total_roth_conversions']:,.0f}",
-            f"${results['early_retire']['total_taxes_paid']:,.0f}",
-            f"${results['early_retire']['total_irmaa_penalties']:,.0f}",
-            f"{results['early_retire']['roth_percentage_final']:.1f}%"
-        ],
-        'High Income': [
-            f"${results['high_income']['initial_portfolio_value']:,.0f}",
-            f"${results['high_income']['final_portfolio_value']:,.0f}",
-            f"${results['high_income']['portfolio_growth']:,.0f}",
-            f"${results['high_income']['total_roth_conversions']:,.0f}",
-            f"${results['high_income']['total_taxes_paid']:,.0f}",
-            f"${results['high_income']['total_irmaa_penalties']:,.0f}",
-            f"{results['high_income']['roth_percentage_final']:.1f}%"
-        ]
-    })
-    
-    print("\n")
-    print(comparison.to_string(index=False))
-    print("\n")
+    _print_comparison_table(comparison_df)
 
 
 def main():

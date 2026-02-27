@@ -65,12 +65,12 @@ def build_historical_networth(num_months=12):
         pd.DataFrame: Historical net worth with datetime index and columns:
                      cash, taxable, tax_deferred, tax_free, total
     """
-    # Generate date range using pandas date_range (more efficient and reliable)
+    # Generate date range using pandas date_range
     end_date = pd.Timestamp.today().normalize()
     start_date = end_date - pd.DateOffset(months=num_months - 1)
     date_range = pd.date_range(start=start_date, end=end_date, freq='MS')
     
-    # Account type mapping for cleaner aggregation
+    # ACCOUNT_TYPE_MAP for cleaner aggregation
     ACCOUNT_TYPE_MAP = {
         'Cash': 'cash',
         'Brokerage': 'taxable',
@@ -107,7 +107,7 @@ def build_historical_networth(num_months=12):
             networth_rows.append(row_data)
             
         except (ValueError, RuntimeError) as e:
-            # Only catch expected exceptions from get_networth_by_month
+            # Catch expected exceptions from data processing
             st.warning(f"Could not fetch data for {date.strftime('%m/%Y')}: {e}")
             continue
     
@@ -812,17 +812,15 @@ with tab5:
     # Get parameters from session state (set by sidebar)
     try:
         ssi_age = int(st.session_state.get("SSI_AGE", 70))
-        conv_amount_at_ssi = float(st.session_state.get("CONV_AMOUNT_AT_SSI_AGE", 5000))
         conv_tax_rate = float(st.session_state.get("CONV_TAX_RATE", 12))
         annual_expenses = float(st.session_state.get("EXPENSE", 50000))
-        expense_multiplier = float(st.session_state.get("EXPENSE_MULITPLIER", 4))
+        expense_multiplier = float(st.session_state.get("EXPENSE_MULTIPLIER", 4))
         rate_of_return = float(st.session_state.get("RATE", 6)) / 100
         daf_rate = float(st.session_state.get("DAF_RATE", 25)) / 100
         planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", 5000))
     except (ValueError, TypeError) as e:
         st.error(f"Error reading sidebar parameters: {e}. Using default values.")
         ssi_age = 70
-        conv_amount_at_ssi = 5000
         conv_tax_rate = 12
         annual_expenses = 50000
         expense_multiplier = 4
@@ -837,7 +835,7 @@ with tab5:
         st.metric("Social Security Age", ssi_age)
         st.metric("Annual Expenses", f"${annual_expenses:,.0f}")
     with param_col2:
-        st.metric("Roth Conv @ SSI Age", f"${conv_amount_at_ssi:,.0f}")
+        st.metric("Max Roth Conv Tax Rate", f"{conv_tax_rate}%")
         st.metric("Expense Multiplier", f"{expense_multiplier}x")
     with param_col3:
         st.metric("Max Conv Tax Rate", f"{conv_tax_rate}%")
@@ -864,13 +862,19 @@ with tab5:
         expense_inflation_rate = config_mgr.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100.0
         
         with st.spinner("Calculating withdrawal strategy..."):
+            # Get person names from config
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+            person1_name = config_mgr.get("personal_info", "person1_name", "Person1")
+            person2_name = config_mgr.get("personal_info", "person2_name", "Person2")
+            
             strategy_df, balances_df = build_withdrawal_strategy_display(
                 start_year=curr_year,
                 end_year=2050,
                 growth_rate=1 + rate_of_return,
                 expense_inflation_rate=expense_inflation_rate,
-                person1_name="Tom",
-                person2_name="Sarah",
+                person1_name=person1_name,
+                person2_name=person2_name,
                 max_conversion_rate=max_conversion_rate,
                 aca_optimize=aca_marketplace_enrolled,
                 ss_claiming_age=ssi_age
@@ -882,23 +886,56 @@ with tab5:
         with strategy_tab:
             st.subheader("Year-by-Year Withdrawal Strategy")
             
-            # Format the strategy dataframe for display
-            # Order: Wages, SS Benefits, RMD, Traditional Withdrawal, Roth Conversion, Expenses, IRMAA, Taxes, Cash Balance
+            # Create a copy of strategy_df to add Cash Start column
+            display_df = strategy_df.copy()
+            
+            # Get actual current cash balance from portfolio data for first year
+            try:
+                _, summary_df = get_networth_by_month(curr_month, curr_year)
+                if not summary_df.empty:
+                    actual_cash_start = float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum())
+                else:
+                    # Fallback to first year's ending balance if no portfolio data
+                    actual_cash_start = display_df.loc[display_df.index[0], 'Cash Balance']
+            except Exception as e:
+                st.warning(f"Could not load current cash balance: {e}")
+                actual_cash_start = display_df.loc[display_df.index[0], 'Cash Balance']
+            
+            # Calculate Cash Start (previous year's Cash Balance)
+            # For first year, use actual current cash balance from portfolio
+            # For subsequent years, use previous year's ending Cash Balance
+            display_df['Cash Start'] = display_df['Cash Balance'].shift(1)
+            display_df.loc[display_df.index[0], 'Cash Start'] = actual_cash_start
+            
+            # Define columns to display (excluding balance columns except Cash Balance)
             display_cols = [
                 'Year', 'Age', 'Stage',
+                # Cash positions
+                'Cash Start',
+                # Income sources
                 'Wages',
                 'SS Benefits',
                 'RMD',
-                'Traditional Withdrawal',
-                'Roth Conversion',
+                # Account movements (fund transfers)
+                'Trad→\nCash',
+                'Trad→\nBrok',
+                'Trad→\nRoth',
+                'Brok→\nCash',
+                'Roth→\nCash',
+                # Expenses and costs
                 'Expenses',
                 'IRMAA Penalty',
+                'ACA Premium',
+                'DAF Contribution',
+                'AGI',
+                'MAGI',
                 'Federal Tax',
+                # Cash ending position
                 'Cash Balance'
             ]
             
-            available_cols = [col for col in display_cols if col in strategy_df.columns]
-            display_df = strategy_df[available_cols].copy()
+            available_cols = [col for col in display_cols if col in display_df.columns]
+            display_df = display_df[available_cols].copy()
             
             # Format numeric columns: show 2 decimals only if not a whole number
             def format_currency(val):
@@ -910,30 +947,51 @@ with tab5:
                 else:
                     return f"${val:,.2f}"
             
-            # Apply formatting to numeric columns (excluding Year, Age, Stage)
-            numeric_cols = ['Wages', 'SS Benefits', 'RMD', 'Traditional Withdrawal', 'Roth Conversion',
-                          'Expenses', 'IRMAA Penalty', 'Federal Tax', 'Cash Balance']
+            # Apply formatting to all numeric columns (excluding Year, Age, Stage)
+            numeric_cols = [col for col in available_cols if col not in ['Year', 'Age', 'Stage']]
             for col in numeric_cols:
                 if col in display_df.columns:
                     display_df[col] = display_df[col].apply(format_currency)
             
-            # Configure column formatting (now treating formatted columns as text)
+            # Configure column formatting with wrapped headers for account movements
             column_config = {
                 "Year": st.column_config.NumberColumn("Year", format="%d"),
                 "Age": st.column_config.TextColumn("Age"),
                 "Stage": st.column_config.TextColumn("Life Stage"),
+                # Cash positions
+                "Cash Start": st.column_config.TextColumn("Cash Start"),
+                # Income sources
                 "Wages": st.column_config.TextColumn("Wages"),
                 "SS Benefits": st.column_config.TextColumn("Social Security"),
-                "RMD": st.column_config.TextColumn("Required Minimum Distribution"),
-                "Traditional Withdrawal": st.column_config.TextColumn("Traditional Withdrawal"),
-                "Roth Conversion": st.column_config.TextColumn("Roth Conversion"),
+                "RMD": st.column_config.TextColumn("RMD"),
+                "Traditional Withdrawal": st.column_config.TextColumn("Trad Withdrawal"),
+                "Roth Conversion": st.column_config.TextColumn("Roth Conv"),
+                # Account movements (compact headers)
+                "Trad→\nCash": st.column_config.TextColumn("Trad→Cash"),
+                "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok"),
+                "Trad→\nRoth": st.column_config.TextColumn("Trad→Roth"),
+                "Brok→\nCash": st.column_config.TextColumn("Brok→Cash"),
+                "Roth→\nCash": st.column_config.TextColumn("Roth→Cash"),
+                "Roth→\nBrok": st.column_config.TextColumn("Roth→Brok"),
+                "Cash\nReplen": st.column_config.TextColumn("Cash Replen"),
+                "Brok\nReplen": st.column_config.TextColumn("Brok Replen"),
+                # Expenses and costs
                 "Expenses": st.column_config.TextColumn("Expenses"),
-                "IRMAA Penalty": st.column_config.TextColumn("Medicare (IRMAA)"),
-                "Federal Tax": st.column_config.TextColumn("Taxes"),
-                "Cash Balance": st.column_config.TextColumn("Cash Drawdown")
+                "IRMAA Penalty": st.column_config.TextColumn("IRMAA"),
+                "ACA Premium": st.column_config.TextColumn("ACA"),
+                "DAF Contribution": st.column_config.TextColumn("DAF Contrib"),
+                "AGI": st.column_config.TextColumn("AGI"),
+                "MAGI": st.column_config.TextColumn("MAGI"),
+                "Federal Tax": st.column_config.TextColumn("Fed Tax"),
+                # Additional details
+                "Taxable Withdrawal": st.column_config.TextColumn("Taxable Wdraw"),
+                "Roth Withdrawal": st.column_config.TextColumn("Roth Wdraw"),
+                "LTCG Harvested": st.column_config.TextColumn("LTCG"),
+                # Cash ending position
+                "Cash Balance": st.column_config.TextColumn("Cash End")
             }
             
-            st.dataframe(display_df, column_config=column_config, hide_index=True, width='stretch')
+            st.dataframe(display_df, column_config=column_config, hide_index=True, use_container_width=True)
         
         with balances_tab:
             st.subheader("Account Balances Over Time")

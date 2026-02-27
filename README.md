@@ -175,6 +175,8 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed configuration instructions
 
 #### Setup
 
+**Linux/Mac:**
+
 1. Clone or download this repository:
 ```bash
 cd retirement_planning
@@ -183,13 +185,42 @@ cd retirement_planning
 2. Create a virtual environment (recommended):
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 ```
 
 3. Install required dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
+**Windows:**
+
+⚠️ **Note:** Windows support is provided via `run.bat` but has not been tested. Please report any issues.
+
+1. Clone or download this repository:
+```cmd
+cd retirement_planning
+```
+
+2. Create a virtual environment (recommended):
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+3. Install required dependencies:
+```cmd
+pip install -r requirements.txt
+```
+
+**Windows-Specific Notes:**
+- Ensure Python is added to your PATH during installation
+- You may need to run Command Prompt or PowerShell as Administrator
+- If you encounter execution policy errors in PowerShell, run:
+  ```powershell
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+  ```
+- The `run.bat` script handles most setup automatically
 
 ### Quick Start with Run Scripts
 
@@ -300,16 +331,44 @@ The following files are **no longer used** by the application but sample files r
 ## Running the Application
 
 ### Method 1: Using the Run Script (Recommended)
+
+**Linux/Mac:**
 ```bash
 ./run.sh
 ```
 
-### Method 2: Manual Start
+**Windows:**
+```cmd
+run.bat
+```
+
+⚠️ **Windows Note:** The `run.bat` script has not been tested on Windows. If you encounter issues, please use Method 2 (Manual Start) below and report any problems.
+
+The run script will:
+- Check for Python installation
+- Create/activate virtual environment
+- Install dependencies
+- Verify required files
+- Start the Streamlit application
+
+### Method 2: Manual Start (Recommended for Windows)
 1. Ensure all required CSV files are in place (use sample files if needed)
 
 2. Activate virtual environment:
+
+**Linux/Mac:**
 ```bash
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
+```
+
+**Windows (Command Prompt):**
+```cmd
+.venv\Scripts\activate
+```
+
+**Windows (PowerShell):**
+```powershell
+.venv\Scripts\Activate.ps1
 ```
 
 3. Start the Streamlit application:
@@ -318,6 +377,11 @@ streamlit run planning_app.py
 ```
 
 4. The application will open in your default web browser at `http://localhost:8501`
+
+**Windows Troubleshooting:**
+- If `streamlit` command is not found, try: `python -m streamlit run planning_app.py`
+- If you get permission errors, run Command Prompt as Administrator
+- If PowerShell blocks script execution, see installation notes above for execution policy
 
 ## Configuration
 
@@ -357,21 +421,22 @@ The sidebar still provides quick access to key parameters (see [`components/side
 retirement_planning/
 ├── planning_app.py                    # Main Streamlit application
 ├── config.py                          # Configuration management system
-├── portfolio_data_entry.py            # Portfolio data validation
+├── portfolio_data_entry.py            # Portfolio data entry and validation
 ├── withdrawal_strategy.py             # 5-stage withdrawal strategy engine
-├── betr_roth_conversion.py            # BETR Roth conversion algorithm (NEW)
+├── betr_roth_conversion.py            # BETR Roth conversion algorithm
+├── ssi_calculator.py                  # Dynamic SSI benefit calculator
+├── generate_ssi_schedule.py           # SSI schedule generation script
 ├── example_withdrawal_strategy.py     # Example scenarios and runner
-├── test_withdrawal_strategy.py        # Test suite for withdrawal module
+├── income_expense.py                  # Income/expense projections with RMD
 ├── calculations.py                    # Tax calculation functions (with logging)
-├── income_expense.py                  # Income/expense projections
 ├── load_data.py                       # Data loading utilities
 ├── portfolio.py                       # Portfolio management functions
-├── ssibenefits.py                     # Social Security calculations
-├── editable_table.py                  # Standalone table editor
+├── ssibenefits.py                     # Social Security benefit lookups
+├── editable_table.py                  # Standalone table editor demo
 ├── components/
 │   └── sidebar.py                     # Sidebar configuration
 ├── pages/
-│   ├── configuration.py               # Configuration page (NEW)
+│   ├── configuration.py               # Configuration page
 │   ├── calculators.py                 # Additional calculator pages
 │   └── flow_of_funds.py               # Cash flow analysis
 ├── .streamlit/
@@ -381,17 +446,95 @@ retirement_planning/
 ├── run_strategy.sh                    # Withdrawal strategy runner
 ├── README.md                          # This file (main documentation)
 ├── CONFIG_GUIDE.md                    # Configuration system guide
-├── BETR_GUIDE.md                      # BETR Roth conversion guide (NEW)
+├── BETR_GUIDE.md                      # BETR Roth conversion guide
+├── SSI_CALCULATOR_GUIDE.md            # SSI calculator documentation
+├── SSI_INTEGRATION_GUIDE.md           # SSI integration with withdrawal strategy
 ├── WITHDRAWAL_STRATEGY_README.md      # Withdrawal strategy documentation
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation details
+├── ACCOUNT_REBALANCING_IMPLEMENTATION.md  # Account rebalancing feature
+├── BETR_CORRECTION_NOTES.md           # BETR algorithm corrections
 ├── ERRORS_FOUND.md                    # Bug fixes and code analysis
 ├── LOGGING_GUIDE.md                   # Debug logging guide
+├── DOCUMENTATION_REVIEW_SUMMARY.md    # Documentation review and gaps
 ├── retirement_config.json             # Configuration file (auto-created)
 ├── portfolio_data_truth.csv           # Portfolio holdings data
 ├── portfolio_data_truth_*.csv         # Timestamped backups
 ├── *.csv                              # Tax reference data files
-└── example*.csv                       # Generated strategy outputs
+├── example*.csv                       # Generated strategy outputs
+└── test_*.py                          # Test suites for various modules
 ```
+
+### Income & Expense Projections ([`income_expense.py`](income_expense.py))
+**Purpose:** Multi-year income and expense projections with portfolio tracking
+
+**Key Functions:**
+- `build_income_expenses_display()` - Generate 25-year income/expense projections
+- `calculate_taxes()` - Calculate federal taxes for a given year
+- `_calculate_year_distributions()` - Determine planned distributions and conversions
+- `_calculate_rmd_and_update_trad()` - Calculate RMDs and update Traditional IRA balance
+- `_load_portfolio_data()` - Load current portfolio data with error handling
+
+**Features:**
+- Integrates with SSI calculator for dynamic benefit calculations
+- Tracks portfolio balances across all account types
+- Calculates RMDs based on age and IRS tables
+- Projects expenses with inflation adjustments
+- Generates comprehensive income/expense DataFrames
+
+**Integration:**
+- Uses [`config.py`](config.py) for personal and financial settings
+- Calls `ssi_calculator.generate_ssi_schedule_from_config()` for SSI benefits
+- Uses [`calculations.py`](calculations.py) for tax calculations
+- Loads portfolio data via `load_data.get_networth_by_month()`
+
+### Portfolio Data Entry ([`portfolio_data_entry.py`](portfolio_data_entry.py))
+**Purpose:** Manual entry, validation, and management of portfolio holdings
+
+**Key Functions:**
+- `validate_ticker_symbol()` - Validate ticker symbols via Yahoo Finance
+- `validate_portfolio_entry()` - Validate single portfolio entry
+- `validate_portfolio_dataframe()` - Validate entire portfolio DataFrame
+- `save_portfolio_data()` - Save/update portfolio data with merge logic
+- `load_previous_month_data()` - Load previous month as template
+- `backup_portfolio_data()` - Create timestamped backups
+- `create_blank_portfolio_file()` - Initialize new portfolio file
+
+**Features:**
+- Real-time ticker validation using yfinance
+- Automatic sector and name lookup
+- Update/overwrite logic for existing entries
+- Timestamped automatic backups
+- Comprehensive validation rules
+- Support for multiple account types (Cash, Brokerage, Traditional, Roth)
+
+**Data Format:**
+- Columns: month, year, account_name, account_type, symbol, name, sector, qty, purchase_price
+- Stored in `portfolio_data_truth.csv`
+- Backups: `portfolio_data_truth_YYYYMMDD_HHMMSS.csv`
+
+### SSI Calculator ([`ssi_calculator.py`](ssi_calculator.py))
+**Purpose:** Dynamic Social Security benefit calculations based on claiming age
+
+**Key Functions:**
+- `calculate_benefit_at_claiming_age()` - Calculate benefit for specific claiming age
+- `calculate_benefit_with_cola()` - Apply COLA adjustments over time
+- `generate_ssi_schedule()` - Generate complete benefit schedule for one person
+- `generate_ssi_schedule_from_config()` - Generate schedule from config.py settings
+- `validate_config_ssi_settings()` - Validate SSI configuration
+
+**Features:**
+- Implements SSA early claiming reduction rules (ages 62-66)
+- Implements delayed retirement credits (ages 68-70, 8% per year)
+- Applies annual COLA adjustments (default 2%)
+- Integrates with [`config.py`](config.py) for automatic schedule generation
+- Replaces static CSV with dynamic calculations
+
+**Formula:**
+- Early claiming: 5/9 of 1% per month (first 36 months), 5/12 of 1% per month (beyond 36)
+- Delayed claiming: 8% per year increase
+- COLA: Compound annual adjustment after claiming
+
+**See Also:** [`SSI_CALCULATOR_GUIDE.md`](SSI_CALCULATOR_GUIDE.md), [`SSI_INTEGRATION_GUIDE.md`](SSI_INTEGRATION_GUIDE.md)
 
 ## Key Modules & Functions
 
@@ -588,6 +731,34 @@ See [`ERRORS_FOUND.md`](ERRORS_FOUND.md) for complete analysis.
 - **AMT calculations**: May need verification for complex scenarios
 - **Market volatility**: Uses constant growth rate (no Monte Carlo simulation)
 - **Healthcare costs**: IRMAA only; no long-term care modeling
+- **Windows support**: `run.bat` script provided but not tested on Windows systems
+
+### Windows-Specific Issues
+⚠️ **The application has not been tested on Windows.** Known potential issues:
+
+1. **Path Separators**: Windows uses backslashes (`\`) vs forward slashes (`/`)
+   - Most Python code should handle this automatically
+   - File paths in CSV files may need adjustment
+
+2. **Virtual Environment Activation**:
+   - Command Prompt: `.venv\Scripts\activate`
+   - PowerShell: `.venv\Scripts\Activate.ps1`
+   - May require execution policy changes in PowerShell
+
+3. **Line Endings**: CSV files may have different line endings (CRLF vs LF)
+   - Python's CSV module should handle this automatically
+   - If issues occur, convert files to Windows line endings
+
+4. **Color Output**: The `run.bat` script uses ANSI color codes
+   - May not display correctly in older Command Prompt versions
+   - Works best in Windows Terminal or PowerShell
+
+5. **File Permissions**: Some operations may require Administrator privileges
+
+**If you encounter Windows-specific issues:**
+- Use Method 2 (Manual Start) instead of `run.bat`
+- Report issues with detailed error messages
+- Consider using WSL (Windows Subsystem for Linux) as an alternative
 
 ## Usage Examples
 
@@ -943,7 +1114,8 @@ For issues or questions:
 - **Advanced Portfolio Features**
   - Real-time portfolio editing (currently roadmap feature)
   - Automatic rebalancing recommendations
-  - Tax-loss harvesting identification
+  - Dynamic tax-loss/gain harvesting with intelligent security selection
+  - Optimized security selection for withdrawals (which specific holdings to liquidate)
   - Asset location optimization (tax-efficient placement)
   - Factor-based portfolio analysis
 - **Performance Analytics**
