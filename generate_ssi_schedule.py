@@ -12,12 +12,25 @@ Usage:
 """
 
 import argparse
+import logging
+import os
 from datetime import datetime
 from ssi_calculator import generate_ssi_schedule_from_config, validate_config_ssi_settings
 from config import get_config_manager
 
+# Configure logging — matches project-wide convention from calculations.py.
+# Default level is WARNING; set LOG_LEVEL=INFO (or DEBUG) to see progress output.
+log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
-def main():
+
+def parse_args() -> argparse.Namespace:
+    """Parse and return command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Generate SSI schedule from config.py settings'
     )
@@ -50,110 +63,119 @@ def main():
         action='store_true',
         help='Only validate config without generating schedule'
     )
-    
-    args = parser.parse_args()
-    
-    # Load configuration
-    print("Loading configuration from config.py...")
-    config = get_config_manager()
-    
-    # Validate configuration
-    print("\nValidating SSI settings...")
-    is_valid, errors = validate_config_ssi_settings(config)
-    
-    if not is_valid:
-        print("❌ Configuration validation failed:")
-        for error in errors:
-            print(f"   - {error}")
-        return 1
-    
-    print("✓ Configuration is valid")
-    
-    # Display current settings
-    print("\nCurrent SSI Configuration:")
-    print("-" * 60)
-    person1_name = config.get("personal_info", "person1_name", "Person1")
-    person1_age = config.get("social_security", "person1_ssi_age", 0)
-    person1_amount = config.get("social_security", "person1_ssi_amount", 0)
-    
-    person2_name = config.get("personal_info", "person2_name", "Person2")
-    person2_age = config.get("social_security", "person2_ssi_age", 0)
-    person2_amount = config.get("social_security", "person2_ssi_amount", 0)
-    
-    print(f"{person1_name}:")
-    print(f"  - Claiming Age: {person1_age}")
-    print(f"  - FRA Benefit (age 67): ${person1_amount:,.2f}/month")
-    
-    print(f"\n{person2_name}:")
-    print(f"  - Claiming Age: {person2_age}")
-    print(f"  - FRA Benefit (age 67): ${person2_amount:,.2f}/month")
-    
-    print(f"\nCOLA Rate: {args.cola * 100:.1f}%")
-    
-    if args.validate_only:
-        print("\n✓ Validation complete (--validate-only flag set)")
-        return 0
-    
-    # Set end year if not provided
-    end_year = args.end_year if args.end_year else args.start_year + 30
-    
-    print(f"\nGenerating schedule from {args.start_year} to {end_year}...")
-    
-    # Generate schedule
-    schedule = generate_ssi_schedule_from_config(
-        config_manager=config,
-        start_year=args.start_year,
-        end_year=end_year,
-        cola_rate=args.cola
-    )
-    
-    if schedule.empty:
-        print("⚠️  No schedule generated. Check that SSI amounts are set in config.py")
-        return 1
-    
-    # Export to CSV
-    schedule.to_csv(args.output, index=False)
-    print(f"✓ Schedule exported to: {args.output}")
-    
-    # Display summary statistics
-    print("\nSchedule Summary:")
-    print("-" * 60)
-    print(f"Total rows: {len(schedule)}")
-    print(f"Years covered: {args.start_year} - {end_year}")
-    print(f"Persons: {', '.join(schedule['person'].unique())}")
-    
-    # Show sample data
-    print("\nSample Data (first 10 rows):")
-    print(schedule.head(10).to_string(index=False))
-    
-    # Show key milestone years
-    print("\nKey Milestone Years:")
-    print("-" * 60)
-    
+    return parser.parse_args()
+
+
+def _get_persons_config(config) -> list:
+    """Return a list of dicts with each person's SSI configuration values."""
+    return [
+        {
+            "name":   config.get("personal_info",   "person1_name",       "Person1"),
+            "age":    config.get("social_security",  "person1_ssi_age",    0),
+            "amount": config.get("social_security",  "person1_ssi_amount", 0),
+        },
+        {
+            "name":   config.get("personal_info",   "person2_name",       "Person2"),
+            "age":    config.get("social_security",  "person2_ssi_age",    0),
+            "amount": config.get("social_security",  "person2_ssi_amount", 0),
+        },
+    ]
+
+
+def _log_config_settings(config, cola_rate: float) -> None:
+    """Log the current SSI configuration for each person and the COLA rate."""
+    logger.info("Current SSI Configuration:")
+    logger.info("-" * 60)
+    for person in _get_persons_config(config):
+        logger.info("%s:", person['name'])
+        logger.info("  - Claiming Age: %s", person['age'])
+        logger.info("  - FRA Benefit (age 67): $%,.2f/month", person['amount'])
+    logger.info("COLA Rate: %.1f%%", cola_rate * 100)
+
+
+def _log_schedule_summary(schedule, start_year: int, end_year: int) -> None:
+    """Log summary statistics and key milestone years for the generated schedule."""
+    logger.info("Schedule Summary:")
+    logger.info("-" * 60)
+    logger.info("Total rows: %d", len(schedule))
+    logger.info("Years covered: %d - %d", start_year, end_year)
+    logger.info("Persons: %s", ', '.join(schedule['person'].unique()))
+
+    logger.info("Sample Data (first 10 rows):\n%s", schedule.head(10).to_string(index=False))
+
+    logger.info("Key Milestone Years:")
+    logger.info("-" * 60)
+
     for person in schedule['person'].unique():
         person_data = schedule[schedule['person'] == person]
-        
+
         # Find first year with benefits
         first_benefit = person_data[person_data['monthly_benefit'] > 0]
         if not first_benefit.empty:
             first_row = first_benefit.iloc[0]
-            print(f"\n{person} starts receiving benefits:")
-            print(f"  Year {first_row['year']} (Age {first_row['claiming_age']}): "
-                  f"${first_row['monthly_benefit']:,.2f}/month")
-            
+            logger.info(
+                "%s starts receiving benefits: Year %d (Age %d): $%,.2f/month",
+                person, first_row['year'], first_row['age'], first_row['monthly_benefit']
+            )
+
             # Show 5 years later
             five_years_later = person_data[
                 person_data['year'] == first_row['year'] + 5
             ]
             if not five_years_later.empty:
                 later_row = five_years_later.iloc[0]
-                print(f"  Year {later_row['year']} (Age {later_row['claiming_age']}): "
-                      f"${later_row['monthly_benefit']:,.2f}/month")
-    
-    print("\n" + "=" * 60)
-    print("✓ Schedule generation complete!")
-    print("=" * 60)
-    
+                logger.info(
+                    "  Year %d (Age %d): $%,.2f/month",
+                    later_row['year'], later_row['age'], later_row['monthly_benefit']
+                )
+
+
+def main() -> int:
+    args = parse_args()
+
+    logger.info("Loading configuration from config.py...")
+    config = get_config_manager()
+
+    logger.info("Validating SSI settings...")
+    is_valid, errors = validate_config_ssi_settings(config)
+
+    if not is_valid:
+        logger.error(
+            "Configuration validation failed:\n%s",
+            "\n".join(f"  - {e}" for e in errors)
+        )
+        return 1
+
+    logger.info("Configuration is valid")
+    _log_config_settings(config, args.cola)
+
+    if args.validate_only:
+        logger.info("Validation complete (--validate-only flag set)")
+        return 0
+
+    end_year = args.end_year or args.start_year + 30
+    logger.info("Generating schedule from %d to %d...", args.start_year, end_year)
+
+    schedule = generate_ssi_schedule_from_config(
+        config_manager=config,
+        start_year=args.start_year,
+        end_year=end_year,
+        cola_rate=args.cola
+    )
+
+    if schedule.empty:
+        logger.warning("No schedule generated. Check that SSI amounts are set in config.py")
+        return 1
+
+    schedule.to_csv(args.output, index=False)
+    logger.info("Schedule exported to: %s", args.output)
+
+    _log_schedule_summary(schedule, args.start_year, end_year)
+
+    logger.info("=" * 60)
+    logger.info("Schedule generation complete!")
+    logger.info("=" * 60)
+
     return 0
 
 

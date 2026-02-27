@@ -1,4 +1,4 @@
-from matplotlib.pylab import f
+import dataclasses
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 YEAR_2026_CONVERSION = 100000
 YEAR_2027_DAF_RATIO = 0.33
 PRE_SSI_CONVERSION = 375000
+EXPENSE_DEFLATOR = 0.993  # Annual real-spending reduction factor
 
 # Account type mapping for portfolio data
 ACCOUNT_TYPE_MAPPING = {
@@ -232,31 +233,32 @@ def _load_portfolio_data(current_month: int, current_year: int) -> dict[str, flo
         logger.error(f"Error loading portfolio data ({error_type}): {e}. Using default values of 0")
         return default_values
 
-def _calculate_rmd_and_update_trad(trad_value: float, t_age: float, 
-                                    planned_dist: float, conversions: float, 
-                                    rate: float) -> tuple[float, float, float, float, float]:
+def _calculate_rmd_and_update_trad(trad_value: float, t_age: float,
+                                    planned_dist: float, conversions: float,
+                                    rate: float) -> tuple[float, float, float, float]:
     """
     Calculate RMD and update traditional account value.
-    
+
     Args:
         trad_value: Current traditional account value
         t_age: Tom's age for the year
         planned_dist: Planned distribution amount
         conversions: Roth conversion amount
         rate: Growth rate multiplier (1 + rate/100)
-        
+
     Returns:
-        tuple: (rmd, planned_dist, conversions, daf, new_trad_value)
-               Returns zeros for distributions if account becomes negative
+        tuple: (rmd, planned_dist, conversions, new_trad_value)
+               Returns zeros for distributions if account becomes negative.
+               DAF is intentionally excluded — callers should preserve the DAF
+               value returned by _calculate_year_distributions directly.
     """
     rmd = 0
-    daf = 0
-    
+
     # Calculate RMD based on age
     rmd_distribution = get_rmd_value(t_age)
     if rmd_distribution > 0:
         rmd = int(trad_value / rmd_distribution)
-        
+
         # Adjust RMD based on other distributions
         if rmd > conversions + planned_dist:
             rmd = rmd - conversions - planned_dist
@@ -264,179 +266,362 @@ def _calculate_rmd_and_update_trad(trad_value: float, t_age: float,
             rmd = 0
         else:
             rmd = 0
-    
+
     # Calculate new traditional account value
     trad_value_new = trad_value - planned_dist - conversions - rmd
-    
+
     # Validate account doesn't go negative
     if trad_value < trad_value_new or trad_value < 0 or trad_value_new < 0:
         # Reset all distributions if validation fails
-        return (0, 0, 0, 0, trad_value * rate)
-    
+        return (0, 0, 0, trad_value * rate)
+
     # Apply growth rate to remaining balance
-    return (rmd, planned_dist, conversions, daf, trad_value_new * rate)
+    return (rmd, planned_dist, conversions, trad_value_new * rate)
 
 
+
+# ---------------------------------------------------------------------------
+# Proposal 1 — SimulationConfig dataclass + _initialize_simulation_config()
+# ---------------------------------------------------------------------------
+
+def _read_personal_config(config) -> dict:
+    """
+    Read personal-info and social-security values from ConfigManager.
+
+    Separating ConfigManager reads from session-state reads allows each
+    source to be tested independently without mocking the other.
+
+    Args:
+        config: A ConfigManager instance (or any object with a .get() method
+                matching the (section, key, default) signature).
+
+    Returns:
+        dict with keys: person1_name, person2_name, person1_claiming_age,
+        person1_birth_year, person2_birth_year.
+
+    Raises:
+        ValueError: If a birth-date string does not match the "%Y-%m-%d" format.
+    """
+    person1_name = config.get("personal_info", "person1_name", "Person1")
+    person2_name = config.get("personal_info", "person2_name", "Person2")
+    logger.info("Using person names from config: %s, %s", person1_name, person2_name)
+    return {
+        "person1_name": person1_name,
+        "person2_name": person2_name,
+        "person1_claiming_age": config.get("social_security", "person1_ssi_age", 70),
+        "person1_birth_year": datetime.datetime.strptime(
+            config.get("personal_info", "person1_birth_date", "1965-01-01"), "%Y-%m-%d"
+        ).year,
+        "person2_birth_year": datetime.datetime.strptime(
+            config.get("personal_info", "person2_birth_date", "1967-01-01"), "%Y-%m-%d"
+        ).year,
+    }
+
+
+@dataclasses.dataclass
+class SimulationConfig:
+    """
+    Immutable snapshot of all configuration and session-state values needed
+    by the simulation loop.  Separating config-reading from simulation logic
+    makes each unit independently testable without mocking st.session_state.
+    """
+    expenses: float
+    rate: float           # growth multiplier, e.g. 1.07 for 7 %
+    daf_rate: float       # annual DAF spend-down fraction, e.g. 0.05
+    expense_multiplier: int
+    planned_dist_2027: float
+    ssi_year: int
+    person1_birth_year: int
+    person2_birth_year: int
+    person1_name: str
+    person2_name: str
+    cash_in: float
+    brokerage: float
+    trad_value: float
+    tax_free_in: float
+    current_year: int
+    current_month: int
+    end_year: int = 2051
+
+
+def _initialize_simulation_config() -> SimulationConfig:
+    """
+    Read all configuration and session-state values once and return them as
+    an immutable SimulationConfig.
+
+    Returns:
+        SimulationConfig: Fully populated configuration snapshot.
+    """
+    today = datetime.date.today()
+    current_year = today.year
+    current_month = today.month
+
+    personal  = _read_personal_config(get_config_manager())
+    portfolio = _load_portfolio_data(current_month, current_year)
+
+    expenses           = float(st.session_state.get("EXPENSE", "50000") or "50000")
+    rate               = 1 + float(st.session_state.get("RATE", "6.0") or "6.0") / 100
+    daf_rate           = float(st.session_state.get("DAF_RATE", "25") or "25") / 100
+    expense_multiplier = int(float(st.session_state.get("EXPENSE_MULTIPLIER", "4") or "4"))
+    planned_dist_2027  = float(
+        st.session_state.get("PLANNED_DIST_2027", "575000") or "575000"
+    )
+
+    return SimulationConfig(
+        expenses=expenses,
+        rate=rate,
+        daf_rate=daf_rate,
+        expense_multiplier=expense_multiplier,
+        planned_dist_2027=planned_dist_2027,
+        ssi_year=personal["person1_birth_year"] + personal["person1_claiming_age"],
+        person1_birth_year=personal["person1_birth_year"],
+        person2_birth_year=personal["person2_birth_year"],
+        person1_name=personal["person1_name"],
+        person2_name=personal["person2_name"],
+        cash_in=portfolio['cash_in'],
+        brokerage=portfolio['brokerage'],
+        trad_value=portfolio['trad_value'],
+        tax_free_in=portfolio['tax_free_in'],
+        current_year=current_year,
+        current_month=current_month,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Proposal 2 — _apply_seed_once(): removes the magic-zero pattern
+# ---------------------------------------------------------------------------
+
+def _apply_seed_once(current: float, seed: float) -> float:
+    """
+    Return *seed* only when *current* is still at its zero initial value,
+    ensuring the seed amount is added exactly once across the simulation loop.
+
+    Args:
+        current: Running account balance (0.0 on the very first iteration).
+        seed:    Opening balance loaded from portfolio data.
+
+    Returns:
+        float: seed if current == 0, else 0.0.
+    """
+    return seed if current == 0 else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Proposal 5 — _update_daf(): named financial operation, independently testable
+# ---------------------------------------------------------------------------
+
+def _update_daf(daf_in: float, daf: float, daf_rate: float) -> float:
+    """
+    Apply the annual DAF spend-down and add the current year's new contribution.
+
+    The three-branch if/elif/else in the original code reduces to a single
+    expression: the elif condition (daf_in >= daf_in * daf_rate) simplifies to
+    (1 >= daf_rate), which is always True for a valid rate in [0, 1].  The else
+    branch was therefore dead code and has been removed.
+
+    Args:
+        daf_in:   Running DAF balance before this year's activity.
+        daf:      New contribution for the current year.
+        daf_rate: Annual spend-down fraction (0.0–1.0).
+
+    Returns:
+        float: Updated DAF balance after spend-down and new contribution.
+    """
+    return daf_in * (1 - daf_rate) + daf
+
+
+# ---------------------------------------------------------------------------
+# Proposal 6 — row-builder helpers: separate compute from format
+# ---------------------------------------------------------------------------
+
+def _build_ie_row(
+    year: int,
+    age: str,
+    monthly_benefit: float,
+    planned_dist: float,
+    conversions: float,
+    rmd: float,
+    tot_inflows: float,
+    taxes: float,
+    expenses: float,
+    portfolio_withdrawal: float,
+) -> dict:
+    """
+    Build a single income/expense row dict for the i_e DataFrame.
+
+    Keeping column construction here means the simulation loop stays focused
+    on computing values; column names and structure are changed in one place.
+    """
+    return {
+        'Year': year,
+        'Age': age,
+        'SSI Flows': monthly_benefit,
+        'Planned Distribution': planned_dist,
+        'Roth Conversions': conversions,
+        'RMD': rmd,
+        'Total Inflows': tot_inflows,
+        'Taxes Owed': taxes,
+        'Expenses': expenses,
+        'Portfolio Withdrawal': portfolio_withdrawal,
+    }
+
+
+def _build_port_row(
+    year: int,
+    cash: float,
+    brokerage: float,
+    trad_value: float,
+    tax_free: float,
+    daf_in: float,
+) -> dict:
+    """
+    Build a single portfolio-draw row dict for the port_draw DataFrame.
+    """
+    return {
+        'Year': year,
+        'Cash': cash,
+        'Taxable': brokerage,
+        'Tax Deferred': trad_value,
+        'Tax Free': tax_free,
+        'Donor Advised Fund': daf_in,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main entry point — refactored to use all helpers above
+# ---------------------------------------------------------------------------
 
 def build_income_expenses_display():
     """
     Build income and expense projections with portfolio tracking.
-    
+
     Returns:
-        tuple: (i_e_df, port_draw_df) - DataFrames containing income/expense and portfolio projections
+        tuple: (i_e_df, port_draw_df) - DataFrames containing income/expense
+               and portfolio projections.
     """
-    # Initialize state variables
-    cash = 0
-    tax_free = 0
-    today = datetime.date.today()
-    current_year = today.year
-    current_month = today.month
-    
-    # Load configuration to get person names dynamically
-    config = get_config_manager()
-    person1_name = config.get("personal_info", "person1_name", "Person1")
-    person2_name = config.get("personal_info", "person2_name", "Person2")
-    person1_claiming_age = config.get("social_security", "person1_ssi_age", 70)
-    person1_birth_date = config.get("personal_info", "person1_birth_date", "1965-01-01")
-    person1_birth_year = int(person1_birth_date.split('-')[0])
-    person2_birth_date = config.get("personal_info", "person2_birth_date", "1967-01-01")
-    person2_birth_year = int(person2_birth_date.split('-')[0])
-    
-    logger.info(f"Using person names from config: {person1_name}, {person2_name}")
-    
-    # Load current net worth data using helper function
-    portfolio = _load_portfolio_data(current_month, current_year)
-    cash_in = portfolio['cash_in']
-    brokerage = portfolio['brokerage']
-    trad_value = portfolio['trad_value']
-    tax_free_in = portfolio['tax_free_in']
-    
-    # Cache session state values to avoid repeated lookups
-    expenses = float(st.session_state["EXPENSE"])
-    rate = 1 + float(st.session_state["RATE"]) / 100
-    daf_rate = float(st.session_state["DAF_RATE"]) / 100
-    expense_multiplier = int(st.session_state["EXPENSE_MULTIPLIER"])
-    planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", "575000") or "575000")
-    
-    # Calculate SSI year and claiming age once using config values
-    claiming_age = person1_claiming_age
-    ssi_year = person1_birth_year + claiming_age
-    
-    # Initialize tracking variables
-    end_year = 2051
-    daf_in = 0
-    
+    # Proposal 1 — load all config/session-state in one place
+    cfg = _initialize_simulation_config()
+
+    # Mutable simulation state (accounts that evolve each year)
+    cash = 0.0
+    cash_seeded = False       # ensures cfg.cash_in is added exactly once
+    tax_free = 0.0
+    tax_free_seeded = False   # ensures cfg.tax_free_in is added exactly once
+    brokerage = cfg.brokerage
+    trad_value = cfg.trad_value
+    expenses = cfg.expenses
+    daf_in = 0.0
+
     # Generate SSI schedule from config (replaces CSV-based lookups)
-    ssi_schedule = generate_ssi_schedule_from_config(config, current_year, end_year)
+    config = get_config_manager()
+    ssi_schedule = generate_ssi_schedule_from_config(config, cfg.current_year, cfg.end_year)
     logger.debug(f"Generated SSI schedule with {len(ssi_schedule)} rows")
-    
-    # Pre-compute age and benefit lookups for performance
-    person1_data = ssi_schedule[ssi_schedule['person'] == person1_name].set_index('year')
-    person2_data = ssi_schedule[ssi_schedule['person'] == person2_name].set_index('year')
-    
+
+    # Pre-compute per-person benefit lookups indexed by year
+    person1_data = ssi_schedule[ssi_schedule['person'] == cfg.person1_name].set_index('year')
+    person2_data = ssi_schedule[ssi_schedule['person'] == cfg.person2_name].set_index('year')
+
     # Accumulate rows in lists for efficient DataFrame construction
-    i_e_rows = []
-    port_draw_rows = []
-    
-    # Iterate through years and accumulate results
-    for year in range(current_year, end_year):
-        # Get ages and benefits from pre-computed SSI schedule
-        person1_age = year - person1_birth_year
-        person2_age = year - person2_birth_year
-        age = str(person2_age) + "/" + str(person1_age)
-        
-        # Get monthly benefits from SSI schedule
-        person1_monthly_benefit = person1_data.loc[year, 'monthly_benefit'] if year in person1_data.index else 0.0
-        person2_monthly_benefit = person2_data.loc[year, 'monthly_benefit'] if year in person2_data.index else 0.0
-        monthly_benefit = (person2_monthly_benefit + person1_monthly_benefit) * 12
-        
-        # Calculate year-specific distributions using helper function
-        planned_dist, daf, conversions = _calculate_year_distributions(
+    i_e_rows: list[dict] = []
+    port_draw_rows: list[dict] = []
+
+    for year in range(cfg.current_year, cfg.end_year):
+        # ── Ages ──────────────────────────────────────────────────────────
+        person1_age = year - cfg.person1_birth_year
+        person2_age = year - cfg.person2_birth_year
+        age = f"{person2_age}/{person1_age}"
+
+        # ── SSI benefits ──────────────────────────────────────────────────
+        person1_monthly = (
+            person1_data.loc[year, 'monthly_benefit'] if year in person1_data.index else 0.0
+        )
+        person2_monthly = (
+            person2_data.loc[year, 'monthly_benefit'] if year in person2_data.index else 0.0
+        )
+        monthly_benefit = (person1_monthly + person2_monthly) * 12
+
+        # ── Distributions (two-stage pipeline) ───────────────────────────
+        # raw_* values are preserved because _calculate_rmd_and_update_trad
+        # may zero them out on a negative-balance guard.
+        # daf is kept here; the helper never modifies it.
+        raw_dist, daf, raw_conversions = _calculate_year_distributions(
             year=year,
-            ssi_year=ssi_year,
-            planned_dist_2027=planned_dist_2027
+            ssi_year=cfg.ssi_year,
+            planned_dist_2027=cfg.planned_dist_2027,
         )
-       
-        # Calculate RMD and update traditional account using helper function
-        rmd, planned_dist, conversions, daf, trad_value = _calculate_rmd_and_update_trad(
-            trad_value, person1_age, planned_dist, conversions, rate
+        rmd, planned_dist, conversions, trad_value = _calculate_rmd_and_update_trad(
+            trad_value, person1_age, raw_dist, raw_conversions, cfg.rate
         )
-        
-        # Calculate taxes
-        taxable_inflows = (monthly_benefit * 0.85) + planned_dist + conversions + rmd - daf
-        taxes = calculate_taxes(taxable_inflows, 0, year)
-        
-        # Update expenses with deflator
-        expenses = expenses * 0.993
-        
-        # Calculate portfolio withdrawal
-        tot_inflows = monthly_benefit
-        portfolio_withdrawal = (expenses + taxes) - tot_inflows
-        if portfolio_withdrawal < 0:
-            portfolio_withdrawal = 0
-        tot_inflows = portfolio_withdrawal + tot_inflows
-        
-        # Update cash balance
-        if cash > 0:
-            cash = cash + monthly_benefit + portfolio_withdrawal - expenses - taxes
-            cash_rate = ((rate - 1) / 3)
-            cash = cash + cash * cash_rate
-        else:
-            cash = cash_in + monthly_benefit + portfolio_withdrawal - expenses - taxes
-            cash_rate = ((rate - 1) / 3)
-            cash = cash + cash * cash_rate
-        
-        # Check brokerage threshold and adjust if needed
-        brokerage_threshold = (expenses + taxes) * expense_multiplier
-        
-        if brokerage < brokerage_threshold:
-            planned_dist = planned_dist + conversions / 2
-            conversions = conversions / 2
-        
-        # Update brokerage account (simplified - same formula for all cases)
-        brokerage = (brokerage + planned_dist + rmd - daf - portfolio_withdrawal) * rate
-        
-        # Update tax-free account
-        if tax_free > 0:
-            tax_free = (tax_free + conversions) * rate
-        else:
-            tax_free = (tax_free_in + tax_free + conversions) * rate
-        
-        # Update DAF
-        if daf_in == 0:
-            daf_in = daf
-        elif daf_in >= (daf_in * daf_rate):
-            daf_in = daf_in - (daf_in * daf_rate) + daf
-        else:
-            daf_in = daf
-        
-        # Accumulate row data (efficient approach)
-        i_e_rows.append({
-            'Year': year,
-            'Age': age,
-            'SSI Flows': monthly_benefit,
-            'Planned Distribution': planned_dist,
-            'Roth Conversions': conversions,
-            'RMD': rmd,
-            'Total Inflows': tot_inflows,
-            'Taxes Owed': taxes,
-            'Expenses': expenses,
-            'Portfolio Withdrawal': portfolio_withdrawal
-        })
-        
-        port_draw_rows.append({
-            'Year': year,
-            'Cash': cash,
-            'Taxable': brokerage,
-            'Tax Deferred': trad_value,
-            'Tax Free': tax_free,
-            'Donor Advised Fund': daf_in
-        })
-    
-    # Construct DataFrames once at the end (efficient approach)
+
+        # ── Taxes ─────────────────────────────────────────────────────────
+        taxable_inflows = (monthly_benefit * 0.85) + planned_dist + conversions + rmd
+        taxes = calculate_taxes(taxable_inflows, daf, year)
+
+        # ── Expenses & portfolio withdrawal ───────────────────────────────
+        expenses = expenses * EXPENSE_DEFLATOR
+        ssi_inflows = monthly_benefit
+        portfolio_withdrawal = max(0.0, (expenses + taxes) - ssi_inflows)
+        tot_inflows = ssi_inflows + portfolio_withdrawal
+
+        # ── Cash (seed applied exactly once via boolean flag) ─────────────
+        # cash_rate: cash earns ~1/3 of the equity growth rate (conservative
+        # assumption for money-market / short-term instruments).
+        cash_rate = (cfg.rate - 1) / 3
+        cash_seed = cfg.cash_in if not cash_seeded else 0.0
+        cash_seeded = True
+        cash = (
+            cash
+            + cash_seed
+            + monthly_benefit
+            + portfolio_withdrawal
+            - expenses
+            - taxes
+        ) * (1 + cash_rate)
+
+        # ── Brokerage (consolidated threshold block) ──────────────────────
+        brokerage_threshold = (expenses + taxes) * cfg.expense_multiplier
+        below_threshold = brokerage < brokerage_threshold
+        # Split conversions between brokerage and tax-free based on threshold.
+        conversions_to_brokerage = conversions / 2 if below_threshold else 0.0
+        conversions_to_tax_free  = conversions / 2 if below_threshold else conversions
+        brokerage = (
+            brokerage + planned_dist + conversions_to_brokerage + rmd - daf - portfolio_withdrawal
+        ) * cfg.rate
+
+        # ── Tax-free (seed applied exactly once via boolean flag) ──────────
+        tax_free_seed = cfg.tax_free_in if not tax_free_seeded else 0.0
+        tax_free_seeded = True
+        tax_free = (tax_free + tax_free_seed + conversions_to_tax_free) * cfg.rate
+
+        # ── DAF (Proposal 3 + 5 — single expression via _update_daf) ──────
+        daf_in = _update_daf(daf_in, daf, cfg.daf_rate)
+
+        # ── Accumulate rows (Proposal 6 — row builders) ───────────────────
+        i_e_rows.append(_build_ie_row(
+            year=year,
+            age=age,
+            monthly_benefit=monthly_benefit,
+            planned_dist=planned_dist,
+            conversions=conversions,
+            rmd=rmd,
+            tot_inflows=tot_inflows,
+            taxes=taxes,
+            expenses=expenses,
+            portfolio_withdrawal=portfolio_withdrawal,
+        ))
+        port_draw_rows.append(_build_port_row(
+            year=year,
+            cash=cash,
+            brokerage=brokerage,
+            trad_value=trad_value,
+            tax_free=tax_free,
+            daf_in=daf_in,
+        ))
+
+    # Construct DataFrames once at the end
     i_e_df = pd.DataFrame(i_e_rows)
     port_draw_df = pd.DataFrame(port_draw_rows)
-    
+
     return i_e_df, port_draw_df
 
 

@@ -11,76 +11,121 @@ Key Concepts:
 - COLA adjustments: Annual cost-of-living adjustments after claiming
 """
 
+import numpy as np
 import pandas as pd
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Tuple
 import logging
 
 logger = logging.getLogger(__name__)
 
 # Constants based on Social Security Administration rules
 FULL_RETIREMENT_AGE = 67
-EARLY_CLAIMING_REDUCTION_RATE = 0.0667  # ~6.67% per year (5/9 of 1% per month for first 36 months, then 5/12 of 1% per month)
+MIN_CLAIMING_AGE = 62                          # Earliest age to claim SSA benefits
+MAX_BENEFIT_AGE = 70                           # Age beyond which no additional delayed credits accrue
+EARLY_MONTHS_THRESHOLD = 36                    # First 36 months use a higher per-month reduction rate
+EARLY_REDUCTION_RATE_FIRST_36 = (5 / 9) * 0.01   # 5/9 of 1% per month (~0.5556%) for first 36 months early
+EARLY_REDUCTION_RATE_BEYOND_36 = (5 / 12) * 0.01  # 5/12 of 1% per month (~0.4167%) beyond 36 months early
+EARLY_CLAIMING_REDUCTION_RATE = 0.0667  # ~6.67% per year (approximate; precise calc uses monthly rates above)
 DELAYED_RETIREMENT_CREDIT_RATE = 0.08  # 8% per year (2/3 of 1% per month)
 DEFAULT_COLA_RATE = 0.02  # 2% annual COLA (conservative estimate)
+# Note: 'age' stores the person's current age each year, not their benefit-claiming age
+SSI_SCHEDULE_COLUMNS: list = ['year', 'age', 'person', 'monthly_benefit']
+MIN_SCHEDULE_AGE = 60  # Earliest age included in a generated schedule (no planning relevance before this)
+
+
+def _clamp_claiming_age(claiming_age: int) -> int:
+    """
+    Clamp claiming age to the valid SSA benefit range [MIN_CLAIMING_AGE, MAX_BENEFIT_AGE].
+
+    Logs a warning whenever the input is outside the valid range so callers are
+    informed of the adjustment without duplicating that logic in every consumer.
+
+    Args:
+        claiming_age: Requested claiming age
+
+    Returns:
+        Age clamped to [MIN_CLAIMING_AGE, MAX_BENEFIT_AGE]
+    """
+    if claiming_age < MIN_CLAIMING_AGE:
+        logger.warning(
+            f"Claiming age {claiming_age} is below minimum age {MIN_CLAIMING_AGE}, "
+            f"using {MIN_CLAIMING_AGE}"
+        )
+        return MIN_CLAIMING_AGE
+    if claiming_age > MAX_BENEFIT_AGE:
+        logger.warning(
+            f"Claiming age {claiming_age} is above maximum benefit age {MAX_BENEFIT_AGE}, "
+            f"using {MAX_BENEFIT_AGE}"
+        )
+        return MAX_BENEFIT_AGE
+    return claiming_age
+
+
+def _calculate_early_claiming_reduction(months_early: int) -> float:
+    """
+    Calculate the benefit reduction percentage for early claiming.
+
+    SSA applies two distinct per-month rates:
+    - First EARLY_MONTHS_THRESHOLD months: EARLY_REDUCTION_RATE_FIRST_36 per month
+    - Each additional month beyond that: EARLY_REDUCTION_RATE_BEYOND_36 per month
+
+    Args:
+        months_early: Number of months before FRA the benefit is claimed (must be >= 0)
+
+    Returns:
+        Reduction as a decimal fraction (e.g. 0.20 represents a 20% reduction)
+    """
+    if months_early <= EARLY_MONTHS_THRESHOLD:
+        return months_early * EARLY_REDUCTION_RATE_FIRST_36
+    return (
+        EARLY_MONTHS_THRESHOLD * EARLY_REDUCTION_RATE_FIRST_36
+        + (months_early - EARLY_MONTHS_THRESHOLD) * EARLY_REDUCTION_RATE_BEYOND_36
+    )
 
 
 def calculate_benefit_at_claiming_age(fra_benefit: float, claiming_age: int, fra: int = FULL_RETIREMENT_AGE) -> float:
     """
     Calculate the monthly benefit amount at a specific claiming age.
-    
+
     The calculation follows SSA rules:
-    - Claiming before FRA: Reduced by ~6.67% per year
+    - Claiming before FRA: Reduced using the two-tier monthly reduction schedule
     - Claiming at FRA: Full benefit amount
-    - Claiming after FRA: Increased by 8% per year (up to age 70)
-    
+    - Claiming after FRA: Increased by 8% per year (up to age MAX_BENEFIT_AGE)
+
+    Claiming ages outside [MIN_CLAIMING_AGE, MAX_BENEFIT_AGE] are clamped to the
+    nearest valid bound and a warning is logged.
+
     Args:
         fra_benefit: Monthly benefit amount at Full Retirement Age (age 67)
         claiming_age: Age when benefits are claimed (typically 62-70)
         fra: Full Retirement Age (default: 67)
-        
+
     Returns:
         Monthly benefit amount at claiming age
-        
+
     Example:
         >>> calculate_benefit_at_claiming_age(4223, 70)
         5215.0  # Approximately 23.5% increase for 3 years of delay
         >>> calculate_benefit_at_claiming_age(4223, 62)
         2829.0  # Approximately 33% reduction for 5 years early
     """
-    if claiming_age < 62:
-        logger.warning(f"Claiming age {claiming_age} is below minimum age 62")
-        return 0.0
-    
-    if claiming_age > 70:
-        logger.warning(f"Claiming age {claiming_age} is above maximum benefit age 70, using 70")
-        claiming_age = 70
-    
-    years_difference = claiming_age - fra
-    
+    clamped_age = _clamp_claiming_age(claiming_age)
+    years_difference = clamped_age - fra
+
     if years_difference < 0:
-        # Early claiming: reduce benefit
-        # More precise calculation for early claiming
+        # Early claiming: reduce benefit using the precise two-tier monthly schedule
         months_early = abs(years_difference * 12)
-        
-        # First 36 months: 5/9 of 1% per month = 0.5556% per month
-        # Beyond 36 months: 5/12 of 1% per month = 0.4167% per month
-        if months_early <= 36:
-            reduction_pct = months_early * (5/9) * 0.01
-        else:
-            reduction_pct = 36 * (5/9) * 0.01 + (months_early - 36) * (5/12) * 0.01
-        
+        reduction_pct = _calculate_early_claiming_reduction(months_early)
         benefit = fra_benefit * (1 - reduction_pct)
-        
     elif years_difference > 0:
-        # Delayed claiming: increase benefit by 8% per year
+        # Delayed claiming: increase benefit by DELAYED_RETIREMENT_CREDIT_RATE per year
         increase_pct = years_difference * DELAYED_RETIREMENT_CREDIT_RATE
         benefit = fra_benefit * (1 + increase_pct)
-        
     else:
-        # Claiming at FRA
+        # Claiming exactly at FRA
         benefit = fra_benefit
-    
+
     return round(benefit, 2)
 
 
@@ -119,58 +164,100 @@ def generate_ssi_schedule(
 ) -> pd.DataFrame:
     """
     Generate a complete SSI schedule for a person from start_year to end_year.
-    
+
+    The output always contains exactly one row per year in [start_year, end_year].
+    Years before the person reaches MIN_SCHEDULE_AGE (age 60) are included with
+    ``monthly_benefit = 0.0``, as are years before the claiming year.
+
     Args:
         person_name: Name of the person
         birth_year: Year of birth
         claiming_age: Age when benefits will be claimed
         fra_benefit: Monthly benefit amount at Full Retirement Age (67)
-        start_year: First year of the schedule
-        end_year: Last year of the schedule
+        start_year: First year of the schedule (inclusive)
+        end_year: Last year of the schedule (inclusive)
         cola_rate: Annual COLA rate (default: 2%)
         fra: Full Retirement Age (default: 67)
-        
+
     Returns:
-        DataFrame with columns: year, claiming_age, person, monthly_benefit
-        
+        DataFrame with columns: year, age, person, monthly_benefit.
+        Rows before the claiming year have ``monthly_benefit = 0.0``.
+        The DataFrame always spans [start_year, end_year] with no gaps.
+
     Example:
         >>> df = generate_ssi_schedule("Tom", 1965, 70, 4223, 2026, 2040, 0.02)
-        >>> df[df['year'] == 2036]  # Year Tom is 71 (1 year after claiming at 70)
-           year  claiming_age person  monthly_benefit
-           2036            71    Tom          5319.30
+        >>> df[df['year'] == 2035].iloc[0]['monthly_benefit']  # Claiming year (age 70)
+        5236.52
+        >>> df[df['year'] == 2036].iloc[0]['monthly_benefit']  # 1 year after claiming
+        5319.30
+        >>> df[df['year'] == 2034].iloc[0]['monthly_benefit']  # Before claiming (age 69)
+        0.0
     """
-    schedule_data = []
+    if start_year > end_year:
+        return pd.DataFrame(columns=SSI_SCHEDULE_COLUMNS)
+
+    # Pre-compute benefit at claiming age once
     claiming_year = birth_year + claiming_age
-    
-    # Calculate initial benefit at claiming age
     initial_benefit = calculate_benefit_at_claiming_age(fra_benefit, claiming_age, fra)
-    
-    for year in range(start_year, end_year + 1):
-        current_age = year - birth_year
-        
-        # Only include years where person is at least 60 (for planning purposes)
-        if current_age < 60:
-            continue
-        
-        # Before claiming age: no benefits
-        if current_age < claiming_age:
-            monthly_benefit = 0.0
-        else:
-            # After claiming: apply COLA adjustments
-            years_since_claiming = year - claiming_year
-            monthly_benefit = calculate_benefit_with_cola(initial_benefit, years_since_claiming, cola_rate)
-        
-        schedule_data.append({
-            'year': year,
-            'claiming_age': current_age,
-            'person': person_name,
-            'monthly_benefit': monthly_benefit
-        })
-    
-    return pd.DataFrame(schedule_data)
+
+    # Build the full year range — output always spans [start_year, end_year]
+    years = np.arange(start_year, end_year + 1)
+    years_since_claiming = years - claiming_year
+
+    # Compute COLA-adjusted benefits for all years, then zero out pre-claiming years.
+    # Using a mask assignment avoids np.where's eager evaluation of both branches.
+    monthly_benefits = np.round(initial_benefit * ((1 + cola_rate) ** years_since_claiming), 2)
+    monthly_benefits[years_since_claiming < 0] = 0.0
+
+    return pd.DataFrame({
+        'year': years,
+        'age': years - birth_year,
+        'person': person_name,
+        'monthly_benefit': monthly_benefits,
+    })
 
 
-def generate_ssi_schedule_from_config(config_manager, start_year: int = None, end_year: int = None, cola_rate: float = DEFAULT_COLA_RATE) -> pd.DataFrame:
+def _get_person_schedule(
+    config_manager,
+    person_key: str,
+    start_year: int,
+    end_year: int,
+    cola_rate: float,
+) -> "pd.DataFrame | None":
+    """
+    Retrieve config values for one person and return their SSI schedule DataFrame.
+
+    Args:
+        config_manager: ConfigManager instance from config.py
+        person_key: Config key prefix for the person (e.g. ``"person1"``, ``"person2"``)
+        start_year: First year of the schedule
+        end_year: Last year of the schedule
+        cola_rate: Annual COLA rate
+
+    Returns:
+        DataFrame with SSI schedule, or ``None`` if no FRA benefit is configured
+    """
+    name = config_manager.get("personal_info", f"{person_key}_name", person_key.capitalize())
+    birth_date = config_manager.get("personal_info", f"{person_key}_birth_date", "1965-01-01")
+    birth_year = datetime.strptime(birth_date, "%Y-%m-%d").year
+    claiming_age = config_manager.get("social_security", f"{person_key}_ssi_age", 70)
+    fra_benefit = config_manager.get("social_security", f"{person_key}_ssi_amount", 0)
+
+    if fra_benefit <= 0:
+        return None
+
+    return generate_ssi_schedule(
+        person_name=name,
+        birth_year=birth_year,
+        claiming_age=claiming_age,
+        fra_benefit=fra_benefit,
+        start_year=start_year,
+        end_year=end_year,
+        cola_rate=cola_rate,
+    )
+
+
+def generate_ssi_schedule_from_config(config_manager, start_year: "int | None" = None, end_year: "int | None" = None, cola_rate: float = DEFAULT_COLA_RATE) -> pd.DataFrame:
     """
     Generate SSI schedules for both persons based on config.py settings.
     
@@ -190,57 +277,20 @@ def generate_ssi_schedule_from_config(config_manager, start_year: int = None, en
     """
     if start_year is None:
         start_year = datetime.now().year
-    
+
     if end_year is None:
         end_year = start_year + 30
-    
-    schedules = []
-    
-    # Generate schedule for person 1
-    person1_name = config_manager.get("personal_info", "person1_name", "Person1")
-    person1_birth_date = config_manager.get("personal_info", "person1_birth_date", "1965-01-01")
-    person1_birth_year = int(person1_birth_date.split('-')[0])
-    person1_claiming_age = config_manager.get("social_security", "person1_ssi_age", 70)
-    person1_fra_benefit = config_manager.get("social_security", "person1_ssi_amount", 0)
-    
-    if person1_fra_benefit > 0:
-        person1_schedule = generate_ssi_schedule(
-            person_name=person1_name,
-            birth_year=person1_birth_year,
-            claiming_age=person1_claiming_age,
-            fra_benefit=person1_fra_benefit,
-            start_year=start_year,
-            end_year=end_year,
-            cola_rate=cola_rate
-        )
-        schedules.append(person1_schedule)
-    
-    # Generate schedule for person 2
-    person2_name = config_manager.get("personal_info", "person2_name", "Person2")
-    person2_birth_date = config_manager.get("personal_info", "person2_birth_date", "1967-01-01")
-    person2_birth_year = int(person2_birth_date.split('-')[0])
-    person2_claiming_age = config_manager.get("social_security", "person2_ssi_age", 70)
-    person2_fra_benefit = config_manager.get("social_security", "person2_ssi_amount", 0)
-    
-    if person2_fra_benefit > 0:
-        person2_schedule = generate_ssi_schedule(
-            person_name=person2_name,
-            birth_year=person2_birth_year,
-            claiming_age=person2_claiming_age,
-            fra_benefit=person2_fra_benefit,
-            start_year=start_year,
-            end_year=end_year,
-            cola_rate=cola_rate
-        )
-        schedules.append(person2_schedule)
-    
-    # Combine schedules
+
+    schedules = [
+        schedule
+        for key in ("person1", "person2")
+        if (schedule := _get_person_schedule(config_manager, key, start_year, end_year, cola_rate)) is not None
+    ]
+
     if schedules:
-        combined_df = pd.concat(schedules, ignore_index=True)
-        return combined_df.sort_values(['year', 'person']).reset_index(drop=True)
-    else:
-        # Return empty DataFrame with correct structure
-        return pd.DataFrame(columns=['year', 'claiming_age', 'person', 'monthly_benefit'])
+        return pd.concat(schedules, ignore_index=True).sort_values(['year', 'person']).reset_index(drop=True)
+
+    return pd.DataFrame(columns=SSI_SCHEDULE_COLUMNS)
 
 
 def export_ssi_schedule_to_csv(schedule_df: pd.DataFrame, filename: str = "ssincome.csv") -> None:
