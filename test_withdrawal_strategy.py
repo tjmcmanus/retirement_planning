@@ -191,6 +191,8 @@ def test_yearly_strategy_structure():
         ltcg_harvested=30000,
         daf_contribution=0,
         expenses=100000,
+        agi=80000,
+        magi=80000,
         federal_tax=15000,
         irmaa_penalty=0,
         aca_premium=0,
