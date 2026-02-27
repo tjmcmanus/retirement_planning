@@ -27,8 +27,8 @@ import numpy as np
 import logging
 import os
 from datetime import datetime
-from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence
-from dataclasses import dataclass
+from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, cast
+from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from load_data import (
@@ -92,6 +92,24 @@ NIIT_THRESHOLDS: Dict[str, int] = {
     'married_filing_separately': 125_000,
     'head_of_household':         200_000,
 }
+
+# Minimum age for Medicare eligibility (fixed by statute)
+MEDICARE_ELIGIBILITY_AGE: int = 65
+
+# ACA marketplace premium estimate per person per month (pre-Medicare)
+# Annualised: ACA_MONTHLY_PREMIUM_PER_PERSON * 12 = $12,000/year
+ACA_MONTHLY_PREMIUM_PER_PERSON: int = 1_000
+
+# Annual out-of-pocket healthcare costs by health status
+OOP_COSTS_BY_HEALTH_STATUS: Dict[str, int] = {
+    'healthy': 4_000,
+    'average': 6_500,
+    'chronic': 12_000,
+}
+OOP_COST_DEFAULT: int = OOP_COSTS_BY_HEALTH_STATUS['average']
+
+# Long-term care insurance annual premium per person (average estimate)
+LTC_ANNUAL_PREMIUM_PER_PERSON: int = 3_500
 
 
 def calculate_ssi_benefits_dynamic(year: int, person_name: str, birth_year: int,
@@ -793,89 +811,196 @@ def calculate_medicare_costs(age_primary: int,
     return total_cost, breakdown
 
 
-def calculate_total_healthcare_costs(age_primary: int,
-                                    age_spouse: int,
-                                    magi_two_years_ago: float,
-                                    year: int,
-                                    filing_status: str = "married_filing_jointly",
-                                    health_status: str = "average",
-                                    has_ltc_insurance: bool = False,
-                                    has_medigap: bool = True) -> Tuple[float, Dict]:
+@dataclass(frozen=True)
+class _AgeStatus:
+    """Medicare/pre-Medicare eligibility status for both persons.
+
+    Computed once by :func:`_classify_ages` and consumed by
+    :func:`calculate_total_healthcare_costs` to eliminate repeated age
+    comparisons and the inconsistent ``age_spouse > 0`` idiom.
     """
-    Calculate comprehensive healthcare costs for the year
-    
+    primary_on_medicare: bool
+    spouse_on_medicare: bool
+    primary_pre_medicare: bool
+    spouse_pre_medicare: bool
+    medicare_count: int       # 0, 1, or 2 — persons on Medicare
+    pre_medicare_count: int   # 0, 1, or 2 — persons not yet on Medicare
+    total_persons: int        # 1 (no spouse) or 2
+
+
+def _classify_ages(age_primary: int, age_spouse: int) -> _AgeStatus:
+    """Return Medicare/pre-Medicare eligibility status for both persons.
+
     Args:
-        age_primary: Primary person's age
-        age_spouse: Spouse's age
-        magi_two_years_ago: MAGI from 2 years prior
-        year: Current year
-        filing_status: Filing status
-        health_status: "healthy", "average", or "chronic"
-        has_ltc_insurance: Whether they have LTC insurance
-        has_medigap: Whether they have Medigap coverage
-    
+        age_primary: Primary person's age (must be > 0).
+        age_spouse:  Spouse's age; pass 0 to indicate no spouse.
+
     Returns:
-        Tuple of (total_healthcare_cost, cost_breakdown)
+        Frozen :class:`_AgeStatus` instance capturing all derived booleans
+        and person counts needed by :func:`calculate_total_healthcare_costs`.
+    """
+    has_spouse = age_spouse > 0
+    p_med = age_primary >= MEDICARE_ELIGIBILITY_AGE
+    s_med = has_spouse and age_spouse >= MEDICARE_ELIGIBILITY_AGE
+    return _AgeStatus(
+        primary_on_medicare=p_med,
+        spouse_on_medicare=s_med,
+        primary_pre_medicare=not p_med,
+        spouse_pre_medicare=has_spouse and not s_med,
+        medicare_count=int(p_med) + int(s_med),
+        pre_medicare_count=int(not p_med) + int(has_spouse and not s_med),
+        total_persons=1 + int(has_spouse),
+    )
+
+
+@dataclass(frozen=True)
+class HealthcareCostBreakdown:
+    """Itemised healthcare costs returned by :func:`calculate_total_healthcare_costs`.
+
+    Using a frozen dataclass instead of a plain ``dict`` provides:
+    - Attribute-style access with IDE auto-complete and type checking.
+    - A computed :attr:`total` property that is always consistent with the
+      individual fields (no separately maintained ``total_healthcare_cost`` key).
+    - An auto-generated ``__repr__`` useful for logging and debugging.
+    - Immutability — callers cannot accidentally mutate the breakdown.
+    """
+    medicare: float = 0.0
+    pre_medicare: float = 0.0
+    out_of_pocket: float = 0.0
+    ltc_insurance: float = 0.0
+    medicare_detail: Dict = field(default_factory=dict)
+
+    @property
+    def total(self) -> float:
+        """Sum of all cost components."""
+        return self.medicare + self.pre_medicare + self.out_of_pocket + self.ltc_insurance
+
+
+def calculate_total_healthcare_costs(age_primary: int,
+                                     age_spouse: int,
+                                     magi_two_years_ago: float,
+                                     year: int,
+                                     filing_status: str = "married_filing_jointly",
+                                     health_status: str = "average",
+                                     has_ltc_insurance: bool = False,
+                                     has_medigap: bool = True) -> Tuple[float, HealthcareCostBreakdown]:
+    """
+    Calculate comprehensive healthcare costs for the year.
+
+    Args:
+        age_primary: Primary person's age.
+        age_spouse: Spouse's age; pass 0 to indicate no spouse.
+        magi_two_years_ago: MAGI from 2 years prior (used for IRMAA).
+        year: Current year.
+        filing_status: Filing status (e.g. ``"married_filing_jointly"``).
+        health_status: One of ``"healthy"``, ``"average"``, or ``"chronic"``.
+        has_ltc_insurance: Whether they carry LTC insurance.
+        has_medigap: Whether they carry Medigap coverage.
+
+    Returns:
+        Tuple of ``(total_healthcare_cost, HealthcareCostBreakdown)``.
     """
     logger.debug(f"Calculating total healthcare costs for year {year}")
-    
-    total_cost = 0.0
-    breakdown = {}
-    
-    # Medicare costs (if age 65+)
-    if age_primary >= 65 or age_spouse >= 65:
-        medicare_cost, medicare_breakdown = calculate_medicare_costs(
-            age_primary, age_spouse, magi_two_years_ago, year, 
+
+    status = _classify_ages(age_primary, age_spouse)
+
+    # --- Medicare costs (one or both persons aged 65+) -------------------
+    medicare_cost = 0.0
+    medicare_detail: Dict = {}
+    if status.medicare_count > 0:
+        medicare_cost, medicare_detail = calculate_medicare_costs(
+            age_primary, age_spouse, magi_two_years_ago, year,
             filing_status, has_medigap
         )
-        total_cost += medicare_cost
-        breakdown['medicare'] = medicare_breakdown
-    
-    # Pre-Medicare costs (if under 65)
-    if age_primary < 65 or age_spouse < 65:
-        # Simplified: Use ACA marketplace estimate
-        people_under_65 = (1 if age_primary < 65 else 0) + (1 if age_spouse < 65 else 0)
-        aca_cost = people_under_65 * 12000  # $1,000/month per person
-        total_cost += aca_cost
-        breakdown['pre_medicare'] = aca_cost
-        logger.debug(f"Pre-Medicare costs: ${aca_cost:,.0f} for {people_under_65} person(s)")
-    
-    # Out-of-pocket expenses
-    oop_costs = {
-        'healthy': 4000,
-        'average': 6500,
-        'chronic': 12000
-    }
-    oop_cost = oop_costs.get(health_status, 6500)
-    total_cost += oop_cost
-    breakdown['out_of_pocket'] = oop_cost
-    
-    # Long-term care insurance premiums
+
+    # --- Pre-Medicare / ACA costs (one or both persons under 65) ---------
+    aca_cost = 0.0
+    if status.pre_medicare_count > 0:
+        aca_cost = status.pre_medicare_count * ACA_MONTHLY_PREMIUM_PER_PERSON * 12
+        logger.debug(
+            f"Pre-Medicare costs: ${aca_cost:,.0f} "
+            f"for {status.pre_medicare_count} person(s)"
+        )
+
+    # --- Out-of-pocket expenses -------------------------------------------
+    oop_cost = OOP_COSTS_BY_HEALTH_STATUS.get(health_status, OOP_COST_DEFAULT)
+
+    # --- Long-term care insurance premiums --------------------------------
+    ltc_cost = 0.0
     if has_ltc_insurance:
-        ltc_premium = 3500  # $3,500/year per person average
-        people_count = 2 if age_spouse > 0 else 1
-        ltc_cost = ltc_premium * people_count
-        total_cost += ltc_cost
-        breakdown['ltc_insurance'] = ltc_cost
-    
-    breakdown['total_healthcare_cost'] = total_cost
-    
-    logger.info(f"Year {year}: Total healthcare cost = ${total_cost:,.0f}")
-    
-    return total_cost, breakdown
+        ltc_cost = LTC_ANNUAL_PREMIUM_PER_PERSON * status.total_persons
+
+    breakdown = HealthcareCostBreakdown(
+        medicare=medicare_cost,
+        pre_medicare=aca_cost,
+        out_of_pocket=oop_cost,
+        ltc_insurance=ltc_cost,
+        medicare_detail=medicare_detail,
+    )
+
+    logger.info(f"Year {year}: Total healthcare cost = ${breakdown.total:,.0f}")
+
+    return breakdown.total, breakdown
 
 
-def project_healthcare_costs(start_year: int,
-                            end_year: int,
-                            age_primary_start: int,
-                            age_spouse_start: int,
-                            magi_projections: List[float],
-                            health_status: str = "average",
-                            has_ltc_insurance: bool = False,
-                            has_medigap: bool = True) -> pd.DataFrame:
+def _validate_healthcare_projection_inputs(
+    start_year: int,
+    end_year: int,
+    magi_projections: List[float],
+) -> None:
+    """Raise ValueError for invalid project_healthcare_costs arguments."""
+    if start_year > end_year:
+        raise ValueError(
+            f"start_year ({start_year}) must be <= end_year ({end_year})"
+        )
+    if not magi_projections:
+        raise ValueError("magi_projections cannot be empty")
+
+
+def _healthcare_projection_row(
+    i: int,
+    year: int,
+    age_primary_start: int,
+    age_spouse_start: int,
+    magi_lookback: List[float],
+    health_status: str,
+    has_ltc_insurance: bool,
+    has_medigap: bool,
+) -> Dict:
+    """Compute a single year's healthcare projection row."""
+    age_primary = age_primary_start + i
+    age_spouse = age_spouse_start + i
+    total_cost, breakdown = calculate_total_healthcare_costs(
+        age_primary=age_primary,
+        age_spouse=age_spouse,
+        magi_two_years_ago=magi_lookback[i],
+        year=year,
+        health_status=health_status,
+        has_ltc_insurance=has_ltc_insurance,
+        has_medigap=has_medigap,
+    )
+    return {
+        'year': year,
+        'age_primary': age_primary,
+        'age_spouse': age_spouse,
+        'total_healthcare_cost': total_cost,
+        **asdict(breakdown),
+    }
+
+
+def project_healthcare_costs(
+    start_year: int,
+    end_year: int,
+    age_primary_start: int,
+    age_spouse_start: int,
+    magi_projections: List[float],
+    health_status: str = "average",
+    has_ltc_insurance: bool = False,
+    has_medigap: bool = True,
+) -> pd.DataFrame:
     """
     Project healthcare costs over retirement period
-    
+
     Args:
         start_year: Starting year
         end_year: Ending year
@@ -885,62 +1010,38 @@ def project_healthcare_costs(start_year: int,
         health_status: Health status assumption
         has_ltc_insurance: Whether they have LTC insurance
         has_medigap: Whether they have Medigap coverage
-    
+
     Returns:
         DataFrame with yearly healthcare cost projections
     """
     logger.info(f"Projecting healthcare costs from {start_year} to {end_year}")
-    
-    # Input validation
-    if start_year > end_year:
-        raise ValueError(f"start_year ({start_year}) must be <= end_year ({end_year})")
-    
-    if not magi_projections:
-        raise ValueError("magi_projections cannot be empty")
-    
+
+    _validate_healthcare_projection_inputs(start_year, end_year, magi_projections)
+
     expected_years = end_year - start_year + 1
     if len(magi_projections) < expected_years:
-        if not magi_projections:
-            raise ValueError("magi_projections cannot be empty when padding is required")
         logger.warning(
             f"MAGI projections ({len(magi_projections)}) shorter than year range "
             f"({expected_years}). Padding with last value."
         )
-        # Pad with last value if needed
-        magi_projections = magi_projections + [magi_projections[-1]] * (expected_years - len(magi_projections))
-    
+        magi_projections = (
+            magi_projections
+            + [magi_projections[-1]] * (expected_years - len(magi_projections))
+        )
+
     # Precompute MAGI lookback values (2 years prior for IRMAA)
     # For first 2 years, use the initial MAGI value since no prior data exists
     magi_lookback = [magi_projections[0]] * 2 + magi_projections
-    
-    projections = []
-    
-    for i, year in enumerate(range(start_year, end_year + 1)):
-        age_primary = age_primary_start + i
-        age_spouse = age_spouse_start + i
-        
-        # Get MAGI from 2 years ago for IRMAA (precomputed)
-        magi_two_years_ago = magi_lookback[i]
-        
-        # Calculate costs
-        total_cost, breakdown = calculate_total_healthcare_costs(
-            age_primary=age_primary,
-            age_spouse=age_spouse,
-            magi_two_years_ago=magi_two_years_ago,
-            year=year,
-            health_status=health_status,
-            has_ltc_insurance=has_ltc_insurance,
-            has_medigap=has_medigap
+
+    projections = [
+        _healthcare_projection_row(
+            i, year,
+            age_primary_start, age_spouse_start,
+            magi_lookback,
+            health_status, has_ltc_insurance, has_medigap,
         )
-        
-        projections.append({
-            'year': year,
-            'age_primary': age_primary,
-            'age_spouse': age_spouse,
-            'total_healthcare_cost': total_cost,
-            **breakdown
-        })
-    
+        for i, year in enumerate(range(start_year, end_year + 1))
+    ]
     return pd.DataFrame(projections)
 
 
@@ -2874,8 +2975,8 @@ class WithdrawalStrategyEngine:
                 ss_primary = 0
                 if person1_fra_benefit > 0 and age_primary >= person1_claiming_age:
                     ss_primary = calculate_ssi_benefits_dynamic(
-                            year=year,
-                            person_name=person1_name or "Person 1",
+                        year=year,
+                        person_name=person1_name or "Person 1",
                         birth_year=person1_birth_year,
                         claiming_age=person1_claiming_age,
                         fra_benefit=person1_fra_benefit,
@@ -2905,8 +3006,8 @@ class WithdrawalStrategyEngine:
                 # Log individual and combined benefits
                 if ss_primary > 0 or ss_spouse > 0:
                     logger.info(f"Year {year} SSI Benefits: "
-                              f"{person1_name}=${ss_primary:,.2f}/mo (age {age_primary}), "
-                              f"{person2_name}=${ss_spouse:,.2f}/mo (age {age_spouse}), "
+                              f"{person1_name or 'Person 1'}=${ss_primary:,.2f}/mo (age {age_primary}), "
+                              f"{person2_name or 'Person 2'}=${ss_spouse:,.2f}/mo (age {age_spouse}), "
                               f"Combined Annual=${ss_benefits:,.2f}")
                 
             except Exception as e:
@@ -3219,7 +3320,7 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
     logger.info(f"Total years calculated: {len(strategy_df)}")
     logger.info("=" * 80)
     
-    return strategy_df, pd.DataFrame(balances_df)
+    return strategy_df, cast(pd.DataFrame, balances_df)
 
 
 def calculate_aca_subsidy(magi: float, year: int, household_size: int = 2) -> Tuple[float, float]:
@@ -3512,8 +3613,11 @@ def _resolve_display_bounds(first_n: int, last_n: int, total_rows: int) -> tuple
     if first_n < 1 or last_n < 1:
         raise ValueError("first_n and last_n must be positive integers")
 
+    if total_rows == 0:
+        return 0, 0
+
     if first_n + last_n > total_rows:
-        logging.warning(
+        logger.warning(
             f"Requested {first_n + last_n} rows but only {total_rows} available. "
             f"Adjusting to show all rows."
         )

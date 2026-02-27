@@ -472,10 +472,12 @@ def calculate_betr_rate(
     # Validate inputs explicitly for defense-in-depth
     _validate_conversion_inputs(conversion_amount, years, annual_return, ordinary_income_tax_rate)
 
-    # Guard against zero-denominator: conversion_fv = 0 when amount or years = 0,
+    # Guard against zero-denominator: conversion_fv = 0 when conversion_amount = 0,
     # which would cause ZeroDivisionError in the BETR formula below.
     if conversion_amount == 0:
         raise ValueError("conversion_amount must be positive for BETR calculation")
+    # Semantic guard: years = 0 means no growth period, making BETR = 0% — economically
+    # meaningless and not a valid input for a conversion decision.
     if years == 0:
         raise ValueError("years must be positive for BETR calculation")
 
@@ -485,19 +487,18 @@ def calculate_betr_rate(
     )
 
     # Calculate BETR: 1 - (After-Tax FV / Conversion FV)
-    betr_rate = 1 - (result.after_tax_fv / result.conversion_fv)
+    betr = 1 - (result.after_tax_fv / result.conversion_fv)
 
     # Log consolidated calculation details at DEBUG — this is a mid-level helper;
     # top-level callers (calculate_betr) log at INFO.
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            f"BETR calculation: After-Tax FV=${result.after_tax_fv:,.2f}, "
-            f"Conversion FV=${result.conversion_fv:,.2f}, "
-            f"BETR=1-({result.after_tax_fv:,.2f}/{result.conversion_fv:,.2f})={betr_rate:.4%} "
-            f"(Convert if future tax rate > {betr_rate:.2%})"
-        )
-    
-    return betr_rate
+    logger.debug(
+        f"BETR calculation: After-Tax FV=${result.after_tax_fv:,.2f}, "
+        f"Conversion FV=${result.conversion_fv:,.2f}, "
+        f"BETR=1-({result.after_tax_fv:,.2f}/{result.conversion_fv:,.2f})={betr:.4%} "
+        f"(Convert if future tax rate > {betr:.2%})"
+    )
+
+    return betr
 
 
 def _get_ltcg_rate(income: float, year: int) -> float:
