@@ -17,7 +17,7 @@ def color_negative_positive(value):
         return 'color: red' if value < 0 else 'color: green'
     return ''
 
-@st.cache_data()
+@st.cache_data(ttl=300)  # refresh every 5 minutes
 def get_current_price(symbol):
     # For cash holdings, return 1.0 (no price lookup needed)
     if symbol == "MF:CASH":
@@ -152,7 +152,7 @@ def getPortfolioData(month=None, year=None):
     portdf = get_portfolio_truth_by_month(month, year)
     
     # Select the required columns, now including account_name for unique identification
-    selected_columns = ['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price']
+    selected_columns = ['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date']
     df_selected = portdf[selected_columns]
     
     # Remove duplicates based on account_name and symbol combination
@@ -209,71 +209,81 @@ def build_portfolio_display(month=None, year=None):
     Includes a totals row at the bottom.
     """
     portfolio_data = getPortfolioData(month=month, year=year)
-    
-    portdf = pd.DataFrame(columns=['Account','Tax Type','Ticker', 'Name','Sector', 'Quantity', 'Price', "Current value", "Cost Basis","Net Return","Dividend date","Dividend Amount","annual dividend amount","dividend yield"])
-    
-    # Iterate through each unique account_name + symbol combination
-    for _, row in portfolio_data.iterrows():
-        account_name = row['account_name']
-        symbol = row['symbol']
-        tax_type = row['account_type']
-        qty = row['qty']
-        purchase_price = row['purchase_price']
-        
-        # Display ticker as "Cash" if it's MF:CASH
-        display_ticker = "Cash" if symbol == "MF:CASH" else symbol
-        
-        # Get current price and calculate values
-        pricef = get_current_price(symbol)
-        sector = get_sector(symbol, month=month, year=year)
-        name = get_ticker_name(symbol, month=month, year=year)
-        
-        # Calculate values using the specific qty and purchase_price from this row
-        current_value = qty * pricef
-        cost_basis = qty * purchase_price
-        net_return = current_value - cost_basis
-        
-        # Get dividend information
-        divy_date, divy_amtf, annual_divy_amountf = get_current_dividend(symbol, month=month, year=year)
-        
-        # Calculate dividend yield
-        divy_yield = annual_divy_amountf/cost_basis if cost_basis > 0 else 0
-        
-        # Format quantity: whole number if no decimal, otherwise 2 decimal places
-        formatted_qty = format_quantity(qty)
-        price = str(pricef)
-        divy_amt = str(divy_amtf)
-        #annual_divy_amount = str(annual_divy_amountf)
-        portdf.loc[len(portdf)] = [account_name, tax_type, display_ticker, name, sector, formatted_qty, price, current_value, cost_basis, net_return, divy_date, divy_amt, annual_divy_amountf, divy_yield]
 
-    # Add totals row at the bottom
+    # Pre-fetch per-symbol data once to avoid redundant external calls for
+    # symbols that appear across multiple accounts.
+    unique_symbols = portfolio_data['symbol'].unique()
+    price_cache    = {s: get_current_price(s)                            for s in unique_symbols}
+    sector_cache   = {s: get_sector(s, month=month, year=year)           for s in unique_symbols}
+    name_cache     = {s: get_ticker_name(s, month=month, year=year)      for s in unique_symbols}
+    dividend_cache = {s: get_current_dividend(s, month=month, year=year) for s in unique_symbols}
+
+    # Accumulate rows as dicts; build the DataFrame once to avoid O(n²)
+    # resize overhead from repeated in-place appends.
+    rows = []
+    for _, row in portfolio_data.iterrows():
+        account_name   = row['account_name']
+        symbol         = row['symbol']
+        tax_type       = row['account_type']
+        qty            = row['qty']
+        purchase_price = row['purchase_price']
+
+        display_ticker = "Cash" if symbol == "MF:CASH" else symbol
+
+        pricef                                    = price_cache[symbol]
+        sector                                    = sector_cache[symbol]
+        name                                      = name_cache[symbol]
+        divy_date, divy_amtf, annual_divy_amountf = dividend_cache[symbol]
+
+        current_value = qty * pricef
+        cost_basis    = qty * purchase_price
+        net_return    = current_value - cost_basis
+        divy_yield    = annual_divy_amountf / cost_basis if cost_basis > 0 else 0
+
+        rows.append({
+            'Account':                account_name,
+            'Tax Type':               tax_type,
+            'Ticker':                 display_ticker,
+            'Name':                   name,
+            'Sector':                 sector,
+            'Quantity':               format_quantity(qty),
+            'Price':                  pricef,
+            'Current value':          current_value,
+            'Cost Basis':             cost_basis,
+            'Net Return':             net_return,
+            'Dividend date':          divy_date,
+            'Dividend Amount':        divy_amtf,
+            'annual dividend amount': annual_divy_amountf,
+            'dividend yield':         divy_yield,
+        })
+
+    portdf = pd.DataFrame(rows)
+
+    # Append totals row at the bottom.
     if not portdf.empty:
-        total_current_value = portdf["Current value"].sum()
-        total_cost_basis = portdf["Cost Basis"].sum()
-        total_net_return = portdf["Net Return"].sum()
-        total_annual_dividend = portdf["annual dividend amount"].sum()
-        
-        # Calculate overall dividend yield
-        total_dividend_yield = total_annual_dividend / total_cost_basis if total_cost_basis > 0 else 0
-        
-        # Add the totals row
+        total_current_value   = portdf['Current value'].sum()
+        total_cost_basis      = portdf['Cost Basis'].sum()
+        total_net_return      = portdf['Net Return'].sum()
+        total_annual_dividend = portdf['annual dividend amount'].sum()
+        total_dividend_yield  = total_annual_dividend / total_cost_basis if total_cost_basis > 0 else 0
+
         totals_row = pd.DataFrame([{
-            'Account': 'Portfolio Totals',
-            'Tax Type': '',
-            'Ticker': '',
-            'Name': '',
-            'Sector': '',
-            'Quantity': '',
-            'Price': '',
-            'Current value': total_current_value,
-            'Cost Basis': total_cost_basis,
-            'Net Return': total_net_return,
-            'Dividend date': '',
-            'Dividend Amount': '',
+            'Account':                'Portfolio Totals',
+            'Tax Type':               '',
+            'Ticker':                 '',
+            'Name':                   '',
+            'Sector':                 '',
+            'Quantity':               '',
+            'Price':                  '',
+            'Current value':          total_current_value,
+            'Cost Basis':             total_cost_basis,
+            'Net Return':             total_net_return,
+            'Dividend date':          '',
+            'Dividend Amount':        '',
             'annual dividend amount': total_annual_dividend,
-            'dividend yield': total_dividend_yield
+            'dividend yield':         total_dividend_yield,
         }])
-        
+
         portdf = pd.concat([portdf, totals_row], ignore_index=True)
 
     return portdf
