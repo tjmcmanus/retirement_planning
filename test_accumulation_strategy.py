@@ -17,6 +17,7 @@ from strategy import (
     Stage2PrepForRetirement,
     build_accumulation_strategy_display,
     generate_strategy_summary,
+    _get_latest_retirement_year,
 )
 
 
@@ -67,27 +68,31 @@ def test_stage1_accumulation_applies():
     """Test Stage1Accumulation.applies() logic.
 
     Stage 1 applies when has_wages=True AND the current year is outside the
-    Stage 2 prep window (i.e. more than PREP_WINDOW_YEARS before the earliest
+    Stage 2 prep window (i.e. more than PREP_WINDOW_YEARS before the latest
     configured retirement year).  Years within the prep window correctly yield
-    to Stage 2, so we use a year well outside that window (2015) to test the
-    pure Stage-1 path.
+    to Stage 2.  We derive the boundary years from the live config so the test
+    remains correct regardless of the user's retirement dates.
     """
     stage = Stage1Accumulation()
+    latest_ret_year = _get_latest_retirement_year()
+    prep_window = Stage2PrepForRetirement.PREP_WINDOW_YEARS
 
-    # Year well outside the prep window → Stage 1 should apply with wages
-    assert stage.applies(35, 33, 2015, has_wages=True,  has_ss=False), \
-        "Stage 1 should apply at age 35 with wages (outside prep window)"
-    assert stage.applies(45, 43, 2015, has_wages=True,  has_ss=False), \
+    # A year well outside the prep window → Stage 1 should apply with wages
+    year_outside = latest_ret_year - prep_window - 5
+    assert stage.applies(35, 33, year_outside, has_wages=True,  has_ss=False), \
+        "Stage 1 should apply with wages when outside the prep window"
+    assert stage.applies(45, 43, year_outside, has_wages=True,  has_ss=False), \
         "Stage 1 should apply at age 45 with wages (outside prep window)"
 
     # Should NOT apply without wages regardless of year
-    assert not stage.applies(45, 43, 2015, has_wages=False, has_ss=False), \
+    assert not stage.applies(45, 43, year_outside, has_wages=False, has_ss=False), \
         "Stage 1 should not apply without wages"
-    assert not stage.applies(60, 58, 2015, has_wages=False, has_ss=True), \
+    assert not stage.applies(60, 58, year_outside, has_wages=False, has_ss=True), \
         "Stage 1 should not apply without wages even with SS"
 
     # Within the prep window → Stage 1 yields to Stage 2 (returns False)
-    assert not stage.applies(45, 43, 2026, has_wages=True, has_ss=False), \
+    year_inside = latest_ret_year - prep_window + 2  # 2 years inside the window
+    assert not stage.applies(45, 43, year_inside, has_wages=True, has_ss=False), \
         "Stage 1 should yield to Stage 2 when within the prep window"
 
 

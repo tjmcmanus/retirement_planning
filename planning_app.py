@@ -388,6 +388,13 @@ def _fmt_currency(v: float) -> str:
     """Format *v* as an accounting-style currency string.
 
     Negative values are shown in parentheses: ``$(1,234.56)``.
+
+    Note:
+        This is intentionally distinct from :func:`format_currency` (line 151),
+        which omits decimals for whole numbers and returns ``""`` for NaN.
+        ``_fmt_currency`` always shows two decimal places and uses accounting
+        parentheses for negatives — the correct style for a formal net worth
+        statement.
     """
     if v < 0:
         return f"$({abs(v):,.2f})"
@@ -436,30 +443,33 @@ def _nw_type_rows(
     border     = styles["border"]
     n          = len(accounts)
 
-    # Fix 3: shared base style eliminates three-way duplication of padding/border/bg
+    # Shared base style eliminates three-way duplication of padding/border/bg
     _td_base = f"padding:6px 12px;border:{border};background:{row_bg};"
     td_r     = f'style="{_td_base}text-align:right;"'
     td_l     = f'style="{_td_base}text-align:left;"'
     td_span  = f'style="{_td_base}border-left:4px solid {accent};text-align:left;font-weight:700;vertical-align:middle;"'
     td_total = f'style="{_td_base}text-align:right;font-weight:600;vertical-align:middle;"'
 
-    # Fix 1: avoid iterrows() — handle first row via iloc[0], rest via itertuples()
-    first = accounts.iloc[0]
-    rows: list[str] = [
-        f'<tr>'
-        f'<td rowspan="{n}" {td_span}>{label}</td>'
-        f'<td rowspan="{n}" {td_total}>{_fmt_currency(type_total)}</td>'
-        f'<td {td_r}>{_fmt_currency(float(first["market_value"]))}</td>'
-        f'<td {td_l}>{str(first["account_name"])}</td>'
-        f'</tr>'
-    ]
-    rows += [
-        f'<tr>'
-        f'<td {td_r}>{_fmt_currency(float(row.market_value))}</td>'
-        f'<td {td_l}>{str(row.account_name)}</td>'
-        f'</tr>'
-        for row in accounts.iloc[1:].itertuples(index=False)
-    ]
+    # Use itertuples() uniformly for all rows — consistent attribute access,
+    # avoids the mixed iloc[0]/label-index pattern that breaks on column rename.
+    rows: list[str] = []
+    for i, row in enumerate(accounts.itertuples(index=False)):
+        if i == 0:
+            rows.append(
+                f'<tr>'
+                f'<td rowspan="{n}" {td_span}>{label}</td>'
+                f'<td rowspan="{n}" {td_total}>{_fmt_currency(type_total)}</td>'
+                f'<td {td_r}>{_fmt_currency(float(row.market_value))}</td>'
+                f'<td {td_l}>{str(row.account_name)}</td>'
+                f'</tr>'
+            )
+        else:
+            rows.append(
+                f'<tr>'
+                f'<td {td_r}>{_fmt_currency(float(row.market_value))}</td>'
+                f'<td {td_l}>{str(row.account_name)}</td>'
+                f'</tr>'
+            )
     return rows
 
 
@@ -562,6 +572,7 @@ def _compute_net_worth_summary(networth: pd.DataFrame) -> dict:
 def _build_net_worth_html(
     acct_grp: pd.DataFrame,
     summary: dict,
+    styles: dict[str, str] = _NW_STYLES,
 ) -> str:
     """Build and return the complete net worth statement HTML string.
 
@@ -572,11 +583,13 @@ def _build_net_worth_html(
         acct_grp: DataFrame with columns ``account_type``, ``account_name``,
                   ``market_value`` (already grouped/summed).
         summary:  Dict returned by ``_compute_net_worth_summary``.
+        styles:   Style-constant dict; defaults to ``_NW_STYLES``.  Pass a
+                  custom dict to override colours without touching the module
+                  global — useful for tests or themed variants.
 
     Returns:
         A self-contained HTML string (``<h4>`` heading + ``<table>``).
     """
-    styles = _NW_STYLES
     rows: list[str] = [_nw_header_row(styles)]
 
     for acct_type in _ACCOUNT_TYPE_ORDER:
@@ -610,13 +623,20 @@ def _get_real_estate_rows() -> pd.DataFrame:
     Returns:
         DataFrame with columns account_type, account_name, market_value
         representing each property at its purchase price.
+        Returns an empty typed DataFrame when no properties are configured or
+        when the config cannot be loaded.
     """
+    _empty = pd.DataFrame({
+        "account_type": pd.Series(dtype=str),
+        "account_name": pd.Series(dtype=str),
+        "market_value": pd.Series(dtype=float),
+    })
     try:
         from config import get_config_manager
         cfg = get_config_manager()
         properties = cfg.get("real_estate", "properties", [])
         if not properties:
-            return pd.DataFrame(columns=["account_type", "account_name", "market_value"])
+            return _empty
         rows = []
         for prop in properties:
             name = prop.get("property_name", "Property")
@@ -627,8 +647,9 @@ def _get_real_estate_rows() -> pd.DataFrame:
                 "market_value": price,
             })
         return pd.DataFrame(rows)
-    except Exception:
-        return pd.DataFrame(columns=["account_type", "account_name", "market_value"])
+    except Exception as exc:
+        st.warning(f"Could not load real estate config: {exc}")
+        return _empty
 
 
 def render_net_worth_statement(
@@ -675,11 +696,13 @@ def render_net_worth_statement(
         .sum()
     )
 
-    # Augment the networth summary total with real estate purchase prices
+    # Augment only the current-month (last) row with real estate purchase prices.
+    # Adding re_total to every historical row would inflate the baseline used by
+    # _compute_net_worth_summary, causing MoM/YTD/rolling gains to be understated.
     re_total = float(re_rows["market_value"].sum()) if not re_rows.empty else 0.0
     nw_augmented = networth.copy()
     if re_total > 0:
-        nw_augmented["total"] = nw_augmented["total"] + re_total
+        nw_augmented.iloc[-1, nw_augmented.columns.get_loc("total")] += re_total
 
     summary = _compute_net_worth_summary(nw_augmented)
     html    = _build_net_worth_html(acct_grp, summary)
@@ -958,7 +981,7 @@ with tab1:
         portfolio_by_sector.update_layout(margin = dict(t=50, l=25, r=25, b=25))
 
         st.plotly_chart(portfolio_by_sector, width='stretch')
-       
+
 with tab3:
     
     st.header("💼 Portfolio")
@@ -1097,6 +1120,214 @@ with tab_accum:
     st.header("📈 Strategy")
     st.markdown("Plan and review your accumulation and withdrawal strategy across all life stages.")
 
+    # ------------------------------------------------------------------ #
+    # 🎯 Retirement Readiness Indicator                                    #
+    # ------------------------------------------------------------------ #
+    st.markdown("#### 🎯 Retirement Readiness Indicator")
+    st.caption(
+        "A composite snapshot of how prepared you are across key retirement planning dimensions. "
+        "Each indicator is scored 0–100. Click any expander for details and next steps."
+    )
+
+    try:
+        from config import get_config_manager as _get_cfg
+        import json as _json
+        import os as _os
+
+        _cfg = _get_cfg()
+
+        # ── 1. Portfolio Funding (4% rule: need 25× annual expenses) ──────────
+        _annual_exp   = float(_cfg.get("financial_assumptions", "expected_annual_expenses", 50_000) or 50_000)
+        _target_port  = _annual_exp * 25.0
+        _current_port = float(networth["total"].iloc[-1]) if not networth.empty else 0.0
+        # Add real estate to portfolio total for funding check
+        try:
+            _re_props = _cfg.get("real_estate", "properties", []) or []
+            _re_total_rri = sum(float(p.get("purchase_price", 0) or 0) for p in _re_props)
+        except Exception:
+            _re_total_rri = 0.0
+        _total_assets = _current_port + _re_total_rri
+        _funding_pct  = min(_total_assets / _target_port * 100, 100) if _target_port > 0 else 0.0
+        _funding_score = _funding_pct  # 0–100
+
+        # ── 2. Estate Planning Completeness ───────────────────────────────────
+        _estate_score = 0.0
+        _ep_done, _ep_tot = 0, 0
+        try:
+            if _os.path.exists("estate_planning_data.json"):
+                with open("estate_planning_data.json") as _ef:
+                    _ed = _json.load(_ef)
+                # Count boolean "done" flags recursively
+                def _count_done(d: dict) -> tuple[int, int]:
+                    tot, done = 0, 0
+                    for v in d.values():
+                        if isinstance(v, dict):
+                            if "done" in v:
+                                tot += 1
+                                if v["done"]:
+                                    done += 1
+                            else:
+                                s_done, s_tot = _count_done(v)
+                                done += s_done; tot += s_tot
+                    return done, tot
+                _ep_done, _ep_tot = _count_done(_ed)
+                # Also credit core documents from assessment
+                _assess = _ed.get("assessment", {})
+                _core_checks = ["has_will", "has_poa", "has_healthcare_directive", "beneficiaries_current"]
+                _core_done = sum(1 for k in _core_checks if _assess.get(k, False))
+                _estate_score = min((_ep_done / _ep_tot * 70 if _ep_tot > 0 else 0) + (_core_done / len(_core_checks) * 30), 100)
+            else:
+                _estate_score = 0.0
+        except Exception:
+            _estate_score = 0.0
+
+        # ── 3. Tax Diversification (Roth ratio target: 30–50%) ────────────────
+        _trad_bal  = float(networth["tax_deferred"].iloc[-1]) if not networth.empty else 0.0
+        _roth_bal  = float(networth["tax_free"].iloc[-1])     if not networth.empty else 0.0
+        _roth_r    = (_roth_bal / (_roth_bal + _trad_bal) * 100) if (_roth_bal + _trad_bal) > 0 else 0.0
+        # Score peaks at 40% Roth ratio, falls off on either side
+        _tax_div_score = max(0.0, 100.0 - abs(_roth_r - 40.0) * 2.5)
+
+        # ── 4. Social Security Configured ─────────────────────────────────────
+        _p1_ssi = float(_cfg.get("social_security", "person1_ssi_amount", 0) or 0)
+        _p2_ssi = float(_cfg.get("social_security", "person2_ssi_amount", 0) or 0)
+        _ssi_score = 100.0 if (_p1_ssi > 0 and _p2_ssi > 0) else (50.0 if (_p1_ssi > 0 or _p2_ssi > 0) else 0.0)
+
+        # ── 5. Healthcare Coverage Configured ─────────────────────────────────
+        _aca_enrolled = bool(_cfg.get("healthcare", "aca_marketplace_enrolled", False))
+        _p1_aca_amt   = float(_cfg.get("healthcare", "person1_aca_insurance_monthly", 0) or 0)
+        _p2_aca_amt   = float(_cfg.get("healthcare", "person2_aca_insurance_monthly", 0) or 0)
+        _medicare_age = int(_cfg.get("healthcare", "person1_medicare_start_age", 65) or 65)
+        _healthcare_score = 100.0 if (_aca_enrolled and (_p1_aca_amt > 0 or _p2_aca_amt > 0)) else (
+            60.0 if (_p1_aca_amt > 0 or _p2_aca_amt > 0) else 20.0
+        )
+
+        # ── 6. Emergency / Cash Buffer ────────────────────────────────────────
+        _target_months = int(_cfg.get("financial_assumptions", "accumulation_cash_buffer_months", 6) or 6)
+        _wages_total   = (
+            float(_cfg.get("income", "person1_annual_wages", 0) or 0) +
+            float(_cfg.get("income", "person2_annual_wages", 0) or 0)
+        )
+        _cash_bal = float(networth["cash"].iloc[-1]) if not networth.empty else 0.0
+        _yrs_cash = float(_cfg.get("financial_assumptions", "years_of_expenses_in_cash", 4) or 4)
+        _cash_target_ret = _annual_exp * _yrs_cash  # always defined
+        _cash_target = _wages_total * _target_months / 12 if _wages_total > 0 else _cash_target_ret
+        if _wages_total > 0:
+            _cash_score = min(_cash_bal / _cash_target * 100, 100) if _cash_target > 0 else 50.0
+        else:
+            # Retired: score based on years-of-expenses in cash
+            _cash_score = min(_cash_bal / _cash_target_ret * 100, 100) if _cash_target_ret > 0 else 50.0
+
+        # ── Weighted composite score ───────────────────────────────────────────
+        # Weights: Funding 35%, Estate 20%, Tax Div 15%, SSI 10%, Healthcare 10%, Cash 10%
+        _weights = [0.35, 0.20, 0.15, 0.10, 0.10, 0.10]
+        _scores  = [_funding_score, _estate_score, _tax_div_score, _ssi_score, _healthcare_score, _cash_score]
+        _overall = sum(w * s for w, s in zip(_weights, _scores))
+
+        def _rri_color(score: float) -> str:
+            if score >= 75: return "#21c354"
+            if score >= 50: return "#ffa500"
+            return "#ff4b4b"
+
+        def _rri_label(score: float) -> str:
+            if score >= 75: return "🟢 On Track"
+            if score >= 50: return "🟡 Needs Attention"
+            return "🔴 Action Required"
+
+        # ── Overall gauge ──────────────────────────────────────────────────────
+        _gauge_fig = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=_overall,
+            delta={"reference": 75, "valueformat": ".0f"},
+            title={"text": "Overall Retirement Readiness", "font": {"size": 16}},
+            gauge={
+                "axis": {"range": [0, 100], "tickwidth": 1},
+                "bar": {"color": _rri_color(_overall)},
+                "steps": [
+                    {"range": [0,  50], "color": "rgba(255,75,75,0.15)"},
+                    {"range": [50, 75], "color": "rgba(255,165,0,0.15)"},
+                    {"range": [75,100], "color": "rgba(33,195,84,0.15)"},
+                ],
+                "threshold": {
+                    "line": {"color": "#333", "width": 3},
+                    "thickness": 0.75,
+                    "value": 75,
+                },
+            },
+            number={"suffix": "%", "valueformat": ".0f"},
+        ))
+        _gauge_fig.update_layout(
+            height=260,
+            margin=dict(t=40, b=10, l=20, r=20),
+            paper_bgcolor="white",
+        )
+
+        _rri_col_gauge, _rri_col_metrics = st.columns([2, 3])
+        with _rri_col_gauge:
+            st.plotly_chart(_gauge_fig, width='stretch')
+            st.markdown(
+                f'<p style="text-align:center;font-size:18px;font-weight:700;'
+                f'color:{_rri_color(_overall)}">{_rri_label(_overall)}</p>',
+                unsafe_allow_html=True,
+            )
+
+        with _rri_col_metrics:
+            _ind_labels = [
+                ("💰 Portfolio Funding",      _funding_score,    f"{_funding_pct:.0f}% of 25× expenses target  (${_total_assets:,.0f} / ${_target_port:,.0f})"),
+                ("⚖️ Estate Planning",        _estate_score,     f"{_ep_done if _estate_score > 0 else 0} of {_ep_tot if _estate_score > 0 else '?'} checklist items complete"),
+                ("🔀 Tax Diversification",    _tax_div_score,    f"Roth ratio {_roth_r:.0f}%  (target 30–50%)"),
+                ("📋 Social Security",        _ssi_score,        "Both persons configured" if _ssi_score == 100 else ("One person configured" if _ssi_score == 50 else "Not configured — add SSI amounts in Configuration")),
+                ("🏥 Healthcare Coverage",    _healthcare_score, "ACA enrolled & premiums set" if _healthcare_score == 100 else ("Premiums set" if _healthcare_score == 60 else "Configure ACA/Medicare in Configuration")),
+                ("🏦 Cash / Emergency Fund",  _cash_score,       f"${_cash_bal:,.0f} vs ${_cash_target:,.0f} target"),
+            ]
+            for _ind_name, _ind_score, _ind_detail in _ind_labels:
+                _bar_color = _rri_color(_ind_score)
+                _bar_pct   = int(_ind_score)
+                st.markdown(
+                    f'<div style="margin-bottom:8px;">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                    f'<span style="font-size:13px;font-weight:600;">{_ind_name}</span>'
+                    f'<span style="font-size:13px;color:{_bar_color};font-weight:700;">{_bar_pct}%</span>'
+                    f'</div>'
+                    f'<div style="background:#e9ecef;border-radius:4px;height:8px;margin:3px 0;">'
+                    f'<div style="background:{_bar_color};width:{_bar_pct}%;height:8px;border-radius:4px;"></div>'
+                    f'</div>'
+                    f'<div style="font-size:11px;color:#666;">{_ind_detail}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        # ── Action items ───────────────────────────────────────────────────────
+        _actions: list[str] = []
+        if _funding_score < 75:
+            _gap = _target_port - _total_assets
+            _actions.append(f"💰 **Portfolio gap:** ${_gap:,.0f} below the 25× expenses target. Increase savings rate or adjust expense expectations.")
+        if _estate_score < 50:
+            _actions.append("⚖️ **Estate planning incomplete.** Visit the ⚖️ Estate Planning page to complete your checklist.")
+        if _tax_div_score < 50:
+            if _roth_r < 30:
+                _actions.append("🔀 **Low Roth ratio.** Consider Roth conversions to improve tax diversification.")
+            else:
+                _actions.append("🔀 **High Roth ratio.** Ensure you have sufficient Traditional assets for tax-bracket management in retirement.")
+        if _ssi_score < 100:
+            _actions.append("📋 **Social Security not fully configured.** Add SSI amounts in ⚙️ Configuration → Social Security.")
+        if _healthcare_score < 60:
+            _actions.append("🏥 **Healthcare coverage not configured.** Add ACA premiums in ⚙️ Configuration → Healthcare.")
+        if _cash_score < 50:
+            _actions.append(f"🏦 **Cash buffer below target.** Current: ${_cash_bal:,.0f}. Build toward ${_cash_target:,.0f}.")
+
+        if _actions:
+            with st.expander(f"📋 {len(_actions)} Action Item(s) to Improve Your Score", expanded=False):
+                for _act in _actions:
+                    st.markdown(f"- {_act}")
+        else:
+            st.success("✅ All retirement readiness indicators are on track!")
+
+    except Exception as _rri_err:
+        st.warning(f"⚠️ Could not compute retirement readiness indicator: {_rri_err}")
+
+    st.markdown("---")
+
     # Phase toggle: Accumulation (pre-retirement) vs Withdrawal (distribution)
     phase = st.radio(
         "Planning Phase",
@@ -1162,7 +1393,8 @@ with tab_accum:
 
                 display_cols_a = [
                     'Year', 'Age', 'Stage',
-                    'Wages', 'Trad→\nRoth', 'Trad→\nBrok',
+                    'Wages', 'Wages→\nPayroll', 'Wages→\nTrad', 'Wages→\nRoth',
+                    'Trad→\nRoth', 'Cash→\nRoth', 'Cash→\nBrok',
                     'Expenses', 'AGI', 'Federal Tax',
                     'Cash Balance',
                 ]
@@ -1178,8 +1410,12 @@ with tab_accum:
                     "Age": st.column_config.TextColumn("Age"),
                     "Stage": st.column_config.TextColumn("Life Stage", help=_STAGE_COLUMN_HELP),
                     "Wages": st.column_config.TextColumn("Wages"),
+                    "Wages→\nPayroll": st.column_config.TextColumn("Payroll Tax"),
+                    "Wages→\nTrad": st.column_config.TextColumn("Wages→Trad"),
+                    "Wages→\nRoth": st.column_config.TextColumn("Wages→Roth"),
                     "Trad→\nRoth": st.column_config.TextColumn("Trad→Roth"),
-                    "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok"),
+                    "Cash→\nRoth": st.column_config.TextColumn("Cash→Roth"),
+                    "Cash→\nBrok": st.column_config.TextColumn("Cash→Brok"),
                     "Expenses": st.column_config.TextColumn("Expenses"),
                     "AGI": st.column_config.TextColumn("AGI"),
                     "Federal Tax": st.column_config.TextColumn("Fed Tax"),

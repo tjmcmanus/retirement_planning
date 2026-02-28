@@ -5,11 +5,18 @@ Provides a comprehensive estate planning checklist, situation assessment,
 document tracker, and review schedule.
 """
 
+import logging
 import streamlit as st
 import json
 import os
 from datetime import datetime, date
 from config import get_config_manager
+
+logger = logging.getLogger(__name__)
+
+# Named constant for the federal estate tax threshold note.
+# The TCJA sunset in 2026 will reduce this from ~$13M (2024) to ~$7M.
+FEDERAL_ESTATE_TAX_THRESHOLD_NOTE = "$13M (2024, scheduled to drop ~$7M in 2026 per TCJA sunset)"
 
 st.set_page_config(page_title="Estate Planning", page_icon="⚖️", layout="wide")
 
@@ -26,8 +33,8 @@ def _load_estate_data() -> dict:
         try:
             with open(ESTATE_DATA_FILE, "r") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not load estate data from {ESTATE_DATA_FILE}: {e}")
     return {}
 
 
@@ -52,6 +59,23 @@ accounts_raw: list = config_mgr.get("portfolio_accounts", "accounts", []) or []
 account_names: list[str] = [a.get("account_name", "") for a in accounts_raw if a.get("account_name")]
 properties_raw: list = config_mgr.get("real_estate", "properties", []) or []
 property_names: list[str] = [p.get("property_name", "") for p in properties_raw if p.get("property_name")]
+
+# Children from configuration page
+_children_cfg: list = config_mgr.get("personal_info", "children", []) or []
+if not isinstance(_children_cfg, list):
+    _children_cfg = []
+# Derive summary flags from config data
+_cfg_has_minor_children: bool = any(
+    config_mgr.calculate_age(c.get("birth_date", "1900-01-01")) < 18
+    for c in _children_cfg
+    if c.get("birth_date")
+)
+_cfg_has_adult_children: bool = any(
+    config_mgr.calculate_age(c.get("birth_date", "1900-01-01")) >= 18
+    for c in _children_cfg
+    if c.get("birth_date")
+)
+_cfg_has_special_needs: bool = any(c.get("special_needs", False) for c in _children_cfg)
 
 # ---------------------------------------------------------------------------
 # Session state initialisation
@@ -107,7 +131,41 @@ with tab_assess:
 
     assess = estate.setdefault("assessment", {})
 
+    # Auto-populate flags from config children data (config is authoritative source)
+    if _children_cfg:
+        assess["minor_children"] = _cfg_has_minor_children
+        assess["adult_children"] = _cfg_has_adult_children
+        assess["special_needs_dependent"] = _cfg_has_special_needs
+
     st.subheader("Family & Beneficiaries")
+
+    # -----------------------------------------------------------------------
+    # Children summary panel (read from configuration)
+    # -----------------------------------------------------------------------
+    if _children_cfg:
+        st.info(
+            f"👶 **{len(_children_cfg)} child(ren) configured** in Personal Info. "
+            "The checkboxes below are automatically set from that data. "
+            "To add or edit children, go to ⚙️ Configuration → Personal Info."
+        )
+        _child_cols = st.columns(min(len(_children_cfg), 4))
+        for _ci, _child in enumerate(_children_cfg):
+            _cname = _child.get("name", f"Child {_ci + 1}")
+            _cbdate = _child.get("birth_date", "")
+            _cage = config_mgr.calculate_age(_cbdate) if _cbdate else "?"
+            _csn = _child.get("special_needs", False)
+            with _child_cols[_ci % len(_child_cols)]:
+                st.markdown(
+                    f"**{_cname}**  \n"
+                    f"Age: {_cage}  \n"
+                    + ("🔹 Special Needs" if _csn else "")
+                )
+    else:
+        st.caption(
+            "💡 No children configured. Add children in ⚙️ Configuration → Personal Info "
+            "to auto-populate the checkboxes below."
+        )
+
     col_a1, col_a2 = st.columns(2)
     with col_a1:
         assess["married"] = st.checkbox(
@@ -117,19 +175,22 @@ with tab_assess:
         )
         assess["minor_children"] = st.checkbox(
             "Do you have minor children (under 18)?",
-            value=assess.get("minor_children", False),
+            value=assess.get("minor_children", _cfg_has_minor_children),
             key="assess_minor_children",
+            disabled=bool(_children_cfg),  # locked when config data is present
         )
         assess["adult_children"] = st.checkbox(
             "Do you have adult children?",
-            value=assess.get("adult_children", False),
+            value=assess.get("adult_children", _cfg_has_adult_children),
             key="assess_adult_children",
+            disabled=bool(_children_cfg),
         )
     with col_a2:
         assess["special_needs_dependent"] = st.checkbox(
             "Do you have a dependent with special needs?",
-            value=assess.get("special_needs_dependent", False),
+            value=assess.get("special_needs_dependent", _cfg_has_special_needs),
             key="assess_special_needs",
+            disabled=bool(_children_cfg),
         )
         assess["blended_family"] = st.checkbox(
             "Is this a blended family (step-children, prior marriages)?",
@@ -162,7 +223,7 @@ with tab_assess:
         )
     with col_b2:
         assess["estate_over_threshold"] = st.checkbox(
-            "Is your estimated estate value over $13M (federal estate tax threshold 2024)?",
+            f"Is your estimated estate value over {FEDERAL_ESTATE_TAX_THRESHOLD_NOTE}?",
             value=assess.get("estate_over_threshold", False),
             key="assess_estate_threshold",
         )
@@ -247,7 +308,23 @@ with tab_assess:
     if assess.get("minor_children") and not assess.get("has_will"):
         recs.append("🔴 **Name a Guardian in Your Will** — You have minor children. A Will is the only way to legally name a guardian.")
     if assess.get("special_needs_dependent"):
-        recs.append("🔴 **Consider a Special Needs Trust** — Protects a disabled dependent's eligibility for government benefits.")
+        # Personalise with child name(s) if available
+        _sn_names = [c.get("name", "") for c in _children_cfg if c.get("special_needs", False)]
+        _sn_label = f" ({', '.join(n for n in _sn_names if n)})" if _sn_names else ""
+        recs.append(
+            f"🔴 **Consider a Special Needs Trust{_sn_label}** — "
+            "Protects a disabled dependent's eligibility for government benefits (SSI, Medicaid). "
+            "Assets held in a properly drafted SNT do not count against benefit eligibility limits."
+        )
+    if _children_cfg and any(
+        18 <= config_mgr.calculate_age(c.get("birth_date", "1900-01-01")) <= 22
+        for c in _children_cfg if c.get("birth_date")
+    ):
+        recs.append(
+            "🟡 **College Funding** — You have children approaching or in college age. "
+            "Consider 529 plan contributions, financial aid implications, and whether "
+            "your withdrawal strategy accounts for college expenses."
+        )
     if assess.get("has_business"):
         recs.append("🟡 **Create a Business Succession Plan** — Document what happens to your business interest at death or incapacity.")
     if assess.get("estate_over_threshold"):
@@ -889,7 +966,7 @@ with tab_progress:
     # Assessment completion
     assess_data = estate.get("assessment", {})
     assess_answered = sum(1 for v in assess_data.values() if isinstance(v, bool))
-    assess_total_q = 18  # total questions in assessment
+    assess_total_q = len([v for v in assess_data.values() if isinstance(v, bool)])
 
     # Overall
     overall_done = legal_done + fin_done + prop_done + sched_done + doc_done

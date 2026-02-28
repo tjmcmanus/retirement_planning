@@ -452,6 +452,46 @@ def _update_daf(daf_in: float, daf: float, daf_rate: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Proposal C — _split_conversions(): isolates the brokerage-threshold split
+# so it can be unit-tested independently of the full account-update logic.
+# ---------------------------------------------------------------------------
+
+def _split_conversions(
+    conversions: float,
+    brokerage: float,
+    annual_expenses: float,
+    taxes: float,
+    expense_multiplier: int,
+) -> tuple[float, float]:
+    """
+    Split Roth conversion proceeds between brokerage and tax-free accounts.
+
+    When brokerage is below the expense-multiple threshold, half the
+    conversion flows to brokerage to rebuild the taxable buffer and the
+    other half goes to tax-free.  Above the threshold the full amount goes
+    to tax-free.
+
+    The invariant ``conversions_to_brokerage + conversions_to_tax_free ==
+    conversions`` holds in both branches.
+
+    Args:
+        conversions:        Total Roth conversion amount for the year.
+        brokerage:          Current brokerage balance (before this year's update).
+        annual_expenses:    Deflated living expenses for this year.
+        taxes:              Tax liability for this year.
+        expense_multiplier: Multiplier applied to (expenses + taxes) to set
+                            the brokerage rebuild threshold.
+
+    Returns:
+        tuple[float, float]: (conversions_to_brokerage, conversions_to_tax_free)
+    """
+    threshold = (annual_expenses + taxes) * expense_multiplier
+    if brokerage < threshold:
+        return conversions / 2, conversions / 2
+    return 0.0, conversions
+
+
+# ---------------------------------------------------------------------------
 # Proposal B — _update_accounts(): isolates the three-account update block
 # (cash, brokerage, tax-free) so it can be unit-tested independently.
 # ---------------------------------------------------------------------------
@@ -498,7 +538,7 @@ def _update_accounts(
     # ── Cash ─────────────────────────────────────────────────────────────────
     # Cash earns ~1/3 of the equity growth rate (conservative assumption for
     # money-market / short-term instruments).
-    cash_rate = (cfg.rate - 1) / 3
+    cash_growth_rate = (cfg.rate - 1) / 3
     cash_seed = _apply_seed_once(state.cash, cfg.cash_in)
     new_cash = (
         state.cash
@@ -507,15 +547,15 @@ def _update_accounts(
         + portfolio_withdrawal
         - annual_expenses
         - taxes
-    ) * (1 + cash_rate)
+    ) * (1 + cash_growth_rate)
 
     # ── Brokerage ─────────────────────────────────────────────────────────────
-    # When brokerage is below the expense-multiple threshold, split conversions
-    # evenly between brokerage and tax-free to rebuild the taxable buffer.
-    brokerage_threshold = (annual_expenses + taxes) * cfg.expense_multiplier
-    below_threshold = state.brokerage < brokerage_threshold
-    conversions_to_brokerage = conversions / 2 if below_threshold else 0.0
-    conversions_to_tax_free  = conversions / 2 if below_threshold else conversions
+    # Delegate the threshold split to _split_conversions() so the rule is
+    # independently testable and the invariant to_brokerage + to_tax_free
+    # == conversions is enforced in one place.
+    conversions_to_brokerage, conversions_to_tax_free = _split_conversions(
+        conversions, state.brokerage, annual_expenses, taxes, cfg.expense_multiplier
+    )
     new_brokerage = (
         state.brokerage
         + planned_dist

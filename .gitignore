@@ -10,5 +10,8 @@ __pycache__/
 # Contains personal information like names, birth dates, and financial data
 retirement_config.json
 
+# Estate planning data - Contains sensitive personal/legal info (names, beneficiaries, healthcare directives)
+estate_planning_data.json
+
 # Runtime-generated timestamped backup files (only portfolio_data_truth.csv should be tracked)
 portfolio_data_truth_????????_??????.csv
