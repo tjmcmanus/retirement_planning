@@ -24,6 +24,7 @@ Version: 2.0 - BETR Integration
 """
 
 import functools
+import itertools
 import pandas as pd
 import numpy as np
 import logging
@@ -31,7 +32,7 @@ import os
 import types
 from datetime import datetime
 from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, cast, TypedDict
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from enum import Enum
 
 from load_data import (
@@ -131,6 +132,15 @@ LTC_ANNUAL_PREMIUM_PER_PERSON: int = 3_500
 # MAGI reported in year N-2.  This constant makes that window explicit and
 # provides a single point of change should the IRS ever alter the period.
 _IRMAA_LOOKBACK_YEARS: int = 2
+
+# Minimum deficit below which buffer replenishment is skipped (de-minimis threshold).
+# Avoids triggering taxable distributions for trivially small shortfalls.
+# Used by both replenish_cash_buffer() and replenish_brokerage_buffer().
+_BUFFER_REPLENISHMENT_MIN_DEFICIT: float = 100.0
+
+# Maximum fraction of the Traditional balance that may be distributed to the
+# brokerage buffer in a single year.  Caps the ordinary-income tax hit.
+_MAX_TRADITIONAL_TO_BROKERAGE_RATE: float = 0.15
 
 
 def calculate_ssi_benefits_dynamic(year: int, person_name: str, birth_year: int,
@@ -1271,6 +1281,40 @@ class HealthcareCostBreakdown:
         return self.medicare + self.pre_medicare + self.out_of_pocket + self.ltc_insurance
 
 
+def _calculate_medicare(
+    status: _AgeStatus,
+    age_primary: int,
+    age_spouse: int,
+    magi_two_years_ago: float,
+    year: int,
+    filing_status: str,
+    has_medigap: bool,
+) -> Tuple[float, MedicareBreakdown]:
+    """Return ``(cost, detail)`` for Medicare-eligible persons; ``(0.0, empty)`` otherwise.
+
+    Centralises the ``medicare_count`` guard and the ``_EMPTY_MEDICARE_BREAKDOWN``
+    sentinel so that :func:`calculate_total_healthcare_costs` does not need to
+    manage mutable initialisation before a conditional call.
+
+    Args:
+        status:             Pre-computed eligibility flags from :func:`_classify_ages`.
+        age_primary:        Primary person's age.
+        age_spouse:         Spouse's age; 0 means no spouse.
+        magi_two_years_ago: MAGI from 2 years prior (used for IRMAA).
+        year:               Current year.
+        filing_status:      Filing status string (e.g. ``"married_filing_jointly"``).
+        has_medigap:        Whether they carry Medigap coverage.
+
+    Returns:
+        Tuple of ``(medicare_cost, MedicareBreakdown)``.
+    """
+    if status.medicare_count == 0:
+        return 0.0, _EMPTY_MEDICARE_BREAKDOWN
+    return calculate_medicare_costs(
+        age_primary, age_spouse, magi_two_years_ago, year, filing_status, has_medigap
+    )
+
+
 def calculate_total_healthcare_costs(age_primary: int,
                                      age_spouse: int,
                                      magi_two_years_ago: float,
@@ -1305,30 +1349,22 @@ def calculate_total_healthcare_costs(age_primary: int,
     )
 
     # --- Medicare costs (one or both persons aged 65+) -------------------
-    medicare_cost = 0.0
-    medicare_detail: MedicareBreakdown = _EMPTY_MEDICARE_BREAKDOWN
-    if status.medicare_count > 0:
-        medicare_cost, medicare_detail = calculate_medicare_costs(
-            age_primary, age_spouse, magi_two_years_ago, year,
-            filing_status, has_medigap
-        )
+    medicare_cost, medicare_detail = _calculate_medicare(
+        status, age_primary, age_spouse, magi_two_years_ago, year,
+        filing_status, has_medigap
+    )
 
     # --- Pre-Medicare / ACA costs (one or both persons under 65) ---------
-    aca_cost = 0.0
-    if status.pre_medicare_count > 0:
-        aca_cost = calculate_aca_premium_for_year(year, age_primary, age_spouse)
-        logger.debug(
-            f"Pre-Medicare costs: ${aca_cost:,.0f} "
-            f"for {status.pre_medicare_count} person(s)"
-        )
+    # calculate_aca_premium_for_year returns 0.0 when neither person is in
+    # their configured ACA age window, so no guard is needed here.
+    aca_cost = calculate_aca_premium_for_year(year, age_primary, age_spouse)
 
     # --- Out-of-pocket expenses -------------------------------------------
-    oop_cost = OOP_COSTS_BY_HEALTH_STATUS.get(health_status, OOP_COST_DEFAULT)
+    # Falls back to OOP_COST_DEFAULT ("average") for unrecognised health_status values.
+    oop_cost: int = OOP_COSTS_BY_HEALTH_STATUS.get(health_status, OOP_COST_DEFAULT)
 
     # --- Long-term care insurance premiums --------------------------------
-    ltc_cost = 0.0
-    if has_ltc_insurance:
-        ltc_cost = LTC_ANNUAL_PREMIUM_PER_PERSON * status.total_persons
+    ltc_cost = LTC_ANNUAL_PREMIUM_PER_PERSON * status.total_persons if has_ltc_insurance else 0.0
 
     breakdown = HealthcareCostBreakdown(
         medicare=medicare_cost,
@@ -1354,27 +1390,49 @@ def _validate_healthcare_projection_inputs(
             f"start_year ({start_year}) must be <= end_year ({end_year})"
         )
     if not magi_projections:
-        raise ValueError("magi_projections cannot be empty")
+        raise ValueError(
+            "magi_projections must contain at least one value "
+            f"(one per year from {start_year} to {end_year})"
+        )
+
+
+def _build_magi_lookback(magi_projections: Sequence[float]) -> List[float]:
+    """Prepend ``_IRMAA_LOOKBACK_YEARS`` sentinel values to *magi_projections*.
+
+    IRMAA surcharges in year N are based on MAGI from year N-2.  By prepending
+    ``_IRMAA_LOOKBACK_YEARS`` copies of the first projected value, index
+    ``year_index`` into the returned list always yields the correct lookback
+    MAGI for projection year ``year_index``, with no special-casing for the
+    first two years.
+
+    Args:
+        magi_projections: Already-padded sequence of MAGI values, one per
+            projection year.  Must be non-empty.
+
+    Returns:
+        New list of length ``len(magi_projections) + _IRMAA_LOOKBACK_YEARS``.
+    """
+    return [magi_projections[0]] * _IRMAA_LOOKBACK_YEARS + list(magi_projections)
 
 
 def _healthcare_projection_row(
-    i: int,
+    year_index: int,
     year: int,
     age_primary_start: int,
     age_spouse_start: int,
-    magi_lookback: List[float],
+    magi_lookback: Sequence[float],
     health_status: str,
     has_ltc_insurance: bool,
     has_medigap: bool,
     filing_status: str = "married_filing_jointly",
 ) -> Dict:
     """Compute a single year's healthcare projection row."""
-    age_primary = age_primary_start + i
-    age_spouse = age_spouse_start + i
+    age_primary = age_primary_start + year_index
+    age_spouse = age_spouse_start + year_index
     total_cost, breakdown = calculate_total_healthcare_costs(
         age_primary=age_primary,
         age_spouse=age_spouse,
-        magi_two_years_ago=magi_lookback[i],
+        magi_two_years_ago=magi_lookback[year_index],
         year=year,
         filing_status=filing_status,
         health_status=health_status,
@@ -1436,25 +1494,29 @@ def project_healthcare_costs(
             f"MAGI projections ({len(magi_projections)}) shorter than year range "
             f"({expected_years}). Padding with last value."
         )
-        magi_projections = (
-            magi_projections
-            + [magi_projections[-1]] * (expected_years - len(magi_projections))
-        )
+        # Use itertools.chain + repeat + islice to lazily extend the sequence
+        # without re-binding the parameter or allocating an intermediate list
+        # larger than needed.
+        magi_padded: Sequence[float] = list(itertools.islice(
+            itertools.chain(magi_projections, itertools.repeat(magi_projections[-1])),
+            expected_years,
+        ))
+    else:
+        magi_padded = magi_projections
 
-    # Precompute MAGI lookback values (2 years prior for IRMAA).
-    # For the first _IRMAA_LOOKBACK_YEARS years, use the initial MAGI value
-    # since no prior data exists.
-    magi_lookback = [magi_projections[0]] * _IRMAA_LOOKBACK_YEARS + magi_projections
+    # Prepend _IRMAA_LOOKBACK_YEARS sentinel values so that index year_index
+    # always yields the MAGI from 2 years before projection year year_index.
+    magi_lookback = _build_magi_lookback(magi_padded)
 
     return pd.DataFrame.from_records(
         _healthcare_projection_row(
-            i, year,
+            year_index, year,
             age_primary_start, age_spouse_start,
             magi_lookback,
             health_status, has_ltc_insurance, has_medigap,
             filing_status,
         )
-        for i, year in enumerate(range(start_year, end_year + 1))
+        for year_index, year in enumerate(range(start_year, end_year + 1))
     )
 
 
@@ -1689,6 +1751,21 @@ class PortfolioBalances:
     def total(self) -> float:
         """Calculate total portfolio value"""
         return self.cash + self.taxable + self.traditional + self.roth + self.daf
+
+
+class BrokerageTransactionLog(TypedDict):
+    """Typed transaction log returned by :func:`replenish_brokerage_buffer`.
+
+    Keys
+    ----
+    traditional_to_brokerage:
+        Amount distributed from the Traditional account to the Brokerage buffer.
+    brokerage_replenishment:
+        Total amount added to the Brokerage buffer this year (equals
+        ``traditional_to_brokerage`` since Roth→Brokerage is intentionally omitted).
+    """
+    traditional_to_brokerage: float
+    brokerage_replenishment:  float
 
 
 class ScenarioType(str, Enum):
@@ -2056,7 +2133,7 @@ def replenish_cash_buffer(balances: PortfolioBalances,
 def replenish_brokerage_buffer(balances: PortfolioBalances,
                                expenses: float,
                                age_primary: int,
-                               year: int) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
+                               year: int) -> Tuple[PortfolioBalances, BrokerageTransactionLog, DecisionLog]:
     """
     Replenish brokerage buffer to target based on configured years of expenses.
 
@@ -2076,23 +2153,22 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
     Returns:
         Tuple of (updated_balances, transaction_log, decision_log)
         - updated_balances: PortfolioBalances after replenishment
-        - transaction_log: Dict with all fund movements
+        - transaction_log: BrokerageTransactionLog with all fund movements
         - decision_log: DecisionLog recording why each source was chosen
     """
     dl = DecisionLog()
     _, brokerage_target = calculate_cash_buffer_targets(expenses)
     brokerage_deficit = max(0, brokerage_target - balances.taxable)
 
-    if brokerage_deficit < 100:
+    if brokerage_deficit < _BUFFER_REPLENISHMENT_MIN_DEFICIT:
         dl.add("brokerage_replenishment", "Brokerage Buffer Check", "No action needed",
                "Brokerage balance meets or exceeds target — no replenishment required.",
                brokerage_balance=f"${balances.taxable:,.0f}",
                brokerage_target=f"${brokerage_target:,.0f}")
-        return balances, {
-            'traditional_to_brokerage': 0.0,
-            'roth_to_brokerage': 0.0,
-            'brokerage_replenishment': 0.0
-        }, dl
+        return balances, BrokerageTransactionLog(
+            traditional_to_brokerage=0.0,
+            brokerage_replenishment=0.0,
+        ), dl
 
     logger.info(f"Year {year}: Brokerage buffer below target (${balances.taxable:,.0f} < ${brokerage_target:,.0f})")
     logger.info(f"  Brokerage deficit: ${brokerage_deficit:,.0f}")
@@ -2106,11 +2182,10 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
            brokerage_target=f"${brokerage_target:,.0f}",
            deficit=f"${brokerage_deficit:,.0f}")
 
-    transactions = {
-        'traditional_to_brokerage': 0.0,
-        'roth_to_brokerage': 0.0,
-        'brokerage_replenishment': 0.0
-    }
+    transactions: BrokerageTransactionLog = BrokerageTransactionLog(
+        traditional_to_brokerage=0.0,
+        brokerage_replenishment=0.0,
+    )
 
     # Step 1: Distribute from Traditional (taxable)
     # Blocked before age 59½ — early withdrawal triggers a 10% IRS penalty (IRC §72(t))
@@ -2123,13 +2198,11 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
                    "Use after-tax wages or Roth contributions to build the brokerage balance instead.",
                    age=age_primary)
         else:
-            distribution = min(brokerage_deficit, balances.traditional * 0.15)  # Max 15% per year
-            balances = PortfolioBalances(
-                cash=balances.cash,
+            distribution = min(brokerage_deficit, balances.traditional * _MAX_TRADITIONAL_TO_BROKERAGE_RATE)
+            balances = replace(
+                balances,
                 taxable=balances.taxable + distribution,
                 traditional=balances.traditional - distribution,
-                roth=balances.roth,
-                daf=balances.daf
             )
             transactions['traditional_to_brokerage'] = distribution
             brokerage_deficit -= distribution
@@ -2143,7 +2216,7 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
                    remaining_deficit=f"${brokerage_deficit:,.0f}")
 
     # Roth → Brokerage intentionally omitted — see docstring
-    if brokerage_deficit > 100:
+    if brokerage_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
         dl.add("brokerage_replenishment", "Roth → Brokerage Skipped",
                "No Roth transfer to Brokerage",
                "Roth→Brokerage transfers are intentionally skipped: moving Roth funds to Brokerage "
@@ -2303,7 +2376,6 @@ def rebalance_accounts(balances: PortfolioBalances,
     # Step 3: Replenish brokerage buffer
     balances, brokerage_txns, brok_dl = replenish_brokerage_buffer(balances, expenses, age_primary, year)
     transactions['traditional_to_brokerage'] = brokerage_txns['traditional_to_brokerage']
-    transactions['roth_to_brokerage'] = brokerage_txns['roth_to_brokerage']
     transactions['brokerage_replenishment'] = brokerage_txns['brokerage_replenishment']
     dl.brokerage_replenishment.extend(brok_dl.brokerage_replenishment)
 
@@ -2320,7 +2392,6 @@ def rebalance_accounts(balances: PortfolioBalances,
     logger.info(f"    Traditional → Cash: ${transactions['traditional_to_cash']:,.2f}")
     logger.info(f"    Roth → Cash: ${transactions['roth_to_cash']:,.2f}")
     logger.info(f"    Traditional → Brokerage: ${transactions['traditional_to_brokerage']:,.2f}")
-    logger.info(f"    Roth → Brokerage: ${transactions['roth_to_brokerage']:,.2f}")
     logger.info(f"    Roth Conversion (Trad→Roth): ${transactions.get('conversion_executed', 0):,.2f}")
     logger.info(f"  Buffer Replenishments:")
     logger.info(f"    Cash replenishment: ${transactions['cash_replenishment']:,.2f}")
@@ -2798,7 +2869,7 @@ class Stage2PrepForRetirement(LifeStage):
         # Compute contribution amounts from config rates (same pattern as Stage 1).
         # The caller does not pass these values, so derive them here.
         # -----------------------------------------------------------------------
-        if wages > 0 and contribution_401k is None and contribution_roth is None:
+        if wages > 0 and (contribution_401k is None or contribution_roth is None):
             try:
                 config_mgr = get_config_manager()
                 trad_pct = float(config_mgr.get("income", "contribution_401k_percent",  10.0)) / 100.0
@@ -2807,8 +2878,10 @@ class Stage2PrepForRetirement(LifeStage):
                 trad_pct, roth_pct = 0.10, 0.05
             trad_pct = max(0.0, min(1.0, trad_pct))
             roth_pct = max(0.0, min(1.0, roth_pct))
-            contribution_401k = wages * trad_pct
-            contribution_roth = wages * roth_pct
+            if contribution_401k is None:
+                contribution_401k = wages * trad_pct
+            if contribution_roth is None:
+                contribution_roth = wages * roth_pct
         # Normalize any remaining None (e.g. wages==0 or only one was None) to 0.0
         if contribution_401k is None:
             contribution_401k = 0.0
@@ -5113,15 +5186,12 @@ def _resolve_scenario_key(scenario_name: Union[str, ScenarioType]) -> ScenarioTy
         :data:`_SCENARIO_OVERRIDES`.
     """
     if isinstance(scenario_name, ScenarioType):
-        key = scenario_name
-    else:
-        try:
-            key = ScenarioType(scenario_name)
-        except ValueError:
-            logger.warning("Unknown scenario '%s', using default", scenario_name)
-            return ScenarioType.DEFAULT
-
-    return key
+        return scenario_name
+    try:
+        return ScenarioType(scenario_name)
+    except ValueError:
+        logger.warning("Unknown scenario '%s', using default", scenario_name)
+        return ScenarioType.DEFAULT
 
 
 @functools.lru_cache(maxsize=None)
@@ -5154,16 +5224,21 @@ def create_example_scenario(scenario_name: Union[str, ScenarioType] = "default")
     Args:
         scenario_name: Scenario identifier. Accepts a :class:`ScenarioType` enum
             member or its string value (e.g. ``"default"``, ``"early_retire"``,
-            ``"high_income"``). Unknown strings fall back to
-            ``ScenarioType.DEFAULT`` with a warning.
+            ``"high_income"``). Prefer the enum form for type safety. Unknown
+            strings fall back to ``ScenarioType.DEFAULT`` with a warning.
 
     Returns:
         ScenarioConfig: Fully populated scenario configuration.
         See ``ScenarioConfig`` for field descriptions.
 
+    Note:
+        Results are cached via :func:`_build_scenario_config`; repeated calls
+        with the same argument are O(1) after the first call.
+
     Example:
-        >>> scenario = create_example_scenario("default")
+        >>> scenario = create_example_scenario(ScenarioType.DEFAULT)
         >>> scenario = create_example_scenario(ScenarioType.EARLY_RETIRE)
+        >>> scenario = create_example_scenario("high_income")  # string form also accepted
         >>> config_dict = scenario.to_dict()  # Convert to dict if needed
     """
     return _build_scenario_config(_resolve_scenario_key(scenario_name))

@@ -1701,6 +1701,9 @@ with tab_tax:
                 conversion_tax = calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, agi, headroom_max, conversions)
             else:
                 conversions, conversion_tax = calc_roth_conversions(maxrate, headroom_rate, uppermax, agi, headroom_max, lowerby)
+        except ValueError as e:
+            st.error(str(e))
+            conversions, conversion_tax = 0, 0
         except Exception as e:
             st.error(f"Error calculating Roth conversion: {e}")
             conversions, conversion_tax = 0, 0

@@ -7,6 +7,8 @@ to ensure the module is working correctly.
 """
 
 import sys
+import logging
+
 from strategy import (
     PortfolioBalances,
     WithdrawalStrategyEngine,
@@ -16,8 +18,13 @@ from strategy import (
     Stage4Medicare,
     Stage5SocialSecurity,
     Stage6RMD,
+    ScenarioType,
+    ScenarioConfig,
     calculate_aca_subsidy,
-    generate_strategy_summary
+    generate_strategy_summary,
+    create_example_scenario,
+    _resolve_scenario_key,
+    _build_scenario_config,
 )
 
 
@@ -206,6 +213,115 @@ def test_yearly_strategy_structure():
     print("✅ YearlyStrategy structure tests passed")
 
 
+def test_resolve_scenario_key():
+    """Test _resolve_scenario_key enum resolution and fallback behaviour"""
+    print("\nTesting _resolve_scenario_key...")
+
+    # ScenarioType member passed directly → returned unchanged
+    assert _resolve_scenario_key(ScenarioType.DEFAULT) is ScenarioType.DEFAULT
+    assert _resolve_scenario_key(ScenarioType.EARLY_RETIRE) is ScenarioType.EARLY_RETIRE
+    assert _resolve_scenario_key(ScenarioType.HIGH_INCOME) is ScenarioType.HIGH_INCOME
+
+    # Valid string values → resolved to matching enum member
+    assert _resolve_scenario_key("default") is ScenarioType.DEFAULT
+    assert _resolve_scenario_key("early_retire") is ScenarioType.EARLY_RETIRE
+    assert _resolve_scenario_key("high_income") is ScenarioType.HIGH_INCOME
+
+    # Unknown string → falls back to DEFAULT with a warning (no exception raised)
+    result = _resolve_scenario_key("nonexistent_scenario")
+    assert result is ScenarioType.DEFAULT, "Unknown string should fall back to DEFAULT"
+
+    print("✅ _resolve_scenario_key tests passed")
+
+
+def test_build_scenario_config():
+    """Test _build_scenario_config produces valid, cached ScenarioConfig instances"""
+    print("\nTesting _build_scenario_config...")
+
+    for scenario_type in ScenarioType:
+        config = _build_scenario_config(scenario_type)
+        assert isinstance(config, ScenarioConfig), f"{scenario_type} should return a ScenarioConfig"
+        assert config.start_year > 0, "start_year must be positive"
+        assert config.end_year > config.start_year, "end_year must be after start_year"
+        assert config.initial_expenses > 0, "initial_expenses must be positive"
+        assert isinstance(config.initial_balances, PortfolioBalances)
+
+    # Cache identity: same key → same object
+    config_a = _build_scenario_config(ScenarioType.DEFAULT)
+    config_b = _build_scenario_config(ScenarioType.DEFAULT)
+    assert config_a is config_b, "Cached results should be the same object"
+
+    print("✅ _build_scenario_config tests passed")
+
+
+def test_create_example_scenario():
+    """Test create_example_scenario for all named scenarios and edge cases"""
+    print("\nTesting create_example_scenario...")
+
+    # All three named scenarios return a valid ScenarioConfig
+    for name in ("default", "early_retire", "high_income"):
+        config = create_example_scenario(name)
+        assert isinstance(config, ScenarioConfig), f"'{name}' should return ScenarioConfig"
+
+    # Enum member form is equivalent to string form
+    assert create_example_scenario(ScenarioType.DEFAULT) == create_example_scenario("default")
+    assert create_example_scenario(ScenarioType.EARLY_RETIRE) == create_example_scenario("early_retire")
+    assert create_example_scenario(ScenarioType.HIGH_INCOME) == create_example_scenario("high_income")
+
+    # Default argument ("default") works without explicit argument
+    config_default = create_example_scenario()
+    assert isinstance(config_default, ScenarioConfig)
+    assert config_default == create_example_scenario("default")
+
+    # Unknown string falls back to DEFAULT (no exception)
+    config_fallback = create_example_scenario("unknown_scenario")
+    assert config_fallback == create_example_scenario("default"), \
+        "Unknown scenario should fall back to DEFAULT"
+
+    # Scenario-specific overrides are applied correctly
+    early = create_example_scenario(ScenarioType.EARLY_RETIRE)
+    assert early.ss_claiming_age == 70, "EARLY_RETIRE should claim SS at 70"
+
+    high = create_example_scenario(ScenarioType.HIGH_INCOME)
+    assert high.growth_rate == 1.08, "HIGH_INCOME should use 8% growth rate"
+    assert high.expense_inflation == 1.025, "HIGH_INCOME should use 2.5% expense inflation"
+
+    default = create_example_scenario(ScenarioType.DEFAULT)
+    assert default.expense_inflation == 0.993, "DEFAULT should use deflation scenario"
+
+    print("✅ create_example_scenario tests passed")
+
+
+def test_scenario_config_to_dict():
+    """Test ScenarioConfig.to_dict() round-trips all fields correctly"""
+    print("\nTesting ScenarioConfig.to_dict()...")
+
+    config = create_example_scenario(ScenarioType.DEFAULT)
+    d = config.to_dict()
+
+    assert d['start_year'] == config.start_year
+    assert d['end_year'] == config.end_year
+    assert d['person1_name'] == config.person1_name
+    assert d['person2_name'] == config.person2_name
+    assert d['growth_rate'] == config.growth_rate
+    assert d['expense_inflation'] == config.expense_inflation
+    assert d['ss_claiming_age'] == config.ss_claiming_age
+    assert d['retirement_year'] == config.retirement_year
+    assert d['has_wages'] == config.has_wages
+    assert d['initial_balances'] is config.initial_balances
+    assert d['initial_expenses'] == config.initial_expenses
+
+    # All expected keys are present
+    expected_keys = {
+        'start_year', 'end_year', 'initial_balances', 'initial_expenses',
+        'person1_name', 'person2_name', 'growth_rate', 'expense_inflation',
+        'ss_claiming_age', 'retirement_year', 'has_wages'
+    }
+    assert set(d.keys()) == expected_keys, f"Unexpected keys in to_dict(): {set(d.keys()) ^ expected_keys}"
+
+    print("✅ ScenarioConfig.to_dict() tests passed")
+
+
 def run_all_tests():
     """Run all test functions"""
     print("="*80)
@@ -218,7 +334,11 @@ def run_all_tests():
         test_aca_subsidy,
         test_withdrawal_engine,
         test_yearly_strategy_structure,
-        test_strategy_calculation
+        test_resolve_scenario_key,
+        test_build_scenario_config,
+        test_create_example_scenario,
+        test_scenario_config_to_dict,
+        test_strategy_calculation,
     ]
     
     passed = 0
