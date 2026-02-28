@@ -1,6 +1,6 @@
-# Tax & Retirement Planning Application
+# Financial Planner
 
-A comprehensive Streamlit-based financial planning application for retirement tax optimization, portfolio management, and long-term financial projections with a sophisticated 5-stage withdrawal strategy engine.
+A comprehensive Streamlit-based financial planning application for tax optimization, portfolio management, and long-term financial projections with a sophisticated 6-stage life-cycle withdrawal strategy engine.
 
 ## Overview
 
@@ -145,12 +145,14 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed configuration instructions
 - **Tax-Advantaged Account Management**: Separate tracking for taxable, traditional, and Roth accounts
 - **Editable Portfolio**: Add, remove, or modify holdings (roadmap feature)
 
-### 4. Retirement Planner Tab
+### 4. Strategy Tab
+- **Accumulation Phase**: Year-by-year projection during working years (Stage 1 & 2)
+- **Withdrawal Phase**: Distribution planning from retirement through RMD stage
 - **Long-term Projections**: Model retirement through 2051
 - **Social Security Integration**: Calculate benefits based on claiming age
 - **Required Minimum Distributions (RMD)**: Automatic RMD calculations
 - **Expense Modeling**: Project expenses with inflation adjustments
-- **Portfolio Withdrawal Strategy**: 5-stage life-cycle optimization
+- **Portfolio Withdrawal Strategy**: 6-stage life-cycle optimization
 - **Cash Flow Analysis**: Year-by-year inflows and outflows through 2051
 - **Withdrawal Sequencing**: Tax-efficient account prioritization
 
