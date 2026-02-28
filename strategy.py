@@ -1001,7 +1001,7 @@ def _resolve_irmaa(
             'part_d_base_monthly', 'part_d_irmaa_monthly']
     for lower, upper, part_b, part_a, part_d_base, part_d_irmaa in irmaa_bracket_df[cols].values:
         if lower <= magi <= upper:
-            annual_penalty = (float(part_b) - PART_B_MONTHLY_STANDARD_PREMIUM) * 12   # per-person; caller multiplies by eligible count
+            annual_penalty = max(0.0, (float(part_b) - PART_B_MONTHLY_STANDARD_PREMIUM) * 12)   # per-person; caller multiplies by eligible count
             part_d_total   = float(part_d_base) + float(part_d_irmaa)
             return _IrmaaResolved(
                 annual_irmaa_penalty=annual_penalty,
@@ -2771,8 +2771,8 @@ class Stage2PrepForRetirement(LifeStage):
 
     def calculate_strategy(self, year: int, balances: PortfolioBalances,
                            expenses: float, wages: float = 0,
-                           contribution_401k: float = 0,
-                           contribution_roth: float = 0,
+                           contribution_401k: float | None = None,
+                           contribution_roth: float | None = None,
                            **kwargs) -> YearlyStrategy:
         """
         Calculate pre-retirement optimisation strategy.
@@ -2798,7 +2798,7 @@ class Stage2PrepForRetirement(LifeStage):
         # Compute contribution amounts from config rates (same pattern as Stage 1).
         # The caller does not pass these values, so derive them here.
         # -----------------------------------------------------------------------
-        if wages > 0 and contribution_401k == 0 and contribution_roth == 0:
+        if wages > 0 and contribution_401k is None and contribution_roth is None:
             try:
                 config_mgr = get_config_manager()
                 trad_pct = float(config_mgr.get("income", "contribution_401k_percent",  10.0)) / 100.0
@@ -2809,6 +2809,11 @@ class Stage2PrepForRetirement(LifeStage):
             roth_pct = max(0.0, min(1.0, roth_pct))
             contribution_401k = wages * trad_pct
             contribution_roth = wages * roth_pct
+        # Normalize any remaining None (e.g. wages==0 or only one was None) to 0.0
+        if contribution_401k is None:
+            contribution_401k = 0.0
+        if contribution_roth is None:
+            contribution_roth = 0.0
 
         # Get tax data
         tax_brackets = get_income_tax_brackets(year)
@@ -5084,18 +5089,20 @@ _SCENARIO_OVERRIDES = {
 # _SCENARIO_OVERRIDES.  This converts a silent runtime fallback into a loud,
 # early error that is caught during development and CI before it can silently
 # return wrong data in production.
-assert set(ScenarioType) <= set(_SCENARIO_OVERRIDES), (
-    f"Missing _SCENARIO_OVERRIDES entries for: "
-    f"{set(ScenarioType) - set(_SCENARIO_OVERRIDES)}"
-)
+_missing = set(ScenarioType) - set(_SCENARIO_OVERRIDES)
+if _missing:
+    raise RuntimeError(
+        f"Missing _SCENARIO_OVERRIDES entries for: {_missing}"
+    )
 
 
 def _resolve_scenario_key(scenario_name: Union[str, ScenarioType]) -> ScenarioType:
     """Resolve a scenario name or enum member to a validated :class:`ScenarioType` key.
 
     Accepts either a :class:`ScenarioType` member or its string value.  Unknown
-    strings and enum members not yet registered in :data:`_SCENARIO_OVERRIDES`
-    both fall back to :attr:`ScenarioType.DEFAULT` with a ``WARNING`` log entry.
+    strings fall back to :attr:`ScenarioType.DEFAULT` with a ``WARNING`` log entry.
+    All :class:`ScenarioType` members are guaranteed to be present in
+    :data:`_SCENARIO_OVERRIDES` by the module-level guard above.
 
     Args:
         scenario_name: A :class:`ScenarioType` member or its string value
@@ -5111,14 +5118,8 @@ def _resolve_scenario_key(scenario_name: Union[str, ScenarioType]) -> ScenarioTy
         try:
             key = ScenarioType(scenario_name)
         except ValueError:
-            logger.warning(f"Unknown scenario '{scenario_name}', using default")
+            logger.warning("Unknown scenario '%s', using default", scenario_name)
             return ScenarioType.DEFAULT
-
-    if key not in _SCENARIO_OVERRIDES:
-        logger.warning(
-            f"No overrides defined for scenario '{key.value}', using default"
-        )
-        return ScenarioType.DEFAULT
 
     return key
 
