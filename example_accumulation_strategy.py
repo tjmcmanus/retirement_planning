@@ -267,6 +267,10 @@ def _run_accumulation_report(
 
     summary = generate_strategy_summary(strategy_df)
     print_strategy_report(strategy_df, summary)
+    _log_growth_summary(
+        strategy_df,
+        f"{strategy_df['Year'].iloc[-1] - strategy_df['Year'].iloc[0]}-Year Growth Summary",
+    )
 
     _print_portfolio_evolution(strategy_df, list(config.milestone_years))
     _print_account_mix(strategy_df, strategy_df['Year'].iloc[-1])
@@ -486,8 +490,6 @@ def example_3_early_saver(
     )
 
     _display_stage_transitions(strategy_df)
-    if not strategy_df.empty:
-        _log_growth_summary(strategy_df, f"{config.end_year - config.start_year}-Year Growth Summary")
     return _run_accumulation_report(strategy_df, balances_df, config)
 
 

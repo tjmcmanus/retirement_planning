@@ -5,6 +5,7 @@ import sys
 import os
 import argparse
 import logging
+import warnings
 from datetime import date
 from datetime import datetime
 from load_data import get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, load_rmd_data
@@ -49,8 +50,12 @@ def calc_roth_conversions_tax(
         logger.debug(f"No conversion: maxrate ({maxrate}) > headroom_rate ({headroom_rate})")
         return 0.0
 
-    current_bracket_space = uppermax - agi
-    headroom_bracket_space = headroom_max - uppermax
+    # Early return for non-positive conversion amounts (no tax owed)
+    if conversion <= 0:
+        return 0.0
+
+    current_bracket_space = max(0.0, uppermax - agi)
+    headroom_bracket_space = max(0.0, headroom_max - uppermax)
     total_bracket_space = current_bracket_space + headroom_bracket_space
 
     logger.debug(
@@ -136,7 +141,9 @@ def calc_agi(joint_gross_income, interest, stddectdf, daf):
         logger.debug("AGI: Zero income route (std_deduction=0)")
         return 0.0
     
-    # Check if DAF exceeds standard deduction (itemized deduction route)
+    # Check if DAF exceeds standard deduction (itemized deduction route).
+    # When itemizing via DAF, the DAF amount IS the deduction — the standard
+    # deduction is NOT also subtracted. AGI = total_income - daf only.
     if std_deduction < daf:
         agi = total_income - daf
         logger.debug(f"AGI: DAF route (daf > std_deduction) = {agi:,.2f}")
@@ -279,7 +286,11 @@ def calculate_atm(total_income, cap_gains, atmdf):
     for year, deduction, lower, upper, phase_out, rate, exception_rate in atmdf[['year', 'deduction', 'lower', 'upper', 'phase_out', 'rate', 'exception_rate']].values:
         logger.debug(f"Processing year {year:.0f}: rate={rate:.2%}, bracket=[${lower:,.0f}-${upper:,.0f}]")
         
-        # Calculate income with phase-out adjustments
+        # Calculate income with phase-out adjustments.
+        # NOTE: std_deduction is intentionally excluded from ATM income. The AMT
+        # system uses its own separate exemption (the 'deduction' column in atmdf)
+        # rather than the regular standard deduction, so adding std_deduction here
+        # would incorrectly inflate MAGI and misplace the taxpayer in ATM brackets.
         income = calc_atm_phase_out(total_income, cap_gains, deduction, phase_out, exception_rate)
         
         # Check if income falls within this bracket
@@ -314,7 +325,6 @@ def getlower_atm_amount_n_deduction(year, atmdf):
         IndexError: If atmdf has fewer than 2 rows
     """
     if year is not None:
-        import warnings
         warnings.warn(
             "The 'year' parameter of getlower_atm_amount_n_deduction() is deprecated "
             "and will be removed in a future version.",
@@ -340,7 +350,6 @@ def calculate_atm1(total_income, cap_gains, atmdf):
         implementation that lacks ``exception_rate`` support and will be
         removed in a future version.
     """
-    import warnings
     warnings.warn(
         "calculate_atm1() is deprecated and will be removed in a future version. "
         "Use calculate_atm() instead.",
@@ -470,7 +479,7 @@ def calculate_cap_gains(income: float, cg_range: pd.DataFrame, cg_income: float)
 
     # Tax the CG falling in the overlap of [income, agi] and each bracket [lower, upper]
     taxed_cg    = np.maximum(0.0, np.minimum(agi, upper) - np.maximum(income, lower))
-    bracket_tax = np.round(taxed_cg * rate, 0)
+    bracket_tax = np.floor(taxed_cg * rate)
     total_tax   = float(bracket_tax.sum())
 
     logger.debug(
@@ -497,7 +506,10 @@ def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> tu
             - max_rate: Highest tax rate that applies to this income
             - upper_max: Upper limit of the highest bracket that applies
     """
-    if income <= 0:
+    if income < 0:
+        logger.warning(f"calculate_taxable_income: negative income={income} received; returning zero tax.")
+        return 0.0, 0.0, 0.0
+    if income == 0:
         return 0.0, 0.0, 0.0
 
     logger.debug(f"calculate_taxable_income: income=${income:,.2f}")
