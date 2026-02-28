@@ -1395,7 +1395,7 @@ with tab_accum:
                     'Year', 'Age', 'Stage',
                     'Wages', 'Wages→\nPayroll', 'Wages→\nTrad', 'Wages→\nRoth',
                     'Trad→\nRoth', 'Cash→\nRoth', 'Cash→\nBrok',
-                    'Expenses', 'AGI', 'Federal Tax',
+                    'Expenses', 'Healthcare Cost', 'AGI', 'Federal Tax',
                     'Cash Balance',
                 ]
                 available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
@@ -1417,6 +1417,7 @@ with tab_accum:
                     "Cash→\nRoth": st.column_config.TextColumn("Cash→Roth"),
                     "Cash→\nBrok": st.column_config.TextColumn("Cash→Brok"),
                     "Expenses": st.column_config.TextColumn("Expenses"),
+                    "Healthcare Cost": st.column_config.TextColumn("Healthcare", help="Combined IRMAA penalty and ACA premium"),
                     "AGI": st.column_config.TextColumn("AGI"),
                     "Federal Tax": st.column_config.TextColumn("Fed Tax"),
                     "Cash Balance": st.column_config.TextColumn("Cash End"),
@@ -1532,7 +1533,7 @@ with tab_accum:
                     'Wages', 'SS Benefits', 'RMD',
                     'Trad→\nCash', 'Trad→\nBrok', 'Trad→\nRoth',
                     'Brok→\nCash', 'Roth→\nCash',
-                    'Expenses', 'IRMAA Penalty', 'ACA Premium',
+                    'Expenses', 'Healthcare Cost',
                     'DAF Contribution', 'AGI', 'MAGI', 'Federal Tax', 'Cash Balance'
                 ]
                 available_cols_w = [c for c in display_cols_w if c in display_df_w.columns]
@@ -1556,8 +1557,7 @@ with tab_accum:
                     "Brok→\nCash": st.column_config.TextColumn("Brok→Cash"),
                     "Roth→\nCash": st.column_config.TextColumn("Roth→Cash"),
                     "Expenses": st.column_config.TextColumn("Expenses"),
-                    "IRMAA Penalty": st.column_config.TextColumn("IRMAA"),
-                    "ACA Premium": st.column_config.TextColumn("ACA"),
+                    "Healthcare Cost": st.column_config.TextColumn("Healthcare", help="Combined IRMAA penalty and ACA premium"),
                     "DAF Contribution": st.column_config.TextColumn("DAF Contrib"),
                     "AGI": st.column_config.TextColumn("AGI"),
                     "MAGI": st.column_config.TextColumn("MAGI"),

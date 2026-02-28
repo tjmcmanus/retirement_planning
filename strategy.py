@@ -29,7 +29,7 @@ import logging
 import os
 import types
 from datetime import datetime
-from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, cast
+from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, cast, TypedDict
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
@@ -104,6 +104,10 @@ PART_D_ANNUAL_BASE_PREMIUM: int = 480   # ~$40/month average
 # Medigap supplemental insurance premium (annual estimate)
 MEDIGAP_ANNUAL_PREMIUM: int = 2_400     # ~$200/month average
 
+# Medicare Part B standard monthly premium (2024; updated annually by CMS).
+# Used as the fallback when IRMAA bracket data is unavailable.
+PART_B_MONTHLY_STANDARD_PREMIUM: float = 174.70
+
 # Minimum age for penalty-free withdrawals from Traditional IRA / 401k (IRC §72(t))
 EARLY_WITHDRAWAL_PENALTY_AGE: float = 59.5
 
@@ -121,6 +125,11 @@ OOP_COST_DEFAULT: int = OOP_COSTS_BY_HEALTH_STATUS['average']
 
 # Long-term care insurance annual premium per person (average estimate)
 LTC_ANNUAL_PREMIUM_PER_PERSON: int = 3_500
+
+# IRMAA uses a 2-year lookback: the surcharge applied in year N is based on
+# MAGI reported in year N-2.  This constant makes that window explicit and
+# provides a single point of change should the IRS ever alter the period.
+_IRMAA_LOOKBACK_YEARS: int = 2
 
 
 def calculate_ssi_benefits_dynamic(year: int, person_name: str, birth_year: int,
@@ -930,94 +939,206 @@ def calculate_net_investment_income(interest: float = 0,
     return nii
 
 
+# Named tuple for the resolved IRMAA bracket values — avoids positional confusion
+# when _resolve_irmaa returns four floats to its caller.
+from typing import NamedTuple
+
+class _IrmaaResolved(NamedTuple):
+    """All per-bracket Medicare cost components resolved in a single CSV scan."""
+    annual_irmaa_penalty: float   # Part B IRMAA penalty × 12 (per eligible person)
+    part_b_monthly: float         # All-in monthly Part B premium (base + surcharge)
+    part_a_monthly: float         # Monthly Part A premium (0 for premium-free Part A)
+    part_d_monthly_total: float   # Part D base + IRMAA surcharge, monthly
+
+
+# Sentinel returned by _resolve_irmaa when no IRMAA bracket matches (e.g. the
+# CSV is unavailable or the year is out of range).  Centralising the fallback
+# values here eliminates the duplicate _IrmaaResolved(...) literal that
+# previously appeared in both _resolve_irmaa and calculate_medicare_costs.
+_STANDARD_IRMAA_RESOLVED = _IrmaaResolved(
+    annual_irmaa_penalty=0.0,
+    part_b_monthly=PART_B_MONTHLY_STANDARD_PREMIUM,
+    part_a_monthly=0.0,
+    part_d_monthly_total=PART_D_ANNUAL_BASE_PREMIUM / 12,
+)
+
+
+def _resolve_irmaa(
+    magi: float,
+    irmaa_bracket_df: pd.DataFrame,
+) -> _IrmaaResolved:
+    """Return all per-bracket Medicare cost components in a single CSV scan.
+
+    ``irmaa.csv`` is the single source of truth for Part A, Part B, and Part D
+    costs.  Each row carries:
+
+    * ``part_b_monthly``      — all-in monthly Part B premium (base + IRMAA surcharge)
+    * ``part_a_monthly``      — monthly Part A premium (0 for premium-free Part A)
+    * ``part_d_base_monthly`` — CMS national base Part D beneficiary premium
+    * ``part_d_irmaa_monthly``— income-tiered Part D IRMAA surcharge
+
+    A single loop finds the matched bracket and extracts all four values at once,
+    replacing the previous two-pass pattern (``calculate_irmma_penalty`` + a
+    second ``.loc[]`` scan).
+
+    ``annual_irmaa_penalty`` is returned as a **per-person** value (``part_b *
+    12``).  The caller is responsible for multiplying by the number of
+    Medicare-eligible persons so that mixed-age couples (one person on Medicare,
+    one not yet eligible) are handled correctly.
+
+    Args:
+        magi: MAGI used for IRMAA bracket matching (2-year lookback value).
+        irmaa_bracket_df: DataFrame with columns ``lower``, ``upper``,
+            ``part_b_monthly``, ``part_a_monthly``, ``part_d_base_monthly``,
+            ``part_d_irmaa_monthly`` as returned by :func:`get_medicare_costs`.
+
+    Returns:
+        :class:`_IrmaaResolved` namedtuple.  Falls back to
+        :data:`_STANDARD_IRMAA_RESOLVED` when no bracket matches.
+    """
+    cols = ['lower', 'upper', 'part_b_monthly', 'part_a_monthly',
+            'part_d_base_monthly', 'part_d_irmaa_monthly']
+    for lower, upper, part_b, part_a, part_d_base, part_d_irmaa in irmaa_bracket_df[cols].values:
+        if lower <= magi <= upper:
+            annual_penalty = float(part_b) * 12   # per-person; caller multiplies by eligible count
+            part_d_total   = float(part_d_base) + float(part_d_irmaa)
+            return _IrmaaResolved(
+                annual_irmaa_penalty=annual_penalty,
+                part_b_monthly=float(part_b),
+                part_a_monthly=float(part_a),
+                part_d_monthly_total=part_d_total,
+            )
+    # Fallback: no bracket matched — use statutory standard premiums
+    return _STANDARD_IRMAA_RESOLVED
+
+
+def _medicare_costs_for_person(
+    age: int,
+    label: str,
+    part_b_monthly: float,
+    part_a_monthly: float,
+    part_d_monthly_total: float,
+    has_medigap: bool,
+) -> Tuple[Dict[str, float], float]:
+    """Return (breakdown_slice, subtotal) for one Medicare-eligible person.
+
+    All premium inputs come from the matched ``irmaa.csv`` bracket row via
+    :func:`_resolve_irmaa`, making ``irmaa.csv`` the single source of truth for
+    Part A, Part B, and Part D costs.
+
+    Args:
+        age: Person's current age.
+        label: Key suffix used in the breakdown dict — ``"primary"`` or ``"spouse"``.
+        part_b_monthly: All-in monthly Part B premium (base + IRMAA surcharge).
+        part_a_monthly: Monthly Part A premium (0 for premium-free Part A).
+        part_d_monthly_total: Monthly Part D cost (base + IRMAA surcharge).
+        has_medigap: Whether the person carries Medigap supplemental coverage.
+
+    Returns:
+        Tuple of (breakdown_slice, subtotal) where breakdown_slice contains the
+        four cost components keyed by label, and subtotal is their sum.
+        Returns ({}, 0.0) when the person is not yet Medicare-eligible.
+    """
+    if age < MEDICARE_ELIGIBILITY_AGE:
+        return {}, 0.0
+
+    part_a   = part_a_monthly * 12
+    part_b   = part_b_monthly * 12
+    part_d   = part_d_monthly_total * 12
+    medigap  = MEDIGAP_ANNUAL_PREMIUM if has_medigap else 0.0
+    subtotal = part_a + part_b + part_d + medigap
+
+    return {
+        f'part_a_{label}':  part_a,
+        f'part_b_{label}':  part_b,
+        f'part_d_{label}':  part_d,
+        f'medigap_{label}': medigap,
+    }, subtotal
+
+
 def calculate_medicare_costs(age_primary: int,
                             age_spouse: int,
                             magi_two_years_ago: float,
                             year: int,
                             filing_status: str = "married_filing_jointly",
-                            has_medigap: bool = True) -> Tuple[float, Dict]:
+                            has_medigap: bool = True) -> Tuple[float, "MedicareBreakdown"]:
     """
     Calculate total Medicare costs including IRMAA.
-    
-    Uses existing get_medicare_costs(year) function from load_data module
-    and calculate_irmma_penalty() for IRMAA calculations.
-    
+
+    Uses :func:`get_medicare_costs` (from ``load_data``) to load the IRMAA
+    bracket table and :func:`_resolve_irmaa` for a single-pass surcharge and
+    premium lookup.  Per-person cost assembly is delegated to the private helper
+    :func:`_medicare_costs_for_person`.
+
     Args:
-        age_primary: Primary person age
-        age_spouse: Spouse age
-        magi_two_years_ago: MAGI from 2 years prior for IRMAA
-        year: Current year
-        filing_status: Filing status
-        has_medigap: Whether they have Medigap coverage
-    
+        age_primary: Primary person age.
+        age_spouse: Spouse age.
+        magi_two_years_ago: MAGI from 2 years prior for IRMAA (2-year lookback).
+        year: Current year.
+        filing_status: Filing status (``"married_filing_jointly"`` or ``"single"``).
+        has_medigap: Whether they carry Medigap supplemental coverage.
+
     Returns:
-        Tuple of (total_medicare_cost, cost_breakdown)
+        Tuple of (total_medicare_cost, cost_breakdown).
     """
     logger.debug(f"Calculating Medicare costs for year {year}, ages {age_primary}/{age_spouse}")
-    
-    total_cost = 0.0
-    breakdown = {
-        'part_b_primary': 0.0,
-        'part_b_spouse': 0.0,
-        'part_d_primary': 0.0,
-        'part_d_spouse': 0.0,
-        'medigap_primary': 0.0,
-        'medigap_spouse': 0.0,
-        'irmaa_penalty': 0.0
-    }
-    
-    # Get IRMAA bracket using existing function
+
+    # --- Load IRMAA bracket table (I/O — isolated in its own try/except) ------
     try:
-        irmaa_penalty, irmaa_details = calculate_irmma_penalty(
-            magi_two_years_ago,
-            year - 2,  # IRMAA based on 2 years prior
-            filing_status
-        )
+        irmaa_bracket_df = get_medicare_costs(year - 2)
     except Exception as e:
-        logger.warning(f"IRMAA calculation failed: {e}, using standard premium")
-        irmaa_penalty = 0
-        irmaa_details = {'part_b_premium': 174.70}  # 2024 standard premium
-    
-    # Part B costs
-    if age_primary >= 65:
-        monthly_premium = irmaa_details.get('part_b_premium', 174.70)
-        breakdown['part_b_primary'] = monthly_premium * 12
-        total_cost += breakdown['part_b_primary']
-    
-    if age_spouse >= 65:
-        monthly_premium = irmaa_details.get('part_b_premium', 174.70)
-        breakdown['part_b_spouse'] = monthly_premium * 12
-        total_cost += breakdown['part_b_spouse']
-    
-    # Part D costs (base premium + IRMAA)
-    part_d_base = PART_D_ANNUAL_BASE_PREMIUM
-    if age_primary >= 65:
-        part_d_irmaa = irmaa_details.get('part_d_irmaa', 0) * 12
-        breakdown['part_d_primary'] = part_d_base + part_d_irmaa
-        total_cost += breakdown['part_d_primary']
-    
-    if age_spouse >= 65:
-        part_d_irmaa = irmaa_details.get('part_d_irmaa', 0) * 12
-        breakdown['part_d_spouse'] = part_d_base + part_d_irmaa
-        total_cost += breakdown['part_d_spouse']
-    
-    # Medigap costs
-    if has_medigap:
-        medigap_annual = MEDIGAP_ANNUAL_PREMIUM
-        if age_primary >= 65:
-            breakdown['medigap_primary'] = medigap_annual
-            total_cost += medigap_annual
-        if age_spouse >= 65:
-            breakdown['medigap_spouse'] = medigap_annual
-            total_cost += medigap_annual
-    
-    breakdown['irmaa_penalty'] = irmaa_penalty
-    breakdown['total_medicare_cost'] = total_cost
-    
+        logger.warning(f"IRMAA bracket load failed: {e}, using standard premium")
+        irmaa_bracket_df = None
+
+    # --- Single-pass bracket scan: all Part A/B/D costs from irmaa.csv --------
+    # _resolve_irmaa returns a per-person annual_irmaa_penalty; we multiply by
+    # the actual number of Medicare-eligible persons below (after the helper
+    # calls) so that mixed-age couples are handled correctly.
+    if isinstance(irmaa_bracket_df, pd.DataFrame):
+        resolved = _resolve_irmaa(magi_two_years_ago, irmaa_bracket_df)
+    else:
+        resolved = _STANDARD_IRMAA_RESOLVED
+
+    # --- Compute per-person costs via the shared helper -----------------------
+    primary_slice, primary_subtotal = _medicare_costs_for_person(
+        age_primary, "primary",
+        resolved.part_b_monthly, resolved.part_a_monthly,
+        resolved.part_d_monthly_total, has_medigap,
+    )
+    spouse_slice, spouse_subtotal = _medicare_costs_for_person(
+        age_spouse, "spouse",
+        resolved.part_b_monthly, resolved.part_a_monthly,
+        resolved.part_d_monthly_total, has_medigap,
+    )
+
+    total_cost = primary_subtotal + spouse_subtotal
+
+    # Multiply the per-person IRMAA penalty by the number of persons who are
+    # actually on Medicare (primary_subtotal > 0 means that person is eligible).
+    # This fixes the previous over-count for mixed-age couples where only one
+    # person is 65+ but filing_status is "married_filing_jointly".
+    medicare_eligible_count = int(primary_subtotal > 0) + int(spouse_subtotal > 0)
+    irmaa_penalty = resolved.annual_irmaa_penalty * medicare_eligible_count
+
+    # --- Assemble the full breakdown dict -------------------------------------
+    # _EMPTY_MEDICARE_BREAKDOWN zero-initialises all per-person keys so that
+    # ineligible persons (age < 65, whose slice is {}) are represented as 0.0
+    # rather than missing entirely.  Dict-unpack (**primary_slice, **spouse_slice)
+    # overwrites the zeros for eligible persons.
+    # cast() is required because TypedDict cannot be assigned from a plain dict
+    # literal that contains **-unpacked entries (basedpyright limitation).
+    _breakdown: MedicareBreakdown = cast("MedicareBreakdown", {
+        **_EMPTY_MEDICARE_BREAKDOWN,
+        **primary_slice,
+        **spouse_slice,
+        'irmaa_penalty':       irmaa_penalty,
+        'total_medicare_cost': total_cost,
+    })
+
     logger.info(f"Year {year}: Medicare costs = ${total_cost:,.0f} "
-               f"(IRMAA penalty: ${irmaa_penalty:,.0f})")
-    
-    return total_cost, breakdown
+                f"(IRMAA penalty: ${irmaa_penalty:,.0f})")
+
+    return total_cost, _breakdown
 
 
 @dataclass(frozen=True)
@@ -1037,6 +1158,63 @@ class _AgeStatus:
     total_persons: int        # 1 (no spouse) or 2
 
 
+class MedicareBreakdown(TypedDict, total=False):
+    """Typed mapping of Medicare cost components returned by :func:`calculate_medicare_costs`.
+
+    Using ``TypedDict`` (rather than a plain ``Dict`` or a nested dataclass)
+    keeps the existing :func:`calculate_medicare_costs` return type unchanged at
+    runtime while giving callers and type-checkers a precise, documented
+    contract for every key.  ``total=False`` marks all keys as optional so that
+    the empty-dict default on :class:`HealthcareCostBreakdown` is also valid.
+
+    All premium values originate from ``irmaa.csv`` via :func:`_resolve_irmaa`,
+    making that file the single source of truth for Part A, Part B, and Part D
+    costs including income-related IRMAA surcharges.
+
+    Keys
+    ----
+    part_a_primary, part_a_spouse   : Part A annual premiums per person.
+    part_b_primary, part_b_spouse   : Part B annual premiums per person.
+    part_d_primary, part_d_spouse   : Part D annual premiums per person (base + IRMAA).
+    medigap_primary, medigap_spouse : Medigap annual premiums per person.
+    irmaa_penalty                   : Total Part B IRMAA surcharge for the year.
+    total_medicare_cost             : Sum of all Medicare components.
+    """
+    part_a_primary: float
+    part_a_spouse: float
+    part_b_primary: float
+    part_b_spouse: float
+    part_d_primary: float
+    part_d_spouse: float
+    medigap_primary: float
+    medigap_spouse: float
+    irmaa_penalty: float
+    total_medicare_cost: float
+
+
+
+
+# Module-level sentinel used as the default value for medicare_detail when no
+# Medicare-eligible person is present.  All ten keys are zero-initialised so
+# that callers can safely iterate the breakdown without checking for missing keys.
+# Defined here — after MedicareBreakdown — so both calculate_medicare_costs and
+# calculate_total_healthcare_costs can reference it.
+# cast() is required because TypedDict cannot be assigned from a plain dict literal
+# (basedpyright limitation).
+_EMPTY_MEDICARE_BREAKDOWN: MedicareBreakdown = cast("MedicareBreakdown", {
+    'part_a_primary':      0.0,
+    'part_a_spouse':       0.0,
+    'part_b_primary':      0.0,
+    'part_b_spouse':       0.0,
+    'part_d_primary':      0.0,
+    'part_d_spouse':       0.0,
+    'medigap_primary':     0.0,
+    'medigap_spouse':      0.0,
+    'irmaa_penalty':       0.0,
+    'total_medicare_cost': 0.0,
+})
+
+
 def _classify_ages(age_primary: int, age_spouse: int) -> _AgeStatus:
     """Return Medicare/pre-Medicare eligibility status for both persons.
 
@@ -1047,7 +1225,14 @@ def _classify_ages(age_primary: int, age_spouse: int) -> _AgeStatus:
     Returns:
         Frozen :class:`_AgeStatus` instance capturing all derived booleans
         and person counts needed by :func:`calculate_total_healthcare_costs`.
+
+    Raises:
+        ValueError: If ``age_primary`` is not a positive integer.
     """
+    if age_primary <= 0:
+        raise ValueError(
+            f"age_primary must be a positive integer, got {age_primary!r}"
+        )
     has_spouse = age_spouse > 0
     p_med = age_primary >= MEDICARE_ELIGIBILITY_AGE
     s_med = has_spouse and age_spouse >= MEDICARE_ELIGIBILITY_AGE
@@ -1077,7 +1262,7 @@ class HealthcareCostBreakdown:
     pre_medicare: float = 0.0
     out_of_pocket: float = 0.0
     ltc_insurance: float = 0.0
-    medicare_detail: Dict = field(default_factory=dict)
+    medicare_detail: MedicareBreakdown = field(default_factory=MedicareBreakdown)
 
     @property
     def total(self) -> float:
@@ -1109,13 +1294,18 @@ def calculate_total_healthcare_costs(age_primary: int,
     Returns:
         Tuple of ``(total_healthcare_cost, HealthcareCostBreakdown)``.
     """
-    logger.debug(f"Calculating total healthcare costs for year {year}")
-
     status = _classify_ages(age_primary, age_spouse)
+    logger.debug(
+        f"calculate_total_healthcare_costs: year={year}, "
+        f"ages={age_primary}/{age_spouse}, "
+        f"{status.total_persons} person(s), "
+        f"{status.medicare_count} on Medicare, "
+        f"{status.pre_medicare_count} pre-Medicare"
+    )
 
     # --- Medicare costs (one or both persons aged 65+) -------------------
     medicare_cost = 0.0
-    medicare_detail: Dict = {}
+    medicare_detail: MedicareBreakdown = _EMPTY_MEDICARE_BREAKDOWN
     if status.medicare_count > 0:
         medicare_cost, medicare_detail = calculate_medicare_costs(
             age_primary, age_spouse, magi_two_years_ago, year,
@@ -1125,7 +1315,7 @@ def calculate_total_healthcare_costs(age_primary: int,
     # --- Pre-Medicare / ACA costs (one or both persons under 65) ---------
     aca_cost = 0.0
     if status.pre_medicare_count > 0:
-        aca_cost = status.pre_medicare_count * ACA_MONTHLY_PREMIUM_PER_PERSON * 12
+        aca_cost = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         logger.debug(
             f"Pre-Medicare costs: ${aca_cost:,.0f} "
             f"for {status.pre_medicare_count} person(s)"
@@ -1175,6 +1365,7 @@ def _healthcare_projection_row(
     health_status: str,
     has_ltc_insurance: bool,
     has_medigap: bool,
+    filing_status: str = "married_filing_jointly",
 ) -> Dict:
     """Compute a single year's healthcare projection row."""
     age_primary = age_primary_start + i
@@ -1184,6 +1375,7 @@ def _healthcare_projection_row(
         age_spouse=age_spouse,
         magi_two_years_ago=magi_lookback[i],
         year=year,
+        filing_status=filing_status,
         health_status=health_status,
         has_ltc_insurance=has_ltc_insurance,
         has_medigap=has_medigap,
@@ -1206,6 +1398,7 @@ def project_healthcare_costs(
     health_status: str = "average",
     has_ltc_insurance: bool = False,
     has_medigap: bool = True,
+    filing_status: str = "married_filing_jointly",
 ) -> pd.DataFrame:
     """
     Project healthcare costs over retirement period
@@ -1219,9 +1412,18 @@ def project_healthcare_costs(
         health_status: Health status assumption
         has_ltc_insurance: Whether they have LTC insurance
         has_medigap: Whether they have Medigap coverage
+        filing_status: Filing status used for IRMAA calculations
+            (e.g. ``"married_filing_jointly"`` or ``"single"``).
 
     Returns:
-        DataFrame with yearly healthcare cost projections
+        DataFrame with one row per year and the following columns:
+
+        - ``year`` — calendar year
+        - ``age_primary`` / ``age_spouse`` — ages for that year
+        - ``total_healthcare_cost`` — combined annual cost for both persons
+        - All fields from :class:`HealthcareCostBreakdown` (via
+          :func:`dataclasses.asdict`), including Medicare part costs,
+          IRMAA penalty, ACA premiums, LTC premiums, and OOP costs.
     """
     logger.info(f"Projecting healthcare costs from {start_year} to {end_year}")
 
@@ -1238,20 +1440,21 @@ def project_healthcare_costs(
             + [magi_projections[-1]] * (expected_years - len(magi_projections))
         )
 
-    # Precompute MAGI lookback values (2 years prior for IRMAA)
-    # For first 2 years, use the initial MAGI value since no prior data exists
-    magi_lookback = [magi_projections[0]] * 2 + magi_projections
+    # Precompute MAGI lookback values (2 years prior for IRMAA).
+    # For the first _IRMAA_LOOKBACK_YEARS years, use the initial MAGI value
+    # since no prior data exists.
+    magi_lookback = [magi_projections[0]] * _IRMAA_LOOKBACK_YEARS + magi_projections
 
-    projections = [
+    return pd.DataFrame.from_records(
         _healthcare_projection_row(
             i, year,
             age_primary_start, age_spouse_start,
             magi_lookback,
             health_status, has_ltc_insurance, has_medigap,
+            filing_status,
         )
         for i, year in enumerate(range(start_year, end_year + 1))
-    ]
-    return pd.DataFrame(projections)
+    )
 
 
 def calculate_niit(net_investment_income: float, magi: float,
@@ -2163,14 +2366,17 @@ class LifeStage:
         raise NotImplementedError
 
 
+def _get_retirement_years() -> tuple:
+    """Return (earliest, latest) calendar year either person is expected to retire."""
+    cfg = get_config_manager()
+    p1 = int(cfg.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0]) + int(cfg.get("personal_info", "person1_retirement_age", 67))
+    p2 = int(cfg.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0]) + int(cfg.get("personal_info", "person2_retirement_age", 62))
+    return min(p1, p2), max(p1, p2)
+
+
 def _get_earliest_retirement_year() -> int:
     """Return the earliest calendar year either person is expected to retire."""
-    config_mgr = get_config_manager()
-    p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
-    p1_ret_age = int(config_mgr.get("personal_info", "person1_retirement_age", 67))
-    p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
-    p2_ret_age = int(config_mgr.get("personal_info", "person2_retirement_age", 62))
-    return min(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
+    return _get_retirement_years()[0]
 
 
 def _get_latest_retirement_year() -> int:
@@ -2181,12 +2387,7 @@ def _get_latest_retirement_year() -> int:
     caused a regression where the stages reverted to Stage 1 after the first
     person retired while the second was still working.
     """
-    config_mgr = get_config_manager()
-    p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
-    p1_ret_age = int(config_mgr.get("personal_info", "person1_retirement_age", 67))
-    p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
-    p2_ret_age = int(config_mgr.get("personal_info", "person2_retirement_age", 62))
-    return max(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
+    return _get_retirement_years()[1]
 
 
 class Stage1Accumulation(LifeStage):
@@ -2465,11 +2666,12 @@ class Stage1Accumulation(LifeStage):
         )
         
         # Calculate MAGI for this year
+        # agi = wages - contribution_401k (pre-tax); include it so IRMAA lookback history
+        # is correct for workers who reach Medicare within 2 years of their last working year.
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = (0 * TAXABLE_SS_RATE +  # No SS benefits yet
+        magi = (agi +              # Wages minus pre-tax 401k contributions
                 trad_withdrawal +  # Traditional distributions from rebalance_accounts()
-                roth_conversion +
-                0)  # No LTCG harvested
+                roth_conversion)   # Roth conversion income
         
         # Record Cash→Roth and Cash→Brokerage contribution decisions
         dl.add("contribution_decisions", "Cash → Roth Contribution",
@@ -2595,6 +2797,22 @@ class Stage2PrepForRetirement(LifeStage):
         age_primary = kwargs.get('age_primary', 0)
         age_spouse = kwargs.get('age_spouse', 0)
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
+
+        # -----------------------------------------------------------------------
+        # Compute contribution amounts from config rates (same pattern as Stage 1).
+        # The caller does not pass these values, so derive them here.
+        # -----------------------------------------------------------------------
+        if wages > 0:
+            try:
+                config_mgr = get_config_manager()
+                trad_pct = float(config_mgr.get("income", "contribution_401k_percent",  10.0)) / 100.0
+                roth_pct = float(config_mgr.get("income", "contribution_roth_percent",   5.0)) / 100.0
+            except Exception:
+                trad_pct, roth_pct = 0.10, 0.05
+            trad_pct = max(0.0, min(1.0, trad_pct))
+            roth_pct = max(0.0, min(1.0, roth_pct))
+            contribution_401k = wages * trad_pct
+            contribution_roth = wages * roth_pct
 
         # Get tax data
         tax_brackets = get_income_tax_brackets(year)
@@ -2774,7 +2992,7 @@ class Stage2PrepForRetirement(LifeStage):
         # -----------------------------------------------------------------------
         payroll_tax, _payroll_breakdown = calculate_payroll_taxes(wages, year) if wages > 0 else (0.0, {})
 
-        after_tax_wages = wages - federal_tax - payroll_tax
+        after_tax_wages = wages - federal_tax - payroll_tax - (contribution_401k if prefer_roth_401k else 0) - contribution_roth - backdoor_roth_amount
 
         # Update balances — backdoor Roth moves cash → Roth (net zero on Traditional IRA)
         balances_updated = PortfolioBalances(
@@ -2796,15 +3014,8 @@ class Stage2PrepForRetirement(LifeStage):
         # linearly scales from the wages-based accumulation target (Stage 1 level)
         # up to 75 % of the full retirement cash reserve over the 10-year prep window.
         try:
-            config_mgr = get_config_manager()
-            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
-            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
-            p1_ret_year = p1_birth_year + p1_ret_age
-            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
-            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
-            p2_ret_year = p2_birth_year + p2_ret_age
-            earliest_retirement_year = min(p1_ret_year, p2_ret_year)
-            years_to_retirement = max(1, earliest_retirement_year - year)
+            latest_retirement_year = _get_latest_retirement_year()
+            years_to_retirement = max(1, latest_retirement_year - year)
         except Exception:
             years_to_retirement = self.PREP_WINDOW_YEARS // 2  # safe fallback
 
@@ -2836,7 +3047,7 @@ class Stage2PrepForRetirement(LifeStage):
         )
 
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = trad_withdrawal + roth_conversion  # wages covered by employer; no SS, no traditional withdrawal
+        magi = agi + trad_withdrawal + roth_conversion  # agi includes wages net of 401k deduction; no SS
 
         # Record Cash→Roth and Cash→Brokerage contribution decisions for Stage 2
         # In Stage 2, the contribution_401k may go to Roth 401k (prefer_roth_401k)
@@ -4475,6 +4686,7 @@ class WithdrawalStrategyEngine:
                 'Roth Conversion': s.roth_conversion,
                 # Expenses and costs
                 'Expenses': s.expenses,
+                'Healthcare Cost': s.irmaa_penalty + s.aca_premium,
                 'IRMAA Penalty': s.irmaa_penalty,
                 'ACA Premium': s.aca_premium,
                 'DAF Contribution': s.daf_contribution,
