@@ -49,10 +49,11 @@ def _save_estate_data(data: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Load config for personalisation
+# Load config for personalisation (re-read on every page load)
 # ---------------------------------------------------------------------------
 
 config_mgr = get_config_manager()
+config_mgr.config = config_mgr._load_config()
 p1_name: str = config_mgr.get("personal_info", "person1_name", "Person 1") or "Person 1"
 p2_name: str = config_mgr.get("personal_info", "person2_name", "Person 2") or "Person 2"
 accounts_raw: list = config_mgr.get("portfolio_accounts", "accounts", []) or []

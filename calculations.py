@@ -410,18 +410,24 @@ def calculate_irmma_penalty(income, irmaa_range, people):
     
     Args:
         income: Annual income amount
-        irmaa_range: DataFrame with IRMAA brackets containing 'lower', 'upper', 'rate' columns
+        irmaa_range: DataFrame with IRMAA brackets.  Supports both the legacy
+            schema (``lower``, ``upper``, ``rate``) and the current schema
+            (``lower``, ``upper``, ``part_b_monthly``).  ``part_b_monthly`` takes
+            precedence when both columns are present.
         people: Number of people subject to IRMAA
         
     Returns:
         float: Annual IRMAA penalty (monthly penalty * 12 * number of people)
     """
     logger.debug(f"calculate_irmma_penalty: income=${income:,.2f}, people={people}")
+
+    # Support both the legacy 'rate' column and the current 'part_b_monthly' column.
+    rate_col = 'part_b_monthly' if 'part_b_monthly' in irmaa_range.columns else 'rate'
     
     monthly_penalty = 0.0
     
     # Find the applicable IRMAA bracket
-    for lower, upper, rate in irmaa_range[['lower', 'upper', 'rate']].values:
+    for lower, upper, rate in irmaa_range[['lower', 'upper', rate_col]].values:
         if lower <= income <= upper:
             monthly_penalty = rate
             logger.debug(f"IRMAA bracket found: income ${income:,.2f} in [${lower:,.2f}-${upper:,.2f}], rate=${rate:,.2f}/month")
