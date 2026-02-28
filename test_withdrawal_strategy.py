@@ -12,10 +12,10 @@ from strategy import (
     WithdrawalStrategyEngine,
     YearlyStrategy,
     Stage1Accumulation,
-    Stage2EarlyRetirement,
-    Stage3Medicare,
-    Stage4SocialSecurity,
-    Stage5RMD,
+    Stage3EarlyRetirement,
+    Stage4Medicare,
+    Stage5SocialSecurity,
+    Stage6RMD,
     calculate_aca_subsidy,
     generate_strategy_summary
 )
@@ -45,13 +45,13 @@ def test_life_stages():
     print("\nTesting Life Stages...")
     
     stage1 = Stage1Accumulation()
-    stage2 = Stage2EarlyRetirement()
-    stage3 = Stage3Medicare()
-    stage4 = Stage4SocialSecurity()
-    stage5 = Stage5RMD()
+    stage2 = Stage3EarlyRetirement()
+    stage3 = Stage4Medicare()
+    stage4 = Stage5SocialSecurity()
+    stage5 = Stage6RMD()
     
-    # Test Stage 1 (Accumulation - has wages)
-    assert stage1.applies(45, 43, 2026, has_wages=True, has_ss=False), "Stage 1 should apply with wages"
+    # Test Stage 1 (Accumulation - has wages, year far from retirement so Stage 2 prep window doesn't apply)
+    assert stage1.applies(45, 43, 2000, has_wages=True, has_ss=False), "Stage 1 should apply with wages"
     
     # Test Stage 2 (Early Retirement - no wages, no SS, pre-Medicare)
     assert stage2.applies(60, 58, 2026, has_wages=False, has_ss=False), "Stage 2 should apply"
@@ -99,8 +99,8 @@ def test_withdrawal_engine():
     
     engine = WithdrawalStrategyEngine()
     
-    # Verify all 5 stages are loaded
-    assert len(engine.stages) == 5, "Should have 5 life stages"
+    # Verify all 6 stages are loaded
+    assert len(engine.stages) == 6, "Should have 6 life stages"
     
     # Test stage determination
     stage = engine.determine_stage(60, 58, 2026, has_wages=False, has_ss=False)

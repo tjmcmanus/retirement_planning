@@ -9,3 +9,6 @@ __pycache__/
 # Retirement Planning App - Personal Configuration
 # Contains personal information like names, birth dates, and financial data
 retirement_config.json
+
+# Runtime-generated timestamped backup files (only portfolio_data_truth.csv should be tracked)
+portfolio_data_truth_????????_??????.csv

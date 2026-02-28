@@ -344,6 +344,27 @@ class SimulationConfig:
     end_year: int = 2051
 
 
+# ---------------------------------------------------------------------------
+# Proposal A — SimulationState dataclass: groups the five mutable account
+# variables so they can be passed as a single unit to per-year helpers.
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class SimulationState:
+    """
+    Mutable per-year account balances that evolve across the simulation loop.
+
+    Grouping them here makes the state boundary explicit, enables the
+    per-year helper (_simulate_year) to accept and return a single object,
+    and removes the need for boolean seed flags in the main loop.
+    """
+    cash: float = 0.0
+    tax_free: float = 0.0
+    brokerage: float = 0.0
+    trad_value: float = 0.0
+    daf_in: float = 0.0
+
+
 def _initialize_simulation_config() -> SimulationConfig:
     """
     Read all configuration and session-state values once and return them as
@@ -431,6 +452,215 @@ def _update_daf(daf_in: float, daf: float, daf_rate: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Proposal B — _update_accounts(): isolates the three-account update block
+# (cash, brokerage, tax-free) so it can be unit-tested independently.
+# ---------------------------------------------------------------------------
+
+def _update_accounts(
+    state: SimulationState,
+    cfg: "SimulationConfig",
+    monthly_benefit: float,
+    portfolio_withdrawal: float,
+    planned_dist: float,
+    conversions: float,
+    rmd: float,
+    daf: float,
+    annual_expenses: float,
+    taxes: float,
+) -> SimulationState:
+    """
+    Compute updated cash, brokerage, and tax-free balances for one year.
+
+    The seed amounts (cfg.cash_in, cfg.tax_free_in) are applied exactly once
+    via _apply_seed_once(), which returns the seed only when the running
+    balance is still at its zero initial value.  This invariant holds as long
+    as neither account can return to exactly 0.0 after the first iteration —
+    a safe assumption for these account types.
+
+    Args:
+        state:               Current account balances (read-only; a new
+                             SimulationState is returned).
+        cfg:                 Immutable simulation configuration.
+        monthly_benefit:     Annual SSI inflow (12 × monthly).
+        portfolio_withdrawal: Amount drawn from portfolio this year.
+        planned_dist:        Planned traditional-account distribution.
+        conversions:         Roth conversion amount.
+        rmd:                 Required minimum distribution.
+        daf:                 New DAF contribution for this year.
+        annual_expenses:     Deflated living expenses for this year.
+        taxes:               Tax liability for this year.
+
+    Returns:
+        SimulationState: New state with updated cash, brokerage, tax_free,
+                         and daf_in.  trad_value is carried forward unchanged
+                         (it is updated by _calculate_rmd_and_update_trad).
+    """
+    # ── Cash ─────────────────────────────────────────────────────────────────
+    # Cash earns ~1/3 of the equity growth rate (conservative assumption for
+    # money-market / short-term instruments).
+    cash_rate = (cfg.rate - 1) / 3
+    cash_seed = _apply_seed_once(state.cash, cfg.cash_in)
+    new_cash = (
+        state.cash
+        + cash_seed
+        + monthly_benefit
+        + portfolio_withdrawal
+        - annual_expenses
+        - taxes
+    ) * (1 + cash_rate)
+
+    # ── Brokerage ─────────────────────────────────────────────────────────────
+    # When brokerage is below the expense-multiple threshold, split conversions
+    # evenly between brokerage and tax-free to rebuild the taxable buffer.
+    brokerage_threshold = (annual_expenses + taxes) * cfg.expense_multiplier
+    below_threshold = state.brokerage < brokerage_threshold
+    conversions_to_brokerage = conversions / 2 if below_threshold else 0.0
+    conversions_to_tax_free  = conversions / 2 if below_threshold else conversions
+    new_brokerage = (
+        state.brokerage
+        + planned_dist
+        + conversions_to_brokerage
+        + rmd
+        - daf
+        - portfolio_withdrawal
+    ) * cfg.rate
+
+    # ── Tax-free ──────────────────────────────────────────────────────────────
+    tax_free_seed = _apply_seed_once(state.tax_free, cfg.tax_free_in)
+    new_tax_free = (state.tax_free + tax_free_seed + conversions_to_tax_free) * cfg.rate
+
+    # ── DAF ───────────────────────────────────────────────────────────────────
+    new_daf_in = _update_daf(state.daf_in, daf, cfg.daf_rate)
+
+    return SimulationState(
+        cash=new_cash,
+        tax_free=new_tax_free,
+        brokerage=new_brokerage,
+        trad_value=state.trad_value,   # unchanged here; updated by RMD helper
+        daf_in=new_daf_in,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Proposal 1 — _simulate_year(): extracts the per-year orchestration so the
+# main loop becomes a thin driver and each year is independently testable.
+# ---------------------------------------------------------------------------
+
+def _simulate_year(
+    year: int,
+    state: SimulationState,
+    cfg: "SimulationConfig",
+    person1_data: pd.DataFrame,
+    person2_data: pd.DataFrame,
+    annual_expenses: float,
+) -> tuple[SimulationState, float, dict, dict]:
+    """
+    Run one year of the retirement simulation and return updated state plus
+    the two row dicts consumed by the caller to build the output DataFrames.
+
+    Args:
+        year:           Calendar year being simulated.
+        state:          Account balances at the *start* of this year.
+        cfg:            Immutable simulation configuration.
+        person1_data:   SSI schedule for person 1, indexed by year.
+        person2_data:   SSI schedule for person 2, indexed by year.
+        annual_expenses: Deflated living expenses entering this year
+                         (the caller applies EXPENSE_DEFLATOR before passing).
+
+    Returns:
+        tuple:
+            new_state       – SimulationState after this year's activity.
+            new_expenses    – annual_expenses after EXPENSE_DEFLATOR applied
+                             (passed back so the caller can thread it forward).
+            ie_row          – dict for the income/expense DataFrame.
+            port_row        – dict for the portfolio DataFrame.
+    """
+    # ── Ages ──────────────────────────────────────────────────────────────────
+    person1_age = year - cfg.person1_birth_year
+    person2_age = year - cfg.person2_birth_year
+    # person2 is listed first in the display string (intentional — matches the
+    # UI convention established when the column was originally named).
+    age = f"{person2_age}/{person1_age}"
+
+    # ── SSI benefits ──────────────────────────────────────────────────────────
+    person1_monthly = (
+        person1_data.loc[year, 'monthly_benefit'] if year in person1_data.index else 0.0
+    )
+    person2_monthly = (
+        person2_data.loc[year, 'monthly_benefit'] if year in person2_data.index else 0.0
+    )
+    monthly_benefit = (person1_monthly + person2_monthly) * 12
+
+    # ── Distributions (two-stage pipeline) ────────────────────────────────────
+    # raw_* values are preserved because _calculate_rmd_and_update_trad may
+    # zero them out on a negative-balance guard.  daf is kept here; the helper
+    # never modifies it.
+    raw_dist, daf, raw_conversions = _calculate_year_distributions(
+        year=year,
+        ssi_year=cfg.ssi_year,
+        planned_dist_2027=cfg.planned_dist_2027,
+    )
+    rmd, planned_dist, conversions, new_trad_value = _calculate_rmd_and_update_trad(
+        state.trad_value, person1_age, raw_dist, raw_conversions, cfg.rate
+    )
+
+    # ── Taxes ─────────────────────────────────────────────────────────────────
+    taxable_inflows = (monthly_benefit * 0.85) + planned_dist + conversions + rmd
+    taxes = calculate_taxes(taxable_inflows, daf, year)
+
+    # ── Expenses & portfolio withdrawal ───────────────────────────────────────
+    new_expenses = annual_expenses * EXPENSE_DEFLATOR
+    ssi_inflows = monthly_benefit
+    portfolio_withdrawal = max(0.0, (new_expenses + taxes) - ssi_inflows)
+    tot_inflows = ssi_inflows + portfolio_withdrawal
+
+    # ── Update accounts (Proposal B) ──────────────────────────────────────────
+    mid_state = SimulationState(
+        cash=state.cash,
+        tax_free=state.tax_free,
+        brokerage=state.brokerage,
+        trad_value=new_trad_value,
+        daf_in=state.daf_in,
+    )
+    new_state = _update_accounts(
+        state=mid_state,
+        cfg=cfg,
+        monthly_benefit=monthly_benefit,
+        portfolio_withdrawal=portfolio_withdrawal,
+        planned_dist=planned_dist,
+        conversions=conversions,
+        rmd=rmd,
+        daf=daf,
+        annual_expenses=new_expenses,
+        taxes=taxes,
+    )
+
+    # ── Build output rows (Proposal 6 — row builders) ─────────────────────────
+    ie_row = _build_ie_row(
+        year=year,
+        age=age,
+        monthly_benefit=monthly_benefit,
+        planned_dist=planned_dist,
+        conversions=conversions,
+        rmd=rmd,
+        tot_inflows=tot_inflows,
+        taxes=taxes,
+        expenses=new_expenses,
+        portfolio_withdrawal=portfolio_withdrawal,
+    )
+    port_row = _build_port_row(
+        year=year,
+        cash=new_state.cash,
+        brokerage=new_state.brokerage,
+        trad_value=new_state.trad_value,
+        tax_free=new_state.tax_free,
+        daf_in=new_state.daf_in,
+    )
+
+    return new_state, new_expenses, ie_row, port_row
+
+
+# ---------------------------------------------------------------------------
 # Proposal 6 — row-builder helpers: separate compute from format
 # ---------------------------------------------------------------------------
 
@@ -495,6 +725,10 @@ def build_income_expenses_display():
     """
     Build income and expense projections with portfolio tracking.
 
+    The simulation loop is now a thin driver: it threads SimulationState and
+    annual_expenses forward each year and delegates all per-year computation
+    to _simulate_year().
+
     Returns:
         tuple: (i_e_df, port_draw_df) - DataFrames containing income/expense
                and portfolio projections.
@@ -502,15 +736,14 @@ def build_income_expenses_display():
     # Proposal 1 — load all config/session-state in one place
     cfg = _initialize_simulation_config()
 
-    # Mutable simulation state (accounts that evolve each year)
-    cash = 0.0
-    cash_seeded = False       # ensures cfg.cash_in is added exactly once
-    tax_free = 0.0
-    tax_free_seeded = False   # ensures cfg.tax_free_in is added exactly once
-    brokerage = cfg.brokerage
-    trad_value = cfg.trad_value
-    expenses = cfg.expenses
-    daf_in = 0.0
+    # Proposal A — initial mutable state grouped in SimulationState
+    state = SimulationState(
+        brokerage=cfg.brokerage,
+        trad_value=cfg.trad_value,
+    )
+
+    # Proposal C — renamed to avoid shadowing cfg.expenses across iterations
+    annual_expenses = cfg.expenses
 
     # Generate SSI schedule from config (replaces CSV-based lookups)
     config = get_config_manager()
@@ -526,97 +759,17 @@ def build_income_expenses_display():
     port_draw_rows: list[dict] = []
 
     for year in range(cfg.current_year, cfg.end_year):
-        # ── Ages ──────────────────────────────────────────────────────────
-        person1_age = year - cfg.person1_birth_year
-        person2_age = year - cfg.person2_birth_year
-        age = f"{person2_age}/{person1_age}"
-
-        # ── SSI benefits ──────────────────────────────────────────────────
-        person1_monthly = (
-            person1_data.loc[year, 'monthly_benefit'] if year in person1_data.index else 0.0
-        )
-        person2_monthly = (
-            person2_data.loc[year, 'monthly_benefit'] if year in person2_data.index else 0.0
-        )
-        monthly_benefit = (person1_monthly + person2_monthly) * 12
-
-        # ── Distributions (two-stage pipeline) ───────────────────────────
-        # raw_* values are preserved because _calculate_rmd_and_update_trad
-        # may zero them out on a negative-balance guard.
-        # daf is kept here; the helper never modifies it.
-        raw_dist, daf, raw_conversions = _calculate_year_distributions(
+        # Proposal 1 — delegate all per-year logic to _simulate_year()
+        state, annual_expenses, ie_row, port_row = _simulate_year(
             year=year,
-            ssi_year=cfg.ssi_year,
-            planned_dist_2027=cfg.planned_dist_2027,
+            state=state,
+            cfg=cfg,
+            person1_data=person1_data,
+            person2_data=person2_data,
+            annual_expenses=annual_expenses,
         )
-        rmd, planned_dist, conversions, trad_value = _calculate_rmd_and_update_trad(
-            trad_value, person1_age, raw_dist, raw_conversions, cfg.rate
-        )
-
-        # ── Taxes ─────────────────────────────────────────────────────────
-        taxable_inflows = (monthly_benefit * 0.85) + planned_dist + conversions + rmd
-        taxes = calculate_taxes(taxable_inflows, daf, year)
-
-        # ── Expenses & portfolio withdrawal ───────────────────────────────
-        expenses = expenses * EXPENSE_DEFLATOR
-        ssi_inflows = monthly_benefit
-        portfolio_withdrawal = max(0.0, (expenses + taxes) - ssi_inflows)
-        tot_inflows = ssi_inflows + portfolio_withdrawal
-
-        # ── Cash (seed applied exactly once via boolean flag) ─────────────
-        # cash_rate: cash earns ~1/3 of the equity growth rate (conservative
-        # assumption for money-market / short-term instruments).
-        cash_rate = (cfg.rate - 1) / 3
-        cash_seed = cfg.cash_in if not cash_seeded else 0.0
-        cash_seeded = True
-        cash = (
-            cash
-            + cash_seed
-            + monthly_benefit
-            + portfolio_withdrawal
-            - expenses
-            - taxes
-        ) * (1 + cash_rate)
-
-        # ── Brokerage (consolidated threshold block) ──────────────────────
-        brokerage_threshold = (expenses + taxes) * cfg.expense_multiplier
-        below_threshold = brokerage < brokerage_threshold
-        # Split conversions between brokerage and tax-free based on threshold.
-        conversions_to_brokerage = conversions / 2 if below_threshold else 0.0
-        conversions_to_tax_free  = conversions / 2 if below_threshold else conversions
-        brokerage = (
-            brokerage + planned_dist + conversions_to_brokerage + rmd - daf - portfolio_withdrawal
-        ) * cfg.rate
-
-        # ── Tax-free (seed applied exactly once via boolean flag) ──────────
-        tax_free_seed = cfg.tax_free_in if not tax_free_seeded else 0.0
-        tax_free_seeded = True
-        tax_free = (tax_free + tax_free_seed + conversions_to_tax_free) * cfg.rate
-
-        # ── DAF (Proposal 3 + 5 — single expression via _update_daf) ──────
-        daf_in = _update_daf(daf_in, daf, cfg.daf_rate)
-
-        # ── Accumulate rows (Proposal 6 — row builders) ───────────────────
-        i_e_rows.append(_build_ie_row(
-            year=year,
-            age=age,
-            monthly_benefit=monthly_benefit,
-            planned_dist=planned_dist,
-            conversions=conversions,
-            rmd=rmd,
-            tot_inflows=tot_inflows,
-            taxes=taxes,
-            expenses=expenses,
-            portfolio_withdrawal=portfolio_withdrawal,
-        ))
-        port_draw_rows.append(_build_port_row(
-            year=year,
-            cash=cash,
-            brokerage=brokerage,
-            trad_value=trad_value,
-            tax_free=tax_free,
-            daf_in=daf_in,
-        ))
+        i_e_rows.append(ie_row)
+        port_draw_rows.append(port_row)
 
     # Construct DataFrames once at the end
     i_e_df = pd.DataFrame(i_e_rows)
