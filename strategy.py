@@ -27,6 +27,7 @@ import pandas as pd
 import numpy as np
 import logging
 import os
+import types
 from datetime import datetime
 from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, cast
 from dataclasses import dataclass, field, asdict
@@ -1198,6 +1199,141 @@ TAXABLE_SS_RATE = 0.85  # 85% of SS benefits are taxable at higher incomes
 FUND_CONSERVATION_TOLERANCE = 1.0  # Allow $1 rounding error in fund conservation checks
 
 
+# ==============================================================================
+# DECISION LOGGING
+# ==============================================================================
+
+@dataclass
+class DecisionReason:
+    """A single named decision with its rationale and the values that drove it."""
+    decision: str        # Short label, e.g. "Roth Conversion"
+    action: str          # What was decided, e.g. "Convert $45,000"
+    reason: str          # Human-readable explanation
+    values: Dict[str, Any] = field(default_factory=dict)  # Supporting numbers
+
+
+@dataclass
+class DecisionLog:
+    """
+    Structured record of every material decision made for a single strategy year.
+
+    Each stage populates the relevant fields.  Consumers (UI, reports) can
+    iterate ``all_decisions()`` to get a flat list of every reason recorded.
+    """
+    # --- Tax strategy ---
+    tax_strategy: List[DecisionReason] = field(default_factory=list)
+
+    # --- Roth conversion ---
+    roth_conversion: List[DecisionReason] = field(default_factory=list)
+
+    # --- ACA / healthcare ---
+    aca_decisions: List[DecisionReason] = field(default_factory=list)
+
+    # --- IRMAA ---
+    irmaa_decisions: List[DecisionReason] = field(default_factory=list)
+
+    # --- Cash replenishment ---
+    cash_replenishment: List[DecisionReason] = field(default_factory=list)
+
+    # --- Brokerage replenishment ---
+    brokerage_replenishment: List[DecisionReason] = field(default_factory=list)
+
+    # --- Accumulation / contributions ---
+    contribution_decisions: List[DecisionReason] = field(default_factory=list)
+
+    # --- RMD ---
+    rmd_decisions: List[DecisionReason] = field(default_factory=list)
+
+    # --- LTCG harvesting ---
+    ltcg_decisions: List[DecisionReason] = field(default_factory=list)
+
+    # --- SS income ---
+    ss_decisions: List[DecisionReason] = field(default_factory=list)
+
+    def add(self, category: str, decision: str, action: str,
+            reason: str, **values: Any) -> None:
+        """Convenience method to append a :class:`DecisionReason` to *category*.
+
+        Args:
+            category: One of the field names on this dataclass
+                      (e.g. ``"roth_conversion"``).
+            decision: Short label for the decision point.
+            action:   What was chosen.
+            reason:   Human-readable explanation.
+            **values: Arbitrary keyword arguments stored in
+                      :attr:`DecisionReason.values` for display.
+
+        Raises:
+            AttributeError: If *category* is not a valid field name.
+        """
+        entry = DecisionReason(decision=decision, action=action,
+                               reason=reason, values=dict(values))
+        target: List[DecisionReason] = getattr(self, category)
+        target.append(entry)
+
+    def all_decisions(self) -> List[DecisionReason]:
+        """Return every :class:`DecisionReason` across all categories, in
+        insertion order per category."""
+        out: List[DecisionReason] = []
+        for f in (
+            self.tax_strategy,
+            self.roth_conversion,
+            self.aca_decisions,
+            self.irmaa_decisions,
+            self.cash_replenishment,
+            self.brokerage_replenishment,
+            self.contribution_decisions,
+            self.rmd_decisions,
+            self.ltcg_decisions,
+            self.ss_decisions,
+        ):
+            out.extend(f)
+        return out
+
+    def summary_lines(self) -> List[str]:
+        """Return a flat list of human-readable summary strings, one per
+        decision, suitable for logging or display."""
+        lines = []
+        for dr in self.all_decisions():
+            vals = ", ".join(f"{k}={v}" for k, v in dr.values.items()) if dr.values else ""
+            line = f"[{dr.decision}] {dr.action} — {dr.reason}"
+            if vals:
+                line += f" ({vals})"
+            lines.append(line)
+        return lines
+
+
+def _category_for(entry: "DecisionReason") -> str:
+    """Return the :class:`DecisionLog` field name that best matches *entry*.
+
+    This is used when merging a sub-log (e.g. from ``rebalance_accounts``)
+    into a stage-level :class:`DecisionLog`.  The mapping is based on the
+    ``decision`` label stored on the entry.
+    """
+    label = entry.decision.lower()
+    if "cash" in label:
+        return "cash_replenishment"
+    if "brokerage" in label or "taxable" in label:
+        return "brokerage_replenishment"
+    if "roth" in label and "conversion" not in label:
+        return "roth_conversion"
+    if "conversion" in label:
+        return "roth_conversion"
+    if "irmaa" in label:
+        return "irmaa_decisions"
+    if "aca" in label or "healthcare" in label:
+        return "aca_decisions"
+    if "rmd" in label:
+        return "rmd_decisions"
+    if "ltcg" in label or "capital gain" in label:
+        return "ltcg_decisions"
+    if "social security" in label or "ss " in label:
+        return "ss_decisions"
+    if "contribution" in label or "401k" in label or "ira" in label:
+        return "contribution_decisions"
+    # Default bucket
+    return "tax_strategy"
+
 
 @dataclass
 class PortfolioBalances:
@@ -1299,6 +1435,9 @@ class YearlyStrategy:
     roth_to_cash: float = 0.0
     roth_to_brokerage: float = 0.0
     conversion_executed: float = 0.0
+
+    # Decision reasoning log (v2.1 - Strategy Instrumentation)
+    decision_log: DecisionLog = field(default_factory=DecisionLog)
     
     def _collect_fund_movements(self) -> Dict[str, float]:
         """
@@ -1386,16 +1525,17 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                           expenses: float,
                           age_primary: int,
                           year: int,
-                          cash_target_override: Optional[float] = None) -> Tuple[PortfolioBalances, Dict[str, float]]:
+                          cash_target_override: Optional[float] = None) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
     """
-    Replenish cash buffer to target based on configured years of expenses
-    
+    Replenish cash buffer to target based on configured years of expenses.
+
     Implements tax-efficient cash buffer maintenance by transferring funds
     from other accounts in priority order:
     1. Brokerage → Cash (60% tax-free return of basis, 40% LTCG)
-    2. Traditional → Cash (ordinary income tax)
-    3. Roth → Cash (tax-free if qualified, avoids LTCG from Brokerage→Cash)
-    
+    2. Roth → Cash (tax-free if qualified, avoids LTCG from Brokerage→Cash)
+    3. Traditional → Cash (ordinary income tax, last resort)
+    4. Emergency Roth → Cash (if still short after Traditional)
+
     Args:
         balances: Current portfolio balances
         expenses: Annual expenses for this year
@@ -1404,26 +1544,33 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         cash_target_override: If provided, use this value as the cash target
             instead of the expenses-based retirement target.  Used during the
             accumulation phase where the target is wages-based.
-    
+
     Returns:
-        Tuple of (updated_balances, transaction_log)
+        Tuple of (updated_balances, transaction_log, decision_log)
         - updated_balances: PortfolioBalances after replenishment
         - transaction_log: Dict with all fund movements
+        - decision_log: DecisionLog recording why each source was chosen
     """
+    dl = DecisionLog()
+
     if cash_target_override is not None:
         cash_target = cash_target_override
     else:
         cash_target, _ = calculate_cash_buffer_targets(expenses)
     cash_deficit = max(0, cash_target - balances.cash)
-    
+
     if cash_deficit < 100:  # Ignore trivial amounts
+        dl.add("cash_replenishment", "Cash Buffer Check", "No action needed",
+               "Cash balance meets or exceeds target — no replenishment required.",
+               cash_balance=f"${balances.cash:,.0f}",
+               cash_target=f"${cash_target:,.0f}")
         return balances, {
             'brokerage_to_cash': 0.0,
             'traditional_to_cash': 0.0,
             'roth_to_cash': 0.0,
             'cash_replenishment': 0.0
-        }
-    
+        }, dl
+
     logger.warning(f"Year {year}: Cash buffer below target (${balances.cash:,.0f} < ${cash_target:,.0f})")
     logger.warning(f"  Cash deficit: ${cash_deficit:,.0f}")
     logger.warning(f"  Current account balances:")
@@ -1432,15 +1579,23 @@ def replenish_cash_buffer(balances: PortfolioBalances,
     logger.warning(f"    Traditional: ${balances.traditional:,.2f}")
     logger.warning(f"    Roth: ${balances.roth:,.2f}")
     logger.warning(f"    DAF: ${balances.daf:,.2f}")
-    
+
+    dl.add("cash_replenishment", "Cash Buffer Deficit",
+           f"Replenish ${cash_deficit:,.0f}",
+           "Cash balance fell below the configured target; sourcing funds in tax-efficient priority order "
+           "(Brokerage first, then Roth if age-qualified, then Traditional as last resort).",
+           cash_balance=f"${balances.cash:,.0f}",
+           cash_target=f"${cash_target:,.0f}",
+           deficit=f"${cash_deficit:,.0f}")
+
     transactions = {
         'brokerage_to_cash': 0.0,
         'traditional_to_cash': 0.0,
         'roth_to_cash': 0.0,
         'cash_replenishment': 0.0
     }
-    
-    # Step 1: Transfer from Brokerage (tax-free)
+
+    # Step 1: Transfer from Brokerage (tax-free return of basis / LTCG)
     if cash_deficit > 0 and balances.taxable > 0:
         transfer = min(cash_deficit, balances.taxable)
         balances = PortfolioBalances(
@@ -1453,9 +1608,14 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         transactions['brokerage_to_cash'] = transfer
         cash_deficit -= transfer
         logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash (tax-free)")
-    
+        dl.add("cash_replenishment", "Brokerage → Cash",
+               f"Transfer ${transfer:,.0f}",
+               "Brokerage is the first source: 60% is tax-free return of cost basis and "
+               "40% is long-term capital gains — preferred over Traditional (ordinary income).",
+               transferred=f"${transfer:,.0f}",
+               remaining_deficit=f"${cash_deficit:,.0f}")
+
     # Step 2: Roth distribution (tax-free if qualified, preferred over Traditional to avoid future LTCG)
-    # Using Roth→Cash directly avoids the LTCG that would occur with Roth→Brokerage→Cash
     if cash_deficit > 0 and balances.roth > 0 and age_primary >= 59.5:
         distribution = min(cash_deficit, balances.roth * 0.10)  # Max 10% per year
         balances = PortfolioBalances(
@@ -1468,7 +1628,22 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         transactions['roth_to_cash'] = distribution
         cash_deficit -= distribution
         logger.info(f"  Distributed ${distribution:,.0f} from Roth to Cash (tax-free, avoids LTCG)")
-    
+        dl.add("cash_replenishment", "Roth → Cash",
+               f"Distribute ${distribution:,.0f}",
+               "Roth is used before Traditional: qualified distributions are 100% tax-free and "
+               "avoid the LTCG that would arise from routing through Brokerage. "
+               "Capped at 10% of Roth balance to preserve long-term tax-free growth.",
+               distributed=f"${distribution:,.0f}",
+               roth_balance=f"${balances.roth:,.0f}",
+               age=age_primary,
+               remaining_deficit=f"${cash_deficit:,.0f}")
+    elif cash_deficit > 0 and balances.roth > 0 and age_primary < 59.5:
+        dl.add("cash_replenishment", "Roth → Cash Skipped",
+               "No distribution (age < 59½)",
+               "Roth distributions before age 59½ may incur a 10% early-withdrawal penalty; "
+               "Traditional is used instead to avoid the penalty.",
+               age=age_primary)
+
     # Step 3: Distribute from Traditional (ordinary income tax, last resort for cash)
     if cash_deficit > 0 and balances.traditional > 0:
         distribution = min(cash_deficit, balances.traditional * 0.10)  # Max 10% per year
@@ -1481,8 +1656,15 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         )
         transactions['traditional_to_cash'] = distribution
         logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Cash (ordinary income tax)")
-    
-    # Step 4: Additional Roth if still needed (emergency, after Traditional exhausted)
+        dl.add("cash_replenishment", "Traditional → Cash",
+               f"Distribute ${distribution:,.0f}",
+               "Traditional is the last resort for cash: every dollar withdrawn is taxed as ordinary income. "
+               "Capped at 10% of Traditional balance to limit tax impact in a single year.",
+               distributed=f"${distribution:,.0f}",
+               traditional_balance=f"${balances.traditional:,.0f}",
+               remaining_deficit=f"${cash_deficit:,.0f}")
+
+    # Step 4: Emergency Roth if still needed (after Traditional exhausted)
     if cash_deficit > 0 and balances.roth > 0:
         distribution = min(cash_deficit, balances.roth * 0.05)  # Max 5% additional
         balances = PortfolioBalances(
@@ -1492,65 +1674,87 @@ def replenish_cash_buffer(balances: PortfolioBalances,
             roth=balances.roth - distribution,
             daf=balances.daf
         )
-        transactions['roth_to_cash'] += distribution  # Add to existing roth_to_cash
+        transactions['roth_to_cash'] += distribution
         logger.warning(f"  EMERGENCY - Additional ${distribution:,.0f} from Roth to Cash (total: ${transactions['roth_to_cash']:,.0f})")
-    
+        dl.add("cash_replenishment", "Emergency Roth → Cash",
+               f"Emergency distribute ${distribution:,.0f}",
+               "EMERGENCY: Traditional balance was insufficient to cover the remaining deficit. "
+               "An additional Roth distribution (capped at 5% of Roth balance) was taken as a last resort.",
+               distributed=f"${distribution:,.0f}",
+               total_roth_to_cash=f"${transactions['roth_to_cash']:,.0f}",
+               remaining_deficit=f"${cash_deficit:,.0f}")
+
     transactions['cash_replenishment'] = sum([
         transactions['brokerage_to_cash'],
         transactions['traditional_to_cash'],
         transactions['roth_to_cash']
     ])
-    
+
     logger.info(f"  Total cash replenishment: ${transactions['cash_replenishment']:,.0f}")
     logger.info(f"  New cash balance: ${balances.cash:,.0f}")
-    
-    return balances, transactions
+
+    return balances, transactions, dl
 
 
 def replenish_brokerage_buffer(balances: PortfolioBalances,
                                expenses: float,
                                age_primary: int,
-                               year: int) -> Tuple[PortfolioBalances, Dict[str, float]]:
+                               year: int) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
     """
-    Replenish brokerage buffer to target based on configured years of expenses
-    
+    Replenish brokerage buffer to target based on configured years of expenses.
+
     Implements tax-efficient brokerage buffer maintenance by distributing
     funds from retirement accounts:
     1. Traditional → Brokerage (ordinary income tax)
-    
+
     Note: Roth → Brokerage transfers have been removed to avoid triggering
     unnecessary LTCG when those funds are later moved to Cash.
-    
+
     Args:
         balances: Current portfolio balances
         expenses: Annual expenses for this year
         age_primary: Primary person's age
         year: Current year
-    
+
     Returns:
-        Tuple of (updated_balances, transaction_log)
+        Tuple of (updated_balances, transaction_log, decision_log)
         - updated_balances: PortfolioBalances after replenishment
         - transaction_log: Dict with all fund movements
+        - decision_log: DecisionLog recording why each source was chosen
     """
+    dl = DecisionLog()
     _, brokerage_target = calculate_cash_buffer_targets(expenses)
     brokerage_deficit = max(0, brokerage_target - balances.taxable)
-    
+
     if brokerage_deficit < 100:
+        dl.add("brokerage_replenishment", "Brokerage Buffer Check", "No action needed",
+               "Brokerage balance meets or exceeds target — no replenishment required.",
+               brokerage_balance=f"${balances.taxable:,.0f}",
+               brokerage_target=f"${brokerage_target:,.0f}")
         return balances, {
             'traditional_to_brokerage': 0.0,
             'roth_to_brokerage': 0.0,
             'brokerage_replenishment': 0.0
-        }
-    
+        }, dl
+
     logger.info(f"Year {year}: Brokerage buffer below target (${balances.taxable:,.0f} < ${brokerage_target:,.0f})")
     logger.info(f"  Brokerage deficit: ${brokerage_deficit:,.0f}")
-    
+
+    dl.add("brokerage_replenishment", "Brokerage Buffer Deficit",
+           f"Replenish ${brokerage_deficit:,.0f}",
+           "Brokerage balance fell below the configured target. "
+           "Sourcing from Traditional (ordinary income) — Roth→Brokerage is intentionally avoided "
+           "because it would trigger LTCG when those funds are later moved to Cash.",
+           brokerage_balance=f"${balances.taxable:,.0f}",
+           brokerage_target=f"${brokerage_target:,.0f}",
+           deficit=f"${brokerage_deficit:,.0f}")
+
     transactions = {
         'traditional_to_brokerage': 0.0,
         'roth_to_brokerage': 0.0,
         'brokerage_replenishment': 0.0
     }
-    
+
     # Step 1: Distribute from Traditional (taxable)
     if brokerage_deficit > 0 and balances.traditional > 0:
         distribution = min(brokerage_deficit, balances.traditional * 0.15)  # Max 15% per year
@@ -1564,17 +1768,29 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
         transactions['traditional_to_brokerage'] = distribution
         brokerage_deficit -= distribution
         logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Brokerage (ordinary income tax)")
-    
-    # Roth → Brokerage transfers removed to avoid unnecessary LTCG
-    # If brokerage buffer cannot be filled from Traditional, it will remain below target
-    # Cash needs should be met directly from Roth → Cash instead
-    
+        dl.add("brokerage_replenishment", "Traditional → Brokerage",
+               f"Distribute ${distribution:,.0f}",
+               "Traditional is the sole source for brokerage replenishment. "
+               "Capped at 15% of Traditional balance to limit the ordinary-income tax hit in a single year.",
+               distributed=f"${distribution:,.0f}",
+               traditional_balance=f"${balances.traditional:,.0f}",
+               remaining_deficit=f"${brokerage_deficit:,.0f}")
+
+    # Roth → Brokerage intentionally omitted — see docstring
+    if brokerage_deficit > 100:
+        dl.add("brokerage_replenishment", "Roth → Brokerage Skipped",
+               "No Roth transfer to Brokerage",
+               "Roth→Brokerage transfers are intentionally skipped: moving Roth funds to Brokerage "
+               "would create a taxable LTCG event when those funds are later moved to Cash. "
+               "Any remaining deficit will be covered by direct Roth→Cash transfers instead.",
+               remaining_deficit=f"${brokerage_deficit:,.0f}")
+
     transactions['brokerage_replenishment'] = transactions['traditional_to_brokerage']
-    
+
     logger.info(f"  Total brokerage replenishment: ${transactions['brokerage_replenishment']:,.0f}")
     logger.info(f"  New brokerage balance: ${balances.taxable:,.0f}")
-    
-    return balances, transactions
+
+    return balances, transactions, dl
 
 
 def execute_roth_conversion(balances: PortfolioBalances,
@@ -1629,7 +1845,7 @@ def rebalance_accounts(balances: PortfolioBalances,
                       irmaa_penalty: float = 0.0,
                       aca_premium: float = 0.0,
                       medical_costs: float = 0.0,
-                      cash_target_override: Optional[float] = None) -> Tuple[PortfolioBalances, Dict[str, float]]:
+                      cash_target_override: Optional[float] = None) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
     """
     Execute all account rebalancing operations for a given year
     
@@ -1655,16 +1871,19 @@ def rebalance_accounts(balances: PortfolioBalances,
             cash target (used during accumulation for wages-based buffer).
     
     Returns:
-        Tuple of (updated_balances, transaction_log)
+        Tuple of (updated_balances, transaction_log, decision_log)
         - updated_balances: PortfolioBalances after all movements
         - transaction_log: Dict with all fund movements for reporting
+        - decision_log: DecisionLog with reasons for every buffer/conversion action
     """
+    dl = DecisionLog()
+
     logger.info(f"Year {year} ({stage}): Starting account rebalancing")
     logger.info(f"  Initial balances: Cash=${balances.cash:,.0f}, "
                 f"Taxable=${balances.taxable:,.0f}, "
                 f"Traditional=${balances.traditional:,.0f}, "
                 f"Roth=${balances.roth:,.0f}")
-    
+
     # Initialize transaction log
     transactions = {
         'brokerage_to_cash': 0.0,
@@ -1676,10 +1895,10 @@ def rebalance_accounts(balances: PortfolioBalances,
         'cash_replenishment': 0.0,
         'brokerage_replenishment': 0.0
     }
-    
+
     # Step 1: Deduct expenses, taxes, IRMAA, ACA, and medical costs from cash account FIRST
     total_cash_outflow = expenses + federal_tax + irmaa_penalty + aca_premium + medical_costs
-    
+
     logger.info(f"Year {year}: Deducting costs from cash")
     logger.info(f"  Cash before deductions: ${balances.cash:,.2f}")
     logger.info(f"  Expenses: ${expenses:,.2f}")
@@ -1688,7 +1907,7 @@ def rebalance_accounts(balances: PortfolioBalances,
     logger.info(f"  ACA Premium: ${aca_premium:,.2f}")
     logger.info(f"  Medical Costs: ${medical_costs:,.2f}")
     logger.info(f"  Total cash outflow: ${total_cash_outflow:,.2f}")
-    
+
     balances = PortfolioBalances(
         cash=balances.cash - total_cash_outflow,
         taxable=balances.taxable,
@@ -1701,11 +1920,11 @@ def rebalance_accounts(balances: PortfolioBalances,
     transactions['irmaa_paid'] = irmaa_penalty
     transactions['aca_paid'] = aca_premium
     transactions['medical_paid'] = medical_costs
-    
+
     logger.info(f"  Cash after deductions: ${balances.cash:,.2f}")
-    
+
     # Step 2: Replenish cash buffer (after expenses paid)
-    balances, cash_txns = replenish_cash_buffer(
+    balances, cash_txns, cash_dl = replenish_cash_buffer(
         balances, expenses, age_primary, year,
         cash_target_override=cash_target_override
     )
@@ -1713,18 +1932,20 @@ def rebalance_accounts(balances: PortfolioBalances,
     transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
     transactions['roth_to_cash'] = cash_txns['roth_to_cash']
     transactions['cash_replenishment'] = cash_txns['cash_replenishment']
-    
+    dl.cash_replenishment.extend(cash_dl.cash_replenishment)
+
     # Step 3: Replenish brokerage buffer
-    balances, brokerage_txns = replenish_brokerage_buffer(balances, expenses, age_primary, year)
+    balances, brokerage_txns, brok_dl = replenish_brokerage_buffer(balances, expenses, age_primary, year)
     transactions['traditional_to_brokerage'] = brokerage_txns['traditional_to_brokerage']
     transactions['roth_to_brokerage'] = brokerage_txns['roth_to_brokerage']
     transactions['brokerage_replenishment'] = brokerage_txns['brokerage_replenishment']
-    
+    dl.brokerage_replenishment.extend(brok_dl.brokerage_replenishment)
+
     # Step 4: Execute Roth conversion (after buffers are replenished)
     if roth_conversion > 0:
         balances = execute_roth_conversion(balances, roth_conversion, year)
         transactions['conversion_executed'] = roth_conversion
-    
+
     # Step 5: Log all fund movements
     logger.info(f"Year {year}: Transaction Summary")
     logger.info(f"  Expenses paid: ${transactions.get('expenses_paid', 0):,.2f}")
@@ -1738,7 +1959,7 @@ def rebalance_accounts(balances: PortfolioBalances,
     logger.info(f"  Buffer Replenishments:")
     logger.info(f"    Cash replenishment: ${transactions['cash_replenishment']:,.2f}")
     logger.info(f"    Brokerage replenishment: ${transactions['brokerage_replenishment']:,.2f}")
-    
+
     total_movements = sum([
         transactions['brokerage_to_cash'],
         transactions['traditional_to_cash'],
@@ -1746,14 +1967,14 @@ def rebalance_accounts(balances: PortfolioBalances,
         transactions['roth_to_cash'],
         transactions['roth_to_brokerage']
     ])
-    
+
     logger.info(f"  Total fund movements: ${total_movements:,.2f}")
     logger.info(f"  Final balances: Cash=${balances.cash:,.2f}, "
                 f"Taxable=${balances.taxable:,.2f}, "
                 f"Traditional=${balances.traditional:,.2f}, "
                 f"Roth=${balances.roth:,.2f}")
-    
-    return balances, transactions
+
+    return balances, transactions, dl
 
 
 class LifeStage:
@@ -1773,6 +1994,16 @@ class LifeStage:
                           expenses: float, **kwargs) -> YearlyStrategy:
         """Calculate withdrawal strategy for this stage"""
         raise NotImplementedError
+
+
+def _get_earliest_retirement_year() -> int:
+    """Return the earliest calendar year either person is expected to retire."""
+    config_mgr = get_config_manager()
+    p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
+    p1_ret_age = int(config_mgr.get("personal_info", "person1_retirement_age", 67))
+    p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
+    p2_ret_age = int(config_mgr.get("personal_info", "person2_retirement_age", 62))
+    return min(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
 
 
 class Stage1Accumulation(LifeStage):
@@ -1797,22 +2028,13 @@ class Stage1Accumulation(LifeStage):
             return False
         # Yield to Stage 2 when within the 10-year prep window
         try:
-            config_mgr = get_config_manager()
-            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
-            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
-            p1_ret_year = p1_birth_year + p1_ret_age
-
-            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
-            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
-            p2_ret_year = p2_birth_year + p2_ret_age
-
-            earliest_retirement_year = min(p1_ret_year, p2_ret_year)
+            earliest_retirement_year = _get_earliest_retirement_year()
             years_to_retirement = earliest_retirement_year - year
             # If within the prep window, Stage 2 should handle this year
             if 0 < years_to_retirement <= Stage2PrepForRetirement.PREP_WINDOW_YEARS:
                 return False
-        except Exception:
-            pass  # If config unavailable, default to Stage 1
+        except Exception as e:
+            logger.warning(f"Stage1.applies: config lookup failed ({e}), defaulting to Stage 1")
         return True
     
     def calculate_strategy(self, year: int, balances: PortfolioBalances,
@@ -1890,6 +2112,19 @@ class Stage1Accumulation(LifeStage):
         # Consider Roth conversions during accumulation using BETR
         # Only convert if in favorable tax bracket (≤ max_conversion_rate)
         # -----------------------------------------------------------------------
+        dl = DecisionLog()
+
+        # Record tax strategy decision
+        dl.add("tax_strategy", "Contribution Type",
+               f"Traditional 401k {trad_pct:.0%} / Roth {roth_pct:.0%} / Brokerage {brok_pct:.0%}",
+               "During accumulation, contributions are split per config rates. "
+               "Pre-tax 401k reduces AGI now; Roth contributions grow tax-free.",
+               trad_401k=f"${contribution_401k:,.0f}",
+               roth=f"${contribution_roth:,.0f}",
+               brokerage=f"${contribution_brok:,.0f}",
+               agi=f"${agi:,.0f}",
+               bracket=f"{max_rate:.1%}")
+
         roth_conversion = 0
         if balances.traditional > 0 and max_rate <= max_conversion_rate:
             try:
@@ -1925,11 +2160,49 @@ class Stage1Accumulation(LifeStage):
                             logger.info(f"Stage 1 Roth conversion: ${roth_conversion:,.0f} "
                                       f"(BETR: {betr_results.betr:.2%}, "
                                       f"Current rate: {max_rate:.1%})")
+                            dl.add("roth_conversion", "BETR Conversion (Stage 1)",
+                                   f"Convert ${roth_conversion:,.0f}",
+                                   "BETR analysis recommends converting during accumulation: current marginal rate "
+                                   "is at or below the expected retirement rate, so paying tax now is cheaper "
+                                   "than paying it on RMDs later.",
+                                   betr=f"{betr_results.betr:.2%}",
+                                   current_rate=f"{max_rate:.1%}",
+                                   expected_future_rate=f"{max_conversion_rate:.1%}",
+                                   conversion_room=f"${conversion_room:,.0f}",
+                                   proposed=f"${proposed_conversion:,.0f}")
                         else:
                             logger.debug(f"BETR {betr_results.betr:.2%} - conversion not recommended")
+                            dl.add("roth_conversion", "BETR Conversion (Stage 1)",
+                                   "No conversion",
+                                   "BETR analysis does not recommend converting: the break-even tax rate "
+                                   "is below the current marginal rate, meaning it is cheaper to defer.",
+                                   betr=f"{betr_results.betr:.2%}",
+                                   current_rate=f"{max_rate:.1%}",
+                                   proposed=f"${proposed_conversion:,.0f}")
+                else:
+                    dl.add("roth_conversion", "BETR Conversion (Stage 1)",
+                           "No conversion — insufficient bracket room",
+                           f"Conversion room (${conversion_room:,.0f}) is below the $10,000 minimum threshold; "
+                           "no conversion executed to avoid disproportionate tax cost.",
+                           conversion_room=f"${conversion_room:,.0f}")
 
             except (ValueError, Exception) as e:
                 logger.debug(f"Could not calculate BETR conversion: {e}")
+                dl.add("roth_conversion", "BETR Conversion (Stage 1)",
+                       "No conversion — calculation error",
+                       f"BETR calculation failed ({e}); conversion skipped to avoid incorrect tax decisions.")
+        else:
+            if balances.traditional <= 0:
+                dl.add("roth_conversion", "BETR Conversion (Stage 1)",
+                       "No conversion — no Traditional balance",
+                       "Traditional account balance is zero; nothing to convert.")
+            else:
+                dl.add("roth_conversion", "BETR Conversion (Stage 1)",
+                       "No conversion — bracket too high",
+                       f"Current marginal rate ({max_rate:.1%}) exceeds the max conversion rate "
+                       f"({max_conversion_rate:.1%}); converting now would cost more than deferring.",
+                       current_rate=f"{max_rate:.1%}",
+                       max_conversion_rate=f"{max_conversion_rate:.1%}")
 
         # Calculate tax on conversion if any
         if roth_conversion > 0:
@@ -1979,7 +2252,7 @@ class Stage1Accumulation(LifeStage):
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         
         # Execute account rebalancing (includes Roth conversion and expense payment)
-        new_balances, transactions = rebalance_accounts(
+        new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances_with_contributions,
             expenses=expenses,
             roth_conversion=roth_conversion,
@@ -1999,6 +2272,10 @@ class Stage1Accumulation(LifeStage):
                 roth_conversion +
                 0)  # No LTCG harvested
         
+        # Merge rebalancing decisions into stage decision log
+        dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
+        dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -2028,7 +2305,8 @@ class Stage1Accumulation(LifeStage):
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
-            conversion_executed=transactions['conversion_executed']
+            conversion_executed=transactions['conversion_executed'],
+            decision_log=dl,
         )
 
 
@@ -2060,17 +2338,7 @@ class Stage2PrepForRetirement(LifeStage):
         if not has_wages:
             return False
         try:
-            config_mgr = get_config_manager()
-            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
-            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
-            p1_ret_year = p1_birth_year + p1_ret_age
-
-            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
-            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
-            p2_ret_year = p2_birth_year + p2_ret_age
-
-            # Use the earlier of the two retirement years
-            earliest_retirement_year = min(p1_ret_year, p2_ret_year)
+            earliest_retirement_year = _get_earliest_retirement_year()
             years_to_retirement = earliest_retirement_year - year
             return 0 < years_to_retirement <= self.PREP_WINDOW_YEARS
         except Exception:
@@ -2113,6 +2381,8 @@ class Stage2PrepForRetirement(LifeStage):
 
         logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
 
+        dl = DecisionLog()
+
         # -----------------------------------------------------------------------
         # Decision 1: Should new 401k contributions go Roth or Traditional?
         # Rule: if current marginal rate <= expected retirement rate → Traditional
@@ -2131,6 +2401,36 @@ class Stage2PrepForRetirement(LifeStage):
             logger.info(f"Year {year}: Traditional (${balances.traditional:,.0f}) > 2× Roth "
                         f"(${balances.roth:,.0f}) — redirecting contributions to Roth 401k")
 
+        # Record contribution type decision
+        if prefer_roth_401k:
+            if trad_heavy:
+                contrib_reason = (
+                    f"Traditional balance (${balances.traditional:,.0f}) exceeds 2× Roth "
+                    f"(${balances.roth:,.0f}). Redirecting 401k contributions to Roth to rebalance "
+                    "the tax-deferred vs tax-free ratio and reduce future RMD exposure."
+                )
+            else:
+                contrib_reason = (
+                    f"Current marginal rate ({max_rate:.1%}) exceeds expected retirement rate "
+                    f"({expected_retirement_rate:.1%}). Paying Roth tax now is cheaper than "
+                    "paying ordinary income tax on Traditional withdrawals in retirement."
+                )
+            dl.add("contribution_decisions", "401k Contribution Type",
+                   "Roth 401k",
+                   contrib_reason,
+                   current_rate=f"{max_rate:.1%}",
+                   expected_retirement_rate=f"{expected_retirement_rate:.1%}",
+                   trad_balance=f"${balances.traditional:,.0f}",
+                   roth_balance=f"${balances.roth:,.0f}")
+        else:
+            dl.add("contribution_decisions", "401k Contribution Type",
+                   "Traditional 401k",
+                   f"Current marginal rate ({max_rate:.1%}) is at or below the expected retirement rate "
+                   f"({expected_retirement_rate:.1%}). Deferring tax now is more efficient; "
+                   "Traditional 401k reduces AGI and current-year tax bill.",
+                   current_rate=f"{max_rate:.1%}",
+                   expected_retirement_rate=f"{expected_retirement_rate:.1%}")
+
         # -----------------------------------------------------------------------
         # Decision 3: Backdoor Roth IRA
         # Execute if income exceeds direct Roth IRA contribution limit (~$161k single / $240k MFJ 2024)
@@ -2143,6 +2443,20 @@ class Stage2PrepForRetirement(LifeStage):
             backdoor_roth_amount = IRA_CONTRIBUTION_LIMIT
             logger.info(f"Year {year}: AGI ${agi:,.0f} exceeds Roth IRA limit — "
                         f"executing backdoor Roth ${backdoor_roth_amount:,.0f}")
+            dl.add("contribution_decisions", "Backdoor Roth IRA",
+                   f"Execute ${backdoor_roth_amount:,.0f} backdoor Roth",
+                   f"AGI (${agi:,.0f}) exceeds the direct Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}). "
+                   "Executing backdoor Roth: contribute to empty Traditional IRA then immediately convert, "
+                   "achieving Roth tax treatment without the income restriction.",
+                   agi=f"${agi:,.0f}",
+                   income_limit=f"${ROTH_IRA_INCOME_LIMIT:,.0f}",
+                   amount=f"${backdoor_roth_amount:,.0f}")
+        else:
+            dl.add("contribution_decisions", "Backdoor Roth IRA",
+                   "Direct Roth IRA contribution eligible",
+                   f"AGI (${agi:,.0f}) is below the Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}); "
+                   "backdoor Roth not needed.",
+                   agi=f"${agi:,.0f}")
 
         # -----------------------------------------------------------------------
         # Decision 4: BETR-validated Roth conversion
@@ -2175,10 +2489,46 @@ class Stage2PrepForRetirement(LifeStage):
                             roth_conversion = proposed_conversion
                             logger.info(f"Stage 2 Prep Roth conversion: ${roth_conversion:,.0f} "
                                         f"(BETR: {betr_results.betr:.2%}, rate: {max_rate:.1%})")
+                            dl.add("roth_conversion", "BETR Conversion (Stage 2 Prep)",
+                                   f"Convert ${roth_conversion:,.0f}",
+                                   "BETR recommends converting while still employed: current rate is at or below "
+                                   "the expected retirement rate, so paying tax now is cheaper than paying it "
+                                   "on RMDs later. Capped at 10% of Traditional balance.",
+                                   betr=f"{betr_results.betr:.2%}",
+                                   current_rate=f"{max_rate:.1%}",
+                                   expected_future_rate=f"{max_conversion_rate:.1%}",
+                                   conversion_room=f"${conversion_room:,.0f}")
                         else:
                             logger.debug(f"BETR {betr_results.betr:.2%} — conversion not recommended")
+                            dl.add("roth_conversion", "BETR Conversion (Stage 2 Prep)",
+                                   "No conversion",
+                                   "BETR does not recommend converting: break-even tax rate is below the "
+                                   "current marginal rate — deferring is more efficient.",
+                                   betr=f"{betr_results.betr:.2%}",
+                                   current_rate=f"{max_rate:.1%}")
+                else:
+                    dl.add("roth_conversion", "BETR Conversion (Stage 2 Prep)",
+                           "No conversion — insufficient bracket room",
+                           f"Conversion room (${conversion_room:,.0f}) is below the $10,000 minimum; "
+                           "no conversion executed.",
+                           conversion_room=f"${conversion_room:,.0f}")
             except Exception as e:
                 logger.debug(f"Could not calculate BETR conversion in Stage 2 Prep: {e}")
+                dl.add("roth_conversion", "BETR Conversion (Stage 2 Prep)",
+                       "No conversion — calculation error",
+                       f"BETR calculation failed ({e}); conversion skipped.")
+        else:
+            if balances.traditional <= 0:
+                dl.add("roth_conversion", "BETR Conversion (Stage 2 Prep)",
+                       "No conversion — no Traditional balance",
+                       "Traditional account balance is zero; nothing to convert.")
+            else:
+                dl.add("roth_conversion", "BETR Conversion (Stage 2 Prep)",
+                       "No conversion — bracket too high",
+                       f"Current marginal rate ({max_rate:.1%}) exceeds the max conversion rate "
+                       f"({max_conversion_rate:.1%}); converting now would cost more than deferring.",
+                       current_rate=f"{max_rate:.1%}",
+                       max_conversion_rate=f"{max_conversion_rate:.1%}")
 
         # Recalculate tax including any conversion
         if roth_conversion > 0:
@@ -2233,7 +2583,7 @@ class Stage2PrepForRetirement(LifeStage):
         )
 
         # Execute rebalancing (includes Roth conversion if any)
-        new_balances, transactions = rebalance_accounts(
+        new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances_updated,
             expenses=expenses,
             roth_conversion=roth_conversion,
@@ -2248,6 +2598,9 @@ class Stage2PrepForRetirement(LifeStage):
         )
 
         magi = roth_conversion  # wages covered by employer; no SS, no traditional withdrawal
+
+        dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
+        dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
 
         return YearlyStrategy(
             year=year,
@@ -2277,7 +2630,8 @@ class Stage2PrepForRetirement(LifeStage):
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
-            conversion_executed=transactions['conversion_executed']
+            conversion_executed=transactions['conversion_executed'],
+            decision_log=dl,
         )
 
 
@@ -2323,7 +2677,7 @@ class Stage3EarlyRetirement(LifeStage):
         
         # Get tax data
         tax_brackets = get_income_tax_brackets(year)
-        cg_brackets = get_cap_gains_brackets(year)
+        cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
         std_deduction_df = get_std_deduction(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
@@ -2341,9 +2695,11 @@ class Stage3EarlyRetirement(LifeStage):
         logger.debug(f"Cash target: ${cash_target:,.2f} (need ${cash_need:,.2f}), "
                     f"Taxable target: ${taxable_target:,.2f} (need ${taxable_need:,.2f})")
         
+        dl = DecisionLog()
+
         # Strategy: Use LTCG to fund expenses, maximize Roth conversions
         # Harvest LTCG from taxable account (preferably at 0% rate)
-        
+
         # Determine optimal LTCG harvest (stay in 0% bracket if possible)
         cg_0_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0])
         if len(cg_0_percent) > 0:
@@ -2352,33 +2708,43 @@ class Stage3EarlyRetirement(LifeStage):
             # Fallback: use standard deduction if no 0% bracket exists
             cg_0_percent_limit = std_deduction
             logger.warning(f"No 0% capital gains bracket found for year {year}, using standard deduction")
-        
+
         # Calculate how much we can withdraw from Brokerage at 0% LTCG rate
         # With 60% cost basis / 40% LTCG assumption:
         # - Total withdrawal = ltcg_room / BROKERAGE_LTCG_RATIO
         # - Only 40% of withdrawal is taxable LTCG
         ltcg_room = cg_0_percent_limit - std_deduction
         estimated_withdrawal_need = expenses * 1.15  # Rough estimate including taxes
-        
+
         # Calculate maximum withdrawal from brokerage (considering only 40% is taxable)
         max_brokerage_withdrawal = min(
             estimated_withdrawal_need / BROKERAGE_LTCG_RATIO,  # Withdrawal needed to get desired LTCG
             ltcg_room / BROKERAGE_LTCG_RATIO,  # Max withdrawal to stay in 0% bracket
             balances.taxable * 0.5  # Don't withdraw more than 50% of brokerage
         )
-        
+
         # The taxable LTCG portion is 40% of the withdrawal
         ltcg_harvested = max_brokerage_withdrawal * BROKERAGE_LTCG_RATIO
-        
+
         logger.debug(f"Brokerage withdrawal: ${max_brokerage_withdrawal:,.2f} (LTCG portion: ${ltcg_harvested:,.2f}, 0% bracket room: ${ltcg_room:,.2f})")
-        
+
+        dl.add("ltcg_decisions", "LTCG Harvest (Stage 3)",
+               f"Harvest ${ltcg_harvested:,.0f} LTCG from Brokerage",
+               "Early retirement is the prime window for 0% LTCG harvesting: no wages, no SS, no RMDs. "
+               "Brokerage withdrawals are capped so that only 40% (the LTCG portion) stays within the "
+               "0% capital-gains bracket, minimising tax while funding living expenses.",
+               ltcg_room=f"${ltcg_room:,.0f}",
+               max_brokerage_withdrawal=f"${max_brokerage_withdrawal:,.0f}",
+               ltcg_harvested=f"${ltcg_harvested:,.0f}",
+               brokerage_balance=f"${balances.taxable:,.0f}")
+
         # Calculate Roth conversion using BETR algorithm
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
         current_income = ltcg_harvested
-        
+
         # Initialize roth_conversion
         roth_conversion = 0
-        
+
         # Use BETR algorithm to optimize conversion amount
         try:
             optimal_amount, betr_results = optimize_conversion_amount(
@@ -2391,20 +2757,47 @@ class Stage3EarlyRetirement(LifeStage):
                 years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 20,
                 annual_return=kwargs.get('growth_rate', 1.07) - 1.0
             )
-            
+
             if optimal_amount <= 0:
                 roth_conversion = 0
                 logger.info('No conversion: insufficient tax bracket room')
+                dl.add("roth_conversion", "BETR Conversion (Stage 3)",
+                       "No conversion — no bracket room",
+                       "BETR optimizer found no room to convert within the target bracket after "
+                       "accounting for LTCG income.",
+                       current_income=f"${current_income:,.0f}",
+                       target_bracket=f"{max_conversion_rate:.1%}")
             else:
                 if betr_results.conversion_recommended:
                     roth_conversion = optimal_amount
                     logger.info(f'BETR: {betr_results.betr:.2%}, Converting ${optimal_amount:,.0f}')
+                    dl.add("roth_conversion", "BETR Conversion (Stage 3)",
+                           f"Convert ${roth_conversion:,.0f}",
+                           "Early retirement is the optimal Roth conversion window: income is low (LTCG only), "
+                           "so the marginal rate on conversions is at its lifetime minimum. "
+                           "BETR confirms converting now is cheaper than paying ordinary income tax on "
+                           "Traditional withdrawals or RMDs later.",
+                           betr=f"{betr_results.betr:.2%}",
+                           current_income=f"${current_income:,.0f}",
+                           target_bracket=f"{max_conversion_rate:.1%}",
+                           optimal_amount=f"${optimal_amount:,.0f}")
                 else:
                     roth_conversion = 0
                     logger.info(f'BETR: {betr_results.betr:.2%}, Conversion not recommended')
-                
+                    dl.add("roth_conversion", "BETR Conversion (Stage 3)",
+                           "No conversion",
+                           "BETR does not recommend converting: the break-even tax rate is below the "
+                           "current marginal rate — deferring is more efficient.",
+                           betr=f"{betr_results.betr:.2%}",
+                           optimal_amount=f"${optimal_amount:,.0f}")
+
         except Exception as e:
             logger.warning(f"BETR calculation failed: {e}, falling back to bracket-filling method")
+            dl.add("roth_conversion", "BETR Conversion (Stage 3)",
+                   "Fallback bracket-fill conversion",
+                   f"BETR calculation failed ({e}). Falling back to simple bracket-filling: "
+                   "converting up to the top of the target bracket.",
+                   error=str(e))
             # Fallback to original method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
@@ -2413,31 +2806,40 @@ class Stage3EarlyRetirement(LifeStage):
             except ValueError:
                 target_bracket_rate = 0.12
                 target_bracket_upper = float(getUpperIncomeRate(0.12, tax_brackets))
-            
+
             conversion_room = max(0, target_bracket_upper - std_deduction - current_income)
             roth_conversion = min(conversion_room, balances.traditional)
-        
+
         logger.debug(f"Roth conversion: ${roth_conversion:,.2f}")
-        
+
         # Calculate taxes
         total_income = ltcg_harvested + roth_conversion
         agi = total_income - std_deduction
-        
+
         # Income tax on conversions
         federal_tax, max_rate, upper_max = calculate_taxable_income(agi, tax_brackets)
-        
+
         # Capital gains tax
         cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
-        
+
         total_tax = federal_tax + cg_tax
-        
+
         logger.debug(f"Total tax: ${total_tax:,.2f} (income: ${federal_tax:,.2f}, CG: ${cg_tax:,.2f})")
-        
+
         # Calculate ACA premium based on configuration
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
+        dl.add("aca_decisions", "ACA Premium (Stage 3)",
+               f"ACA premium: ${aca_premium:,.0f}",
+               "Pre-Medicare retirees must purchase ACA marketplace coverage. "
+               "The premium is calculated from config (age, number of people). "
+               "Roth conversions and LTCG harvesting are sized to keep MAGI below 400% FPL "
+               "to preserve ACA premium tax credits.",
+               aca_premium=f"${aca_premium:,.0f}",
+               age_primary=age_primary,
+               age_spouse=age_spouse)
         
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
-        new_balances, transactions = rebalance_accounts(
+        new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances,
             expenses=expenses,
             roth_conversion=roth_conversion,
@@ -2467,6 +2869,9 @@ class Stage3EarlyRetirement(LifeStage):
                 roth_conversion +
                 ltcg_harvested)
         
+        dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
+        dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -2496,7 +2901,8 @@ class Stage3EarlyRetirement(LifeStage):
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
-            conversion_executed=transactions['conversion_executed']
+            conversion_executed=transactions['conversion_executed'],
+            decision_log=dl,
         )
 
 
@@ -2535,14 +2941,14 @@ class Stage4Medicare(LifeStage):
             target_conversion: Target Roth conversion amount
             prior_magi: MAGI from 2 years prior (for IRMAA calculation)
         """
-        logger.debug(f"Stage 3 calculation for year {year}, prior MAGI=${prior_magi:,.2f}")
+        logger.debug(f"Stage 4 calculation for year {year}, prior MAGI=${prior_magi:,.2f}")
         
         age_primary = kwargs.get('age_primary', 0)
         age_spouse = kwargs.get('age_spouse', 0)
         
         # Get tax and IRMAA data
         tax_brackets = get_income_tax_brackets(year)
-        cg_brackets = get_cap_gains_brackets(year)
+        cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
         std_deduction_df = get_std_deduction(year)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
@@ -2607,8 +3013,9 @@ class Stage4Medicare(LifeStage):
         # Calculate IRMAA headroom
         irmaa_headroom = next_irmaa_threshold - ltcg_harvested - std_deduction
         
-        # Initialize roth_conversion
+        # Initialize roth_conversion and optimal_amount
         roth_conversion = 0
+        optimal_amount = 0
         
         # Use BETR algorithm to optimize conversion
         try:
@@ -2691,7 +3098,7 @@ class Stage4Medicare(LifeStage):
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
-        new_balances, transactions = rebalance_accounts(
+        new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances,
             expenses=expenses,
             roth_conversion=roth_conversion,
@@ -2721,6 +3128,80 @@ class Stage4Medicare(LifeStage):
                 roth_conversion +
                 ltcg_harvested)
         
+        # --- Decision log for Stage 4 ---
+        dl = DecisionLog()
+
+        # IRMAA assessment
+        dl.add(
+            "irmaa_decisions",
+            "IRMAA Assessment",
+            f"${irmaa_penalty:,.0f} penalty ({people_on_medicare} person(s) on Medicare)",
+            "IRMAA is based on MAGI from 2 years prior. "
+            "Roth conversions are capped at the IRMAA headroom to avoid crossing into the next bracket.",
+            prior_magi=f"${prior_magi:,.0f}",
+            people_on_medicare=people_on_medicare,
+            next_irmaa_threshold=f"${next_irmaa_threshold:,.0f}" if next_irmaa_threshold != float('inf') else "None",
+            irmaa_headroom=f"${irmaa_headroom:,.0f}",
+        )
+
+        # LTCG harvest decision
+        dl.add(
+            "ltcg_decisions",
+            "LTCG Harvest",
+            f"Harvested ${ltcg_harvested:,.0f} from brokerage",
+            f"Harvesting LTCG up to the 0% bracket limit (${ltcg_room:,.0f} room). "
+            f"Only {BROKERAGE_LTCG_RATIO:.0%} of brokerage withdrawals are taxable LTCG.",
+            ltcg_room=f"${ltcg_room:,.0f}",
+            ltcg_harvested=f"${ltcg_harvested:,.0f}",
+            brokerage_ltcg_ratio=f"{BROKERAGE_LTCG_RATIO:.0%}",
+        )
+
+        # Roth conversion decision (mirrors the logic above)
+        if roth_conversion > 0 and roth_conversion == irmaa_headroom:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                f"Convert ${roth_conversion:,.0f} (IRMAA-limited)",
+                "BETR algorithm recommended a larger conversion but it was capped at the IRMAA "
+                "headroom to avoid triggering a higher Medicare premium bracket next year.",
+                optimal_betr_amount=f"${optimal_amount:,.0f}",
+                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                conversion_executed=f"${roth_conversion:,.0f}",
+            )
+        elif roth_conversion > 0:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                f"Convert ${roth_conversion:,.0f}",
+                "BETR algorithm recommended this conversion amount. "
+                "It fits within the IRMAA headroom so no Medicare penalty increase is expected.",
+                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                conversion_executed=f"${roth_conversion:,.0f}",
+            )
+        else:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                "No conversion",
+                "Either BETR did not recommend a conversion at current rates, "
+                "there was no room within the IRMAA headroom, or the Traditional balance is zero.",
+                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                traditional_balance=f"${balances.traditional:,.0f}",
+            )
+
+        # ACA premium
+        dl.add(
+            "aca_decisions",
+            "ACA Premium",
+            f"${aca_premium:,.0f}/yr" if aca_premium > 0 else "No ACA premium",
+            "ACA premium applies if either person is under 65 and not yet on Medicare.",
+            aca_premium=f"${aca_premium:,.0f}",
+        )
+
+        # Merge rebalancing decisions
+        for entry in rebal_dl.all_decisions():
+            getattr(dl, _category_for(entry)).append(entry)
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -2750,7 +3231,8 @@ class Stage4Medicare(LifeStage):
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
-            conversion_executed=transactions['conversion_executed']
+            conversion_executed=transactions['conversion_executed'],
+            decision_log=dl,
         )
 
 
@@ -2789,14 +3271,14 @@ class Stage5SocialSecurity(LifeStage):
             target_conversion: Target Roth conversion amount
             prior_magi: MAGI from 2 years prior (for IRMAA)
         """
-        logger.debug(f"Stage 4 calculation for year {year}, SS=${ss_benefits:,.2f}")
+        logger.debug(f"Stage 5 calculation for year {year}, SS=${ss_benefits:,.2f}")
         
         age_primary = kwargs.get('age_primary', 0)
         age_spouse = kwargs.get('age_spouse', 0)
         
         # Get tax data
         tax_brackets = get_income_tax_brackets(year)
-        cg_brackets = get_cap_gains_brackets(year)
+        cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
         std_deduction_df = get_std_deduction(year)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
@@ -2859,8 +3341,9 @@ class Stage5SocialSecurity(LifeStage):
         # Calculate Roth conversion using BETR algorithm with SS income
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
         
-        # Initialize roth_conversion
+        # Initialize roth_conversion and optimal_amount
         roth_conversion = 0
+        optimal_amount = 0
         
         # Use BETR algorithm - SS income is already in current_income
         try:
@@ -2954,7 +3437,7 @@ class Stage5SocialSecurity(LifeStage):
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
-        new_balances, transactions = rebalance_accounts(
+        new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances_with_ss,
             expenses=expenses,
             roth_conversion=roth_conversion,
@@ -2984,6 +3467,91 @@ class Stage5SocialSecurity(LifeStage):
                 roth_conversion +
                 ltcg_harvested)
         
+        # --- Decision log for Stage 5 ---
+        dl = DecisionLog()
+
+        # SS income / taxation
+        dl.add(
+            "ss_decisions",
+            "Social Security Income",
+            f"${ss_benefits:,.0f}/yr (${taxable_ss:,.0f} taxable at {TAXABLE_SS_RATE:.0%})",
+            f"Up to {TAXABLE_SS_RATE:.0%} of SS benefits are included in taxable income at higher "
+            "income levels. SS income reduces the amount that must be withdrawn from investment accounts.",
+            ss_benefits=f"${ss_benefits:,.0f}",
+            taxable_ss=f"${taxable_ss:,.0f}",
+            taxable_ss_rate=f"{TAXABLE_SS_RATE:.0%}",
+        )
+
+        # IRMAA assessment
+        dl.add(
+            "irmaa_decisions",
+            "IRMAA Assessment",
+            f"${irmaa_penalty:,.0f} penalty ({people_on_medicare} person(s) on Medicare)",
+            "IRMAA is based on MAGI from 2 years prior. "
+            "Roth conversions are capped at the IRMAA headroom to avoid crossing into the next bracket.",
+            prior_magi=f"${prior_magi:,.0f}",
+            people_on_medicare=people_on_medicare,
+            next_irmaa_threshold=f"${next_irmaa_threshold:,.0f}" if next_irmaa_threshold != float('inf') else "None",
+            irmaa_headroom=f"${irmaa_headroom:,.0f}",
+        )
+
+        # LTCG harvest decision
+        dl.add(
+            "ltcg_decisions",
+            "LTCG Harvest",
+            f"Harvested ${ltcg_harvested:,.0f} from brokerage",
+            f"Harvesting LTCG up to the 0% bracket limit after accounting for taxable SS income. "
+            f"Only {BROKERAGE_LTCG_RATIO:.0%} of brokerage withdrawals are taxable LTCG.",
+            ltcg_harvested=f"${ltcg_harvested:,.0f}",
+            brokerage_ltcg_ratio=f"{BROKERAGE_LTCG_RATIO:.0%}",
+        )
+
+        # Roth conversion decision
+        if roth_conversion > 0 and roth_conversion < optimal_amount:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                f"Convert ${roth_conversion:,.0f} (IRMAA-limited with SS income)",
+                "BETR algorithm recommended a larger conversion but it was capped at the IRMAA "
+                "headroom. SS income reduces available conversion room.",
+                optimal_betr_amount=f"${optimal_amount:,.0f}",
+                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                conversion_executed=f"${roth_conversion:,.0f}",
+            )
+        elif roth_conversion > 0:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                f"Convert ${roth_conversion:,.0f} (with SS income)",
+                "BETR algorithm recommended this conversion. "
+                "It fits within the IRMAA headroom despite SS income.",
+                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                conversion_executed=f"${roth_conversion:,.0f}",
+            )
+        else:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                "No conversion",
+                "BETR did not recommend a conversion, or SS income plus IRMAA constraints "
+                "left no room for a beneficial conversion.",
+                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                traditional_balance=f"${balances.traditional:,.0f}",
+            )
+
+        # ACA premium
+        dl.add(
+            "aca_decisions",
+            "ACA Premium",
+            f"${aca_premium:,.0f}/yr" if aca_premium > 0 else "No ACA premium",
+            "ACA premium applies if either person is under 65 and not yet on Medicare.",
+            aca_premium=f"${aca_premium:,.0f}",
+        )
+
+        # Merge rebalancing decisions
+        for entry in rebal_dl.all_decisions():
+            getattr(dl, _category_for(entry)).append(entry)
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -3013,7 +3581,8 @@ class Stage5SocialSecurity(LifeStage):
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
-            conversion_executed=transactions['conversion_executed']
+            conversion_executed=transactions['conversion_executed'],
+            decision_log=dl,
         )
 
 
@@ -3058,7 +3627,7 @@ class Stage6RMD(LifeStage):
         
         # Get tax data
         tax_brackets = get_income_tax_brackets(year)
-        cg_brackets = get_cap_gains_brackets(year)
+        cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
         std_deduction_df = get_std_deduction(year)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
@@ -3166,7 +3735,7 @@ class Stage6RMD(LifeStage):
         
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         # Note: RMD is handled separately as it's mandatory
-        new_balances, transactions = rebalance_accounts(
+        new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances_with_ss,
             expenses=expenses,
             roth_conversion=roth_conversion,
@@ -3207,6 +3776,91 @@ class Stage6RMD(LifeStage):
                 roth_conversion +
                 ltcg_harvested)
         
+        # --- Decision log for Stage 6 ---
+        dl = DecisionLog()
+
+        # RMD decision
+        dl.add(
+            "rmd_decisions",
+            "Required Minimum Distribution",
+            f"${rmd_amount:,.0f} distributed from Traditional to Brokerage",
+            f"RMD is mandatory at age {age_primary}. "
+            f"The divisor for this age is {rmd_rate:.1f}, giving RMD = "
+            f"${balances.traditional:,.0f} / {rmd_rate:.1f} = ${rmd_amount:,.0f}.",
+            age_primary=age_primary,
+            traditional_balance=f"${balances.traditional:,.0f}",
+            rmd_divisor=f"{rmd_rate:.1f}",
+            rmd_amount=f"${rmd_amount:,.0f}",
+        )
+
+        # SS income / taxation
+        dl.add(
+            "ss_decisions",
+            "Social Security Income",
+            f"${ss_benefits:,.0f}/yr (${taxable_ss:,.0f} taxable at {TAXABLE_SS_RATE:.0%})",
+            f"Up to {TAXABLE_SS_RATE:.0%} of SS benefits are included in taxable income. "
+            "Combined with the RMD, this determines the effective tax bracket.",
+            ss_benefits=f"${ss_benefits:,.0f}",
+            taxable_ss=f"${taxable_ss:,.0f}",
+        )
+
+        # IRMAA assessment
+        people_on_medicare_s6 = sum([age_primary >= MEDICARE_AGE, age_spouse >= MEDICARE_AGE])
+        dl.add(
+            "irmaa_decisions",
+            "IRMAA Assessment",
+            f"${irmaa_penalty:,.0f} penalty ({people_on_medicare_s6} person(s) on Medicare)",
+            "IRMAA is based on MAGI from 2 years prior. "
+            "Any additional Roth conversion is capped at the IRMAA headroom.",
+            prior_magi=f"${prior_magi:,.0f}",
+            people_on_medicare=people_on_medicare_s6,
+        )
+
+        # LTCG harvest decision
+        dl.add(
+            "ltcg_decisions",
+            "LTCG Harvest",
+            f"Harvested ${ltcg_harvested:,.0f} from brokerage",
+            "In the RMD stage, LTCG is harvested up to the 15% bracket limit "
+            "(not the 0% limit) since RMD income already occupies the lower brackets.",
+            ltcg_harvested=f"${ltcg_harvested:,.0f}",
+        )
+
+        # Roth conversion decision (limited by RMD)
+        if roth_conversion > 0:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                f"Convert ${roth_conversion:,.0f} (conservative, RMD-limited)",
+                "A small conversion was possible after the RMD filled the lower brackets. "
+                "Only 50% of the available room is used to stay conservative.",
+                conversion_room=f"${roth_conversion / 0.5:,.0f}" if roth_conversion > 0 else "N/A",
+                conversion_executed=f"${roth_conversion:,.0f}",
+            )
+        else:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                "No conversion",
+                "The RMD plus SS income filled the target tax bracket, "
+                "leaving no room for an additional Roth conversion.",
+                rmd_amount=f"${rmd_amount:,.0f}",
+                taxable_ss=f"${taxable_ss:,.0f}",
+            )
+
+        # ACA premium
+        dl.add(
+            "aca_decisions",
+            "ACA Premium",
+            f"${aca_premium:,.0f}/yr" if aca_premium > 0 else "No ACA premium",
+            "ACA premium applies if either person is under 65 and not yet on Medicare.",
+            aca_premium=f"${aca_premium:,.0f}",
+        )
+
+        # Merge rebalancing decisions
+        for entry in rebal_dl.all_decisions():
+            getattr(dl, _category_for(entry)).append(entry)
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -3236,7 +3890,8 @@ class Stage6RMD(LifeStage):
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
-            conversion_executed=transactions['conversion_executed']
+            conversion_executed=transactions['conversion_executed'],
+            decision_log=dl,
         )
 
 
@@ -3584,7 +4239,8 @@ class WithdrawalStrategyEngine:
                 'Traditional Balance': s.balances.traditional,
                 'Roth Balance': s.balances.roth,
                 'DAF Balance': s.balances.daf,
-                'Total Portfolio': s.balances.total()
+                'Total Portfolio': s.balances.total(),
+                'Decision Log': s.decision_log,
             })
         
         return pd.DataFrame(data)
@@ -3877,8 +4533,10 @@ def calculate_aca_subsidy(magi: float, year: int, household_size: int = 2) -> Tu
     return subsidy, net_premium
 
 
-# Default configuration shared across all scenarios
-_DEFAULT_SCENARIO_CONFIG = {
+# Default configuration shared across all scenarios.
+# Wrapped in MappingProxyType to prevent accidental mutation; the dict-unpack
+# syntax ({**_DEFAULT_SCENARIO_CONFIG, **overrides}) works identically.
+_DEFAULT_SCENARIO_CONFIG: types.MappingProxyType = types.MappingProxyType({
     "start_year": 2026,
     "end_year": 2050,
     "person1_name": "Tom",
@@ -3888,7 +4546,7 @@ _DEFAULT_SCENARIO_CONFIG = {
     "ss_claiming_age": 67,
     "retirement_year": 2026,
     "has_wages": False
-}
+})
 
 
 # Scenario-specific configuration overrides

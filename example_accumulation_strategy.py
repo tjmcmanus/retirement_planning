@@ -12,6 +12,12 @@ Usage:
     python example_accumulation_strategy.py
 """
 
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+
 from strategy import (
     PortfolioBalances,
     build_accumulation_strategy_display,
@@ -19,6 +25,47 @@ from strategy import (
     print_strategy_report,
 )
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Scenario configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AccumulationScenarioConfig:
+    """Configuration for an accumulation-phase scenario.
+
+    All hard-coded values that previously lived inside each example function
+    are promoted to named, typed fields with defaults matching Example 1
+    (mid-career accumulation).  Override individual fields when constructing
+    configs for other scenarios.
+    """
+
+    # --- Portfolio starting balances ---
+    cash:         int   = 30_000
+    taxable:      int   = 120_000
+    traditional:  int   = 380_000
+    roth:         int   = 120_000
+    daf:          int   = 0
+
+    # --- Simulation parameters ---
+    start_year:             int   = 2026
+    end_year:               int   = 2035
+    retirement_year:        int   = 2036
+    initial_expenses:       int   = 150_000
+    growth_rate:            float = 1.07
+    expense_inflation_rate: float = 0.03
+    has_wages:              bool  = True
+
+    # --- People ---
+    person1_name: str = "Tom"
+    person2_name: str = "Sarah"
+
+    # --- Output ---
+    output_csv:      Path  = field(default_factory=lambda: Path("example_accum1_mid_career.csv"))
+    milestone_years: tuple = (2026, 2030, 2035)
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +146,143 @@ def _print_roth_conversion_summary(strategy_df: pd.DataFrame) -> None:
     print(f"   Average per year:       ${conversion_years['Roth Conversion'].mean():>12,.0f}")
 
 
+def _display_stage_transitions(strategy_df: pd.DataFrame) -> None:
+    """Log each life-stage transition found in *strategy_df*.
+
+    Iterates the DataFrame once and emits one log line per stage boundary,
+    showing the year and age at which the transition occurs.
+
+    Args:
+        strategy_df: DataFrame containing accumulation strategy data with
+            ``'Stage'``, ``'Year'``, and ``'Age'`` columns.
+    """
+    if strategy_df.empty:
+        return
+    logger.info("🎯 Life Stage Transitions:")
+    prev_stage = None
+    for _, row in strategy_df.iterrows():
+        if row['Stage'] != prev_stage:
+            logger.info("   %s: %s (Age %s)", row['Year'], row['Stage'], row['Age'])
+            prev_stage = row['Stage']
+
+
+def _save_scenario_csv(df: pd.DataFrame, path: Path) -> Path:
+    """Write *df* to *path* as CSV and return the resolved path.
+
+    Creates any missing parent directories so callers can safely pass
+    sub-directory paths (e.g. ``Path("output/example1.csv")``).
+
+    Args:
+        df:   DataFrame to persist.
+        path: Destination file path (``str`` or :class:`~pathlib.Path`).
+
+    Returns:
+        The resolved absolute path of the written file.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+    logger.info("Results saved to %s", path.resolve())
+    return path
+
+
+def _log_scenario_header(title: str) -> None:
+    """Emit a bordered INFO banner for a scenario.
+
+    Args:
+        title: The scenario title line to display between the two separator
+            bars, e.g. ``"EXAMPLE 1: Mid-Career Accumulation (2026-2036)"``.
+    """
+    logger.info("=" * 80)
+    logger.info(title)
+    logger.info("=" * 80)
+
+
+def _log_growth_summary(strategy_df: pd.DataFrame, label: str = "Growth Summary") -> None:
+    """Log start/end portfolio values and the growth multiple.
+
+    Args:
+        strategy_df: DataFrame containing accumulation strategy data with a
+            ``'Total Portfolio'`` column.
+        label: Heading text emitted before the three summary lines.
+    """
+    start_total = strategy_df['Total Portfolio'].iloc[0]
+    end_total   = strategy_df['Total Portfolio'].iloc[-1]
+    growth_x    = round(end_total / start_total, 1) if start_total else 0
+    logger.info(
+        "📈 %s:\n   Starting portfolio: $%s\n   Ending portfolio:   $%s\n   Growth multiple:    %.1fx",
+        label,
+        f"{start_total:>12,.0f}",
+        f"{end_total:>12,.0f}",
+        growth_x,
+    )
+
+
+def _balances_from_config(config: AccumulationScenarioConfig) -> PortfolioBalances:
+    """Construct a :class:`~strategy.PortfolioBalances` from a scenario config.
+
+    Centralises the five-field construction that is otherwise duplicated in
+    every scenario function.
+
+    Args:
+        config: Scenario configuration supplying the starting account balances.
+
+    Returns:
+        A new :class:`~strategy.PortfolioBalances` populated from *config*.
+    """
+    return PortfolioBalances(
+        cash=config.cash,
+        taxable=config.taxable,
+        traditional=config.traditional,
+        roth=config.roth,
+        daf=config.daf,
+    )
+
+
+def _run_accumulation_report(
+    strategy_df: pd.DataFrame,
+    balances_df: pd.DataFrame,
+    config: AccumulationScenarioConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run the standard reporting block for any accumulation scenario.
+
+    Centralises the repeated pattern shared by all three example functions:
+    summary generation, strategy report, portfolio evolution, account mix,
+    and Roth conversion summary.
+
+    Args:
+        strategy_df: DataFrame returned by
+            :func:`~strategy.build_accumulation_strategy_display`.
+        balances_df: Companion balances DataFrame from the same call.
+        config:      Scenario configuration supplying ``milestone_years``
+                     and ``output_csv``.
+
+    Returns:
+        The unchanged ``(strategy_df, balances_df)`` tuple so callers can
+        return it directly.
+    """
+    if strategy_df.empty:
+        logger.warning("No accumulation data returned — check config retirement dates.")
+        return strategy_df, balances_df
+
+    summary = generate_strategy_summary(strategy_df)
+    print_strategy_report(strategy_df, summary)
+
+    _print_portfolio_evolution(strategy_df, list(config.milestone_years))
+    _print_account_mix(strategy_df, strategy_df['Year'].iloc[-1])
+    _print_roth_conversion_summary(strategy_df)
+
+    _save_scenario_csv(strategy_df, config.output_csv)
+    return strategy_df, balances_df
+
+
 # ---------------------------------------------------------------------------
 # Example scenarios
 # ---------------------------------------------------------------------------
 
-def example_1_mid_career_accumulation() -> tuple:
+def example_1_mid_career_accumulation(
+    config: AccumulationScenarioConfig | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Example 1: Mid-career worker building retirement assets (2026-2036).
 
     Scenario:
@@ -113,54 +292,106 @@ def example_1_mid_career_accumulation() -> tuple:
     - 7% growth, 3% expense inflation
     - Retirement target: 2036 (age 55 / 53)
 
-    Returns:
-        tuple: (strategy_df, balances_df)
-    """
-    print("\n" + "="*80)
-    print("EXAMPLE 1: Mid-Career Accumulation (2026-2036)")
-    print("="*80)
+    Args:
+        config: Scenario configuration.  Defaults to
+            :class:`AccumulationScenarioConfig` with all Example-1 values.
+            Pass a customised instance to override individual parameters
+            without touching the function body.
 
-    initial_balances = PortfolioBalances(
-        cash=30_000,
-        taxable=120_000,
-        traditional=380_000,
-        roth=120_000,
-        daf=0,
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: ``(strategy_df, balances_df)``
+    """
+    if config is None:
+        config = AccumulationScenarioConfig()
+
+    _log_scenario_header(
+        f"EXAMPLE 1: Mid-Career Accumulation ({config.start_year}-{config.retirement_year})"
     )
+
+    initial_balances = _balances_from_config(config)
 
     _print_portfolio_balances(initial_balances, "Starting Portfolio")
 
     strategy_df, balances_df = build_accumulation_strategy_display(
-        start_year=2026,
-        end_year=2035,
+        start_year=config.start_year,
+        end_year=config.end_year,
         initial_balances=initial_balances,
-        initial_expenses=150_000,
-        person1_name="Tom",
-        person2_name="Sarah",
-        growth_rate=1.07,
-        expense_inflation_rate=0.03,
-        retirement_year=2036,
-        has_wages=True,
+        initial_expenses=config.initial_expenses,
+        person1_name=config.person1_name,
+        person2_name=config.person2_name,
+        growth_rate=config.growth_rate,
+        expense_inflation_rate=config.expense_inflation_rate,
+        retirement_year=config.retirement_year,
+        has_wages=config.has_wages,
     )
 
-    if strategy_df.empty:
-        print("⚠️  No accumulation data returned — check config retirement dates.")
-        return strategy_df, balances_df
-
-    summary = generate_strategy_summary(strategy_df)
-    print_strategy_report(strategy_df, summary)
-
-    _print_portfolio_evolution(strategy_df, [2026, 2030, 2035])
-    _print_account_mix(strategy_df, strategy_df['Year'].iloc[-1])
-    _print_roth_conversion_summary(strategy_df)
-
-    strategy_df.to_csv("example_accum1_mid_career.csv", index=False)
-    print("\n✅ Results saved to example_accum1_mid_career.csv")
-
-    return strategy_df, balances_df
+    _display_stage_transitions(strategy_df)
+    return _run_accumulation_report(strategy_df, balances_df, config)
 
 
-def example_2_prep_for_retirement() -> tuple:
+def _example_2_config() -> AccumulationScenarioConfig:
+    """Return the default :class:`AccumulationScenarioConfig` for Example 2.
+
+    Centralises all hard-coded values for the *Prep for Retirement* scenario
+    so that :func:`example_2_prep_for_retirement` can accept an injectable
+    ``config`` parameter without duplicating defaults in the function body.
+
+    Returns:
+        AccumulationScenarioConfig: Fully populated config for Example 2.
+    """
+    return AccumulationScenarioConfig(
+        cash=50_000,
+        taxable=200_000,
+        traditional=900_000,
+        roth=250_000,
+        daf=0,
+        start_year=2026,
+        end_year=2035,
+        retirement_year=2036,
+        initial_expenses=160_000,
+        growth_rate=1.065,
+        expense_inflation_rate=0.025,
+        has_wages=True,
+        person1_name="Tom",
+        person2_name="Sarah",
+        output_csv=Path("example_accum2_prep_retirement.csv"),
+        milestone_years=(2026, 2030, 2035),
+    )
+
+
+def _example_3_config() -> AccumulationScenarioConfig:
+    """Return the default :class:`AccumulationScenarioConfig` for Example 3.
+
+    Centralises all hard-coded values for the *Early Saver* scenario so that
+    :func:`example_3_early_saver` can accept an injectable ``config`` parameter
+    without duplicating defaults in the function body.
+
+    Returns:
+        AccumulationScenarioConfig: Fully populated config for Example 3.
+    """
+    return AccumulationScenarioConfig(
+        cash=20_000,
+        taxable=30_000,
+        traditional=80_000,
+        roth=70_000,
+        daf=0,
+        start_year=2026,
+        end_year=2045,
+        retirement_year=2046,
+        initial_expenses=120_000,
+        growth_rate=1.075,
+        expense_inflation_rate=0.03,
+        has_wages=True,
+        person1_name="Tom",
+        person2_name="Sarah",
+        output_csv=Path("example_accum3_early_saver.csv"),
+        milestone_years=(2026, 2030, 2035, 2040, 2045),
+    )
+
+
+def example_2_prep_for_retirement(
+    config: AccumulationScenarioConfig | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Example 2: Final 10 years before retirement — Stage 2 Prep phase (2026-2035).
 
     Scenario:
@@ -171,59 +402,46 @@ def example_2_prep_for_retirement() -> tuple:
     - Retirement target: 2036 (age 65 / 63)
     - Demonstrates Stage 2: Prep for Retirement optimisation
 
-    Returns:
-        tuple: (strategy_df, balances_df)
-    """
-    print("\n" + "="*80)
-    print("EXAMPLE 2: Prep for Retirement — Final 10 Years (2026-2035)")
-    print("="*80)
+    Args:
+        config: Scenario configuration.  Defaults to
+            :func:`_example_2_config` with all Example-2 values.
+            Pass a customised instance to override individual parameters
+            without touching the function body.
 
-    initial_balances = PortfolioBalances(
-        cash=50_000,
-        taxable=200_000,
-        traditional=900_000,
-        roth=250_000,
-        daf=0,
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: ``(strategy_df, balances_df)``
+    """
+    if config is None:
+        config = _example_2_config()
+
+    _log_scenario_header(
+        f"EXAMPLE 2: Prep for Retirement — Final 10 Years ({config.start_year}-{config.end_year})"
     )
+
+    initial_balances = _balances_from_config(config)
 
     _print_portfolio_balances(initial_balances, "Starting Portfolio")
 
     strategy_df, balances_df = build_accumulation_strategy_display(
-        start_year=2026,
-        end_year=2035,
+        start_year=config.start_year,
+        end_year=config.end_year,
         initial_balances=initial_balances,
-        initial_expenses=160_000,
-        person1_name="Tom",
-        person2_name="Sarah",
-        growth_rate=1.065,
-        expense_inflation_rate=0.025,
-        retirement_year=2036,
-        has_wages=True,
+        initial_expenses=config.initial_expenses,
+        person1_name=config.person1_name,
+        person2_name=config.person2_name,
+        growth_rate=config.growth_rate,
+        expense_inflation_rate=config.expense_inflation_rate,
+        retirement_year=config.retirement_year,
+        has_wages=config.has_wages,
     )
 
-    if strategy_df.empty:
-        print("⚠️  No accumulation data returned — check config retirement dates.")
-        return strategy_df, balances_df
-
-    # Show stage transitions
-    print("\n🎯 Life Stage Transitions:")
-    prev_stage = None
-    for _, row in strategy_df.iterrows():
-        if row['Stage'] != prev_stage:
-            print(f"   {row['Year']}: {row['Stage']} (Age {row['Age']})")
-            prev_stage = row['Stage']
-
-    _print_portfolio_evolution(strategy_df, [2026, 2030, 2035])
-    _print_account_mix(strategy_df, strategy_df['Year'].iloc[-1])
-    _print_roth_conversion_summary(strategy_df)
-
-    strategy_df.to_csv("example_accum2_prep_retirement.csv", index=False)
-    print("\n✅ Results saved to example_accum2_prep_retirement.csv")
-
-    return strategy_df, balances_df
+    _display_stage_transitions(strategy_df)
+    return _run_accumulation_report(strategy_df, balances_df, config)
 
 
-def example_3_early_saver() -> tuple:
+def example_3_early_saver(
+    config: AccumulationScenarioConfig | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Example 3: Early-career saver with long accumulation horizon (2026-2045).
 
     Scenario:
@@ -234,57 +452,43 @@ def example_3_early_saver() -> tuple:
     - Retirement target: 2046 (age 55 / 53)
     - Demonstrates long compounding runway
 
-    Returns:
-        tuple: (strategy_df, balances_df)
-    """
-    print("\n" + "="*80)
-    print("EXAMPLE 3: Early Saver — Long Accumulation Horizon (2026-2045)")
-    print("="*80)
+    Args:
+        config: Scenario configuration.  Defaults to
+            :func:`_example_3_config` with all Example-3 values.
+            Pass a customised instance to override individual parameters
+            without touching the function body.
 
-    initial_balances = PortfolioBalances(
-        cash=20_000,
-        taxable=30_000,
-        traditional=80_000,
-        roth=70_000,
-        daf=0,
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: ``(strategy_df, balances_df)``
+    """
+    if config is None:
+        config = _example_3_config()
+
+    _log_scenario_header(
+        f"EXAMPLE 3: Early Saver — Long Accumulation Horizon "
+        f"({config.start_year}-{config.end_year})"
     )
 
+    initial_balances = _balances_from_config(config)
     _print_portfolio_balances(initial_balances, "Starting Portfolio")
 
     strategy_df, balances_df = build_accumulation_strategy_display(
-        start_year=2026,
-        end_year=2045,
+        start_year=config.start_year,
+        end_year=config.end_year,
         initial_balances=initial_balances,
-        initial_expenses=120_000,
-        person1_name="Tom",
-        person2_name="Sarah",
-        growth_rate=1.075,
-        expense_inflation_rate=0.03,
-        retirement_year=2046,
-        has_wages=True,
+        initial_expenses=config.initial_expenses,
+        person1_name=config.person1_name,
+        person2_name=config.person2_name,
+        growth_rate=config.growth_rate,
+        expense_inflation_rate=config.expense_inflation_rate,
+        retirement_year=config.retirement_year,
+        has_wages=config.has_wages,
     )
 
-    if strategy_df.empty:
-        print("⚠️  No accumulation data returned — check config retirement dates.")
-        return strategy_df, balances_df
-
-    _print_portfolio_evolution(strategy_df, [2026, 2030, 2035, 2040, 2045])
-    _print_account_mix(strategy_df, strategy_df['Year'].iloc[-1])
-    _print_roth_conversion_summary(strategy_df)
-
-    # Show total portfolio growth
-    start_total = strategy_df['Total Portfolio'].iloc[0]
-    end_total   = strategy_df['Total Portfolio'].iloc[-1]
-    growth_x    = end_total / start_total if start_total > 0 else 0
-    print(f"\n📈 20-Year Growth Summary:")
-    print(f"   Starting portfolio: ${start_total:>12,.0f}")
-    print(f"   Ending portfolio:   ${end_total:>12,.0f}")
-    print(f"   Growth multiple:    {growth_x:.1f}x")
-
-    strategy_df.to_csv("example_accum3_early_saver.csv", index=False)
-    print("\n✅ Results saved to example_accum3_early_saver.csv")
-
-    return strategy_df, balances_df
+    _display_stage_transitions(strategy_df)
+    if not strategy_df.empty:
+        _log_growth_summary(strategy_df, "20-Year Growth Summary")
+    return _run_accumulation_report(strategy_df, balances_df, config)
 
 
 def compare_accumulation_scenarios() -> None:

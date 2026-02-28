@@ -1,3 +1,4 @@
+from typing import cast
 import streamlit as st
 import datetime
 import pandas as pd
@@ -74,14 +75,14 @@ def _build_networth_row(date: pd.Timestamp, summary_df: pd.DataFrame) -> dict:
     """
     # Single-pass aggregation with reindex to ensure all account types present
     account_totals = (
-        summary_df[summary_df['account_type'].isin(ACCOUNT_TYPE_MAP.keys())]
+        summary_df[summary_df['account_type'].isin(list(ACCOUNT_TYPE_MAP.keys()))]
         .groupby('account_type')['market_value']
         .sum()
-        .reindex(ACCOUNT_TYPE_MAP.keys(), fill_value=0.0)
+        .reindex(list(ACCOUNT_TYPE_MAP.keys()), fill_value=0.0)
     )
     
     # Map account types to column names
-    row_data = {ACCOUNT_TYPE_MAP[k]: v for k, v in account_totals.items()}
+    row_data = {ACCOUNT_TYPE_MAP[str(k)]: v for k, v in account_totals.items()}
     row_data['total'] = account_totals.sum()
     row_data['date'] = date
     
@@ -133,7 +134,7 @@ def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
     else:
         # Return empty DataFrame with correct structure and datetime index
         return pd.DataFrame(
-            columns=['cash', 'taxable', 'tax_deferred', 'tax_free', 'total']
+            data={col: pd.Series(dtype=float) for col in ['cash', 'taxable', 'tax_deferred', 'tax_free', 'total']}
         ).set_index(pd.DatetimeIndex([], name='date'))
 
 currentDate = datetime.date.today()
@@ -331,7 +332,7 @@ def render_balance_table(balances_df: pd.DataFrame) -> None:
                     'Roth Balance', 'DAF Balance', 'Total Portfolio']
     for col in balance_cols:
         if col in display.columns:
-            display[col] = pd.to_numeric(display[col], errors='coerce').map(format_currency)
+            display[col] = pd.Series(pd.to_numeric(display[col], errors='coerce')).map(format_currency)
     st.dataframe(display, column_config=BALANCE_COLUMN_CONFIG, hide_index=True, width='stretch')
 
 
@@ -369,6 +370,267 @@ _ACCOUNT_TYPE_ACCENT: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Net worth statement — style constants (shared by all row-builder helpers)
+# ---------------------------------------------------------------------------
+_NW_STYLES: dict[str, str] = {
+    "hdr_bg":   "#1a1a2e",
+    "hdr_fg":   "white",
+    "total_bg": "#e8f4fd",
+    "summ_bg":  "#f8f9fa",
+    "pos_clr":  "#21c354",
+    "neg_clr":  "#ff4b4b",
+    "border":   "1px solid #dee2e6",
+}
+
+
+def _fmt_currency(v: float) -> str:
+    """Format *v* as an accounting-style currency string.
+
+    Negative values are shown in parentheses: ``$(1,234.56)``.
+    """
+    if v < 0:
+        return f"$({abs(v):,.2f})"
+    return f"${v:,.2f}"
+
+
+def _change_style(v: float, styles: dict[str, str]) -> str:
+    """Return an inline CSS snippet that colours *v* green (≥0) or red (<0)."""
+    clr = styles["pos_clr"] if v >= 0 else styles["neg_clr"]
+    return f"color:{clr};font-weight:600"
+
+
+def _nw_header_row(styles: dict[str, str]) -> str:
+    """Return the ``<tr>`` HTML for the column-header row of the net worth table."""
+    bg, fg = styles["hdr_bg"], styles["hdr_fg"]
+    return (
+        f'<tr style="background:{bg};color:{fg};font-size:12px;'
+        f'text-transform:uppercase;letter-spacing:.05em;">'
+        f'<th style="padding:8px 12px;text-align:left;">Type</th>'
+        f'<th style="padding:8px 12px;text-align:right;">Type Total</th>'
+        f'<th style="padding:8px 12px;text-align:right;">Account Total</th>'
+        f'<th style="padding:8px 12px;text-align:left;">Account</th>'
+        f'</tr>'
+    )
+
+
+def _nw_type_rows(
+    acct_type: str,
+    accounts: pd.DataFrame,
+    styles: dict[str, str],
+) -> list[str]:
+    """Return a list of ``<tr>`` HTML strings for one account-type group.
+
+    The first row carries ``rowspan`` cells for the type label and type total;
+    subsequent rows contain only the account value and name cells.
+
+    Args:
+        acct_type: Key into ``_ACCOUNT_TYPE_LABELS`` / ``_ACCOUNT_TYPE_COLORS``.
+        accounts:  Filtered DataFrame with columns ``account_name``, ``market_value``.
+        styles:    Style-constant dict (``_NW_STYLES``).
+    """
+    label      = _ACCOUNT_TYPE_LABELS.get(acct_type, acct_type)
+    type_total = float(accounts["market_value"].sum())
+    row_bg     = _ACCOUNT_TYPE_COLORS.get(acct_type, "rgba(240,242,246,0.4)")
+    accent     = _ACCOUNT_TYPE_ACCENT.get(acct_type, "#cccccc")
+    border     = styles["border"]
+    n          = len(accounts)
+
+    # Fix 3: shared base style eliminates three-way duplication of padding/border/bg
+    _td_base = f"padding:6px 12px;border:{border};background:{row_bg};"
+    td_r     = f'style="{_td_base}text-align:right;"'
+    td_l     = f'style="{_td_base}text-align:left;"'
+    td_span  = f'style="{_td_base}border-left:4px solid {accent};text-align:left;font-weight:700;vertical-align:middle;"'
+    td_total = f'style="{_td_base}text-align:right;font-weight:600;vertical-align:middle;"'
+
+    # Fix 1: avoid iterrows() — handle first row via iloc[0], rest via itertuples()
+    first = accounts.iloc[0]
+    rows: list[str] = [
+        f'<tr>'
+        f'<td rowspan="{n}" {td_span}>{label}</td>'
+        f'<td rowspan="{n}" {td_total}>{_fmt_currency(type_total)}</td>'
+        f'<td {td_r}>{_fmt_currency(float(first["market_value"]))}</td>'
+        f'<td {td_l}>{str(first["account_name"])}</td>'
+        f'</tr>'
+    ]
+    rows += [
+        f'<tr>'
+        f'<td {td_r}>{_fmt_currency(float(row.market_value))}</td>'
+        f'<td {td_l}>{str(row.account_name)}</td>'
+        f'</tr>'
+        for row in accounts.iloc[1:].itertuples(index=False)
+    ]
+    return rows
+
+
+def _nw_total_row(
+    grand_total: float,
+    mom_change: float,
+    styles: dict[str, str],
+) -> str:
+    """Return the ``<tr>`` HTML for the total net worth row."""
+    border    = styles["border"]
+    total_bg  = styles["total_bg"]
+    chg_style = _change_style(mom_change, styles)
+    return (
+        f'<tr style="background:{total_bg};font-weight:700;font-size:14px;">'
+        f'<td style="padding:8px 12px;border:{border};text-align:left;">Total net worth</td>'
+        f'<td style="padding:8px 12px;border:{border};text-align:right;">{_fmt_currency(grand_total)}</td>'
+        f'<td style="padding:8px 12px;border:{border};text-align:right;{chg_style}">Change from last month</td>'
+        f'<td style="padding:8px 12px;border:{border};text-align:right;{chg_style}">{_fmt_currency(mom_change)}</td>'
+        f'</tr>'
+    )
+
+
+def _nw_summary_row(label: str, value: float, styles: dict[str, str]) -> str:
+    """Return the ``<tr>`` HTML for a two-column summary row (YTD / rolling gains).
+
+    Args:
+        label:  Row description shown in the left two merged cells.
+        value:  Gain/loss value shown in the right two merged cells.
+        styles: Style-constant dict (``_NW_STYLES``).
+    """
+    border    = styles["border"]
+    summ_bg   = styles["summ_bg"]
+    chg_style = _change_style(value, styles)
+    return (
+        f'<tr style="background:{summ_bg};">'
+        f'<td colspan="2" style="padding:6px 12px;border:{border};text-align:left;'
+        f'font-style:italic;">{label}</td>'
+        f'<td colspan="2" style="padding:6px 12px;border:{border};text-align:right;'
+        f'{chg_style}">{_fmt_currency(value)}</td>'
+        f'</tr>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Proposal 1 — pure data layer
+# ---------------------------------------------------------------------------
+
+def _compute_net_worth_summary(networth: pd.DataFrame) -> dict:
+    """Compute MoM, YTD, and rolling-12-month summary figures from *networth*.
+
+    Args:
+        networth: DataFrame with DatetimeIndex and a ``total`` column.
+                  Must contain at least 2 rows.
+
+    Returns:
+        dict with keys:
+            ``current_total`` – latest total net worth,
+            ``mom_change``    – month-over-month change,
+            ``ytd_gain``      – year-to-date gain/loss,
+            ``rolling_gain``  – rolling 12-month gain/loss,
+            ``as_of``         – ``pd.Timestamp`` of the latest entry.
+    """
+    current_total = float(networth["total"].iloc[-1])
+    prior_total   = float(networth["total"].iloc[-2])
+    mom_change    = current_total - prior_total
+
+    # YTD: compare to first available entry in the current calendar year
+    dti: pd.DatetimeIndex = pd.DatetimeIndex(networth.index)
+    curr_year_mask = dti.year == dti[-1].year  # type: ignore[union-attr]
+    ytd_start_val  = (
+        float(networth.loc[curr_year_mask, "total"].iloc[0])
+        if curr_year_mask.any()
+        else current_total
+    )
+    ytd_gain = current_total - ytd_start_val
+
+    # Rolling 12-month: compare to entry 12 months ago (or earliest available)
+    twelve_ago    = dti[-1] - pd.DateOffset(months=12)
+    older         = networth.loc[networth.index <= twelve_ago]
+    rolling_start = (
+        float(older["total"].iloc[-1])
+        if not older.empty
+        else float(networth["total"].iloc[0])
+    )
+    rolling_gain = current_total - rolling_start
+
+    return dict(
+        current_total=current_total,
+        mom_change=mom_change,
+        ytd_gain=ytd_gain,
+        rolling_gain=rolling_gain,
+        as_of=dti[-1],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Proposal 2 — pure HTML builder
+# ---------------------------------------------------------------------------
+
+def _build_net_worth_html(
+    acct_grp: pd.DataFrame,
+    summary: dict,
+) -> str:
+    """Build and return the complete net worth statement HTML string.
+
+    Iterates over ``_ACCOUNT_TYPE_ORDER``, delegates per-type row generation to
+    ``_nw_type_rows``, and appends the total and summary rows.
+
+    Args:
+        acct_grp: DataFrame with columns ``account_type``, ``account_name``,
+                  ``market_value`` (already grouped/summed).
+        summary:  Dict returned by ``_compute_net_worth_summary``.
+
+    Returns:
+        A self-contained HTML string (``<h4>`` heading + ``<table>``).
+    """
+    styles = _NW_STYLES
+    rows: list[str] = [_nw_header_row(styles)]
+
+    for acct_type in _ACCOUNT_TYPE_ORDER:
+        accounts = acct_grp.loc[acct_grp["account_type"] == acct_type]
+        if accounts.empty:
+            continue
+        rows.extend(_nw_type_rows(acct_type, accounts, styles))
+
+    # Fix 2: use the authoritative total from the historical series rather than
+    # re-summing account detail rows (avoids a subtle dual-source inconsistency).
+    rows.append(_nw_total_row(summary["current_total"], summary["mom_change"], styles))
+    rows.append(_nw_summary_row("Year to date gains (losses)",     summary["ytd_gain"],     styles))
+    rows.append(_nw_summary_row("Rolling 12 month gains (losses)", summary["rolling_gain"], styles))
+
+    as_of = summary["as_of"].strftime("%B %Y")
+    return (
+        f'<h4 style="margin-bottom:6px;">📊 Net Worth Statement — {as_of}</h4>'
+        f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+        + "".join(rows)
+        + "</table>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public render function — thin Streamlit wrapper (call site unchanged)
+# ---------------------------------------------------------------------------
+
+def _get_real_estate_rows() -> pd.DataFrame:
+    """Load real estate properties from config and return as account-detail rows.
+
+    Returns:
+        DataFrame with columns account_type, account_name, market_value
+        representing each property at its purchase price.
+    """
+    try:
+        from config import get_config_manager
+        cfg = get_config_manager()
+        properties = cfg.get("real_estate", "properties", [])
+        if not properties:
+            return pd.DataFrame(columns=["account_type", "account_name", "market_value"])
+        rows = []
+        for prop in properties:
+            name = prop.get("property_name", "Property")
+            price = float(prop.get("purchase_price", 0) or 0)
+            rows.append({
+                "account_type": "Real Estate",
+                "account_name": name,
+                "market_value": price,
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame(columns=["account_type", "account_name", "market_value"])
+
+
 def render_net_worth_statement(
     networth: pd.DataFrame,
     detailed_df: pd.DataFrame,
@@ -391,159 +653,36 @@ def render_net_worth_statement(
         detailed_df: DataFrame with columns account_type, account_name, market_value
                      for the current month (from get_networth_by_month).
     """
-    # ------------------------------------------------------------------ #
-    # Aggregate account-level data                                         #
-    # ------------------------------------------------------------------ #
+    # Fix 4: guard against insufficient history so _compute_net_worth_summary
+    # cannot raise IndexError on networth["total"].iloc[-2].
+    if len(networth) < 2:
+        st.warning("Need at least 2 months of data to compute net worth changes.")
+        return
     if detailed_df.empty:
         st.warning("No account detail data available for net worth statement.")
         return
 
-    acct_grp = (
-        detailed_df
+    # Append real estate rows from configuration
+    re_rows = _get_real_estate_rows()
+    if not re_rows.empty:
+        combined_df = pd.concat([detailed_df, re_rows], ignore_index=True)
+    else:
+        combined_df = detailed_df
+
+    acct_grp: pd.DataFrame = pd.DataFrame(
+        combined_df
         .groupby(["account_type", "account_name"], as_index=False)["market_value"]
         .sum()
     )
 
-    # ------------------------------------------------------------------ #
-    # Compute summary figures from historical networth                     #
-    # ------------------------------------------------------------------ #
-    current_total = float(networth["total"].iloc[-1])
-    prior_total   = float(networth["total"].iloc[-2])
-    mom_change    = current_total - prior_total
+    # Augment the networth summary total with real estate purchase prices
+    re_total = float(re_rows["market_value"].sum()) if not re_rows.empty else 0.0
+    nw_augmented = networth.copy()
+    if re_total > 0:
+        nw_augmented["total"] = nw_augmented["total"] + re_total
 
-    # YTD: compare to first available entry in current calendar year
-    curr_year_idx = networth.index.year == networth.index[-1].year
-    ytd_start_val = float(networth.loc[curr_year_idx, "total"].iloc[0]) if curr_year_idx.any() else current_total
-    ytd_gain      = current_total - ytd_start_val
-
-    # Rolling 12-month: compare to entry 12 months ago (or earliest available)
-    twelve_ago = networth.index[-1] - pd.DateOffset(months=12)
-    older = networth[networth.index <= twelve_ago]
-    rolling_start = float(older["total"].iloc[-1]) if not older.empty else float(networth["total"].iloc[0])
-    rolling_gain  = current_total - rolling_start
-
-    # ------------------------------------------------------------------ #
-    # Build HTML table                                                     #
-    # ------------------------------------------------------------------ #
-    HDR_BG   = "#1a1a2e"
-    HDR_FG   = "white"
-    TOTAL_BG = "#e8f4fd"
-    SUMM_BG  = "#f8f9fa"
-    POS_CLR  = "#21c354"
-    NEG_CLR  = "#ff4b4b"
-    BORDER   = "1px solid #dee2e6"
-
-    def _fmt(v: float) -> str:
-        if v < 0:
-            return f"$({abs(v):,.2f})"
-        return f"${v:,.2f}"
-
-    def _chg_style(v: float) -> str:
-        return f"color:{POS_CLR};font-weight:600" if v >= 0 else f"color:{NEG_CLR};font-weight:600"
-
-    rows_html = ""
-
-    # Header row
-    rows_html += (
-        f'<tr style="background:{HDR_BG};color:{HDR_FG};font-size:12px;'
-        f'text-transform:uppercase;letter-spacing:.05em;">'
-        f'<th style="padding:8px 12px;text-align:left;">Type</th>'
-        f'<th style="padding:8px 12px;text-align:right;">Type Total</th>'
-        f'<th style="padding:8px 12px;text-align:right;">Account Total</th>'
-        f'<th style="padding:8px 12px;text-align:left;">Account</th>'
-        f'</tr>'
-    )
-
-    grand_total = 0.0
-
-    for acct_type in _ACCOUNT_TYPE_ORDER:
-        accounts = acct_grp[acct_grp["account_type"] == acct_type].copy()
-        if accounts.empty:
-            continue
-
-        type_label  = _ACCOUNT_TYPE_LABELS.get(acct_type, acct_type)
-        type_total  = float(accounts["market_value"].sum())
-        grand_total += type_total
-        n_accounts  = len(accounts)
-
-        # Per-type palette colors
-        row_bg     = _ACCOUNT_TYPE_COLORS.get(acct_type, "rgba(240,242,246,0.4)")
-        accent_clr = _ACCOUNT_TYPE_ACCENT.get(acct_type, "#cccccc")
-
-        # Shared cell style for account detail cells within this type group
-        td  = (f'style="padding:6px 12px;border:{BORDER};text-align:right;'
-               f'background:{row_bg};"')
-        tdl = (f'style="padding:6px 12px;border:{BORDER};text-align:left;'
-               f'background:{row_bg};"')
-
-        for i, (_, row) in enumerate(accounts.iterrows()):
-            acct_val  = float(row["market_value"])
-            acct_name = str(row["account_name"])
-
-            if i == 0:
-                # First account row: type label + type total with left accent border
-                rows_html += (
-                    f'<tr>'
-                    f'<td rowspan="{n_accounts}" style="padding:6px 12px;border:{BORDER};'
-                    f'border-left:4px solid {accent_clr};text-align:left;font-weight:700;'
-                    f'vertical-align:middle;background:{row_bg};">{type_label}</td>'
-                    f'<td rowspan="{n_accounts}" style="padding:6px 12px;border:{BORDER};'
-                    f'text-align:right;font-weight:600;vertical-align:middle;'
-                    f'background:{row_bg};">{_fmt(type_total)}</td>'
-                    f'<td {td}>{_fmt(acct_val)}</td>'
-                    f'<td {tdl}>{acct_name}</td>'
-                    f'</tr>'
-                )
-            else:
-                rows_html += (
-                    f'<tr>'
-                    f'<td {td}>{_fmt(acct_val)}</td>'
-                    f'<td {tdl}>{acct_name}</td>'
-                    f'</tr>'
-                )
-
-    # Total net worth row
-    mom_style = _chg_style(mom_change)
-    rows_html += (
-        f'<tr style="background:{TOTAL_BG};font-weight:700;font-size:14px;">'
-        f'<td style="padding:8px 12px;border:{BORDER};text-align:left;">Total net worth</td>'
-        f'<td style="padding:8px 12px;border:{BORDER};text-align:right;">{_fmt(grand_total)}</td>'
-        f'<td style="padding:8px 12px;border:{BORDER};text-align:right;{mom_style}">'
-        f'Change from last month</td>'
-        f'<td style="padding:8px 12px;border:{BORDER};text-align:right;{mom_style}">'
-        f'{_fmt(mom_change)}</td>'
-        f'</tr>'
-    )
-
-    # YTD gains row
-    ytd_style = _chg_style(ytd_gain)
-    rows_html += (
-        f'<tr style="background:{SUMM_BG};">'
-        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:left;'
-        f'font-style:italic;">Year to date gains (losses)</td>'
-        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:right;'
-        f'{ytd_style}">{_fmt(ytd_gain)}</td>'
-        f'</tr>'
-    )
-
-    # Rolling 12-month gains row
-    roll_style = _chg_style(rolling_gain)
-    rows_html += (
-        f'<tr style="background:{SUMM_BG};">'
-        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:left;'
-        f'font-style:italic;">Rolling 12 month gains (losses)</td>'
-        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:right;'
-        f'{roll_style}">{_fmt(rolling_gain)}</td>'
-        f'</tr>'
-    )
-
-    as_of = networth.index[-1].strftime("%B %Y")
-    html = (
-        f'<h4 style="margin-bottom:6px;">📊 Net Worth Statement — {as_of}</h4>'
-        f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
-        f'{rows_html}'
-        f'</table>'
-    )
+    summary = _compute_net_worth_summary(nw_augmented)
+    html    = _build_net_worth_html(acct_grp, summary)
     st.markdown(html, unsafe_allow_html=True)
 
 
@@ -833,10 +972,11 @@ with tab3:
     portdf_no_totals = portdf[portdf['Account'] != 'Portfolio Totals'].copy()
     
     # Define styles for center alignment of headers and specific columns
-    styles = [
-        dict(selector="th", props=[('text-align', 'center')]),
-        dict(selector="td", props=[('text-align', 'center')])
-    ]
+    from pandas.io.formats.style import CSSStyles
+    styles = cast(CSSStyles, [
+        {"selector": "th", "props": [("text-align", "center")]},
+        {"selector": "td", "props": [("text-align", "center")]},
+    ])
     
     # Apply styles and color formatting
     styled_portdf = portdf.style.set_table_styles(styles).map(color_negative_positive)
@@ -1027,11 +1167,11 @@ with tab_accum:
                     'Cash Balance',
                 ]
                 available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
-                display_df_a = display_df_a[available_cols_a].copy()
+                display_df_a = cast(pd.DataFrame, display_df_a[available_cols_a].copy())
 
                 numeric_cols_a = [c for c in available_cols_a if c not in ['Year', 'Age', 'Stage']]
                 for col in numeric_cols_a:
-                    display_df_a[col] = display_df_a[col].apply(format_currency)
+                    display_df_a[col] = display_df_a[col].map(format_currency)
 
                 accum_column_config = {
                     "Year": st.column_config.NumberColumn("Year", format="%d"),
@@ -1160,11 +1300,11 @@ with tab_accum:
                     'DAF Contribution', 'AGI', 'MAGI', 'Federal Tax', 'Cash Balance'
                 ]
                 available_cols_w = [c for c in display_cols_w if c in display_df_w.columns]
-                display_df_w = display_df_w[available_cols_w].copy()
+                display_df_w = cast(pd.DataFrame, display_df_w[available_cols_w].copy())
 
                 numeric_cols_w = [c for c in available_cols_w if c not in ['Year', 'Age', 'Stage']]
                 for col in numeric_cols_w:
-                    display_df_w[col] = display_df_w[col].apply(format_currency)
+                    display_df_w[col] = display_df_w[col].map(format_currency)
 
                 withdrawal_column_config = {
                     "Year": st.column_config.NumberColumn("Year", format="%d"),
@@ -1270,7 +1410,7 @@ with tab_tax:
     if summarize_button:
         try:
             taxratedf  = get_income_tax_brackets(year)
-            cgdf       = get_cap_gains_brackets(year)
+            cgdf       = cast(pd.DataFrame, get_cap_gains_brackets(year))
             irmaadf    = get_medicare_costs(year)
             stddectdf  = get_std_deduction(year)
             atmdf      = get_atm_costs(year)
@@ -1441,9 +1581,9 @@ with tab_flow:
         _ff_portfolio = get_portfolio_truth_by_month(_ff_month, _ff_year)
         if not _ff_portfolio.empty:
             _ff_portfolio = _ff_portfolio.copy()
-            _ff_portfolio['symbol'] = _ff_portfolio['symbol'].str.replace('^MF:', '', regex=True)
+            _ff_portfolio['symbol'] = cast(pd.Series, _ff_portfolio['symbol']).str.replace('^MF:', '', regex=True)
             st.subheader("Holdings by Account")
-            for _acct_type in _ff_portfolio['account_type'].unique():
+            for _acct_type in cast(pd.Series, _ff_portfolio['account_type']).unique():
                 with st.expander(f"{_acct_type} Accounts"):
                     _type_data = _ff_portfolio[_ff_portfolio['account_type'] == _acct_type]
                     st.dataframe(_type_data[['account_name', 'symbol', 'name', 'qty', 'purchase_price']], hide_index=True, use_container_width=True)

@@ -8,6 +8,8 @@ is working correctly.
 """
 
 import sys
+import pytest  # type: ignore[import-untyped]
+import pandas as pd
 from strategy import (
     PortfolioBalances,
     WithdrawalStrategyEngine,
@@ -19,14 +21,28 @@ from strategy import (
 
 
 # ---------------------------------------------------------------------------
-# Unit tests
+# Constants
 # ---------------------------------------------------------------------------
 
-def test_portfolio_balances_accumulation():
-    """Test PortfolioBalances with typical accumulation-phase values."""
-    print("Testing PortfolioBalances (accumulation)...")
+REQUIRED_STRATEGY_COLS = (
+    'Year', 'Stage', 'Total Portfolio',
+    'Cash Balance', 'Taxable Balance',
+    'Traditional Balance', 'Roth Balance',
+)
 
-    balances = PortfolioBalances(
+ACCUMULATION_STAGES = (
+    "Stage 1: Accumulation",
+    "Stage 2: Prep for Retirement",
+)
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def accumulation_balances() -> PortfolioBalances:
+    """Standard accumulation-phase portfolio used across multiple tests."""
+    return PortfolioBalances(
         cash=30_000,
         taxable=120_000,
         traditional=380_000,
@@ -34,34 +50,45 @@ def test_portfolio_balances_accumulation():
         daf=0,
     )
 
-    assert balances.total() == 650_000, f"Expected 650000, got {balances.total()}"
-    assert balances.cash == 30_000, "Cash value incorrect"
-    assert balances.roth == 120_000, "Roth value incorrect"
 
-    print("✅ PortfolioBalances (accumulation) tests passed")
+# ---------------------------------------------------------------------------
+# Unit tests
+# ---------------------------------------------------------------------------
+
+def test_portfolio_balances_accumulation(accumulation_balances):
+    """Test PortfolioBalances with typical accumulation-phase values."""
+    assert accumulation_balances.total() == 650_000, \
+        f"Expected 650000, got {accumulation_balances.total()}"
+    assert accumulation_balances.cash == 30_000, "Cash value incorrect"
+    assert accumulation_balances.roth == 120_000, "Roth value incorrect"
 
 
 def test_stage1_accumulation_applies():
-    """Test Stage1Accumulation.applies() logic."""
-    print("\nTesting Stage1Accumulation.applies()...")
+    """Test Stage1Accumulation.applies() logic.
 
+    Stage 1 applies when has_wages=True AND the current year is outside the
+    Stage 2 prep window (i.e. more than PREP_WINDOW_YEARS before the earliest
+    configured retirement year).  Years within the prep window correctly yield
+    to Stage 2, so we use a year well outside that window (2015) to test the
+    pure Stage-1 path.
+    """
     stage = Stage1Accumulation()
 
-    # Should apply whenever has_wages=True, regardless of age
-    assert stage.applies(35, 33, 2026, has_wages=True,  has_ss=False), \
-        "Stage 1 should apply at age 35 with wages"
-    assert stage.applies(55, 53, 2026, has_wages=True,  has_ss=False), \
-        "Stage 1 should apply at age 55 with wages"
-    assert stage.applies(64, 62, 2026, has_wages=True,  has_ss=False), \
-        "Stage 1 should apply at age 64 with wages"
+    # Year well outside the prep window → Stage 1 should apply with wages
+    assert stage.applies(35, 33, 2015, has_wages=True,  has_ss=False), \
+        "Stage 1 should apply at age 35 with wages (outside prep window)"
+    assert stage.applies(45, 43, 2015, has_wages=True,  has_ss=False), \
+        "Stage 1 should apply at age 45 with wages (outside prep window)"
 
-    # Should NOT apply without wages
-    assert not stage.applies(45, 43, 2026, has_wages=False, has_ss=False), \
+    # Should NOT apply without wages regardless of year
+    assert not stage.applies(45, 43, 2015, has_wages=False, has_ss=False), \
         "Stage 1 should not apply without wages"
-    assert not stage.applies(60, 58, 2026, has_wages=False, has_ss=True), \
+    assert not stage.applies(60, 58, 2015, has_wages=False, has_ss=True), \
         "Stage 1 should not apply without wages even with SS"
 
-    print("✅ Stage1Accumulation.applies() tests passed")
+    # Within the prep window → Stage 1 yields to Stage 2 (returns False)
+    assert not stage.applies(45, 43, 2026, has_wages=True, has_ss=False), \
+        "Stage 1 should yield to Stage 2 when within the prep window"
 
 
 def test_stage2_prep_applies():
@@ -111,156 +138,108 @@ def test_accumulation_stage_determination():
     print("✅ Accumulation stage determination tests passed")
 
 
-def test_accumulation_strategy_calculation():
+def test_accumulation_strategy_calculation(accumulation_balances):
     """Test build_accumulation_strategy_display() with explicit parameters."""
-    print("\nTesting accumulation strategy calculation...")
+    strategy_df, balances_df = build_accumulation_strategy_display(
+        start_year=2026,
+        end_year=2030,
+        initial_balances=accumulation_balances,
+        initial_expenses=150_000,
+        person1_name="Tom",
+        person2_name="Sarah",
+        growth_rate=1.07,
+        expense_inflation_rate=0.03,
+        retirement_year=2036,
+        has_wages=True,
+    )
 
-    try:
-        balances = PortfolioBalances(
-            cash=30_000,
-            taxable=120_000,
-            traditional=380_000,
-            roth=120_000,
-            daf=0,
+    # DataFrames must be returned even if empty (config may limit years)
+    assert strategy_df is not None, "strategy_df should not be None"
+    assert balances_df is not None, "balances_df should not be None"
+
+    if not strategy_df.empty:
+        # Verify all required columns exist — report every missing column at once
+        missing = [c for c in REQUIRED_STRATEGY_COLS if c not in strategy_df.columns]
+        assert not missing, f"Missing columns: {missing}"
+
+        # All returned rows must be accumulation stages
+        non_accum = strategy_df[~strategy_df['Stage'].isin(ACCUMULATION_STAGES)]
+        assert non_accum.empty, \
+            f"Non-accumulation stages found: {set(non_accum['Stage'].tolist())}"
+
+        # Portfolio values must be positive (vectorized)
+        assert bool((strategy_df['Total Portfolio'] > 0).all()), \
+            "All portfolio values should be positive"
+
+        # balances_df must have the same years as strategy_df
+        pd.testing.assert_series_equal(
+            balances_df['Year'].reset_index(drop=True),
+            strategy_df['Year'].reset_index(drop=True),
+            check_names=False,
+            obj="Year alignment between balances_df and strategy_df",
         )
 
-        strategy_df, balances_df = build_accumulation_strategy_display(
-            start_year=2026,
-            end_year=2030,
-            initial_balances=balances,
-            initial_expenses=150_000,
-            person1_name="Tom",
-            person2_name="Sarah",
-            growth_rate=1.07,
-            expense_inflation_rate=0.03,
-            retirement_year=2036,
-            has_wages=True,
-        )
 
-        # DataFrame must be returned even if empty (config may limit years)
-        assert strategy_df is not None, "strategy_df should not be None"
-        assert balances_df is not None, "balances_df should not be None"
-
-        if not strategy_df.empty:
-            # Verify required columns exist
-            required_cols = ['Year', 'Stage', 'Total Portfolio',
-                             'Cash Balance', 'Taxable Balance',
-                             'Traditional Balance', 'Roth Balance']
-            for col in required_cols:
-                assert col in strategy_df.columns, f"Missing column: {col}"
-
-            # All returned rows must be accumulation stages
-            accum_stages = ["Stage 1: Accumulation", "Stage 2: Prep for Retirement"]
-            non_accum = strategy_df[~strategy_df['Stage'].isin(accum_stages)]
-            assert non_accum.empty, \
-                f"Non-accumulation stages found: {set(non_accum['Stage'].tolist())}"
-
-            # Portfolio values must be positive
-            assert (strategy_df['Total Portfolio'] > 0).all(), \
-                "All portfolio values should be positive"
-
-            # balances_df must have the same years as strategy_df
-            assert list(balances_df['Year']) == list(strategy_df['Year']), \
-                "balances_df years must match strategy_df years"
-
-            print(f"   Calculated {len(strategy_df)} accumulation year(s)")
-
-        print("✅ Accumulation strategy calculation tests passed")
-
-    except Exception as e:
-        print(f"⚠️  Accumulation strategy calculation test skipped "
-              f"(requires full data files): {e}")
-
-
-def test_accumulation_summary():
+def test_accumulation_summary(accumulation_balances):
     """Test generate_strategy_summary() with accumulation data."""
-    print("\nTesting accumulation strategy summary...")
+    strategy_df, _ = build_accumulation_strategy_display(
+        start_year=2026,
+        end_year=2028,
+        initial_balances=accumulation_balances,
+        initial_expenses=150_000,
+        person1_name="Tom",
+        person2_name="Sarah",
+        growth_rate=1.07,
+        expense_inflation_rate=0.03,
+        retirement_year=2036,
+        has_wages=True,
+    )
 
-    try:
-        balances = PortfolioBalances(
-            cash=30_000,
-            taxable=120_000,
-            traditional=380_000,
-            roth=120_000,
-            daf=0,
-        )
-
-        strategy_df, _ = build_accumulation_strategy_display(
-            start_year=2026,
-            end_year=2028,
-            initial_balances=balances,
-            initial_expenses=150_000,
-            person1_name="Tom",
-            person2_name="Sarah",
-            growth_rate=1.07,
-            expense_inflation_rate=0.03,
-            retirement_year=2036,
-            has_wages=True,
-        )
-
-        if not strategy_df.empty:
-            summary = generate_strategy_summary(strategy_df)
-            assert 'total_years' in summary, "Summary missing total_years"
-            assert 'initial_portfolio_value' in summary, \
-                "Summary missing initial_portfolio_value"
-            assert summary['initial_portfolio_value'] > 0, \
-                "Initial portfolio value should be positive"
-            assert summary['total_years'] == len(strategy_df), \
-                "total_years should match DataFrame length"
-
-        print("✅ Accumulation strategy summary tests passed")
-
-    except Exception as e:
-        print(f"⚠️  Accumulation summary test skipped "
-              f"(requires full data files): {e}")
+    if not strategy_df.empty:
+        summary = generate_strategy_summary(strategy_df)
+        assert 'total_years' in summary, "Summary missing total_years"
+        assert 'initial_portfolio_value' in summary, \
+            "Summary missing initial_portfolio_value"
+        assert summary['initial_portfolio_value'] > 0, \
+            "Initial portfolio value should be positive"
+        assert summary['total_years'] == len(strategy_df), \
+            "total_years should match DataFrame length"
 
 
-def test_accumulation_portfolio_growth():
+def test_accumulation_portfolio_growth(accumulation_balances):
     """Test that portfolio grows over the accumulation period."""
-    print("\nTesting accumulation portfolio growth...")
+    strategy_df, _ = build_accumulation_strategy_display(
+        start_year=2026,
+        end_year=2035,
+        initial_balances=accumulation_balances,
+        initial_expenses=150_000,
+        person1_name="Tom",
+        person2_name="Sarah",
+        growth_rate=1.07,
+        expense_inflation_rate=0.03,
+        retirement_year=2036,
+        has_wages=True,
+    )
 
-    try:
-        balances = PortfolioBalances(
-            cash=30_000,
-            taxable=120_000,
-            traditional=380_000,
-            roth=120_000,
-            daf=0,
+    if len(strategy_df) >= 2:
+        start_val = strategy_df['Total Portfolio'].iloc[0]
+        end_val   = strategy_df['Total Portfolio'].iloc[-1]
+        assert end_val > start_val, (
+            f"Portfolio should grow during accumulation: "
+            f"{start_val:,.0f} → {end_val:,.0f}"
         )
-
-        strategy_df, _ = build_accumulation_strategy_display(
-            start_year=2026,
-            end_year=2035,
-            initial_balances=balances,
-            initial_expenses=150_000,
-            person1_name="Tom",
-            person2_name="Sarah",
-            growth_rate=1.07,
-            expense_inflation_rate=0.03,
-            retirement_year=2036,
-            has_wages=True,
-        )
-
-        if len(strategy_df) >= 2:
-            start_val = strategy_df['Total Portfolio'].iloc[0]
-            end_val   = strategy_df['Total Portfolio'].iloc[-1]
-            assert end_val > start_val, \
-                f"Portfolio should grow during accumulation: {start_val:,.0f} → {end_val:,.0f}"
-            print(f"   Portfolio grew from ${start_val:,.0f} to ${end_val:,.0f}")
-
-        print("✅ Accumulation portfolio growth tests passed")
-
-    except Exception as e:
-        print(f"⚠️  Portfolio growth test skipped "
-              f"(requires full data files): {e}")
 
 
 # ---------------------------------------------------------------------------
-# Test runner
+# Test runner (fixture-independent tests only)
 # ---------------------------------------------------------------------------
 
 def run_all_tests() -> int:
-    """Run all accumulation strategy test functions.
+    """Run fixture-independent accumulation strategy tests directly.
+
+    Tests that use the ``accumulation_balances`` pytest fixture are excluded
+    here because fixtures are only injected when pytest invokes the function.
+    Run ``pytest test_accumulation_strategy.py`` for the full suite.
 
     Returns:
         int: 0 if all tests passed, 1 if any failed
@@ -271,14 +250,10 @@ def run_all_tests() -> int:
     print("="*80)
 
     tests = [
-        test_portfolio_balances_accumulation,
         test_stage1_accumulation_applies,
         test_stage2_prep_applies,
         test_accumulation_engine_stages,
         test_accumulation_stage_determination,
-        test_accumulation_strategy_calculation,
-        test_accumulation_summary,
-        test_accumulation_portfolio_growth,
     ]
 
     passed = 0

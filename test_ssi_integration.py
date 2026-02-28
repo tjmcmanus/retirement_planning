@@ -60,6 +60,16 @@ def test_ssi_calculation():
               f"${annual_benefit:,.2f}/year")
 
 
+def _person_from_config(cfg, n: int) -> dict:
+    """Build a person dict from config for person index n (1 or 2)."""
+    return {
+        "name":         cfg.get("personal_info",   f"person{n}_name",       f"Person{n}"),
+        "birth_date":   cfg.get("personal_info",   f"person{n}_birth_date", f"196{n+4}-01-01"),
+        "claiming_age": cfg.get("social_security", f"person{n}_ssi_age",    70),
+        "fra_benefit":  cfg.get("social_security", f"person{n}_ssi_amount", 0),
+    }
+
+
 def test_config_integration():
     """Test SSI calculation using config.py settings."""
     logger.info("=" * 80)
@@ -67,38 +77,27 @@ def test_config_integration():
     logger.info("=" * 80)
 
     config = get_config_manager()
-
-    # Build a list of person dicts from config, mirroring the person1/person2 key pattern
-    persons = []
-    for n in (1, 2):
-        persons.append({
-            "name":         config.get("personal_info",   f"person{n}_name",       f"Person{n}"),
-            "birth_date":   config.get("personal_info",   f"person{n}_birth_date", f"196{n+4}-01-01"),
-            "claiming_age": config.get("social_security", f"person{n}_ssi_age",    70),
-            "fra_benefit":  config.get("social_security", f"person{n}_ssi_amount", 0),
-        })
+    persons = [_person_from_config(config, n) for n in (1, 2)]
 
     logger.info("Current Config Settings:")
     for p in persons:
         logger.info(
-            "%s: birth_date=%s  claiming_age=%s  fra_benefit=$%,.2f/month",
-            p["name"], p["birth_date"], p["claiming_age"], p["fra_benefit"],
+            f"{p['name']}: birth_date={p['birth_date']}  "
+            f"claiming_age={p['claiming_age']}  fra_benefit=${p['fra_benefit']:,.2f}/month"
         )
 
-    if not any(p["fra_benefit"] > 0 for p in persons):
-        logger.warning(
-            "No SSI amounts configured in config.py — "
-            "set person1_ssi_amount / person2_ssi_amount to test"
-        )
-        return
+    assert any(p["fra_benefit"] > 0 for p in persons), (
+        "No SSI amounts configured in config.py — "
+        "set person1_ssi_amount / person2_ssi_amount to test"
+    )
 
     sample_year = 2036  # Representative year when both persons are past claiming age
-    logger.info("Sample Calculation for Year %d:", sample_year)
+    logger.info(f"Sample Calculation for Year {sample_year}:")
 
-    benefits = {}
+    total_monthly = 0.0
     for p in persons:
         if p["fra_benefit"] > 0:
-            birth_year = int(p["birth_date"].split('-')[0])
+            birth_year = int(p["birth_date"].split("-")[0])
             monthly = calculate_ssi_benefits_dynamic(
                 year=sample_year,
                 person_name=p["name"],
@@ -106,12 +105,11 @@ def test_config_integration():
                 claiming_age=p["claiming_age"],
                 fra_benefit=p["fra_benefit"],
             )
-            benefits[p["name"]] = monthly
-            logger.info("%s: $%,.2f/month ($%,.2f/year)", p["name"], monthly, monthly * 12)
+            total_monthly += monthly
+            logger.info(f"{p['name']}: ${monthly:,.2f}/month (${monthly * 12:,.2f}/year)")
 
-    total_annual = sum(benefits.values()) * 12
-    if total_annual > 0:
-        logger.info("Combined Annual SSI: $%,.2f", total_annual)
+    if total_monthly > 0:
+        logger.info(f"Combined Annual SSI: ${total_monthly * 12:,.2f}")
 
 
 def test_withdrawal_strategy_integration():

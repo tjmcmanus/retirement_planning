@@ -55,14 +55,15 @@ st.title("⚙️ Retirement Planning Configuration")
 st.markdown("Configure your personal information, financial assumptions, and planning parameters.")
 
 # Create tabs for different configuration sections
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "👤 Personal Info",
     "💰 Financial Assumptions",
     "🏥 Healthcare",
     "📊 Social Security",
     "📈 Tax Strategy",
     "📊 Portfolio Data",
-    "🔧 Advanced"
+    "🔧 Advanced",
+    "🏠 Real Estate"
 ])
 
 # Sync configuration to session state on page load
@@ -1235,6 +1236,124 @@ with tab7:
     if metadata.get("last_updated"):
         st.caption(f"Last updated: {metadata['last_updated']}")
     st.caption(f"Version: {metadata.get('version', 'Unknown')}")
+
+# Real Estate Tab
+with tab8:
+    st.header("🏠 Real Estate")
+    st.markdown("Track your real estate properties. Purchase prices are included in your net worth statement.")
+
+    # Initialize session state for real estate
+    if 'real_estate_list' not in st.session_state:
+        st.session_state['real_estate_list'] = config_mgr.get("real_estate", "properties", [])
+
+    re_df = pd.DataFrame(st.session_state['real_estate_list'])
+    if re_df.empty:
+        re_df = pd.DataFrame(columns=['property_name', 'address', 'purchase_price'])
+
+    # Ensure required columns exist
+    for _col in ['property_name', 'address', 'purchase_price']:
+        if _col not in re_df.columns:
+            re_df[_col] = '' if _col != 'purchase_price' else 0.0
+
+    re_col1, re_col2, re_col3 = st.columns([2, 1, 1])
+    with re_col1:
+        st.markdown("**Your Properties:**")
+    with re_col2:
+        if st.button("➕ Add Property", width='stretch', key="add_property_btn"):
+            new_prop = pd.DataFrame({
+                'property_name': ['New Property'],
+                'address': [''],
+                'purchase_price': [0.0]
+            })
+            re_df = pd.concat([re_df, new_prop], ignore_index=True)
+            st.session_state['real_estate_list'] = re_df.to_dict('records')
+            st.rerun()
+    with re_col3:
+        if st.button("💾 Save Properties", width='stretch', key="save_properties_btn"):
+            # Sync latest edits from editor into session state before validating
+            _current_re = st.session_state.get('real_estate_list', [])
+            _validation_errors = []
+            for _i, _prop in enumerate(_current_re):
+                _row_num = _i + 1
+                _name = str(_prop.get('property_name', '') or '').strip()
+                _addr = str(_prop.get('address', '') or '').strip()
+                _price = _prop.get('purchase_price', None)
+                if not _name:
+                    _validation_errors.append(f"Row {_row_num}: Property Name is required.")
+                if not _addr:
+                    _validation_errors.append(f"Row {_row_num}: Address is required.")
+                if _price is None or str(_price).strip() == '' or float(_price) <= 0:
+                    _validation_errors.append(f"Row {_row_num}: Purchase Price must be greater than $0.")
+            if _validation_errors:
+                st.error("❌ Please fix the following before saving:")
+                for _err in _validation_errors:
+                    st.markdown(f"  - {_err}")
+            else:
+                config_mgr.update_section("real_estate", {
+                    "properties": _current_re
+                })
+                if config_mgr.save_config():
+                    st.success("✅ Properties saved!")
+                else:
+                    st.error("❌ Error saving properties")
+
+    re_column_config = {
+        'property_name': st.column_config.TextColumn(
+            'Property Name', required=True,
+            help="Descriptive name (e.g. Primary Residence, Vacation Home)"
+        ),
+        'address': st.column_config.TextColumn(
+            'Address', required=True,
+            help="Full street address of the property"
+        ),
+        'purchase_price': st.column_config.NumberColumn(
+            'Purchase Price ($)', required=True, min_value=0,
+            format="$%d",
+            help="Original purchase price — used in net worth statement"
+        ),
+    }
+
+    edited_re_df = st.data_editor(
+        re_df,
+        column_config=re_column_config,
+        num_rows="dynamic",
+        width='stretch',
+        hide_index=True,
+        key="real_estate_editor"
+    )
+
+    # Keep session state in sync with edits (supports row deletion via num_rows="dynamic")
+    st.session_state['real_estate_list'] = edited_re_df.to_dict('records')
+
+    # Per-row delete buttons
+    if not edited_re_df.empty:
+        st.markdown("**Delete a property:**")
+        _del_cols = st.columns(min(len(edited_re_df), 4))
+        for _idx, _row in edited_re_df.iterrows():
+            _prop_label = str(_row.get('property_name', f'Row {_idx + 1}')) or f'Row {_idx + 1}'
+            _col_idx = int(_idx) % 4
+            with _del_cols[_col_idx]:
+                if st.button(f"🗑️ {_prop_label}", key=f"del_re_{_idx}", help=f"Delete '{_prop_label}'"):
+                    _updated = [
+                        r for i, r in enumerate(st.session_state['real_estate_list'])
+                        if i != _idx
+                    ]
+                    st.session_state['real_estate_list'] = _updated
+                    st.rerun()
+
+    # Summary metrics
+    if not edited_re_df.empty and 'purchase_price' in edited_re_df.columns:
+        _re_prices = pd.to_numeric(edited_re_df['purchase_price'], errors='coerce')
+        total_re_value = float(_re_prices.fillna(0).sum())
+        st.markdown("---")
+        re_m1, re_m2 = st.columns(2)
+        with re_m1:
+            st.metric("Total Properties", len(edited_re_df))
+        with re_m2:
+            st.metric("Total Real Estate Value (Purchase Price)", f"${total_re_value:,.0f}")
+
+    st.info("💡 **Note:** Real estate values appear in the Net Worth Statement on the Dashboard under the 'Real Estate' category.")
+
 
 # Add helpful information at the bottom
 st.markdown("---")
