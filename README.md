@@ -74,7 +74,7 @@ Comprehensive tax optimization and healthcare cost modeling in [`strategy.py`](s
   - Long-term care insurance premiums
   - Multi-year projections with age transitions
 
-See [`withdrawal_strategy_plan.yaml`](withdrawal_strategy_plan.yaml) for detailed specifications.
+See [`strategy_plan.yaml`](strategy_plan.yaml) for detailed specifications.
 
 ### 🔧 Enhanced Logging System
 Configurable debug logging throughout [`calculations.py`](calculations.py):

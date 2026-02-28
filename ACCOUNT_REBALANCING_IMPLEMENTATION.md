@@ -1,7 +1,7 @@
 # Account Rebalancing Implementation Summary
 
 ## Overview
-Successfully implemented the account rebalancing feature for the retirement planning withdrawal strategy module as specified in `withdrawal_strategy_plan.yaml`.
+Successfully implemented the account rebalancing feature for the retirement planning withdrawal strategy module as specified in `strategy_plan.yaml`.
 
 ## Implementation Date
 2026-02-24

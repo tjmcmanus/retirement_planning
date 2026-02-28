@@ -22,10 +22,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, agi, headroom_max, conversion):
+def calc_roth_conversions_tax(
+    maxrate: float,
+    headroom_rate: float,
+    uppermax: float,
+    agi: float,
+    headroom_max: float,
+    conversion: float,
+) -> float:
     """
     Calculate tax on Roth conversions considering tax brackets and headroom.
-    
+
     Args:
         maxrate: Current tax bracket rate
         headroom_rate: Next higher tax bracket rate
@@ -33,7 +40,7 @@ def calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, agi, headroom_ma
         agi: Adjusted Gross Income
         headroom_max: Upper limit of headroom bracket
         conversion: Conversion amount
-        
+
     Returns:
         float: Calculated conversion tax
     """
@@ -41,27 +48,30 @@ def calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, agi, headroom_ma
     if maxrate > headroom_rate:
         logger.debug(f"No conversion: maxrate ({maxrate}) > headroom_rate ({headroom_rate})")
         return 0.0
-    
-    # Calculate available conversion space in current bracket
-    conversion_max = uppermax - agi
-    headroom_conv = headroom_max - uppermax
-    
-    logger.debug(f"Conversion space: conversion_max={conversion_max:,.2f}, headroom_conv={headroom_conv:,.2f}")
-    
-    # Determine if conversion exceeds current bracket
-    delta_conversion = conversion_max - conversion
-    
-    if delta_conversion < 0:
-        # Conversion exceeds current bracket, spills into headroom
-        overflow = abs(delta_conversion)
-        conversion_tax = (conversion_max * maxrate) + (overflow * headroom_rate)
-        logger.debug(f"Overflow scenario: overflow={overflow:,.2f}, tax={conversion_tax:,.2f}")
-    else:
-        # Conversion fits within current bracket
-        conversion_tax = conversion * maxrate
-        logger.debug(f"Within bracket: conversion={conversion:,.2f}, tax={conversion_tax:,.2f}")
-    
-    logger.debug(f"Final conversion_tax: ${conversion_tax:,.2f}")
+
+    current_bracket_space = uppermax - agi
+    headroom_bracket_space = headroom_max - uppermax
+    total_bracket_space = current_bracket_space + headroom_bracket_space
+
+    logger.debug(
+        f"Bracket spaces: current={current_bracket_space:,.2f}, headroom={headroom_bracket_space:,.2f}"
+    )
+
+    if conversion > total_bracket_space:
+        excess = conversion - total_bracket_space
+        raise ValueError(
+            f"Conversion exceeds both current bracket and headroom bracket by {excess:,.2f}. "
+            "No third-rate bracket is defined to handle this overflow."
+        )
+
+    current_portion = min(conversion, current_bracket_space)
+    headroom_portion = max(0.0, conversion - current_bracket_space)
+    conversion_tax = (current_portion * maxrate) + (headroom_portion * headroom_rate)
+
+    logger.debug(
+        f"Conversion tax: current_portion={current_portion:,.2f} @ {maxrate:.0%}, "
+        f"headroom_portion={headroom_portion:,.2f} @ {headroom_rate:.0%} → tax={conversion_tax:,.2f}"
+    )
     return conversion_tax
 
 def calc_roth_conversions(maxrate, headroom_rate, uppermax, agi, headroom_max, lowerby):
@@ -128,8 +138,7 @@ def calc_agi(joint_gross_income, interest, stddectdf, daf):
     
     # Check if DAF exceeds standard deduction (itemized deduction route)
     if std_deduction < daf:
-        std_deduction_base = calculate_std_deduction(joint_gross_income, stddectdf)
-        agi = total_income - daf - std_deduction_base
+        agi = total_income - daf
         logger.debug(f"AGI: DAF route (daf > std_deduction) = {agi:,.2f}")
     else:
         # Standard deduction route
@@ -170,21 +179,10 @@ def calc_daf_value(joint_gross_income, interest, daf1, maxdaf):
         logger.debug(f"DAF: Custom amount = ${daf:,.2f}")
     else:
         daf = 0.0
-        logger.debug(f"DAF: Invalid amount (daf1={daf1:,.2f} exceeds limit {max_daf_limit:,.2f}), defaulting to 0")
+        logger.warning(f"DAF: Requested amount (daf1={daf1:,.2f}) exceeds limit {max_daf_limit:,.2f} or is negative — silently rejected, defaulting to 0")
     
     return daf
     
-def get_net_worth(ret_date):
-   networth_data =pd.read_csv('financial_data.csv')
-   cash = networth_data[networth_data['date'] == ret_date]['cash'].squeeze()
-   taxable = networth_data[networth_data['date'] == ret_date]['taxable'].squeeze()
-   tax_deferred = networth_data[networth_data['date'] == ret_date]['tax_deferred'].squeeze()
-   tax_free = networth_data[networth_data['date'] == ret_date]['tax_free'].squeeze()
-   total = networth_data[networth_data['date'] == ret_date]['total'].squeeze()
-   expenses = networth_data[networth_data['date'] == ret_date]['expenses'].squeeze()
-   daf = networth_data[networth_data['date'] == ret_date]['daf'].squeeze()
-   return cash,taxable,tax_deferred,tax_free,total,expenses,daf
-
 def getUpperIncomeRate(taxrate, year_tax_brackets_df):
     """
     Get the upper income limit for a given tax rate from tax brackets.
@@ -205,7 +203,6 @@ def getUpperIncomeRate(taxrate, year_tax_brackets_df):
     
     # Use numpy isclose for floating-point comparison to handle precision issues
     # This handles cases like 0.24 vs 0.24000000000000002
-    import numpy as np
     mask = np.isclose(year_tax_brackets_df['rate'], rate_to_query, rtol=1e-9, atol=1e-9)
     result = year_tax_brackets_df[mask]
     
@@ -213,7 +210,10 @@ def getUpperIncomeRate(taxrate, year_tax_brackets_df):
         logger.warning(f"Tax rate {rate_to_query:.2%} not found in brackets")
         raise ValueError(f"Tax rate {rate_to_query} not found in tax brackets")
     
-    uppervalue = float(result['upper'].squeeze())
+    if len(result) > 1:
+        raise ValueError(f"Tax rate {rate_to_query} matches multiple rows in tax brackets; expected exactly one")
+    
+    uppervalue = float(result['upper'].item())
     logger.debug(f"Upper limit for rate {rate_to_query:.2%}: ${uppervalue:,.2f}")
     
     return uppervalue
@@ -279,11 +279,8 @@ def calculate_atm(total_income, cap_gains, atmdf):
     for year, deduction, lower, upper, phase_out, rate, exception_rate in atmdf[['year', 'deduction', 'lower', 'upper', 'phase_out', 'rate', 'exception_rate']].values:
         logger.debug(f"Processing year {year:.0f}: rate={rate:.2%}, bracket=[${lower:,.0f}-${upper:,.0f}]")
         
-        # Get standard deduction for the year
-        std_deduction = get_std_deduction_by_year(year)
-        
         # Calculate income with phase-out adjustments
-        income = calc_atm_phase_out(total_income + std_deduction, cap_gains, deduction, phase_out, exception_rate)
+        income = calc_atm_phase_out(total_income, cap_gains, deduction, phase_out, exception_rate)
         
         # Check if income falls within this bracket
         if lower <= income <= upper:
@@ -297,14 +294,17 @@ def calculate_atm(total_income, cap_gains, atmdf):
     logger.debug(f"Total ATM tax: ${total_tax:,.2f}, lowerby: ${lowerby:,.2f}")
     return total_tax, lowerby
 
+# TODO: remove `year` parameter in a future version once all callers are updated
 def getlower_atm_amount_n_deduction(year, atmdf):
     """
     Get the lower ATM amount and deduction for the second bracket (index 1).
     
     Note: The 'year' parameter is currently unused but kept for API compatibility.
+    It is deprecated and will be removed in a future version.
     
     Args:
-        year: Year parameter (unused, kept for compatibility)
+        year: Deprecated. Year parameter (unused, kept for compatibility).
+              Pass ``None`` (or omit via a wrapper) to suppress the warning.
         atmdf: DataFrame containing ATM brackets with 'lower' and 'deduction' columns
         
     Returns:
@@ -313,6 +313,14 @@ def getlower_atm_amount_n_deduction(year, atmdf):
     Raises:
         IndexError: If atmdf has fewer than 2 rows
     """
+    if year is not None:
+        import warnings
+        warnings.warn(
+            "The 'year' parameter of getlower_atm_amount_n_deduction() is deprecated "
+            "and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
     if len(atmdf) < 2:
         logger.error(f"ATM DataFrame has insufficient rows: {len(atmdf)} (need at least 2)")
         raise IndexError("ATM DataFrame must have at least 2 rows")
@@ -325,26 +333,21 @@ def getlower_atm_amount_n_deduction(year, atmdf):
     
     return lower_amount, deduction_amount
    
-def calculate_atm1(total_income,cap_gains,atmdf):
-    tax=0
-    logger.debug(f"ATM MAGI is ${total_income+cap_gains:.2f}")
-    lowerby=0
-    tax_owed = np.zeros(len(atmdf))
-    for i, (year, deduction, lower, upper, phase_out, rate) in enumerate(atmdf[['year','deduction','lower','upper','phase_out','rate']].values):
-        amount=0
-        if total_income+cap_gains <= phase_out:      
-            income= round((total_income+cap_gains)-deduction,0)
-            logger.debug(f"Income is below Phase out include deduction ${income:.2f}")
-        else:
-            income= round(total_income+cap_gains,0)
-            logger.debug(f"Income, with phase out, no deduction, is ${income:,.2f}")
-        if income >= lower and income <= upper:
-            tax_owed [i] = round(income*rate,0)
-            lowerby = income-lower
-            logger.debug(f"Income is ${income:.2f} which is above ${lower:,.2f} tween Rate is {rate:.0%}: Tax is ${tax_owed [i]:.2f}")
-        tax += tax_owed[i]
-    logger.debug(f"tax owed ${tax:,.2f}")
-    return tax,float(lowerby)
+def calculate_atm1(total_income, cap_gains, atmdf):
+    """
+    .. deprecated::
+        Use :func:`calculate_atm` instead. ``calculate_atm1`` is a legacy
+        implementation that lacks ``exception_rate`` support and will be
+        removed in a future version.
+    """
+    import warnings
+    warnings.warn(
+        "calculate_atm1() is deprecated and will be removed in a future version. "
+        "Use calculate_atm() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return calculate_atm(total_income, cap_gains, atmdf)
     
 def get_std_deduction_by_year(year_in):
     """
@@ -477,7 +480,7 @@ def calculate_cap_gains(income: float, cg_range: pd.DataFrame, cg_income: float)
     return total_tax
 
     
-def calculate_taxable_income(income, tax_brackets_df):
+def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> tuple[float, float, float]:
     """
     Calculate income tax using progressive tax brackets.
     
@@ -490,19 +493,25 @@ def calculate_taxable_income(income, tax_brackets_df):
         
     Returns:
         tuple: (total_tax, max_rate, upper_max)
-            - total_tax: Total tax owed
+            - total_tax: Total tax owed (truncated to whole dollars via floor)
             - max_rate: Highest tax rate that applies to this income
             - upper_max: Upper limit of the highest bracket that applies
     """
+    if income <= 0:
+        return 0.0, 0.0, 0.0
+
     logger.debug(f"calculate_taxable_income: income=${income:,.2f}")
 
     lower = tax_brackets_df['lower'].to_numpy()
     upper = tax_brackets_df['upper'].to_numpy()
     rate  = tax_brackets_df['rate'].to_numpy()
 
-    # Vectorized bracket calculation: amount of income falling in each bracket
-    taxable_in_bracket = np.maximum(0.0, np.minimum(income, upper) - lower)
-    bracket_tax        = np.round(taxable_in_bracket * rate, 0)
+    # Vectorized bracket calculation: clip income above each bracket's floor to the
+    # bracket width. Brackets are non-overlapping and cumulative (each bracket's
+    # lower == previous bracket's upper), so this gives the correct marginal amount
+    # without double-counting lower-bracket income.
+    taxable_in_bracket = np.clip(income - lower, 0.0, upper - lower)
+    bracket_tax        = np.floor(taxable_in_bracket * rate)
     total_tax          = float(bracket_tax.sum())
 
     # Highest bracket that income reaches (taxable_in_bracket > 0)
