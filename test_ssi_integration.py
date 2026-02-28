@@ -7,6 +7,7 @@ the withdrawal strategy for Stage 4 (Social Security) and Stage 5 (RMD).
 """
 
 import logging
+import pytest
 from config import get_config_manager
 from strategy import (
     WithdrawalStrategyEngine,
@@ -86,10 +87,8 @@ def test_config_integration():
             f"claiming_age={p['claiming_age']}  fra_benefit=${p['fra_benefit']:,.2f}/month"
         )
 
-    assert any(p["fra_benefit"] > 0 for p in persons), (
-        "No SSI amounts configured in config.py — "
-        "set person1_ssi_amount / person2_ssi_amount to test"
-    )
+    if not any(p["fra_benefit"] > 0 for p in persons):
+        pytest.skip("No SSI amounts configured — set person1_ssi_amount / person2_ssi_amount to test")
 
     sample_year = 2036  # Representative year when both persons are past claiming age
     logger.info(f"Sample Calculation for Year {sample_year}:")
@@ -119,8 +118,8 @@ def test_withdrawal_strategy_integration():
     print("=" * 80)
     
     print("\nThe withdrawal strategy now uses dynamic SSI calculation in:")
-    print("  • Stage 4: Social Security (lines 2108-2394)")
-    print("  • Stage 5: RMD (lines 2397-2609)")
+    print("  • Stage 5: Social Security")
+    print("  • Stage 6: RMD")
     print("\nKey changes:")
     print("  1. Added calculate_ssi_benefits_dynamic() helper function")
     print("  2. Updated calculate_multi_year_strategy() to use dynamic calculator")

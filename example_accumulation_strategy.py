@@ -487,7 +487,7 @@ def example_3_early_saver(
 
     _display_stage_transitions(strategy_df)
     if not strategy_df.empty:
-        _log_growth_summary(strategy_df, "20-Year Growth Summary")
+        _log_growth_summary(strategy_df, f"{config.end_year - config.start_year}-Year Growth Summary")
     return _run_accumulation_report(strategy_df, balances_df, config)
 
 

@@ -23,6 +23,8 @@ DEFAULT_CONFIG = {
         "person2_retirement_age": 62,
         "person2_retirement_year": 2028,  # Year of retirement
         "retirement_state": "FL",  # State for retirement (affects state tax calculations)
+        # List of children: each entry is {"name": str, "birth_date": "YYYY-MM-DD"}
+        "children": [],
     },
     "financial_assumptions": {
         "expected_annual_expenses": 50000,

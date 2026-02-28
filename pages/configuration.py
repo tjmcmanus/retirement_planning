@@ -161,6 +161,86 @@ with tab1:
     
     st.info(f"Selected state: {retirement_state} - State tax calculations will be applied based on this selection.")
 
+    # -----------------------------------------------------------------------
+    # Children
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("👶 Children")
+    st.markdown(
+        "Add children and their birth dates. This information is used for "
+        "estate planning suggestions, dependent tax calculations, and college "
+        "funding stage strategies."
+    )
+
+    # Load existing children from config (list of {name, birth_date} dicts)
+    _existing_children = config_mgr.get("personal_info", "children", [])
+    if not isinstance(_existing_children, list):
+        _existing_children = []
+
+    # Build an editable DataFrame — include special_needs flag
+    _seed_row = [{"name": "", "birth_date": "", "special_needs": False}]
+    _children_df = pd.DataFrame(
+        _existing_children if _existing_children else _seed_row,
+    )
+    # Ensure all three columns always exist (handles legacy data without special_needs)
+    for _col, _default in (("name", ""), ("birth_date", ""), ("special_needs", False)):
+        if _col not in _children_df.columns:
+            _children_df[_col] = _default
+
+    st.caption(
+        "Enter each child's name, birth date (YYYY-MM-DD), and whether they have special needs. "
+        "Add rows with the ➕ button; delete rows by selecting them and pressing Delete."
+    )
+
+    children_df = st.data_editor(
+        _children_df,
+        column_config={
+            "name": st.column_config.TextColumn(
+                "Child's Name",
+                help="First name (or full name) of the child",
+                max_chars=60,
+            ),
+            "birth_date": st.column_config.TextColumn(
+                "Birth Date (YYYY-MM-DD)",
+                help="Date of birth in YYYY-MM-DD format, e.g. 2005-03-15",
+                max_chars=10,
+            ),
+            "special_needs": st.column_config.CheckboxColumn(
+                "Special Needs",
+                help=(
+                    "Check if this child has a disability or special needs. "
+                    "Used in estate planning to recommend a Special Needs Trust."
+                ),
+                default=False,
+            ),
+        },
+        num_rows="dynamic",
+        use_container_width=True,
+        key="children_editor",
+    )
+
+    # Validate birth dates and show a live summary
+    _valid_children = []
+    _child_errors = []
+    for _row_num, (_idx, _row) in enumerate(children_df.iterrows(), start=1):
+        _cname = str(_row.get("name", "")).strip()
+        _cbdate = str(_row.get("birth_date", "")).strip()
+        _cspecial = bool(_row.get("special_needs", False))
+        if not _cname and not _cbdate:
+            continue  # skip blank rows
+        try:
+            datetime.strptime(_cbdate, "%Y-%m-%d")
+            _cage = config_mgr.calculate_age(_cbdate)
+            _sn_tag = " 🔹 Special Needs" if _cspecial else ""
+            _valid_children.append({"name": _cname, "birth_date": _cbdate, "special_needs": _cspecial})
+            st.caption(f"  • **{_cname}** — born {_cbdate} (age {_cage}){_sn_tag}")
+        except ValueError:
+            _child_errors.append(f"Row {_row_num}: '{_cbdate}' is not a valid YYYY-MM-DD date for '{_cname}'")
+
+    if _child_errors:
+        for _err in _child_errors:
+            st.warning(f"⚠️ {_err}")
+
 # Financial Assumptions Tab
 with tab2:
     st.header("Financial Assumptions")
@@ -1093,6 +1173,7 @@ with tab7:
                 "person2_birth_date": person2_birth_date.strftime("%Y-%m-%d"),
                 "person2_retirement_age": person2_retirement_age,
                 "retirement_state": retirement_state,
+                "children": _valid_children,
             })
             
             config_mgr.update_section("financial_assumptions", {

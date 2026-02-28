@@ -98,6 +98,15 @@ NIIT_THRESHOLDS: Dict[str, int] = {
 # Minimum age for Medicare eligibility (fixed by statute)
 MEDICARE_ELIGIBILITY_AGE: int = 65
 
+# Medicare Part D base premium (annual; updated each year by CMS)
+PART_D_ANNUAL_BASE_PREMIUM: int = 480   # ~$40/month average
+
+# Medigap supplemental insurance premium (annual estimate)
+MEDIGAP_ANNUAL_PREMIUM: int = 2_400     # ~$200/month average
+
+# Minimum age for penalty-free withdrawals from Traditional IRA / 401k (IRC §72(t))
+EARLY_WITHDRAWAL_PENALTY_AGE: float = 59.5
+
 # ACA marketplace premium estimate per person per month (pre-Medicare)
 # Annualised: ACA_MONTHLY_PREMIUM_PER_PERSON * 12 = $12,000/year
 ACA_MONTHLY_PREMIUM_PER_PERSON: int = 1_000
@@ -519,6 +528,138 @@ def optimize_rmd_lookback(strategies: list,
     return adjusted_strategies, optimization_report
 
 
+# State Unemployment Tax Act (SUTA) rates and taxable wage bases by state (2024 estimates).
+# Format: state_code -> (employee_rate, wage_base)
+# Sources: DOL state UI tax tables; rates shown are new-employer / average rates.
+_SUTA_BY_STATE: Dict[str, Tuple[float, float]] = {
+    'AL': (0.0270, 8_000),
+    'AK': (0.0100, 49_700),
+    'AZ': (0.0200, 8_000),
+    'AR': (0.0310, 10_000),
+    'CA': (0.0340, 7_000),
+    'CO': (0.0170, 23_800),
+    'CT': (0.0290, 25_000),
+    'DE': (0.0180, 10_500),
+    'FL': (0.0270, 7_000),
+    'GA': (0.0270, 9_500),
+    'HI': (0.0240, 59_100),
+    'ID': (0.0207, 53_500),
+    'IL': (0.0350, 13_590),
+    'IN': (0.0250, 9_500),
+    'IA': (0.0100, 38_200),
+    'KS': (0.0270, 14_000),
+    'KY': (0.0270, 11_100),
+    'LA': (0.0270, 7_700),
+    'ME': (0.0220, 12_000),
+    'MD': (0.0270, 8_500),
+    'MA': (0.0290, 15_000),
+    'MI': (0.0270, 9_500),
+    'MN': (0.0100, 42_000),
+    'MS': (0.0100, 14_000),
+    'MO': (0.0270, 10_500),
+    'MT': (0.0100, 43_000),
+    'NE': (0.0125, 9_000),
+    'NV': (0.0295, 40_600),
+    'NH': (0.0270, 14_000),
+    'NJ': (0.0028, 42_300),
+    'NM': (0.0100, 31_700),
+    'NY': (0.0290, 12_500),
+    'NC': (0.0120, 31_400),
+    'ND': (0.0100, 43_800),
+    'OH': (0.0270, 9_000),
+    'OK': (0.0270, 25_700),
+    'OR': (0.0270, 52_800),
+    'PA': (0.0370, 10_000),
+    'RI': (0.0099, 29_200),
+    'SC': (0.0270, 14_000),
+    'SD': (0.0120, 15_000),
+    'TN': (0.0270, 7_000),
+    'TX': (0.0270, 9_000),
+    'UT': (0.0100, 47_000),
+    'VT': (0.0100, 14_300),
+    'VA': (0.0270, 8_000),
+    'WA': (0.0100, 72_800),
+    'WV': (0.0270, 9_000),
+    'WI': (0.0350, 14_000),
+    'WY': (0.0270, 29_100),
+    'DC': (0.0270, 9_000),
+}
+
+
+def calculate_payroll_taxes(wages: float, year: int = 2024) -> Tuple[float, Dict]:
+    """
+    Calculate payroll taxes on wage income: FICA (Social Security), Medicare,
+    state income tax, and unemployment insurance (FUTA/SUTA).
+
+    SUTA rate and wage base are looked up by the state configured in personal_info.
+    These are deducted from gross wages before any savings or investment decisions.
+
+    Args:
+        wages: Gross annual wages
+        year:  Tax year (used for wage-base inflation; base year 2024)
+
+    Returns:
+        Tuple of (total_payroll_tax, breakdown_dict)
+    """
+    if wages <= 0:
+        return 0.0, {}
+
+    # ── Resolve state from config ─────────────────────────────────────────────
+    try:
+        _cfg = get_config_manager()
+        state = (_cfg.get('personal_info', 'retirement_state', 'FL') or 'FL').upper()
+    except Exception:
+        state = 'FL'
+
+    # ── Social Security (OASDI) ────────────────────────────────────────────────
+    # 2024 wage base: $168,600; employee share: 6.2 %
+    # Inflate wage base by ~3.5 % per year beyond 2024
+    ss_wage_base = 168_600 * (1.035 ** max(0, year - 2024))
+    ss_tax = min(wages, ss_wage_base) * 0.062
+
+    # ── Medicare ──────────────────────────────────────────────────────────────
+    # 1.45 % on all wages; additional 0.9 % on wages > $250k (MFJ)
+    medicare_tax = wages * 0.0145
+    additional_medicare_threshold = 250_000
+    if wages > additional_medicare_threshold:
+        medicare_tax += (wages - additional_medicare_threshold) * 0.009
+
+    # ── State income tax on wages ─────────────────────────────────────────────
+    state_tax, _ = calculate_state_tax(state_agi=wages, year=year, state=state)
+
+    # ── FUTA ──────────────────────────────────────────────────────────────────
+    # Federal Unemployment Tax Act: 0.6 % on first $7,000 (net of SUTA credit)
+    futa_wage_base = 7_000
+    futa_tax = min(wages, futa_wage_base) * 0.006
+
+    # ── SUTA (state unemployment insurance) ───────────────────────────────────
+    # Rate and wage base vary by state; fall back to national average if unknown.
+    suta_rate, suta_wage_base = _SUTA_BY_STATE.get(state, (0.027, 7_000))
+    suta_tax = min(wages, suta_wage_base) * suta_rate
+    logger.debug(f"SUTA ({state}): rate={suta_rate:.2%}, wage_base=${suta_wage_base:,}, tax=${suta_tax:,.0f}")
+
+    total = ss_tax + medicare_tax + state_tax + futa_tax + suta_tax
+
+    breakdown = {
+        'state':               state,
+        'social_security_tax': ss_tax,
+        'medicare_tax':        medicare_tax,
+        'state_tax':           state_tax,
+        'futa_tax':            futa_tax,
+        'suta_rate':           suta_rate,
+        'suta_wage_base':      suta_wage_base,
+        'suta_tax':            suta_tax,
+        'total_payroll_tax':   total,
+    }
+    logger.info(
+        f"Payroll taxes ({state}) on ${wages:,.0f} wages: SS=${ss_tax:,.0f}, "
+        f"Medicare=${medicare_tax:,.0f}, State=${state_tax:,.0f}, "
+        f"FUTA=${futa_tax:,.0f}, SUTA={suta_rate:.2%}×${suta_wage_base:,}=${suta_tax:,.0f}"
+        f"  →  Total=${total:,.0f}"
+    )
+    return total, breakdown
+
+
 def calculate_state_tax(state_agi: float, state: Optional[str] = None, year: int = 2024,
                        filing_status: str = "married_filing_jointly",
                        retirement_income: float = 0,
@@ -849,7 +990,7 @@ def calculate_medicare_costs(age_primary: int,
         total_cost += breakdown['part_b_spouse']
     
     # Part D costs (base premium + IRMAA)
-    part_d_base = 480  # $40/month average
+    part_d_base = PART_D_ANNUAL_BASE_PREMIUM
     if age_primary >= 65:
         part_d_irmaa = irmaa_details.get('part_d_irmaa', 0) * 12
         breakdown['part_d_primary'] = part_d_base + part_d_irmaa
@@ -862,7 +1003,7 @@ def calculate_medicare_costs(age_primary: int,
     
     # Medigap costs
     if has_medigap:
-        medigap_annual = 2400  # $200/month average
+        medigap_annual = MEDIGAP_ANNUAL_PREMIUM
         if age_primary >= 65:
             breakdown['medigap_primary'] = medigap_annual
             total_cost += medigap_annual
@@ -1197,6 +1338,8 @@ RMD_AGE = 73  # Updated for 2023+ (SECURE Act 2.0)
 ACA_SUBSIDY_THRESHOLD = 400  # % of Federal Poverty Level for max subsidies
 TAXABLE_SS_RATE = 0.85  # 85% of SS benefits are taxable at higher incomes
 FUND_CONSERVATION_TOLERANCE = 1.0  # Allow $1 rounding error in fund conservation checks
+ROTH_IRA_INCOME_LIMIT = 240_000  # MFJ 2024 phase-out upper bound (update annually)
+IRA_CONTRIBUTION_LIMIT = 7_000   # 2024 limit (age < 50); 8_000 if ≥ 50 (update annually)
 
 
 # ==============================================================================
@@ -1428,6 +1571,9 @@ class YearlyStrategy:
     
     # NEW: Fund movement tracking (v2.0 - Account Rebalancing)
     cash_replenishment: float = 0.0
+    payroll_tax: float = 0.0    # FICA + Medicare + State + FUTA/SUTA (wages years only)
+    wages_to_trad: float = 0.0  # Wages → Traditional 401k contribution
+    wages_to_roth: float = 0.0  # Wages → Roth 401k / Roth IRA contribution
     brokerage_replenishment: float = 0.0
     traditional_to_cash: float = 0.0
     traditional_to_brokerage: float = 0.0
@@ -1435,6 +1581,9 @@ class YearlyStrategy:
     roth_to_cash: float = 0.0
     roth_to_brokerage: float = 0.0
     conversion_executed: float = 0.0
+    # Accumulation-phase contributions routed from take-home cash
+    cash_to_roth: float = 0.0
+    cash_to_brokerage: float = 0.0
 
     # Decision reasoning log (v2.1 - Strategy Instrumentation)
     decision_log: DecisionLog = field(default_factory=DecisionLog)
@@ -1645,24 +1794,33 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                age=age_primary)
 
     # Step 3: Distribute from Traditional (ordinary income tax, last resort for cash)
+    # Blocked before age 59½ — early withdrawal triggers a 10% IRS penalty (IRC §72(t))
     if cash_deficit > 0 and balances.traditional > 0:
-        distribution = min(cash_deficit, balances.traditional * 0.10)  # Max 10% per year
-        balances = PortfolioBalances(
-            cash=balances.cash + distribution,
-            taxable=balances.taxable,
-            traditional=balances.traditional - distribution,
-            roth=balances.roth,
-            daf=balances.daf
-        )
-        transactions['traditional_to_cash'] = distribution
-        logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Cash (ordinary income tax)")
-        dl.add("cash_replenishment", "Traditional → Cash",
-               f"Distribute ${distribution:,.0f}",
-               "Traditional is the last resort for cash: every dollar withdrawn is taxed as ordinary income. "
-               "Capped at 10% of Traditional balance to limit tax impact in a single year.",
-               distributed=f"${distribution:,.0f}",
-               traditional_balance=f"${balances.traditional:,.0f}",
-               remaining_deficit=f"${cash_deficit:,.0f}")
+        if age_primary < EARLY_WITHDRAWAL_PENALTY_AGE:
+            dl.add("cash_replenishment", "Traditional → Cash Blocked",
+                   "No distribution (age < 59½)",
+                   "Withdrawals from Traditional IRA/401k before age 59½ incur a 10% IRS early-withdrawal "
+                   "penalty (IRC §72(t)). This transfer is blocked to avoid the penalty. "
+                   "Build cash reserves from wages or after-tax savings instead.",
+                   age=age_primary)
+        else:
+            distribution = min(cash_deficit, balances.traditional * 0.10)  # Max 10% per year
+            balances = PortfolioBalances(
+                cash=balances.cash + distribution,
+                taxable=balances.taxable,
+                traditional=balances.traditional - distribution,
+                roth=balances.roth,
+                daf=balances.daf
+            )
+            transactions['traditional_to_cash'] = distribution
+            logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Cash (ordinary income tax)")
+            dl.add("cash_replenishment", "Traditional → Cash",
+                   f"Distribute ${distribution:,.0f}",
+                   "Traditional is the last resort for cash: every dollar withdrawn is taxed as ordinary income. "
+                   "Capped at 10% of Traditional balance to limit tax impact in a single year.",
+                   distributed=f"${distribution:,.0f}",
+                   traditional_balance=f"${balances.traditional:,.0f}",
+                   remaining_deficit=f"${cash_deficit:,.0f}")
 
     # Step 4: Emergency Roth if still needed (after Traditional exhausted)
     if cash_deficit > 0 and balances.roth > 0:
@@ -1756,25 +1914,34 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
     }
 
     # Step 1: Distribute from Traditional (taxable)
+    # Blocked before age 59½ — early withdrawal triggers a 10% IRS penalty (IRC §72(t))
     if brokerage_deficit > 0 and balances.traditional > 0:
-        distribution = min(brokerage_deficit, balances.traditional * 0.15)  # Max 15% per year
-        balances = PortfolioBalances(
-            cash=balances.cash,
-            taxable=balances.taxable + distribution,
-            traditional=balances.traditional - distribution,
-            roth=balances.roth,
-            daf=balances.daf
-        )
-        transactions['traditional_to_brokerage'] = distribution
-        brokerage_deficit -= distribution
-        logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Brokerage (ordinary income tax)")
-        dl.add("brokerage_replenishment", "Traditional → Brokerage",
-               f"Distribute ${distribution:,.0f}",
-               "Traditional is the sole source for brokerage replenishment. "
-               "Capped at 15% of Traditional balance to limit the ordinary-income tax hit in a single year.",
-               distributed=f"${distribution:,.0f}",
-               traditional_balance=f"${balances.traditional:,.0f}",
-               remaining_deficit=f"${brokerage_deficit:,.0f}")
+        if age_primary < EARLY_WITHDRAWAL_PENALTY_AGE:
+            dl.add("brokerage_replenishment", "Traditional → Brokerage Blocked",
+                   "No distribution (age < 59½)",
+                   "Withdrawals from Traditional IRA/401k before age 59½ incur a 10% IRS early-withdrawal "
+                   "penalty (IRC §72(t)). This transfer is blocked to avoid the penalty. "
+                   "Use after-tax wages or Roth contributions to build the brokerage balance instead.",
+                   age=age_primary)
+        else:
+            distribution = min(brokerage_deficit, balances.traditional * 0.15)  # Max 15% per year
+            balances = PortfolioBalances(
+                cash=balances.cash,
+                taxable=balances.taxable + distribution,
+                traditional=balances.traditional - distribution,
+                roth=balances.roth,
+                daf=balances.daf
+            )
+            transactions['traditional_to_brokerage'] = distribution
+            brokerage_deficit -= distribution
+            logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Brokerage (ordinary income tax)")
+            dl.add("brokerage_replenishment", "Traditional → Brokerage",
+                   f"Distribute ${distribution:,.0f}",
+                   "Traditional is the sole source for brokerage replenishment. "
+                   "Capped at 15% of Traditional balance to limit the ordinary-income tax hit in a single year.",
+                   distributed=f"${distribution:,.0f}",
+                   traditional_balance=f"${balances.traditional:,.0f}",
+                   remaining_deficit=f"${brokerage_deficit:,.0f}")
 
     # Roth → Brokerage intentionally omitted — see docstring
     if brokerage_deficit > 100:
@@ -2006,6 +2173,22 @@ def _get_earliest_retirement_year() -> int:
     return min(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
 
 
+def _get_latest_retirement_year() -> int:
+    """Return the latest calendar year either person is expected to retire.
+
+    Stage 1 (Accumulation) and Stage 2 (Prep for Retirement) should remain
+    active until the *last* earner retires.  Using the earliest retirement year
+    caused a regression where the stages reverted to Stage 1 after the first
+    person retired while the second was still working.
+    """
+    config_mgr = get_config_manager()
+    p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
+    p1_ret_age = int(config_mgr.get("personal_info", "person1_retirement_age", 67))
+    p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
+    p2_ret_age = int(config_mgr.get("personal_info", "person2_retirement_age", 62))
+    return max(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
+
+
 class Stage1Accumulation(LifeStage):
     """
     Stage 1: Accumulation Phase
@@ -2023,13 +2206,22 @@ class Stage1Accumulation(LifeStage):
     
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
-        """Applies when employed with wages AND outside the Stage 2 prep window."""
+        """Applies when employed with wages AND outside the Stage 2 prep window.
+
+        Uses the *latest* retirement year so that Stage 1 remains active (and
+        correctly yields to Stage 2) until the last earner in the household
+        retires.  Using the earliest retirement year caused a false reversion
+        back to Stage 1 after the first person retired while the second was
+        still working.
+        """
         if not has_wages:
             return False
-        # Yield to Stage 2 when within the 10-year prep window
+        # Yield to Stage 2 when within the 10-year prep window of the LAST
+        # person to retire (household is not in prep mode until the final
+        # earner is within the window).
         try:
-            earliest_retirement_year = _get_earliest_retirement_year()
-            years_to_retirement = earliest_retirement_year - year
+            latest_retirement_year = _get_latest_retirement_year()
+            years_to_retirement = latest_retirement_year - year
             # If within the prep window, Stage 2 should handle this year
             if 0 < years_to_retirement <= Stage2PrepForRetirement.PREP_WINDOW_YEARS:
                 return False
@@ -2211,12 +2403,18 @@ class Stage1Accumulation(LifeStage):
             federal_tax, _, _ = calculate_taxable_income(taxable_income_with_conversion, tax_brackets)
 
         # -----------------------------------------------------------------------
-        # Compute take-home cash after tax and after-tax contributions
-        # Take-home = gross wages - federal tax - Roth contribution - brokerage contribution
+        # Compute payroll taxes (FICA, Medicare, State, FUTA/SUTA) on gross wages
+        # These are deducted before any savings or investment decisions.
+        # -----------------------------------------------------------------------
+        payroll_tax, _payroll_breakdown = calculate_payroll_taxes(wages, year) if wages > 0 else (0.0, {})
+
+        # -----------------------------------------------------------------------
+        # Compute take-home cash after all taxes and after-tax contributions
+        # Take-home = gross wages - federal tax - payroll tax - Roth contribution - brokerage contribution
         # (Traditional 401k is pre-tax so it already reduced AGI; it does NOT come out of
         #  take-home again — it was never in the paycheck to begin with.)
         # -----------------------------------------------------------------------
-        after_tax_wages = wages - federal_tax - contribution_roth - contribution_brok
+        after_tax_wages = wages - federal_tax - payroll_tax - contribution_roth - contribution_brok
 
         # -----------------------------------------------------------------------
         # Update balances: route each dollar to the right account
@@ -2267,11 +2465,29 @@ class Stage1Accumulation(LifeStage):
         )
         
         # Calculate MAGI for this year
+        trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
         magi = (0 * TAXABLE_SS_RATE +  # No SS benefits yet
-                0 +  # No traditional withdrawal
+                trad_withdrawal +  # Traditional distributions from rebalance_accounts()
                 roth_conversion +
                 0)  # No LTCG harvested
         
+        # Record Cash→Roth and Cash→Brokerage contribution decisions
+        dl.add("contribution_decisions", "Cash → Roth Contribution",
+               f"Contribute ${contribution_roth:,.0f} from take-home pay",
+               "After-tax wages are routed directly to the Roth account. "
+               "This builds tax-free savings without triggering any early-withdrawal penalty "
+               "because it is a contribution, not a distribution.",
+               amount=f"${contribution_roth:,.0f}",
+               roth_pct=f"{roth_pct:.0%}")
+        dl.add("contribution_decisions", "Cash → Brokerage Contribution",
+               f"Contribute ${contribution_brok + surplus_to_brokerage:,.0f} from take-home pay",
+               "After-tax wages in excess of the cash buffer target are routed to the taxable "
+               "brokerage account. This builds liquid, after-tax savings that can fund future "
+               "Roth conversions in early retirement without penalty.",
+               explicit_contrib=f"${contribution_brok:,.0f}",
+               surplus=f"${surplus_to_brokerage:,.0f}",
+               brok_pct=f"{brok_pct:.0%}")
+
         # Merge rebalancing decisions into stage decision log
         dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
         dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
@@ -2297,6 +2513,9 @@ class Stage1Accumulation(LifeStage):
             irmaa_penalty=0,
             aca_premium=aca_premium,
             balances=new_balances,
+            payroll_tax=payroll_tax,
+            wages_to_trad=contribution_401k,
+            wages_to_roth=contribution_roth,
             # Fund movement tracking
             cash_replenishment=transactions['cash_replenishment'],
             brokerage_replenishment=transactions['brokerage_replenishment'],
@@ -2306,6 +2525,9 @@ class Stage1Accumulation(LifeStage):
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
             conversion_executed=transactions['conversion_executed'],
+            # Accumulation contributions from take-home cash
+            cash_to_roth=contribution_roth,
+            cash_to_brokerage=contribution_brok + surplus_to_brokerage,
             decision_log=dl,
         )
 
@@ -2334,12 +2556,17 @@ class Stage2PrepForRetirement(LifeStage):
 
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
-        """Applies when employed AND within PREP_WINDOW_YEARS of the earlier retirement date."""
+        """Applies when employed AND within PREP_WINDOW_YEARS of the last retirement date.
+
+        Anchored to the *latest* retirement year so that Stage 2 covers the
+        full prep window up until the last earner retires, preventing a false
+        reversion to Stage 1 after the first person retires.
+        """
         if not has_wages:
             return False
         try:
-            earliest_retirement_year = _get_earliest_retirement_year()
-            years_to_retirement = earliest_retirement_year - year
+            latest_retirement_year = _get_latest_retirement_year()
+            years_to_retirement = latest_retirement_year - year
             return 0 < years_to_retirement <= self.PREP_WINDOW_YEARS
         except Exception:
             return False
@@ -2374,22 +2601,18 @@ class Stage2PrepForRetirement(LifeStage):
         std_deduction_df = get_std_deduction(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
 
-        # AGI after pre-tax 401k contributions
-        agi = wages - contribution_401k
-        taxable_income = agi - std_deduction
-        federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
-
-        logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
-
-        dl = DecisionLog()
-
         # -----------------------------------------------------------------------
         # Decision 1: Should new 401k contributions go Roth or Traditional?
         # Rule: if current marginal rate <= expected retirement rate → Traditional
         #       if current marginal rate >  expected retirement rate → Roth 401k
+        # Use a preliminary Traditional-assumption AGI to determine the bracket,
+        # then recompute AGI correctly once contribution type is known.
         # -----------------------------------------------------------------------
         expected_retirement_rate = max_conversion_rate  # proxy for retirement bracket
-        prefer_roth_401k = max_rate > expected_retirement_rate
+        _preliminary_agi = wages - contribution_401k
+        _preliminary_taxable = _preliminary_agi - std_deduction
+        _, _preliminary_rate, _ = calculate_taxable_income(_preliminary_taxable, tax_brackets)
+        prefer_roth_401k = _preliminary_rate > expected_retirement_rate
 
         # -----------------------------------------------------------------------
         # Decision 2: Is Traditional balance disproportionately large?
@@ -2400,6 +2623,16 @@ class Stage2PrepForRetirement(LifeStage):
             prefer_roth_401k = True
             logger.info(f"Year {year}: Traditional (${balances.traditional:,.0f}) > 2× Roth "
                         f"(${balances.roth:,.0f}) — redirecting contributions to Roth 401k")
+
+        # Roth 401k contributions are after-tax and do NOT reduce AGI.
+        # Traditional 401k contributions are pre-tax and DO reduce AGI.
+        agi = wages if prefer_roth_401k else wages - contribution_401k
+        taxable_income = agi - std_deduction
+        federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
+
+        logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
+
+        dl = DecisionLog()
 
         # Record contribution type decision
         if prefer_roth_401k:
@@ -2436,8 +2669,7 @@ class Stage2PrepForRetirement(LifeStage):
         # Execute if income exceeds direct Roth IRA contribution limit (~$161k single / $240k MFJ 2024)
         # Assumes Traditional IRA is kept empty for this purpose.
         # -----------------------------------------------------------------------
-        ROTH_IRA_INCOME_LIMIT = 240_000  # MFJ 2024 phase-out upper bound
-        IRA_CONTRIBUTION_LIMIT = 7_000   # 2024 limit (age < 50); 8_000 if ≥ 50
+        # ROTH_IRA_INCOME_LIMIT and IRA_CONTRIBUTION_LIMIT are module-level constants
         backdoor_roth_amount = 0.0
         if agi > ROTH_IRA_INCOME_LIMIT:
             backdoor_roth_amount = IRA_CONTRIBUTION_LIMIT
@@ -2536,7 +2768,13 @@ class Stage2PrepForRetirement(LifeStage):
             taxable_with_conv = total_income - std_deduction
             federal_tax, _, _ = calculate_taxable_income(taxable_with_conv, tax_brackets)
 
-        after_tax_wages = wages - federal_tax
+        # -----------------------------------------------------------------------
+        # Compute payroll taxes (FICA, Medicare, State, FUTA/SUTA) on gross wages
+        # These are deducted before any savings or investment decisions.
+        # -----------------------------------------------------------------------
+        payroll_tax, _payroll_breakdown = calculate_payroll_taxes(wages, year) if wages > 0 else (0.0, {})
+
+        after_tax_wages = wages - federal_tax - payroll_tax
 
         # Update balances — backdoor Roth moves cash → Roth (net zero on Traditional IRA)
         balances_updated = PortfolioBalances(
@@ -2597,7 +2835,25 @@ class Stage2PrepForRetirement(LifeStage):
             cash_target_override=accum_cash_target,
         )
 
-        magi = roth_conversion  # wages covered by employer; no SS, no traditional withdrawal
+        trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
+        magi = trad_withdrawal + roth_conversion  # wages covered by employer; no SS, no traditional withdrawal
+
+        # Record Cash→Roth and Cash→Brokerage contribution decisions for Stage 2
+        # In Stage 2, the contribution_401k may go to Roth 401k (prefer_roth_401k)
+        # and backdoor_roth_amount is also a cash→roth flow
+        stage2_cash_to_roth = (contribution_401k if prefer_roth_401k else 0) + contribution_roth + backdoor_roth_amount
+        # Stage 2 does not have an explicit brokerage contribution from wages in this path,
+        # but after-tax wages flow to cash first; any surplus above cash target goes to brokerage
+        stage2_cash_to_brokerage = 0.0  # Stage 2 routes surplus via rebalance_accounts
+
+        dl.add("contribution_decisions", "Cash → Roth Contribution",
+               f"Contribute ${stage2_cash_to_roth:,.0f} from take-home pay",
+               "After-tax wages are routed to Roth (Roth 401k and/or backdoor Roth IRA). "
+               "This builds tax-free savings without triggering any early-withdrawal penalty "
+               "because it is a contribution, not a distribution.",
+               roth_401k=f"${contribution_401k if prefer_roth_401k else 0:,.0f}",
+               roth_ira=f"${contribution_roth:,.0f}",
+               backdoor_roth=f"${backdoor_roth_amount:,.0f}")
 
         dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
         dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
@@ -2623,6 +2879,9 @@ class Stage2PrepForRetirement(LifeStage):
             irmaa_penalty=0,
             aca_premium=aca_premium,
             balances=new_balances,
+            payroll_tax=payroll_tax,
+            wages_to_trad=0 if prefer_roth_401k else contribution_401k,
+            wages_to_roth=(contribution_401k if prefer_roth_401k else 0) + contribution_roth + backdoor_roth_amount,
             cash_replenishment=transactions['cash_replenishment'],
             brokerage_replenishment=transactions['brokerage_replenishment'],
             traditional_to_cash=transactions['traditional_to_cash'],
@@ -2631,6 +2890,9 @@ class Stage2PrepForRetirement(LifeStage):
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
             conversion_executed=transactions['conversion_executed'],
+            # Accumulation contributions from take-home cash
+            cash_to_roth=stage2_cash_to_roth,
+            cash_to_brokerage=stage2_cash_to_brokerage,
             decision_log=dl,
         )
 
@@ -2670,7 +2932,7 @@ class Stage3EarlyRetirement(LifeStage):
             target_conversion: Target Roth conversion amount
             aca_optimize: Whether to optimize for ACA subsidies
         """
-        logger.debug(f"Stage 2 calculation for year {year}, target conversion=${target_conversion:,.2f}")
+        logger.debug(f"Stage 3 calculation for year {year}, target conversion=${target_conversion:,.2f}")
         
         age_primary = kwargs.get('age_primary', 0)
         age_spouse = kwargs.get('age_spouse', 0)
@@ -3097,6 +3359,9 @@ class Stage4Medicare(LifeStage):
         # Calculate ACA premium based on configuration (may still apply if under 65)
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         
+        # --- Decision log for Stage 4 ---
+        dl = DecisionLog()
+
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         new_balances, transactions, rebal_dl = rebalance_accounts(
             balances=balances,
@@ -3128,9 +3393,6 @@ class Stage4Medicare(LifeStage):
                 roth_conversion +
                 ltcg_harvested)
         
-        # --- Decision log for Stage 4 ---
-        dl = DecisionLog()
-
         # IRMAA assessment
         dl.add(
             "irmaa_decisions",
@@ -4234,6 +4496,12 @@ class WithdrawalStrategyEngine:
                 'Roth→\nBrok': s.roth_to_brokerage,
                 'Cash\nReplen': s.cash_replenishment,
                 'Brok\nReplen': s.brokerage_replenishment,
+                # Accumulation-phase contributions (non-zero only in Stage 1 & 2)
+                'Wages→\nPayroll': s.payroll_tax,
+                'Wages→\nTrad': s.wages_to_trad,
+                'Wages→\nRoth': s.wages_to_roth,
+                'Cash→\nRoth': s.cash_to_roth,
+                'Cash→\nBrok': s.cash_to_brokerage,
                 # Account balances
                 'Taxable Balance': s.balances.taxable,
                 'Traditional Balance': s.balances.traditional,
