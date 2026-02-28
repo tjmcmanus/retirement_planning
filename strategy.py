@@ -23,6 +23,7 @@ Date: 2026-02-24
 Version: 2.0 - BETR Integration
 """
 
+import functools
 import pandas as pd
 import numpy as np
 import logging
@@ -1000,7 +1001,7 @@ def _resolve_irmaa(
             'part_d_base_monthly', 'part_d_irmaa_monthly']
     for lower, upper, part_b, part_a, part_d_base, part_d_irmaa in irmaa_bracket_df[cols].values:
         if lower <= magi <= upper:
-            annual_penalty = float(part_b) * 12   # per-person; caller multiplies by eligible count
+            annual_penalty = (float(part_b) - PART_B_MONTHLY_STANDARD_PREMIUM) * 12   # per-person; caller multiplies by eligible count
             part_d_total   = float(part_d_base) + float(part_d_irmaa)
             return _IrmaaResolved(
                 annual_irmaa_penalty=annual_penalty,
@@ -1262,7 +1263,7 @@ class HealthcareCostBreakdown:
     pre_medicare: float = 0.0
     out_of_pocket: float = 0.0
     ltc_insurance: float = 0.0
-    medicare_detail: MedicareBreakdown = field(default_factory=MedicareBreakdown)
+    medicare_detail: MedicareBreakdown = field(default_factory=lambda: _EMPTY_MEDICARE_BREAKDOWN)
 
     @property
     def total(self) -> float:
@@ -1457,70 +1458,65 @@ def project_healthcare_costs(
     )
 
 
-def calculate_niit(net_investment_income: float, magi: float,
-                  filing_status: str = "married_filing_jointly") -> Tuple[float, Dict[str, Any]]:
+def calculate_niit(
+    net_investment_income: float,
+    magi: float,
+    filing_status: str = "married_filing_jointly",
+) -> Tuple[float, Dict[str, Any]]:
     """
-    Calculate Net Investment Income Tax (3.8% surtax)
-    
+    Calculate Net Investment Income Tax (3.8% surtax).
+
     Args:
-        net_investment_income: Total investment income (must be non-negative)
-        magi: Modified Adjusted Gross Income (must be non-negative)
+        net_investment_income: Total investment income (must be non-negative).
+        magi: Modified Adjusted Gross Income (must be non-negative).
         filing_status: Filing status — must be a key in NIIT_THRESHOLDS;
-            raises ValueError for unrecognised values
+            raises ValueError for unrecognised values.
 
     Returns:
-        Tuple of (niit_amount, calculation_details)
+        Tuple of (niit_amount, calculation_details).
 
     Formula:
         NIIT = min(NII, max(0, MAGI - threshold)) * NIIT_RATE
-        
-    Key Thresholds (NOT indexed for inflation since 2013):
-        - Married Filing Jointly: $250,000
-        - Single: $200,000
-        - Married Filing Separately: $125,000
-        - Head of Household: $200,000
-    """
-    logger.debug(f"Calculating NIIT: NII=${net_investment_income:,.0f}, MAGI=${magi:,.0f}")
 
-    if net_investment_income < 0:
+    Key Thresholds (NOT indexed for inflation since 2013):
+        - Married Filing Jointly:     $250,000
+        - Single:                     $200,000
+        - Married Filing Separately:  $125,000
+        - Head of Household:          $200,000
+    """
+    logger.debug("Calculating NIIT: NII=$%,.0f, MAGI=$%,.0f",
+                 net_investment_income, magi)
+
+    if net_investment_income < 0 or magi < 0:
         raise ValueError(
-            f"net_investment_income must be non-negative, got {net_investment_income}"
+            f"Inputs must be non-negative: "
+            f"net_investment_income={net_investment_income}, magi={magi}"
         )
-    if magi < 0:
-        raise ValueError(f"magi must be non-negative, got {magi}")
 
     if filing_status not in NIIT_THRESHOLDS:
         raise ValueError(
             f"Unknown filing_status {filing_status!r}. "
             f"Valid values: {sorted(NIIT_THRESHOLDS)}"
         )
-    threshold = NIIT_THRESHOLDS[filing_status]
 
-    # Calculate excess MAGI over threshold
-    excess_magi = max(0, magi - threshold)
-
-    # NIIT applies to lesser of NII or excess MAGI
-    niit_base = min(net_investment_income, excess_magi)
-
-    niit_amount = niit_base * NIIT_RATE
+    threshold   = NIIT_THRESHOLDS[filing_status]
+    niit_amount = min(net_investment_income, max(0, magi - threshold)) * NIIT_RATE
 
     details: Dict[str, Any] = {
         'net_investment_income': net_investment_income,
-        'magi': magi,
-        'threshold': threshold,
-        'excess_magi': excess_magi,
-        'niit_base': niit_base,
-        'niit_rate': NIIT_RATE,
-        'niit_amount': niit_amount,
-        'subject_to_niit': niit_base > 0,
+        'magi':            magi,
+        'threshold':       threshold,
+        'niit_rate':       NIIT_RATE,
+        'niit_amount':     niit_amount,
+        'subject_to_niit': niit_amount > 0,
     }
-    
+
     if niit_amount > 0:
-        logger.info(f"NIIT Triggered: MAGI=${magi:,.0f} exceeds threshold=${threshold:,.0f}, "
-                   f"NIIT=${niit_amount:,.0f}")
+        logger.info("NIIT Triggered: MAGI=$%,.0f exceeds threshold=$%,.0f, NIIT=$%,.0f",
+                    magi, threshold, niit_amount)
     else:
-        logger.debug(f"No NIIT: MAGI=${magi:,.0f} below threshold=${threshold:,.0f}")
-    
+        logger.debug("No NIIT: MAGI=$%,.0f below threshold=$%,.0f", magi, threshold)
+
     return niit_amount, details
 
 
@@ -1702,7 +1698,7 @@ class ScenarioType(str, Enum):
     HIGH_INCOME = "high_income"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScenarioConfig:
     """Configuration for a retirement scenario
     
@@ -2802,7 +2798,7 @@ class Stage2PrepForRetirement(LifeStage):
         # Compute contribution amounts from config rates (same pattern as Stage 1).
         # The caller does not pass these values, so derive them here.
         # -----------------------------------------------------------------------
-        if wages > 0:
+        if wages > 0 and contribution_401k == 0 and contribution_roth == 0:
             try:
                 config_mgr = get_config_manager()
                 trad_pct = float(config_mgr.get("income", "contribution_401k_percent",  10.0)) / 100.0
@@ -5084,55 +5080,92 @@ _SCENARIO_OVERRIDES = {
     },
 }
 
+# Fail fast at import time if a ScenarioType member has no entry in
+# _SCENARIO_OVERRIDES.  This converts a silent runtime fallback into a loud,
+# early error that is caught during development and CI before it can silently
+# return wrong data in production.
+assert set(ScenarioType) <= set(_SCENARIO_OVERRIDES), (
+    f"Missing _SCENARIO_OVERRIDES entries for: "
+    f"{set(ScenarioType) - set(_SCENARIO_OVERRIDES)}"
+)
+
+
+def _resolve_scenario_key(scenario_name: Union[str, ScenarioType]) -> ScenarioType:
+    """Resolve a scenario name or enum member to a validated :class:`ScenarioType` key.
+
+    Accepts either a :class:`ScenarioType` member or its string value.  Unknown
+    strings and enum members not yet registered in :data:`_SCENARIO_OVERRIDES`
+    both fall back to :attr:`ScenarioType.DEFAULT` with a ``WARNING`` log entry.
+
+    Args:
+        scenario_name: A :class:`ScenarioType` member or its string value
+            (e.g. ``"default"``, ``"early_retire"``).
+
+    Returns:
+        A :class:`ScenarioType` member guaranteed to be present in
+        :data:`_SCENARIO_OVERRIDES`.
+    """
+    if isinstance(scenario_name, ScenarioType):
+        key = scenario_name
+    else:
+        try:
+            key = ScenarioType(scenario_name)
+        except ValueError:
+            logger.warning(f"Unknown scenario '{scenario_name}', using default")
+            return ScenarioType.DEFAULT
+
+    if key not in _SCENARIO_OVERRIDES:
+        logger.warning(
+            f"No overrides defined for scenario '{key.value}', using default"
+        )
+        return ScenarioType.DEFAULT
+
+    return key
+
+
+@functools.lru_cache(maxsize=None)
+def _build_scenario_config(key: ScenarioType) -> ScenarioConfig:
+    """Build and cache a :class:`ScenarioConfig` for a validated *key*.
+
+    Results are cached indefinitely because both :data:`_DEFAULT_SCENARIO_CONFIG`
+    and :data:`_SCENARIO_OVERRIDES` are module-level constants that never change
+    at runtime.  :class:`ScenarioConfig` is ``frozen=True``, so cached instances
+    are safe to share across callers without risk of mutation.
+
+    Args:
+        key: A :class:`ScenarioType` member present in :data:`_SCENARIO_OVERRIDES`.
+
+    Returns:
+        An immutable :class:`ScenarioConfig` populated from the merged base and
+        scenario-specific configuration.
+    """
+    return ScenarioConfig(**{**_DEFAULT_SCENARIO_CONFIG, **_SCENARIO_OVERRIDES[key]})
+
 
 def create_example_scenario(scenario_name: Union[str, ScenarioType] = "default") -> ScenarioConfig:
     """
     Create example scenarios for testing withdrawal strategies
-    
+
     This function provides pre-configured retirement scenarios with different
     portfolio sizes, expense levels, and assumptions. Each scenario can be
     used to test withdrawal strategies under various conditions.
-    
+
     Args:
         scenario_name: Scenario identifier. Accepts a :class:`ScenarioType` enum
             member or its string value (e.g. ``"default"``, ``"early_retire"``,
             ``"high_income"``). Unknown strings fall back to
             ``ScenarioType.DEFAULT`` with a warning.
-    
+
     Returns:
         ScenarioConfig: Fully populated scenario configuration.
         See ``ScenarioConfig`` for field descriptions.
-    
+
     Example:
         >>> scenario = create_example_scenario("default")
         >>> scenario = create_example_scenario(ScenarioType.EARLY_RETIRE)
         >>> config_dict = scenario.to_dict()  # Convert to dict if needed
     """
-    # Resolve scenario_name to a ScenarioType member using the enum's O(1)
-    # value map rather than a linear generator scan.
-    if not isinstance(scenario_name, ScenarioType):
-        try:
-            scenario_key = ScenarioType(scenario_name)
-        except ValueError:
-            logger.warning(f"Unknown scenario '{scenario_name}', using default")
-            scenario_key = ScenarioType.DEFAULT
-    else:
-        scenario_key = scenario_name
-
-    # Guard against a newly added ScenarioType member with no corresponding
-    # entry in _SCENARIO_OVERRIDES, converting a silent KeyError into a
-    # graceful fallback consistent with the unknown-name path above.
-    if scenario_key not in _SCENARIO_OVERRIDES:
-        logger.warning(
-            f"No overrides defined for scenario '{scenario_key.value}', using default"
-        )
-        scenario_key = ScenarioType.DEFAULT
-
-    # Merge base config with scenario-specific overrides
-    merged_config = {**_DEFAULT_SCENARIO_CONFIG, **_SCENARIO_OVERRIDES[scenario_key]}
-
-    # Return as ScenarioConfig dataclass for type safety
-    return ScenarioConfig(**merged_config)
+    return _build_scenario_config(_resolve_scenario_key(scenario_name))
 
 
 def generate_strategy_summary(strategy_df: pd.DataFrame) -> Dict:
