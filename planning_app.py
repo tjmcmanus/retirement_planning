@@ -23,6 +23,12 @@ from tax_harvesting import (
     get_ltcg_zero_threshold,
     get_ltcg_rate_for_income,
 )
+from portfolio_rebalancing import (
+    compute_rebalance_plan,
+    build_rebalance_display_df,
+    build_actions_display_df,
+    build_holdings_by_class_df,
+)
 from income_expense import build_income_expenses_display,calculate_taxes
 from components.sidebar import sidebar
 st.set_page_config(page_title="Financial Planner", page_icon="😊", layout="wide")
@@ -1015,7 +1021,9 @@ with tab3:
     styled_portdf = portdf.style.set_table_styles(styles).map(color_negative_positive)
     styled_portdf_no_total = portdf_no_totals.style.set_table_styles(styles).map(color_negative_positive)
     
-    map_tab, details_tab, harvest_tab = st.tabs(["Map Of Portfolio", "Details", "🌾 Tax Harvesting"])
+    map_tab, details_tab, harvest_tab, rebalance_tab = st.tabs(
+        ["Map Of Portfolio", "Details", "🌾 Tax Harvesting", "⚖️ Rebalancing"]
+    )
     with map_tab:
         st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
 
@@ -1469,6 +1477,296 @@ with tab3:
             st.error(f"⚠️ Error running tax harvesting analysis: {_h_err}")
             st.info("Ensure current market prices are accessible and portfolio data is loaded correctly.")
 
+
+    # ======================================================================
+    # ⚖️ PORTFOLIO REBALANCING TAB
+    # ======================================================================
+    with rebalance_tab:
+        st.markdown("## ⚖️ Portfolio Rebalancing")
+        st.caption(
+            "Calculates your current **Cash / Bonds / Stocks** allocation across all accounts "
+            "and flags when any asset class drifts more than the threshold from its target. "
+            "Rebalancing suggestions prioritise tax-advantaged accounts first (no tax event), "
+            "then use tax-loss harvesting in Brokerage, and finally redirect new contributions."
+        )
+
+        # ── Target allocation inputs ────────────────────────────────────────
+        st.markdown("#### 🎯 Target Allocation & Drift Threshold")
+        _rb_col1, _rb_col2, _rb_col3, _rb_col4 = st.columns(4)
+        with _rb_col1:
+            _rb_cash_tgt = st.number_input(
+                "Target Cash %",
+                min_value=0, max_value=100, value=10, step=1,
+                help="Target percentage of total portfolio held as cash / money-market.",
+                key="rb_cash_tgt",
+            )
+        with _rb_col2:
+            _rb_bonds_tgt = st.number_input(
+                "Target Bonds %",
+                min_value=0, max_value=100, value=10, step=1,
+                help="Target percentage of total portfolio held in bonds / fixed income.",
+                key="rb_bonds_tgt",
+            )
+        with _rb_col3:
+            _rb_stocks_tgt = st.number_input(
+                "Target Stocks %",
+                min_value=0, max_value=100, value=80, step=1,
+                help="Target percentage of total portfolio held in equities.",
+                key="rb_stocks_tgt",
+            )
+        with _rb_col4:
+            _rb_drift = st.number_input(
+                "Drift Threshold %",
+                min_value=1, max_value=20, value=5, step=1,
+                help="Trigger rebalancing when any asset class drifts this many percentage points from its target.",
+                key="rb_drift",
+            )
+
+        # Validate weights sum to 100
+        _rb_total = _rb_cash_tgt + _rb_bonds_tgt + _rb_stocks_tgt
+        if _rb_total != 100:
+            st.error(
+                f"⚠️ Target weights must sum to 100% — currently {_rb_total}%. "
+                "Adjust Cash, Bonds, or Stocks targets."
+            )
+        else:
+            st.markdown("---")
+
+            try:
+                with st.spinner("Fetching current prices and computing rebalancing plan…"):
+                    _rb_report = compute_rebalance_plan(
+                        month=curr_month,
+                        year=curr_year,
+                        target_cash_pct=float(_rb_cash_tgt),
+                        target_bonds_pct=float(_rb_bonds_tgt),
+                        target_stocks_pct=float(_rb_stocks_tgt),
+                        drift_threshold_pct=float(_rb_drift),
+                    )
+
+                # ── Top-level status banner ─────────────────────────────────
+                if _rb_report.drift_triggered:
+                    st.warning(
+                        f"🔴 **Rebalancing Required** — one or more asset classes have drifted "
+                        f"more than {_rb_report.drift_threshold_pct:.0f}% from their targets."
+                    )
+                else:
+                    st.success(
+                        f"✅ **Portfolio is balanced** — all asset classes are within "
+                        f"{_rb_report.drift_threshold_pct:.0f}% of their targets."
+                    )
+
+                # ── Asset-class summary metrics ─────────────────────────────
+                st.markdown(f"#### 📊 Asset Class Allocation  (Total Portfolio: ${_rb_report.total_portfolio_value:,.0f})")
+                _rb_sum_df = build_rebalance_display_df(_rb_report)
+
+                _rb_mc1, _rb_mc2, _rb_mc3 = st.columns(3)
+                for _rb_col_idx, (_rb_mc, _rb_ac) in enumerate(
+                    zip([_rb_mc1, _rb_mc2, _rb_mc3], ["Cash", "Bonds", "Stocks"])
+                ):
+                    _rb_row = _rb_sum_df[_rb_sum_df["Asset Class"] == _rb_ac]
+                    if not _rb_row.empty:
+                        _rb_r = _rb_row.iloc[0]
+                        with _rb_mc:
+                            _rb_drift_val = float(_rb_r["Drift %"])
+                            _rb_delta_str = f"{_rb_drift_val:+.1f}% vs {_rb_r['Target %']:.0f}% target"
+                            _rb_delta_clr = "normal" if abs(_rb_drift_val) < float(_rb_drift) else "inverse"
+                            st.metric(
+                                label=f"{_rb_ac}",
+                                value=f"{_rb_r['Current %']:.1f}%  (${_rb_r['Current Value']:,.0f})",
+                                delta=_rb_delta_str,
+                                delta_color=_rb_delta_clr,
+                                help=f"Target: {_rb_r['Target %']:.0f}%  |  Delta: ${_rb_r['Delta $']:,.0f}",
+                            )
+
+                # ── Allocation bar chart ────────────────────────────────────
+                _rb_fig_cols = st.columns([2, 1])
+                with _rb_fig_cols[0]:
+                    import plotly.graph_objects as _go_rb
+                    _rb_bar = _go_rb.Figure()
+                    _rb_colors = {"Cash": "#f6cf71", "Bonds": "#8be0a4", "Stocks": "#b497e7"}
+                    for _rb_ac in ["Cash", "Bonds", "Stocks"]:
+                        _rb_row = _rb_sum_df[_rb_sum_df["Asset Class"] == _rb_ac]
+                        if not _rb_row.empty:
+                            _rb_r = _rb_row.iloc[0]
+                            _rb_bar.add_trace(_go_rb.Bar(
+                                name=_rb_ac,
+                                x=["Current", "Target"],
+                                y=[float(_rb_r["Current %"]), float(_rb_r["Target %"])],
+                                marker_color=_rb_colors.get(_rb_ac, "#aaa"),
+                                text=[f"{float(_rb_r['Current %']):.1f}%", f"{float(_rb_r['Target %']):.1f}%"],
+                                textposition="auto",
+                            ))
+                    _rb_bar.update_layout(
+                        barmode="stack",
+                        title="Current vs Target Allocation",
+                        yaxis_title="Allocation %",
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                        margin=dict(t=50, l=10, r=10, b=10),
+                        yaxis=dict(range=[0, 105]),
+                    )
+                    st.plotly_chart(_rb_bar, width="stretch")
+
+                with _rb_fig_cols[1]:
+                    # Pie chart of current allocation
+                    _rb_pie = _go_rb.Figure(_go_rb.Pie(
+                        labels=_rb_sum_df["Asset Class"].tolist(),
+                        values=_rb_sum_df["Current Value"].tolist(),
+                        marker_colors=[_rb_colors.get(ac, "#aaa") for ac in _rb_sum_df["Asset Class"].tolist()],
+                        textinfo="label+percent",
+                        hole=0.35,
+                    ))
+                    _rb_pie.update_layout(
+                        title="Current Mix",
+                        plot_bgcolor="white", paper_bgcolor="white",
+                        margin=dict(t=50, l=10, r=10, b=10),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_rb_pie, width="stretch")
+
+                st.markdown("---")
+
+                # ── Brokerage cash cushion ──────────────────────────────────
+                st.markdown("#### 💵 Brokerage Cash Cushion")
+                _rb_brok_pct = _rb_report.brokerage_cash_pct * 100
+                if _rb_report.brokerage_cash_ok:
+                    st.success(
+                        f"✅ Brokerage cash cushion: **{_rb_brok_pct:.1f}%** "
+                        f"(target ≥ 10%) — adequate liquidity maintained."
+                    )
+                else:
+                    st.warning(
+                        f"⚠️ Brokerage cash cushion: **{_rb_brok_pct:.1f}%** "
+                        f"(target ≥ 10%) — consider adding MF:CASH to the Brokerage account."
+                    )
+
+                st.markdown("---")
+
+                # ── Account-location issues ─────────────────────────────────
+                if _rb_report.location_issues:
+                    st.markdown("#### 🏦 Account Location Recommendations")
+                    st.caption(
+                        "Optimal asset location reduces taxes over time. "
+                        "Bonds → Traditional IRA (ordinary income anyway). "
+                        "Stocks → Roth (tax-free growth) or Brokerage (LTCG rates). "
+                        "Municipal bonds & Treasuries may stay in Brokerage."
+                    )
+                    for _rb_issue in _rb_report.location_issues:
+                        if _rb_issue.startswith("⚠️"):
+                            st.warning(_rb_issue)
+                        elif _rb_issue.startswith("💡"):
+                            st.info(_rb_issue)
+                        else:
+                            st.write(_rb_issue)
+                    st.markdown("---")
+
+                # ── Holdings by asset class ─────────────────────────────────
+                with st.expander("📋 Holdings Classified by Asset Class", expanded=False):
+                    _rb_hold_df = build_holdings_by_class_df(_rb_report)
+                    if not _rb_hold_df.empty:
+                        _rb_hold_df["Current Value"] = _rb_hold_df["Current Value"].map(lambda x: f"${x:,.0f}")
+                        _rb_hold_df["Cost Basis"]    = _rb_hold_df["Cost Basis"].map(lambda x: f"${x:,.0f}")
+                        _rb_hold_df["Unrealized G/L"]= _rb_hold_df["Unrealized G/L"].map(lambda x: f"${x:,.0f}")
+                        _rb_hold_df["Current Price"] = _rb_hold_df["Current Price"].map(lambda x: f"${x:,.2f}")
+                        st.dataframe(_rb_hold_df, hide_index=True, width="stretch")
+
+                # ── Rebalancing action plan ─────────────────────────────────
+                st.markdown("#### 🔄 Rebalancing Action Plan")
+                if not _rb_report.drift_triggered and _rb_report.brokerage_cash_ok and not _rb_report.location_issues:
+                    st.info("No rebalancing actions required at this time.")
+                else:
+                    _rb_act_df = build_actions_display_df(_rb_report)
+                    if _rb_act_df.empty:
+                        st.info("No specific actions generated.")
+                    else:
+                        st.caption(
+                            "Actions are ordered by priority. "
+                            "**Priority 1** = rebalance inside tax-advantaged accounts (no tax event). "
+                            "**Brokerage sells** may trigger a taxable event — check LTCG rate first. "
+                            "**Redirect Contributions** = direct new money / dividends to under-weight classes."
+                        )
+                        # Display each action as a styled card
+                        for _, _rb_act in _rb_act_df.iterrows():
+                            _rb_action_str = str(_rb_act["Action"])
+                            _rb_tax_str    = str(_rb_act["Tax Impact"])
+                            _rb_is_sell    = "Sell" in _rb_action_str
+                            _rb_is_buy     = "Buy" in _rb_action_str
+                            _rb_is_redir   = "Redirect" in _rb_action_str
+
+                            if _rb_is_sell and "Brokerage" in _rb_action_str:
+                                _rb_card_bg     = "#fff8f0"
+                                _rb_card_border = "#f58518"
+                            elif _rb_is_sell:
+                                _rb_card_bg     = "#f0f8ff"
+                                _rb_card_border = "#4c78a8"
+                            elif _rb_is_buy:
+                                _rb_card_bg     = "#f0fff4"
+                                _rb_card_border = "#21c354"
+                            else:
+                                _rb_card_bg     = "#f8f9fa"
+                                _rb_card_border = "#6c757d"
+
+                            st.markdown(
+                                f'<div style="border-left:4px solid {_rb_card_border};'
+                                f'background:{_rb_card_bg};padding:12px 16px;'
+                                f'border-radius:6px;margin-bottom:10px;">'
+                                f'<div style="font-size:14px;font-weight:700;">'
+                                f'#{int(_rb_act["Priority"])} — {_rb_action_str} '
+                                f'<span style="color:#555;font-weight:400;">'
+                                f'[{_rb_act["Asset Class"]}]</span> '
+                                f'<span style="font-size:13px;color:#1a73e8;">{_rb_act["Symbol"]}</span>'
+                                f'</div>'
+                                f'<div style="font-size:12px;margin-top:4px;">'
+                                f'Account: <b>{_rb_act["Account"]}</b> | '
+                                f'Amount: <b>${float(_rb_act["Amount"]):,.0f}</b> | '
+                                f'Tax Impact: <b>{_rb_tax_str}</b>'
+                                f'</div>'
+                                f'<div style="font-size:12px;color:#444;margin-top:6px;">'
+                                f'{_rb_act["Rationale"]}</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                st.markdown("---")
+
+                # ── Educational expander ────────────────────────────────────
+                with st.expander("📚 Rebalancing Strategy Guide", expanded=False):
+                    st.markdown("""
+**Why Rebalance?**
+Over time, asset classes grow at different rates, causing your portfolio to drift from its target allocation.
+A portfolio that started at 10% Cash / 10% Bonds / 80% Stocks might drift to 5% / 12% / 83% after a strong
+equity run — increasing risk beyond your intended level.
+
+**The 5% Drift Rule**
+Rebalance when any asset class deviates more than **5 percentage points** from its target.
+This balances transaction costs against the risk of staying too far off-target.
+
+**Rebalancing Priority (Tax-Efficient Order)**
+1. **Inside Traditional or Roth accounts first** — no tax event. Sell over-weight assets and buy under-weight ones within the same account.
+2. **Tax-Loss Harvesting in Brokerage** — if you must sell in a taxable account, prioritise positions with unrealized losses. Book the loss, buy a wash-sale-safe replacement in the target asset class.
+3. **Redirect new contributions & dividends** — direct new money to under-weight asset classes to restore balance without selling anything.
+4. **Sell appreciated Brokerage positions last** — only if necessary, and check your LTCG rate first (0% if income is low enough).
+
+**Optimal Asset Location**
+| Asset Class | Best Account | Why |
+|---|---|---|
+| Bonds (general) | Traditional IRA | Interest is ordinary income — deferred until withdrawal |
+| Municipal Bonds | Brokerage | Interest is federally tax-exempt |
+| Treasuries | Brokerage | State-tax-exempt; acceptable in taxable accounts |
+| Stocks (growth) | Roth IRA | Tax-free growth on highest-return assets |
+| Stocks (dividend) | Brokerage | Qualified dividends taxed at LTCG rates |
+| Cash / Money Market | Brokerage (≥ 10%) | Liquidity cushion for rebalancing trades |
+
+**Brokerage Cash Cushion**
+Keep at least **10% of your Brokerage account** in MF:CASH (money market).
+This provides liquidity for rebalancing trades, tax payments, and opportunistic purchases without forcing a sale.
+                    """)
+
+            except ValueError as _rb_ve:
+                st.error(f"⚠️ Configuration error: {_rb_ve}")
+            except Exception as _rb_err:
+                st.error(f"⚠️ Error computing rebalancing plan: {_rb_err}")
+                st.info("Ensure current market prices are accessible and portfolio data is loaded correctly.")
 
 
 with tab_accum:
