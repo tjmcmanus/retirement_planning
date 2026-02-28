@@ -13,6 +13,16 @@ from load_data import get_month_account_values,get_cap_gains_brackets, get_incom
 from strategy import build_withdrawal_strategy_display, build_accumulation_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
+from tax_harvesting import (
+    build_harvesting_analysis,
+    classify_harvest_opportunities,
+    compute_harvest_summary,
+    check_market_drop_trigger,
+    get_replacement_detail,
+    compute_net_tax_impact,
+    get_ltcg_zero_threshold,
+    get_ltcg_rate_for_income,
+)
 from income_expense import build_income_expenses_display,calculate_taxes
 from components.sidebar import sidebar
 st.set_page_config(page_title="Financial Planner", page_icon="😊", layout="wide")
@@ -1005,7 +1015,7 @@ with tab3:
     styled_portdf = portdf.style.set_table_styles(styles).map(color_negative_positive)
     styled_portdf_no_total = portdf_no_totals.style.set_table_styles(styles).map(color_negative_positive)
     
-    map_tab, details_tab = st.tabs(["Map Of Portfolio", "Details"])
+    map_tab, details_tab, harvest_tab = st.tabs(["Map Of Portfolio", "Details", "🌾 Tax Harvesting"])
     with map_tab:
         st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
 
@@ -1114,6 +1124,341 @@ with tab3:
         column_order=None)
 
         
+    # ======================================================================
+    # 🌾 TAX HARVESTING / STOCK INDEXING TAB
+    # ======================================================================
+    with harvest_tab:
+        st.markdown("## 🌾 Tax Loss & Gain Harvesting (Stock Indexing)")
+        st.caption(
+            "Analyzes your **Brokerage (taxable) account** holdings to identify opportunities to "
+            "harvest losses (offset gains or up to $3,000 of ordinary income) and harvest gains "
+            "at the **0% LTCG rate**. Wash-sale-safe replacement securities are suggested for every "
+            "sell recommendation. Only taxable accounts are analyzed — Traditional and Roth accounts "
+            "have no current-year tax consequence from unrealized gains/losses."
+        )
+
+        # ── User inputs ────────────────────────────────────────────────────
+        st.markdown("#### ⚙️ Analysis Parameters")
+        _h_col1, _h_col2, _h_col3, _h_col4 = st.columns(4)
+        with _h_col1:
+            _h_agi = st.number_input(
+                "Estimated AGI (current year, $)",
+                min_value=0,
+                max_value=2_000_000,
+                value=80_000,
+                step=1_000,
+                help="Your estimated Adjusted Gross Income for the current tax year, BEFORE any harvesting. "
+                     "Used to determine your LTCG bracket (0%, 15%, or 20%).",
+                key="harvest_agi",
+            )
+        with _h_col2:
+            _h_marginal = st.number_input(
+                "Marginal Ordinary Tax Rate (%)",
+                min_value=0,
+                max_value=50,
+                value=22,
+                step=1,
+                help="Your federal marginal income tax rate. Used to estimate savings from loss harvesting "
+                     "against ordinary income (up to $3,000/year).",
+                key="harvest_marginal",
+            )
+        with _h_col3:
+            _h_loss_thresh = st.number_input(
+                "Loss Harvest Threshold ($)",
+                min_value=0,
+                max_value=100_000,
+                value=500,
+                step=100,
+                help="Minimum unrealized loss (absolute value) to flag a position for loss harvesting.",
+                key="harvest_loss_thresh",
+            )
+        with _h_col4:
+            _h_drop_pct = st.number_input(
+                "Market Drop Trigger (%)",
+                min_value=1,
+                max_value=50,
+                value=10,
+                step=1,
+                help="Flag positions that have declined this % or more from cost basis "
+                     "(simulates the 'S&P 500 drops 10%' trigger).",
+                key="harvest_drop_pct",
+            )
+
+        st.markdown("---")
+
+        # ── LTCG bracket context ───────────────────────────────────────────
+        _h_year = curr_year
+        _h_zero_thresh = get_ltcg_zero_threshold(_h_year)
+        _h_ltcg_rate   = get_ltcg_rate_for_income(float(_h_agi), _h_year)
+        _h_headroom    = max(0.0, _h_zero_thresh - float(_h_agi))
+
+        _bracket_col1, _bracket_col2, _bracket_col3, _bracket_col4 = st.columns(4)
+        with _bracket_col1:
+            _rate_color = "🟢" if _h_ltcg_rate == 0.0 else ("🟡" if _h_ltcg_rate == 0.15 else "🔴")
+            st.metric(
+                "Your LTCG Rate",
+                f"{_rate_color} {_h_ltcg_rate:.0%}",
+                help=f"Based on estimated AGI of ${_h_agi:,} for {_h_year}.",
+            )
+        with _bracket_col2:
+            st.metric(
+                "0% LTCG Threshold",
+                f"${_h_zero_thresh:,.0f}",
+                help=f"MFJ income limit for 0% long-term capital gains rate in {_h_year}.",
+            )
+        with _bracket_col3:
+            st.metric(
+                "Headroom to 0% Rate",
+                f"${_h_headroom:,.0f}",
+                help="How much more income you can realize before crossing into the 15% LTCG bracket. "
+                     "This is the maximum gain you can harvest tax-free this year.",
+            )
+        with _bracket_col4:
+            _h_strategy_label = (
+                "🟢 Harvest Gains (0% rate!)" if _h_ltcg_rate == 0.0
+                else ("🟡 Harvest Losses" if _h_ltcg_rate == 0.15
+                      else "🔴 Harvest Losses (High Rate)")
+            )
+            st.metric("Recommended Strategy", _h_strategy_label)
+
+        st.markdown("---")
+
+        # ── Run analysis ───────────────────────────────────────────────────
+        try:
+            with st.spinner("Fetching current prices and analyzing brokerage holdings..."):
+                _h_analysis = build_harvesting_analysis(curr_month, curr_year)
+
+            if _h_analysis.empty:
+                st.info(
+                    "ℹ️ No taxable (Brokerage) holdings found for the current period. "
+                    "Tax harvesting applies only to Brokerage accounts."
+                )
+            else:
+                # Classify opportunities
+                _h_classified = classify_harvest_opportunities(
+                    _h_analysis,
+                    estimated_agi=float(_h_agi),
+                    year=_h_year,
+                    loss_threshold=-float(_h_loss_thresh),
+                    gain_threshold=float(_h_loss_thresh),
+                )
+
+                # Summary metrics
+                _h_summary = compute_harvest_summary(_h_classified)
+                _h_tax_impact = compute_net_tax_impact(
+                    _h_classified,
+                    estimated_agi=float(_h_agi),
+                    year=_h_year,
+                    marginal_ordinary_rate=float(_h_marginal) / 100.0,
+                )
+
+                # ── Summary cards ──────────────────────────────────────────
+                st.markdown("#### 📊 Portfolio Gain/Loss Summary (Brokerage Only)")
+                _sm_c1, _sm_c2, _sm_c3, _sm_c4, _sm_c5 = st.columns(5)
+                with _sm_c1:
+                    st.metric(
+                        "Total Unrealized Gains",
+                        f"${_h_summary['total_unrealized_gain']:,.0f}",
+                        help="Sum of all unrealized gains in brokerage positions.",
+                    )
+                with _sm_c2:
+                    _loss_val = _h_summary['total_unrealized_loss']
+                    st.metric(
+                        "Total Unrealized Losses",
+                        f"${abs(_loss_val):,.0f}",
+                        delta=f"-${abs(_loss_val):,.0f}" if _loss_val < 0 else None,
+                        delta_color="inverse",
+                        help="Sum of all unrealized losses in brokerage positions.",
+                    )
+                with _sm_c3:
+                    _net = _h_summary['net_unrealized']
+                    st.metric(
+                        "Net Unrealized",
+                        f"${_net:,.0f}",
+                        delta=f"{'▲' if _net >= 0 else '▼'} ${abs(_net):,.0f}",
+                        delta_color="normal" if _net >= 0 else "inverse",
+                    )
+                with _sm_c4:
+                    st.metric(
+                        "Harvestable Losses",
+                        f"${abs(_h_summary['harvestable_losses']):,.0f}",
+                        help=f"{_h_summary['num_loss_candidates']} position(s) flagged for loss harvesting.",
+                    )
+                with _sm_c5:
+                    st.metric(
+                        "Harvestable Gains @ 0%",
+                        f"${_h_summary['harvestable_gains_at_zero']:,.0f}",
+                        help=f"{_h_summary['num_gain_candidates']} position(s) eligible for 0% gain harvesting.",
+                    )
+
+                # ── Tax impact estimate ────────────────────────────────────
+                if _h_tax_impact:
+                    st.markdown("#### 💰 Estimated Tax Impact of Recommended Actions")
+                    _ti_c1, _ti_c2, _ti_c3, _ti_c4 = st.columns(4)
+                    with _ti_c1:
+                        st.metric("Net Position (Gains − Losses)", f"${_h_tax_impact['net_position']:,.0f}")
+                    with _ti_c2:
+                        st.metric("Tax on Net Gains", f"${_h_tax_impact['tax_on_net_gains']:,.0f}")
+                    with _ti_c3:
+                        st.metric("Ordinary Income Offset", f"${_h_tax_impact['ordinary_income_offset']:,.0f}",
+                                  help="Up to $3,000 of net losses can offset ordinary income.")
+                    with _ti_c4:
+                        _net_impact = _h_tax_impact['net_tax_impact']
+                        _impact_label = f"${abs(_net_impact):,.0f} {'Savings' if _net_impact >= 0 else 'Owed'}"
+                        st.metric(
+                            "Net Tax Impact",
+                            _impact_label,
+                            delta=f"{'Save' if _net_impact >= 0 else 'Owe'} ${abs(_net_impact):,.0f}",
+                            delta_color="normal" if _net_impact >= 0 else "inverse",
+                        )
+
+                st.markdown("---")
+
+                # ── Market drop trigger check ──────────────────────────────
+                _h_drop_result = check_market_drop_trigger(_h_analysis, drop_threshold_pct=float(_h_drop_pct))
+                if _h_drop_result["triggered"]:
+                    st.warning(_h_drop_result["message"])
+                    with st.expander(
+                        f"📉 {len(_h_drop_result['candidates'])} Position(s) Down ≥ {_h_drop_pct}% — Loss Harvest Candidates",
+                        expanded=True,
+                    ):
+                        _drop_df = _h_drop_result["candidates"][
+                            ["Account","Symbol","Name","Sector","Qty","Purchase Price",
+                             "Current Price","Unrealized G/L","Return %","Gain Type"]
+                        ].copy()
+                        _drop_df["Return %"]       = _drop_df["Return %"].map(lambda x: f"{x:.1f}%")
+                        _drop_df["Unrealized G/L"] = _drop_df["Unrealized G/L"].map(lambda x: f"${x:,.0f}")
+                        _drop_df["Purchase Price"] = _drop_df["Purchase Price"].map(lambda x: f"${x:,.2f}")
+                        _drop_df["Current Price"]  = _drop_df["Current Price"].map(lambda x: f"${x:,.2f}")
+                        st.dataframe(_drop_df, hide_index=True, width='stretch')
+                else:
+                    st.success(f"✅ {_h_drop_result['message']}")
+
+                st.markdown("---")
+
+                # ── Main recommendations table ─────────────────────────────
+                st.markdown("#### 🎯 Harvesting Recommendations — All Brokerage Positions")
+                st.caption(
+                    "Positions sorted by unrealized gain/loss. "
+                    "🔴 = Harvest Loss  |  🟢 = Harvest Gain (0% rate)  |  🟡 = Monitor  |  ⚪ = Hold"
+                )
+
+                _display_cols = [
+                    "Account", "Symbol", "Name", "Sector",
+                    "Qty", "Purchase Price", "Current Price",
+                    "Current Value", "Cost Basis", "Unrealized G/L",
+                    "Return %", "Days Held", "Gain Type",
+                    "Recommendation",
+                ]
+                _h_display = cast(pd.DataFrame, _h_classified[_display_cols].copy())
+                _h_display["Purchase Price"] = cast(pd.Series, _h_display["Purchase Price"]).map(lambda x: f"${x:,.2f}")
+                _h_display["Current Price"]  = cast(pd.Series, _h_display["Current Price"]).map(lambda x: f"${x:,.2f}")
+                _h_display["Current Value"]  = cast(pd.Series, _h_display["Current Value"]).map(lambda x: f"${x:,.0f}")
+                _h_display["Cost Basis"]     = cast(pd.Series, _h_display["Cost Basis"]).map(lambda x: f"${x:,.0f}")
+                _h_display["Unrealized G/L"] = cast(pd.Series, _h_display["Unrealized G/L"]).map(lambda x: f"${x:,.0f}")
+                _h_display["Return %"]       = cast(pd.Series, _h_display["Return %"]).map(lambda x: f"{x:.1f}%")
+                _h_display["Qty"]            = cast(pd.Series, _h_display["Qty"]).map(lambda x: f"{x:,.0f}")
+
+                _h_row_height = (len(_h_display) + 1) * 38 + 3
+                st.dataframe(_h_display, hide_index=True, height=_h_row_height, width='stretch')
+
+                st.markdown("---")
+
+                # ── Detailed action cards with replacement suggestions ──────
+                st.markdown("#### 🔄 Action Details & Wash-Sale Replacement Suggestions")
+                st.caption(
+                    "For each flagged position, a wash-sale-safe replacement is suggested. "
+                    "**Wash Sale Rule:** Do not repurchase the same (or substantially identical) "
+                    "security within 30 days before or after the sale."
+                )
+
+                _actionable = _h_classified[
+                    _h_classified["Recommendation"].str.startswith("🔴") |
+                    _h_classified["Recommendation"].str.startswith("🟢")
+                ].copy()
+
+                if _actionable.empty:
+                    st.info("No immediate harvesting actions recommended at current thresholds and AGI.")
+                else:
+                    for _, _action_row in _actionable.iterrows():
+                        _sym    = str(_action_row["Symbol"])
+                        _rec    = str(_action_row["Recommendation"])
+                        _gl     = float(_action_row["Unrealized G/L"])
+                        _pct    = float(_action_row["Return %"])
+                        _gtype  = str(_action_row["Gain Type"])
+                        _detail = str(_action_row["Action Detail"])
+                        _replacements = get_replacement_detail(_sym)
+
+                        _card_color   = "#fff3f3" if _rec.startswith("🔴") else "#f0fff4"
+                        _border_color = "#ff4b4b" if _rec.startswith("🔴") else "#21c354"
+
+                        st.markdown(
+                            f'<div style="border-left: 4px solid {_border_color}; '
+                            f'background: {_card_color}; padding: 12px 16px; '
+                            f'border-radius: 6px; margin-bottom: 12px;">'
+                            f'<div style="font-size:15px;font-weight:700;">{_rec} — {_sym} '
+                            f'<span style="font-weight:400;font-size:13px;color:#555;">'
+                            f'({_action_row["Name"]})</span></div>'
+                            f'<div style="font-size:13px;margin-top:4px;">'
+                            f'Unrealized G/L: <b>${_gl:,.0f}</b> ({_pct:.1f}%) | '
+                            f'Gain Type: <b>{_gtype}</b> | '
+                            f'Account: <b>{_action_row["Account"]}</b></div>'
+                            f'<div style="font-size:12px;color:#444;margin-top:6px;">{_detail}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        if _replacements:
+                            _rep_cols = st.columns(min(len(_replacements), 3))
+                            for _ri, _rep in enumerate(_replacements[:3]):
+                                with _rep_cols[_ri]:
+                                    st.markdown(
+                                        f'<div style="background:#f8f9fa;border:1px solid #dee2e6;'
+                                        f'border-radius:6px;padding:10px;text-align:center;">'
+                                        f'<div style="font-size:16px;font-weight:700;color:#1a73e8;">'
+                                        f'{_rep["symbol"]}</div>'
+                                        f'<div style="font-size:12px;color:#333;">{_rep["name"]}</div>'
+                                        f'<div style="font-size:11px;color:#666;margin-top:4px;">'
+                                        f'💡 {_rep["reason"]}</div>'
+                                        f'</div>',
+                                        unsafe_allow_html=True,
+                                    )
+                            st.markdown("")
+
+                st.markdown("---")
+
+                # ── Educational expander ───────────────────────────────────
+                with st.expander("📚 How Tax Harvesting Works — Strategy Guide", expanded=False):
+                    st.markdown("""
+**Tax Loss Harvesting**
+- Sell a position with an unrealized loss to "realize" the loss for tax purposes.
+- Immediately buy a *similar but not identical* security to maintain your market exposure.
+- The realized loss offsets capital gains dollar-for-dollar. If losses exceed gains, up to **$3,000/year** can offset ordinary income. Excess losses carry forward indefinitely.
+- **Wash Sale Rule:** You cannot buy the same (or substantially identical) security within **30 days before or after** the sale. Violating this rule disallows the loss.
+
+**Tax Gain Harvesting (at 0% LTCG Rate)**
+- When your income falls in the **0% long-term capital gains bracket**, you can sell appreciated positions and pay *zero federal tax* on the gain.
+- Immediately repurchase the same security to reset your cost basis higher — reducing future taxable gains.
+- This is most powerful during low-income years: early retirement, sabbaticals, or years with large deductions.
+
+**Stock Indexing Strategy**
+- Periodically review your brokerage account for positions that have declined ≥ 10% from cost basis (or from a recent market high).
+- Replace losers with similar ETFs or stocks in the same sector to maintain your target allocation.
+- Example: S&P 500 drops 10% → sell NVDA (down 15%) → buy AMD or SOXX → book the loss, stay invested in semiconductors.
+
+**Long-Term vs Short-Term**
+- **Long-Term (LT):** Held > 1 year. Taxed at 0%, 15%, or 20% depending on income.
+- **Short-Term (ST):** Held ≤ 1 year. Taxed as ordinary income (10%–37%).
+- Prefer to harvest LT gains at 0% and LT losses (same rate benefit as ST losses but with better holding-period optics).
+
+**Account Location**
+- Only **Brokerage (taxable)** accounts are relevant. Gains/losses in Traditional IRA, Roth IRA, or 401(k) accounts are not taxable events.
+                    """)
+
+        except Exception as _h_err:
+            st.error(f"⚠️ Error running tax harvesting analysis: {_h_err}")
+            st.info("Ensure current market prices are accessible and portfolio data is loaded correctly.")
+
 
 
 with tab_accum:
