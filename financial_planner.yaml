@@ -1,0 +1,777 @@
+
+# ==============================================================================
+# Financial Planner — Declarative Application Plan
+# ==============================================================================
+# Reverse-engineered specification of the retirement planning application.
+# Mirrors the style of strategy_plan.yaml.
+# ==============================================================================
+
+- metadata:
+    module_name: financial_planner
+    version: "2.0"
+    created: "2026-02-28"
+    last_reviewed: "2026-02-28"
+    purpose: >
+      Comprehensive retirement planning web application built with Streamlit.
+      Provides portfolio tracking, tax planning, withdrawal strategy, Social
+      Security optimisation, estate planning, and portfolio rebalancing across
+      the full financial life-cycle from accumulation through RMD distribution.
+    integration:
+      framework: Streamlit (multi-page app)
+      entry_point: planning_app.py
+      pages_directory: pages/
+      components_directory: components/
+      config_file: retirement_config.json
+      data_directory: "."
+
+  overview:
+    description: >
+      A single-user, locally-hosted Streamlit application that models a
+      two-person household's finances from working years through retirement.
+      Combines real-time portfolio data (yfinance), tax-bracket CSV reference
+      tables, and a 6-stage life-cycle strategy engine to produce year-by-year
+      projections, tax optimisation recommendations, and actionable dashboards.
+    key_features:
+      - Real-time portfolio valuation via yfinance API (5-minute cache)
+      - 6-stage life-cycle withdrawal strategy (Accumulation through RMD)
+      - BETR (Break-Even Tax Rate) Roth conversion algorithm (Vanguard 2025)
+      - Tax-loss and tax-gain harvesting analysis for brokerage accounts
+      - Portfolio rebalancing with Cash/Bonds/Stocks drift detection
+      - Social Security benefit calculator with COLA and claiming-age optimisation
+      - IRMAA Medicare surcharge modelling with 2-year lookback
+      - Alternative Minimum Tax (AMT) calculation
+      - Net Investment Income Tax (NIIT) at 3.8%
+      - State income tax with retirement-income exemptions (50 states + DC)
+      - Donor Advised Fund (DAF) contribution optimisation (30% AGI limit)
+      - Estate planning checklist and document tracker
+      - Retirement Readiness Indicator (RRI) composite score (0-100%)
+      - Flow-of-funds Graphviz diagram
+      - Historical net worth trend (12-month rolling)
+      - Configuration page with persistent JSON storage
+    life_stages:
+      stage_1: "Accumulation — employed, building wealth"
+      stage_2: "Prep for Retirement — within 10 years of retirement"
+      stage_3: "Early Retirement — pre-Medicare, pre-SS, pre-RMD"
+      stage_4: "Medicare — IRMAA optimisation, continued Roth conversions"
+      stage_5: "Social Security — SS + Medicare, pre-RMD optimisation"
+      stage_6: "RMD — Required Minimum Distributions, full retirement income"
+
+  architecture:
+    design_pattern: Multi-page Streamlit application with modular Python back-end
+    description: >
+      The application separates concerns into distinct layers:
+      (1) UI layer — planning_app.py (main tabs) + pages/ (sub-pages)
+      (2) Strategy layer — strategy.py (6-stage engine) + betr_roth_conversion.py
+      (3) Calculation layer — calculations.py (tax math)
+      (4) Data layer — load_data.py (CSV + yfinance) + portfolio_data_truth.csv
+      (5) Configuration layer — config.py + retirement_config.json
+      (6) Domain modules — portfolio.py, tax_harvesting.py,
+          portfolio_rebalancing.py, income_expense.py, ssi_calculator.py,
+          ssibenefits.py
+    core_components:
+      planning_app.py:
+        role: Main Streamlit entry point; renders all primary tabs
+        tabs:
+          - "tab1: Dashboard"
+          - "tab3: Portfolio"
+          - "tab_accum: Strategy"
+          - "tab_tax: Tax Planner"
+          - "tab_flow: Flow of Funds"
+          - "tab5: Settings"
+        shared_state:
+          networth: build_historical_networth(num_months=12)
+          curr_year_month: datetime.date.today()
+          COLOR_PALETTE: px.colors.qualitative.Pastel
+          ACCOUNT_TYPE_MAP:
+            Cash: cash
+            Brokerage: taxable
+            Traditional: tax_deferred
+            Roth: tax_free
+      strategy.py:
+        role: 6-stage life-cycle strategy engine; BETR integration; RMD lookback
+        public_api:
+          - build_withdrawal_strategy_display()
+          - build_accumulation_strategy_display()
+      calculations.py:
+        role: Core tax mathematics (AGI, brackets, AMT, IRMAA, cap gains, RMD)
+      betr_roth_conversion.py:
+        role: Vanguard BETR algorithm for Roth conversion optimisation
+      load_data.py:
+        role: CSV data loading (cached) + yfinance price fetching
+      config.py:
+        role: ConfigManager class; JSON persistence; DEFAULT_CONFIG schema
+      portfolio.py:
+        role: Portfolio data access; yfinance price/sector lookups; display builder
+      tax_harvesting.py:
+        role: Loss/gain harvesting analysis; wash-sale replacement suggestions
+      portfolio_rebalancing.py:
+        role: Cash/Bonds/Stocks drift detection; rebalancing action plan
+      income_expense.py:
+        role: Income/expense projection; tax calculation wrapper; RMD integration
+      ssi_calculator.py:
+        role: Dynamic SSI benefit calculation; COLA; claiming-age adjustments
+      ssibenefits.py:
+        role: Legacy SSI data lookup from ssincome.csv schedule
+      components/sidebar.py:
+        role: Sidebar widget definitions; config-to-session-state sync
+      pages/configuration.py:
+        role: Full configuration UI (8 tabs); portfolio data entry; SSI schedule
+      pages/estate_planning.py:
+        role: Estate planning checklist; document tracker; review schedule
+
+  tab_dashboard:
+    name: "Dashboard"
+    description: >
+      Primary overview tab showing net worth history, asset mix, tax efficiency
+      score, account breakdown treemaps, portfolio performance vs benchmark,
+      and the Retirement Readiness Indicator (RRI).
+    sections:
+      net_worth_charts:
+        histogram:
+          title: "Total Net Worth"
+          x: date index (12 months)
+          y: total net worth
+          color_scale: COLOR_PALETTE
+        stacked_bar:
+          title: "Net Worth by Account"
+          traces: [Traditional, Roth, Brokerage, Cash]
+          colors:
+            Cash: "rgb(246, 207, 113)"
+            Brokerage: "rgb(254, 136, 177)"
+            Traditional: "rgb(139, 224, 164)"
+            Roth: "rgb(180, 151, 231)"
+        pie_chart:
+          title: "Asset mix"
+          labels: [Cash, Broker, Traditional, Roth]
+          values: latest month row
+      net_worth_statement:
+        function: render_net_worth_statement()
+        data_source: get_networth_by_month(curr_month, curr_year)
+        displays:
+          - Account hierarchy (Cash / Brokerage / Traditional / Roth)
+          - Real estate properties from config (purchase price)
+          - Month-over-month / Year-to-date / Rolling 12-month gains
+        helpers:
+          - _build_net_worth_html()
+          - _compute_net_worth_summary()
+          - _nw_header_row()
+          - _nw_type_rows()
+          - _nw_total_row()
+          - _nw_summary_row()
+          - _get_real_estate_rows()
+      net_worth_trend:
+        title: "Net Worth Trend (12 months)"
+        chart_type: Line + markers with fill-to-zero
+        annotation: MoM delta ($ and %) on last data point
+        arrow_color: green if positive, red if negative
+      tax_efficiency_score:
+        formula: "(Roth + Taxable) / Total Portfolio x 100"
+        roth_ratio: "Roth / (Roth + Traditional) x 100"
+        thresholds:
+          excellent: ">= 60%"
+          good: "40-60%"
+          improve: "< 40%"
+        metrics_displayed: [Tax Efficiency Score, Roth Ratio, Tax-Deferred, Tax-Free]
+      account_mix_treemap:
+        path: [account_type, account_name]
+        values: market_value
+        source: get_month_account_values(curr_month, curr_year)
+      portfolio_mix_treemap:
+        path: [Tax Type, Sector]
+        values: Current value
+        source: build_portfolio_display()
+      portfolio_performance:
+        benchmark: "7% annual (compounded monthly from first data point)"
+        chart_type: Line chart with shaded gap between portfolio and benchmark
+        annotation: Portfolio vs benchmark delta ($ and %)
+
+  tab_portfolio:
+    name: "Portfolio"
+    description: >
+      Detailed portfolio holdings, tax harvesting analysis, and rebalancing
+      recommendations across four sub-tabs.
+    sub_tabs:
+      map_of_portfolio:
+        treemap:
+          path: [Tax Type, Sector, Ticker]
+          values: Current value
+          source: build_portfolio_display()
+        performance_chart:
+          type: Line chart (portfolio vs 7% benchmark)
+          period: 12 months rolling
+      details:
+        table: build_portfolio_display()
+        columns:
+          - Account
+          - Ticker
+          - Name
+          - Sector
+          - Qty
+          - Purchase Price
+          - Current Price
+          - Current value
+          - Cost Basis
+          - Unrealized G/L
+          - Return %
+          - Tax Type
+        styling: color_negative_positive() for G/L column
+        totals_row: Portfolio Totals row appended at bottom
+      tax_harvesting:
+        description: >
+          Identifies long-term and short-term capital gains/losses in Brokerage
+          accounts. Recommends loss harvesting (sell losers, buy similar) and
+          gain harvesting at 0% LTCG rate. Provides wash-sale-safe replacement
+          suggestions.
+        inputs:
+          agi: Number input (for LTCG bracket determination)
+          marginal_ordinary_rate: Number input
+          market_drop_threshold: Slider (default 10%)
+        analysis_function: build_harvesting_analysis()
+        summary_metrics:
+          - Total harvestable losses
+          - Total harvestable gains at 0%
+          - Net position (gains minus losses)
+          - Tax on net gains
+          - Ordinary income offset (up to $3,000 per IRC 1211b)
+          - Net tax impact (savings or owed)
+        recommendations:
+          loss_harvest: "Harvest Loss"
+          gain_harvest: "Harvest Gain (0% rate)"
+          monitor: "Monitor"
+          hold: "Hold"
+        replacement_suggestions:
+          function: get_replacement_detail(symbol)
+          display: Up to 3 replacement cards per flagged position
+        market_drop_trigger:
+          threshold: User-configurable (default 10%)
+          action: Flag positions down >= threshold for immediate review
+        educational_expander: "How Tax Harvesting Works - Strategy Guide"
+      rebalancing:
+        description: >
+          Calculates Cash/Bonds/Stocks allocation across all accounts. Flags
+          when any asset class drifts > threshold from target. Prioritises
+          tax-advantaged rebalancing (Traditional/Roth first), then tax-loss
+          harvesting in Brokerage, then new contributions.
+        inputs:
+          target_cash_pct: Number input (default 10%)
+          target_bonds_pct: Number input (default 10%)
+          target_stocks_pct: Number input (default 80%)
+          drift_threshold_pct: Number input (default 5%)
+        validation: Target weights must sum to 100%
+        report_function: compute_rebalance_plan()
+        displays:
+          - Status banner (balanced or rebalancing required)
+          - Asset class summary metrics (Current % / Target % / Drift %)
+          - Allocation bar chart (Current vs Target, stacked)
+          - Holdings by asset class (account-level detail)
+          - Rebalancing actions (sell/buy recommendations)
+        account_location_rules:
+          bonds: "Prefer Traditional IRA (ordinary income on withdrawal anyway)"
+          cash: ">= 10% of Brokerage in MF:CASH"
+          stocks: "Roth (tax-free growth) or Brokerage"
+
+  tab_strategy:
+    name: "Strategy"
+    description: >
+      Year-by-year projection of portfolio balances, withdrawals, Roth
+      conversions, taxes, and healthcare costs. Supports both Accumulation
+      (pre-retirement) and Withdrawal (distribution) phases.
+    retirement_readiness_indicator:
+      description: >
+        Composite score (0-100%) measuring readiness across 6 dimensions.
+        Displayed as a Plotly gauge chart with colour bands.
+      sub_scores:
+        portfolio_funding:
+          formula: "min(100, total_assets / (25 x annual_expenses) x 100)"
+          target: "25x annual expenses (Rule of 25)"
+        estate_planning:
+          formula: "checklist_items_done / total_items x 100"
+          source: estate_planning_data.json
+        tax_diversification:
+          formula: "100 if 30% <= roth_ratio <= 50% else penalty"
+          target_roth_ratio: "30-50%"
+        social_security:
+          formula: "100 if both configured, 50 if one, 0 if none"
+        healthcare_coverage:
+          formula: "100 if ACA enrolled and premiums set, 60 if premiums set, 0 otherwise"
+        cash_emergency_fund:
+          formula: "min(100, cash_balance / cash_target x 100)"
+      gauge_chart:
+        type: Plotly indicator
+        color_bands:
+          red: "0-50"
+          orange: "50-75"
+          green: "75-100"
+        threshold_line: 75
+      action_items: Generated when any sub-score below threshold
+    phase_toggle:
+      options:
+        - "Accumulation (Pre-Retirement)"
+        - "Withdrawal (Distribution)"
+      type: st.radio (horizontal)
+    sub_tabs:
+      annual_plan: "Annual Plan"
+      account_balances: "Account Balances"
+      visualisations: "Visualizations"
+    accumulation_phase:
+      description: >
+        Models working years with wages, payroll taxes, 401k/Roth contributions,
+        and cash buffer ramp-up. Includes Stage 1 (Accumulation) and Stage 2
+        (Prep for Retirement).
+      strategy_engine: build_accumulation_strategy_display()
+      parameters:
+        rate_of_return: from session state (RATE key)
+        expense_inflation_rate: from config financial_assumptions
+        annual_expenses: from config financial_assumptions
+        person1_name: from config personal_info
+        person2_name: from config personal_info
+      annual_plan_columns:
+        - Year
+        - Age
+        - Stage
+        - Wages
+        - Wages to Payroll (FICA, Medicare, FUTA, SUTA, state tax)
+        - Wages to Trad (401k contributions)
+        - Wages to Roth (Roth 401k/IRA contributions)
+        - Trad to Roth (Roth conversions)
+        - Cash to Roth (cash-funded conversions)
+        - Cash to Brok (brokerage buffer replenishment)
+        - Expenses
+        - Healthcare Cost
+        - AGI
+        - Federal Tax
+        - Cash Balance
+      account_balances_columns:
+        - Year
+        - Cash Balance
+        - Taxable Balance
+        - Traditional Balance
+        - Roth Balance
+      visualisations:
+        - Stacked area chart (account balances over time)
+        - Income sources chart (wages, contributions, conversions)
+    withdrawal_phase:
+      description: >
+        Models retirement years (Stages 3-6) with BETR-optimised Roth
+        conversions, RMD lookback optimisation, IRMAA management, and
+        tax-efficient withdrawal sequencing.
+      strategy_engine: build_withdrawal_strategy_display()
+      parameters:
+        max_roth_conversion_tax_rate: from session state (CONV_TAX_RATE)
+        expected_annual_expenses: from session state (EXPENSE)
+        expense_cash_multiplier: from session state (EXPENSE_MULTIPLIER)
+        expected_rate_of_return: from session state (RATE)
+        daf_disbursement_rate: from session state (DAF_RATE)
+        planned_distribution_2027: from session state (PLANNED_DIST_2027)
+      annual_plan_columns:
+        - Year
+        - Age
+        - Stage
+        - Roth Conversion
+        - Federal Tax
+        - IRMAA Penalty
+        - Total Portfolio
+        - Cash Balance
+        - Taxable Balance
+        - Traditional Balance
+        - Roth Balance
+      account_balances_columns:
+        - Year
+        - Cash Balance
+        - Taxable Balance
+        - Traditional Balance
+        - Roth Balance
+      visualisations:
+        - Stacked area chart (account balances over time)
+        - Income sources chart (SS, RMD, conversions, withdrawals)
+      life_stage_guide:
+        expander: "Life Stage Guide"
+        content: LIFE_STAGE_DESCRIPTIONS dict (plain-English per stage)
+
+  tab_tax_planner:
+    name: "Tax Planner"
+    description: >
+      Interactive single-year tax calculator. User inputs income sources,
+      deductions, and Roth conversion amounts; the tool calculates AGI,
+      taxable income, federal tax, state tax, capital gains tax, AMT, IRMAA,
+      and account balance updates.
+    inputs:
+      year: Selectbox (2024-2026)
+      wages: Number input
+      deferred_distribution: Traditional IRA/401k withdrawal
+      interest: Interest and dividend income
+      cg_income_st: Short-term capital gains
+      cg_income_lt: Long-term capital gains
+      daf: Donor Advised Fund contribution
+      roth_amount: Roth conversion amount (optional override)
+      people: Number of people on Medicare (for IRMAA)
+    calculations:
+      agi: calc_agi(gross_income, interest, stddectdf, daf)
+      taxable_income: calculate_taxable_income(agi, taxratedf)
+      conversion_tax: calc_roth_conversions_tax() or calc_roth_conversions()
+      cg_tax: calculate_cap_gains(agi, cgdf, cg_income_lt)
+      atm_tax: calculate_atm(agi, cg_income_lt, atmdf)
+      irmaa_fees: calculate_irmma_penalty(uppermax, irmaadf, people)
+      state_tax: "(wages + cg_income_lt + cg_income_st + interest) x 0.03"
+    output_columns:
+      ordinary_income:
+        - Adjusted Gross Income
+        - Interest
+        - Short Term Capital Gains
+        - Long Term Capital Gains
+      taxes_owed:
+        - Income Tax
+        - Quarterly Fed Tax Payment
+        - State Tax
+        - Quarterly State Tax Payment
+      other_costs:
+        - Donor Advisory Fund
+        - Long Term Capital Gains Tax
+        - Medicare Surcharge (IRMAA)
+        - Medicare Cost with Roth Conversion
+        - Additional ATM Taxes
+        - Decrease Income or LT Cap Gains by (ATM avoidance)
+      traditional_updates:
+        - New Traditional Balance (after distributions + conversions)
+      roth_updates:
+        - New Roth Account Balance
+        - Roth Conversion
+        - Estimated Roth Conversion Tax
+      broker_cash_updates:
+        - New Cash Balance (after taxes paid)
+        - New Broker Balance (after DAF + distributions)
+
+  tab_flow_of_funds:
+    name: "Flow of Funds"
+    description: >
+      Graphviz diagram showing how money moves between accounts and to
+      charitable giving. Displays account summary and strategy notes.
+    sub_tabs:
+      investment_flow:
+        diagram_type: Graphviz directed graph (rankdir LR)
+        node_colors:
+          Cash: lightgreen
+          Brokerage: lightyellow
+          Traditional: lightcoral
+          Roth: lavender
+          DAF: lightgray
+        edges:
+          - "Traditional to Cash: Withdrawals (stocks down)"
+          - "Brokerage to Cash: Withdrawals (stocks up)"
+          - "Traditional to Brokerage: RMDs / Replenish"
+          - "Traditional to Roth: Roth Conversions"
+          - "Roth to Cash: Big Purchases"
+          - "Brokerage to DAF: Charitable Giving"
+        account_summary_metrics:
+          - Cash Accounts (total $)
+          - Brokerage Accounts (total $)
+          - Traditional Accounts (total $)
+          - Roth Accounts (total $)
+        strategy_notes:
+          - "Traditional to Cash: Withdraw when market is down"
+          - "Brokerage to Cash: Withdraw when market is up (tax-efficient)"
+          - "Traditional to Roth: Convert during low-income years"
+          - "Traditional to Brokerage: RMDs after age 73"
+          - "Roth to Cash: Emergency funds or large purchases (tax-free)"
+          - "Brokerage to DAF: Donate appreciated securities for tax deduction"
+      account_details:
+        display: Holdings by account (expandable by account_type)
+        columns: [account_name, symbol, name, qty, purchase_price]
+        data_source: get_portfolio_truth_by_month(month, year)
+
+  tab_settings:
+    name: "Settings"
+    description: >
+      Quick parameter adjustments (mirroring sidebar inputs) and link to full
+      Configuration page. Changes take effect immediately on Strategy tab.
+    quick_parameters:
+      source: SIDEBAR_NUMBER_CONFIGS from components/sidebar.py
+      layout: 3-column grid
+      inputs:
+        - label: "Max Roth Conversion Tax Rate"
+          key: CONV_TAX_RATE
+          range: "0-50%"
+          step: 1
+          unit: "%"
+        - label: "Expected Annual Expenses"
+          key: EXPENSE
+          range: "$0-$500k"
+          step: 1000
+          unit: "$"
+        - label: "Expense Cash Multiplier"
+          key: EXPENSE_MULTIPLIER
+          range: "1-10x"
+          step: 0.5
+          unit: "x expenses"
+        - label: "Expected Annual Rate of Return"
+          key: RATE
+          range: "0-20%"
+          step: 0.5
+          unit: "%"
+        - label: "DAF Disbursement Rate"
+          key: DAF_RATE
+          range: "0-100%"
+          step: 5
+          unit: "%"
+        - label: "2027 Planned Distribution"
+          key: PLANNED_DIST_2027
+          range: "$0-$1M"
+          step: 5000
+          unit: "$"
+      validation_rules:
+        - "RATE > 15% => warning: unusually high"
+        - "EXPENSE < $1,000 => warning: too low"
+        - "CONV_TAX_RATE > 40% => warning: double-check"
+        - "EXPENSE_MULTIPLIER < 1 => warning: insufficient buffer"
+      persistence: save_sidebar_value_to_config() on change
+      cache_clearing: clear_withdrawal_strategy_cache() if EXPENSE or EXPENSE_MULTIPLIER changed
+    full_configuration_link:
+      text: "Open the Configuration page"
+      url: configuration
+      description: "Edit personal info, healthcare, Social Security, tax strategy, and portfolio data"
+
+  page_configuration:
+    name: "Configuration"
+    file: pages/configuration.py
+    description: >
+      Comprehensive configuration UI with 8 tabs. Persists all settings to
+      retirement_config.json. Includes portfolio data entry, SSI schedule
+      generation, and real estate property management.
+    tabs:
+      personal_info:
+        fields:
+          - person1_name, person1_birth_date, person1_retirement_age, person1_retirement_year
+          - person2_name, person2_birth_date, person2_retirement_age, person2_retirement_year
+          - retirement_state (2-letter code, affects state tax calculations)
+          - children (list of {name, birth_date, special_needs})
+      financial_assumptions:
+        fields:
+          - expected_annual_expenses
+          - expense_inflation_rate (%)
+          - expected_rate_of_return (%)
+          - years_of_expenses_in_cash (retirement buffer multiplier)
+          - accumulation_cash_buffer_months (3-24 months of wages)
+      healthcare:
+        fields:
+          - person1_aca_insurance_monthly, person1_aca_start_age, person1_aca_end_age
+          - person2_aca_insurance_monthly, person2_aca_start_age, person2_aca_end_age
+          - medicare_start_age (default 65)
+          - aca_marketplace_enrolled (boolean, affects subsidy optimisation)
+      social_security:
+        fields:
+          - person1_ssi_age (claiming age), person1_ssi_amount (monthly benefit at FRA)
+          - person2_ssi_age (claiming age), person2_ssi_amount (monthly benefit at FRA)
+        actions:
+          - Generate SSI Schedule (creates ssincome.csv via generate_ssi_schedule_from_config)
+          - Export SSI Schedule to CSV
+      tax_strategy:
+        fields:
+          - max_roth_conversion_tax_rate (%)
+          - daf_disbursement_rate (%)
+          - planned_distribution_2027 ($)
+      portfolio_data:
+        description: >
+          Manage portfolio_data_truth.csv (single source of truth for holdings).
+          Supports loading previous month, creating empty template, starting
+          from scratch, and reverting to last backup.
+        actions:
+          - Load Previous Month Data (load_previous_month_data)
+          - Create Empty Entry Template (create_empty_entry_template)
+          - Start From Scratch (start_from_scratch)
+          - Revert to Last Backup (revert_to_last_backup)
+        validation:
+          - validate_portfolio_dataframe()
+          - validate_ticker_symbol()
+        columns:
+          - month, year, account_type, account_name, symbol, name, sector,
+            qty, purchase_price, purchase_date
+        valid_account_types: VALID_ACCOUNT_TYPES (Cash, Brokerage, Traditional, Roth)
+        valid_sectors: VALID_SECTORS
+      advanced:
+        fields:
+          - portfolio_accounts (list of {account_name, account_type, institution})
+          - debug_logging (enable/disable LOG_LEVEL env var)
+      real_estate:
+        description: >
+          Manage real estate properties for net worth statement. Properties
+          are added to the Dashboard net worth display at purchase price.
+        fields:
+          - property_name
+          - purchase_price
+          - purchase_date
+          - property_type (Primary Residence, Rental, Vacation, Investment)
+          - address (optional)
+          - notes (optional)
+    persistence:
+      file: retirement_config.json
+      schema: DEFAULT_CONFIG (from config.py)
+      sync: sync_config_to_session_state() on page load
+
+  page_estate_planning:
+    name: "Estate Planning"
+    file: pages/estate_planning.py
+    description: >
+      Comprehensive estate planning checklist, situation assessment, document
+      tracker, and review schedule. Persists data to estate_planning_data.json.
+    personalisation:
+      source: config.py (person1_name, person2_name, children, accounts, properties)
+      children_flags:
+        - has_minor_children (age < 18)
+        - has_adult_children (age >= 18)
+        - has_special_needs
+    checklist_categories:
+      - Essential Documents (Will, Trust, POA, Healthcare Directive)
+      - Beneficiary Designations (401k, IRA, Life Insurance)
+      - Account Access (Joint accounts, TOD/POD, Digital assets)
+      - Tax Planning (Estate tax, Gift tax, Step-up basis)
+      - Special Situations (Minor children, Special needs, Business, Pets)
+    situation_assessment:
+      questions:
+        - Do you have minor children?
+        - Do you have adult children?
+        - Do you have special needs dependents?
+        - Do you own a business?
+        - Do you have significant real estate holdings?
+        - Is your estate above the federal threshold?
+      federal_threshold_note: "$13M (2024, scheduled to drop ~$7M in 2026 per TCJA sunset)"
+      recommendations: Generated based on answers
+    document_tracker:
+      fields:
+        - Document name
+        - Location (physical or digital)
+        - Last updated date
+        - Review frequency
+        - Next review date
+        - Notes
+    review_schedule:
+      triggers:
+        - Major life events (marriage, divorce, birth, death)
+        - Significant financial changes
+        - Tax law changes
+        - Every 3-5 years (routine review)
+    persistence:
+      file: estate_planning_data.json
+      format: JSON (indent=2)
+
+  data_files:
+    portfolio_data:
+      primary_file: portfolio_data_truth.csv
+      description: >
+        Single source of truth for all portfolio holdings. Updated monthly via
+        Configuration page. Supports historical snapshots by month/year.
+      columns:
+        - month (1-12)
+        - year (YYYY)
+        - account_type (Cash, Brokerage, Traditional, Roth)
+        - account_name (e.g., "Fidelity Roth IRA")
+        - symbol (ticker or "MF:CASH")
+        - name (security name)
+        - sector (e.g., "Technology", "MF:Cash", "MF:Bond")
+        - qty (shares or units)
+        - purchase_price (cost basis per share)
+        - purchase_date (YYYY-MM-DD)
+      legacy_files:
+        - financial_account_sample.csv (deprecated)
+        - financial_data_sample.csv (deprecated)
+    tax_reference_files:
+      income_rates.csv:
+        description: Federal income tax brackets by year
+        columns: [year, rate, lower, upper]
+        loader: get_income_tax_brackets(year)
+      cap_gains.csv:
+        description: Long-term capital gains brackets by year
+        columns: [year, rate, lower, upper]
+        loader: get_cap_gains_brackets(year)
+      irmaa.csv:
+        description: Medicare IRMAA surcharge brackets by year
+        columns: [year, lower, upper, part_b_premium, part_d_premium]
+        loader: get_medicare_costs(year)
+      atm.csv:
+        description: Alternative Minimum Tax brackets by year
+        columns: [year, deduction, lower, upper, phase_out, rate, exception_rate]
+        loader: get_atm_costs(year)
+      rmd.csv:
+        description: Required Minimum Distribution life expectancy factors
+        columns: [age, life_expectancy_factor]
+        loader: load_rmd_data()
+      standard.csv:
+        description: Standard deduction by year and filing status
+        columns: [year, filing_status, deduction]
+        loader: get_std_deduction(year)
+    social_security_files:
+      ssincome.csv:
+        description: Social Security income schedule (generated by ssi_calculator)
+        columns: [year, age, person, monthly_benefit]
+        generation: generate_ssi_schedule_from_config()
+        loader: load_ssi_data() / get_annual_ssi_data(year)
+
+  configuration_system:
+    file: config.py
+    config_file: retirement_config.json
+    manager_class: ConfigManager
+    default_config: DEFAULT_CONFIG
+    sections:
+      personal_info:
+        keys:
+          - person1_name (default "Tom")
+          - person1_birth_date (default "1965-01-01")
+          - person1_retirement_age (default 62)
+          - person1_retirement_year (default 2026)
+          - person2_name (default "Sarah")
+          - person2_birth_date (default "1967-01-01")
+          - person2_retirement_age (default 62)
+          - person2_retirement_year (default 2028)
+          - retirement_state (default "FL")
+          - children (default [])
+      financial_assumptions:
+        keys:
+          - expected_annual_expenses (default 50000)
+          - expense_inflation_rate (default 3.0)
+          - expected_rate_of_return (default 6.0)
+          - years_of_expenses_in_cash (default 4)
+          - accumulation_cash_buffer_months (default 6)
+      income:
+        keys:
+          - person1_annual_wages (default 0)
+          - person2_annual_wages (default 0)
+          - wage_inflation_rate (default 3.0)
+          - contribution_401k_percent (default 10.0)
+          - contribution_roth_percent (default 5.0)
+          - contribution_brokerage_percent (default 5.0)
+      social_security:
+        keys:
+          - person1_ssi_age (default 70)
+          - person1_ssi_amount (default 0)
+          - person2_ssi_age (default 70)
+          - person2_ssi_amount (default 0)
+      healthcare:
+        keys:
+          - aca_insurance_monthly (default 0)
+          - aca_start_age (default 62)
+          - aca_end_age (default 65)
+          - medicare_start_age (default 65)
+          - aca_marketplace_enrolled (default false)
+      tax_strategy:
+        keys:
+          - max_roth_conversion_tax_rate (default 12)
+          - daf_disbursement_rate (default 25)
+          - planned_distribution_2027 (default 75000)
+      metadata:
+        keys:
+          - last_updated (default null)
+          - version (default "1.0")
+    methods:
+      - get(section, key, default)
+      - set(section, key, value)
+      - save_config()
+      - _load_config()
+      - _merge_with_defaults(config)
+      - calculate_age(birth_date)
+    session_state_mappings:
+      SSI_AGE: [social_security, person1_ssi_age]
+      CONV_TAX_RATE: [tax_strategy, max_roth_conversion_tax_rate]
+      EXPENSE: [financial_assumptions, expected_annual_expenses]
+      EXPENSE_MULTIPLIER: [financial_assumptions, years_of_expenses_in_cash]
+      RATE: [financial_assumptions, expected_rate_of_return]
+      DAF_RATE: [tax_strategy, daf_disbursement_rate]
+      PLANNED_DIST_2027: [tax_strategy, planned_distribution_2027]
