@@ -1792,8 +1792,28 @@ class Stage1Accumulation(LifeStage):
     
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
-        """Applies when still employed with wages"""
-        return has_wages
+        """Applies when employed with wages AND outside the Stage 2 prep window."""
+        if not has_wages:
+            return False
+        # Yield to Stage 2 when within the 10-year prep window
+        try:
+            config_mgr = get_config_manager()
+            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
+            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
+            p1_ret_year = p1_birth_year + p1_ret_age
+
+            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
+            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
+            p2_ret_year = p2_birth_year + p2_ret_age
+
+            earliest_retirement_year = min(p1_ret_year, p2_ret_year)
+            years_to_retirement = earliest_retirement_year - year
+            # If within the prep window, Stage 2 should handle this year
+            if 0 < years_to_retirement <= Stage2PrepForRetirement.PREP_WINDOW_YEARS:
+                return False
+        except Exception:
+            pass  # If config unavailable, default to Stage 1
+        return True
     
     def calculate_strategy(self, year: int, balances: PortfolioBalances,
                           expenses: float, wages: float = 0,

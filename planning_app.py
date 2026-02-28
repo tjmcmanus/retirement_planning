@@ -14,7 +14,7 @@ from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduct
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
 from income_expense import build_income_expenses_display,calculate_taxes
 from components.sidebar import sidebar
-st.set_page_config(page_title="Retirement Planner", page_icon="😊", layout="wide")
+st.set_page_config(page_title="Financial Planner", page_icon="😊", layout="wide")
 
 hide_st_style = """
             <style>
@@ -246,6 +246,64 @@ def render_income_chart(strategy_df: pd.DataFrame, title: str = "Income Sources 
         paper_bgcolor='white'
     )
     st.plotly_chart(fig, width='stretch')
+
+
+# ---------------------------------------------------------------------------
+# Life stage descriptions (plain-English summaries shown as tooltips / legend)
+# ---------------------------------------------------------------------------
+LIFE_STAGE_DESCRIPTIONS: dict[str, str] = {
+    "Stage 1: Accumulation": (
+        "🏗️ Building wealth while working.\n\n"
+        "You're still earning wages. The plan routes your paycheck into a "
+        "Traditional 401k (pre-tax), Roth account, and brokerage at the rates "
+        "you configured. Any leftover take-home above your cash target goes to "
+        "brokerage. Roth conversions are considered if you're in a low bracket."
+    ),
+    "Stage 2: Prep for Retirement": (
+        "🎯 Fine-tuning before you retire (within ~10 years).\n\n"
+        "Still working, but now the focus shifts to balance. If your Traditional "
+        "account is much larger than your Roth, new 401k contributions are "
+        "redirected to Roth. A backdoor Roth IRA is executed if your income is "
+        "too high for a direct contribution. Your cash buffer gradually ramps up "
+        "toward the full retirement reserve target."
+    ),
+    "Stage 3: Early Retirement": (
+        "🌅 Retired but before Medicare & Social Security.\n\n"
+        "No wages yet. Living expenses come from your brokerage account first "
+        "(long-term capital gains taxed at 0% when possible). This is the prime "
+        "window for large Roth conversions — income is low, so you fill up lower "
+        "tax brackets cheaply. ACA marketplace health insurance costs are managed "
+        "to preserve subsidy eligibility."
+    ),
+    "Stage 4: Medicare": (
+        "🏥 On Medicare, still before Social Security.\n\n"
+        "Medicare Part B/D premiums are now in play, including IRMAA surcharges "
+        "if your income from 2 years ago was high. Roth conversions continue but "
+        "are sized carefully to avoid jumping an IRMAA tier. The goal is to keep "
+        "converting while your income is still relatively low."
+    ),
+    "Stage 5: Social Security": (
+        "💰 Collecting Social Security + Medicare.\n\n"
+        "SS benefits add a new income stream — up to 85% of benefits are taxable. "
+        "Roth conversions are still possible but must account for the 'SS torpedo' "
+        "effect where extra income makes more SS taxable. IRMAA management remains "
+        "important. Withdrawals shift toward a mix of brokerage and traditional."
+    ),
+    "Stage 6: RMD": (
+        "📋 Required Minimum Distributions are mandatory.\n\n"
+        "The IRS requires you to withdraw a minimum amount from your Traditional "
+        "accounts each year based on your age and balance. These withdrawals are "
+        "fully taxable. The strategy focuses on minimizing the tax hit by "
+        "coordinating RMDs with other income, using DAF charitable contributions "
+        "to offset taxes, and preserving Roth assets as long as possible."
+    ),
+}
+
+# Tooltip shown on the Stage column header in both accumulation and withdrawal tables
+_STAGE_COLUMN_HELP = (
+    "The life stage determines which financial priorities and rules apply this year. "
+    "Hover over the stage name in the legend below the table for a plain-English summary."
+)
 
 
 # Shared column config for account balance tables (used by both Strategy phases)
@@ -489,7 +547,7 @@ def render_net_worth_statement(
     st.markdown(html, unsafe_allow_html=True)
 
 
-st.header("Retirement planner")
+st.header("Financial Planner")
 ##############################################################################################
 
 sidebar()
@@ -978,7 +1036,7 @@ with tab_accum:
                 accum_column_config = {
                     "Year": st.column_config.NumberColumn("Year", format="%d"),
                     "Age": st.column_config.TextColumn("Age"),
-                    "Stage": st.column_config.TextColumn("Life Stage"),
+                    "Stage": st.column_config.TextColumn("Life Stage", help=_STAGE_COLUMN_HELP),
                     "Wages": st.column_config.TextColumn("Wages"),
                     "Trad→\nRoth": st.column_config.TextColumn("Trad→Roth"),
                     "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok"),
@@ -988,6 +1046,15 @@ with tab_accum:
                     "Cash Balance": st.column_config.TextColumn("Cash End"),
                 }
                 st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, width='stretch')
+
+                # Stage legend — plain-English descriptions for each stage in the table
+                _accum_stages_present = display_df_a['Stage'].unique() if 'Stage' in display_df_a.columns else []
+                with st.expander("ℹ️ Life Stage Guide", expanded=False):
+                    for _stage_name, _stage_desc in LIFE_STAGE_DESCRIPTIONS.items():
+                        if _stage_name in list(_accum_stages_present):
+                            st.markdown(f"**{_stage_name}**")
+                            st.caption(_stage_desc)
+                            st.markdown("---")
 
             with balances_sub_tab:
                 st.subheader("Account Balances Over Time")
@@ -1102,7 +1169,7 @@ with tab_accum:
                 withdrawal_column_config = {
                     "Year": st.column_config.NumberColumn("Year", format="%d"),
                     "Age": st.column_config.TextColumn("Age"),
-                    "Stage": st.column_config.TextColumn("Life Stage"),
+                    "Stage": st.column_config.TextColumn("Life Stage", help=_STAGE_COLUMN_HELP),
                     "Cash Start": st.column_config.TextColumn("Cash Start"),
                     "Wages": st.column_config.TextColumn("Wages"),
                     "SS Benefits": st.column_config.TextColumn("Social Security"),
@@ -1122,6 +1189,15 @@ with tab_accum:
                     "Cash Balance": st.column_config.TextColumn("Cash End"),
                 }
                 st.dataframe(display_df_w, column_config=withdrawal_column_config, hide_index=True, width='stretch')
+
+                # Stage legend — plain-English descriptions for each stage in the table
+                _with_stages_present = display_df_w['Stage'].unique() if 'Stage' in display_df_w.columns else []
+                with st.expander("ℹ️ Life Stage Guide", expanded=False):
+                    for _stage_name, _stage_desc in LIFE_STAGE_DESCRIPTIONS.items():
+                        if _stage_name in list(_with_stages_present):
+                            st.markdown(f"**{_stage_name}**")
+                            st.caption(_stage_desc)
+                            st.markdown("---")
 
             with balances_sub_tab:
                 st.subheader("Account Balances Over Time")
