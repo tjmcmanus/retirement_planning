@@ -4,7 +4,7 @@
 # Date: 2026-02-24
 
 metadata:
-  module_name: withdrawal_strategy.py
+  module_name: strategy.py
   version: "1.0"
   created: "2026-02-22"
   last_reviewed: "2026-02-24"
@@ -887,7 +887,7 @@ state_tax_planning:
       integrate_state_tax_with_stages:
         description: "Add state tax calculations to all stage strategies"
         changes_required:
-          - "Import calculate_state_tax() in withdrawal_strategy.py"
+          - "Import calculate_state_tax() in strategy.py"
           - "Add state parameter to YearlyStrategy dataclass"
           - "Calculate state tax in each stage's calculate_strategy()"
           - "Add state_tax field to YearlyStrategy output"
@@ -1279,7 +1279,7 @@ amt_planning:
       integrate_amt_with_stages:
         description: "Add AMT calculations to stage strategies"
         changes_required:
-          - "Import calculate_amt() in withdrawal_strategy.py"
+          - "Import calculate_amt() in strategy.py"
           - "Calculate AMT in each stage's calculate_strategy()"
           - "Add amt_owed field to YearlyStrategy dataclass"
           - "Integrate with BETR algorithm for conversion optimization"
@@ -3055,7 +3055,7 @@ constants:
 # ==============================================================================
 
 testing:
-  test_file: "test_withdrawal_strategy.py"
+  test_file: "test_strategy.py"
   
   test_coverage:
     - test_portfolio_balances(): "PortfolioBalances dataclass"
@@ -3065,7 +3065,7 @@ testing:
     - test_strategy_calculation(): "Full strategy calculation"
     - test_yearly_strategy_structure(): "YearlyStrategy dataclass"
     
-  example_file: "example_withdrawal_strategy.py"
+  example_file: "example_strategy.py"
   
   examples:
     - example_1_basic_strategy(): "Basic 25-year projection"
@@ -3083,7 +3083,7 @@ integration:
   
   usage_in_app:
     import: |
-      from withdrawal_strategy import build_withdrawal_strategy_display
+      from strategy import build_withdrawal_strategy_display
       
     calculation: |
       strategy_df, balances_df = build_withdrawal_strategy_display(
@@ -3604,7 +3604,7 @@ account_rebalancing:
   helper_function:
     name: "rebalance_accounts()"
     purpose: "Centralized account rebalancing logic"
-    location: "Add to withdrawal_strategy.py after calculate_niit()"
+    location: "Add to strategy.py after calculate_niit()"
     
     signature: |
       def rebalance_accounts(balances: PortfolioBalances,
@@ -3805,7 +3805,7 @@ account_rebalancing:
           - "Emergency Roth distributions"
           - "Graceful degradation"
     
-    test_file: "test_withdrawal_strategy.py"
+    test_file: "test_strategy.py"
     new_test_section: "Account Rebalancing Tests"
   
   documentation_updates:
@@ -4078,7 +4078,7 @@ future_enhancements:
           - "Test 25-year projection with account depletion"
           - "Test buffer maintenance across all stages"
           - "Test tax calculations with distributions"
-        file: "test_withdrawal_strategy.py (expand existing tests)"
+        file: "test_strategy.py (expand existing tests)"
     
     estimated_effort:
       analysis: "2 hours"
@@ -4116,7 +4116,7 @@ future_enhancements:
 # ==============================================================================
 
 documentation:
-  readme: "WITHDRAWAL_STRATEGY_README.md"
+  readme: "STRATEGY_README.md"
   
   sections:
     - Overview
@@ -4164,7 +4164,7 @@ logging:
     
   debug_usage: |
     export LOG_LEVEL=DEBUG
-    python example_withdrawal_strategy.py
+    python example_strategy.py
 
 # ==============================================================================
 # VERSION HISTORY

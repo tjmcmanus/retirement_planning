@@ -75,8 +75,8 @@ echo ""
 echo -e "${YELLOW}Checking required data files...${NC}"
 
 REQUIRED_FILES=(
-    "withdrawal_strategy.py"
-    "example_withdrawal_strategy.py"
+    "strategy.py"
+    "example_strategy.py"
     "load_data.py"
     "calculations.py"
     "ssibenefits.py"
@@ -114,7 +114,7 @@ echo -e "${BLUE}                    RUNNING WITHDRAWAL STRATEGY EXAMPLES${NC}"
 echo -e "${BLUE}================================================================================================${NC}"
 echo ""
 
-python3 example_withdrawal_strategy.py
+python3 example_strategy.py
 
 EXIT_CODE=$?
 
@@ -145,10 +145,10 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "  1. Review the generated CSV files for detailed year-by-year strategies"
     echo "  2. Open CSV files in Excel or Google Sheets for analysis"
     echo "  3. Compare different scenarios to optimize your retirement plan"
-    echo "  4. Adjust parameters in example_withdrawal_strategy.py for custom scenarios"
+    echo "  4. Adjust parameters in example_strategy.py for custom scenarios"
     echo ""
     echo -e "${BLUE}For more information, see:${NC}"
-    echo "  - WITHDRAWAL_STRATEGY_README.md - Complete documentation"
+    echo "  - STRATEGY_README.md - Complete documentation"
     echo "  - IMPLEMENTATION_SUMMARY.md - Implementation overview"
     echo ""
 else
@@ -164,7 +164,7 @@ else
     echo "  4. Review error messages above for specific issues"
     echo ""
     echo -e "${YELLOW}For help, see:${NC}"
-    echo "  - WITHDRAWAL_STRATEGY_README.md (Troubleshooting section)"
+    echo "  - STRATEGY_README.md (Troubleshooting section)"
     echo ""
     exit $EXIT_CODE
 fi

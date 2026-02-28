@@ -10,7 +10,17 @@ import pandas as pd
 import os
 import shutil
 from config import get_config_manager, reload_config
-from portfolio_data_entry import validate_portfolio_dataframe, VALID_ACCOUNT_TYPES, VALID_SECTORS
+from portfolio_data_entry import (
+    validate_portfolio_dataframe,
+    validate_ticker_symbol,
+    load_previous_month_data,
+    create_empty_entry_template,
+    save_portfolio_data,
+    start_from_scratch,
+    revert_to_last_backup,
+    VALID_ACCOUNT_TYPES,
+    VALID_SECTORS,
+)
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
@@ -194,9 +204,34 @@ with tab2:
             min_value=1,
             max_value=10,
             value=config_mgr.get("financial_assumptions", "years_of_expenses_in_cash", 4),
-            help="How many years of expenses to keep in cash/safe assets",
+            help="How many years of expenses to keep in cash/safe assets (retirement phase)",
             key="years_of_expenses_in_cash"
         )
+
+        accumulation_cash_buffer_months = st.slider(
+            "Accumulation Phase: Cash Buffer (months of wages)",
+            min_value=3,
+            max_value=24,
+            value=int(config_mgr.get("financial_assumptions", "accumulation_cash_buffer_months", 6)),
+            step=1,
+            help=(
+                "During working years, target this many months of gross wages in cash. "
+                "6 months is the standard emergency fund recommendation. "
+                "Range: 3 months (lean) to 24 months (very conservative)."
+            ),
+            key="accumulation_cash_buffer_months"
+        )
+        # Show the dollar equivalent based on total household income
+        total_wages = (
+            config_mgr.get("income", "person1_annual_wages", 0) +
+            config_mgr.get("income", "person2_annual_wages", 0)
+        )
+        if total_wages > 0:
+            accum_cash_target = total_wages * accumulation_cash_buffer_months / 12
+            st.caption(
+                f"≈ ${accum_cash_target:,.0f} target cash balance "
+                f"({accumulation_cash_buffer_months} months × ${total_wages:,.0f}/yr wages)"
+            )
     
     # Income Section
     st.markdown("---")
@@ -408,7 +443,7 @@ with tab4:
             "Age to Start Benefits",
             min_value=62,
             max_value=70,
-            value=config_mgr.get("social_security", "person1_ssi_age", 70),
+            value=max(62, min(70, config_mgr.get("social_security", "person1_ssi_age", 70))),
             help="Age when you plan to start collecting Social Security (62-70)",
             key="person1_ssi_age"
         )
@@ -446,7 +481,7 @@ with tab4:
             "Age to Start Benefits",
             min_value=62,
             max_value=70,
-            value=config_mgr.get("social_security", "person2_ssi_age", 70),
+            value=max(62, min(70, config_mgr.get("social_security", "person2_ssi_age", 70))),
             help="Age when you plan to start collecting Social Security (62-70)",
             key="person2_ssi_age"
         )
@@ -730,11 +765,21 @@ with tab6:
                 'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
             ])
     
-    # File management buttons
-    col1, col2, col3 = st.columns(3)
-    
+    # Month/Year selector for loading prior month data
+    _now = datetime.now()
+    _sel_col1, _sel_col2, _ = st.columns([1, 1, 4])
+    with _sel_col1:
+        entry_month = st.number_input("Month", min_value=1, max_value=12,
+                                      value=_now.month, step=1, key="cfg_entry_month")
+    with _sel_col2:
+        entry_year = st.number_input("Year", min_value=2000, max_value=2100,
+                                     value=_now.year, step=1, key="cfg_entry_year")
+
+    # File management buttons — row 1
+    col1, col2, col3, col4 = st.columns(4)
+
     with col1:
-        if st.button("📂 Load Current Data", width='stretch'):
+        if st.button("📂 Load Current Data", use_container_width=True):
             if os.path.exists('portfolio_data_truth.csv'):
                 try:
                     st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
@@ -743,12 +788,12 @@ with tab6:
                     st.error(f"Error loading data: {e}")
             else:
                 st.warning("portfolio_data_truth.csv not found")
-    
+
     with col2:
-        if st.button("➕ Add Empty Row", width='stretch'):
+        if st.button("➕ Add Empty Row", use_container_width=True):
             new_row = pd.DataFrame({
-                'month': [datetime.now().month],
-                'year': [datetime.now().year],
+                'month': [entry_month],
+                'year': [entry_year],
                 'account_name': [''],
                 'account_type': ['Brokerage'],
                 'symbol': [''],
@@ -757,15 +802,135 @@ with tab6:
                 'qty': [0.0],
                 'purchase_price': [0.0]
             })
-            st.session_state['portfolio_df'] = pd.concat([st.session_state['portfolio_df'], new_row], ignore_index=True)
+            # Prepend new row so it appears at the top of the reversed display
+            st.session_state['portfolio_df'] = pd.concat(
+                [new_row, st.session_state['portfolio_df']], ignore_index=True
+            )
             st.rerun()
-    
+
     with col3:
-        if st.button("🗑️ Clear All", width='stretch'):
+        # Determine the "last month" to copy from
+        if _now.month == 1:
+            _src_month, _src_year = 12, _now.year - 1
+        else:
+            _src_month, _src_year = _now.month - 1, _now.year
+        _tgt_month, _tgt_year = _now.month, _now.year
+
+        if st.button(
+            f"📋 Copy {_src_month}/{_src_year} → {_tgt_month}/{_tgt_year}",
+            use_container_width=True,
+            help=f"Copies all entries from {_src_month}/{_src_year}, updates month/year to "
+                 f"{_tgt_month}/{_tgt_year}, and prepends them for editing."
+        ):
+            existing = st.session_state['portfolio_df']
+            last_month_rows = existing[
+                (existing['month'] == _src_month) & (existing['year'] == _src_year)
+            ].copy()
+
+            if last_month_rows.empty:
+                st.warning(
+                    f"No entries found for {_src_month}/{_src_year}. "
+                    "Load the data first or check the source month."
+                )
+            else:
+                # Update month/year to current month
+                last_month_rows['month'] = _tgt_month
+                last_month_rows['year']  = _tgt_year
+                # Prepend copied rows so they appear at the top of the reversed display
+                st.session_state['portfolio_df'] = pd.concat(
+                    [last_month_rows, existing], ignore_index=True
+                )
+                st.success(
+                    f"✅ Copied {len(last_month_rows)} entries from "
+                    f"{_src_month}/{_src_year} → {_tgt_month}/{_tgt_year}. "
+                    "Review and edit above, then save."
+                )
+                st.rerun()
+
+    with col4:
+        if st.button("🗑️ Clear All", use_container_width=True):
             st.session_state['portfolio_df'] = pd.DataFrame(columns=[
                 'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
             ])
             st.rerun()
+
+    # File management buttons — row 2 (ticker validation & backup/restore)
+    col5, col6, col7 = st.columns(3)
+
+    with col5:
+        if st.button("🔍 Validate & Lookup Tickers", use_container_width=True,
+                     help="Validates all ticker symbols against Yahoo Finance and auto-fills Name and Sector"):
+            current_df = st.session_state['portfolio_df']
+            non_empty = current_df[current_df['symbol'].str.strip() != ''].copy()
+            if non_empty.empty:
+                st.warning("No entries to validate. Add rows with ticker symbols first.")
+            else:
+                validation_results = []
+                with st.spinner("Validating ticker symbols with Yahoo Finance..."):
+                    for idx, row in non_empty.iterrows():
+                        symbol = str(row['symbol']).strip().upper()
+                        is_valid, name, sector, error = validate_ticker_symbol(symbol)
+                        if is_valid:
+                            non_empty.at[idx, 'name'] = name
+                            non_empty.at[idx, 'sector'] = sector
+                            validation_results.append({'Symbol': symbol, 'Status': '✅ Valid', 'Name': name, 'Sector': sector})
+                        else:
+                            validation_results.append({'Symbol': symbol, 'Status': '❌ Invalid', 'Name': '', 'Sector': error})
+                # Merge validated rows back into full dataframe
+                st.session_state['portfolio_df'].update(non_empty)
+                results_df = pd.DataFrame(validation_results)
+                invalid_count = sum(1 for r in validation_results if '❌' in r['Status'])
+                if invalid_count == 0:
+                    st.success(f"✅ All {len(validation_results)} ticker symbols validated successfully!")
+                else:
+                    st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
+                st.dataframe(results_df, use_container_width=True, hide_index=True)
+                st.rerun()
+
+    with col6:
+        if st.button("🆕 Start from Scratch", type="secondary", use_container_width=True,
+                     help="Backs up current data and creates a blank portfolio file"):
+            if 'cfg_confirm_scratch' not in st.session_state:
+                st.session_state.cfg_confirm_scratch = False
+            if not st.session_state.cfg_confirm_scratch:
+                st.session_state.cfg_confirm_scratch = True
+                st.warning("⚠️ This will backup your current data and create a blank file. Click again to confirm.")
+                st.rerun()
+            else:
+                with st.spinner("Creating backup and blank file..."):
+                    success, message = start_from_scratch()
+                if success:
+                    st.success(f"✅ {message}")
+                    st.cache_data.clear()
+                    st.session_state['portfolio_df'] = create_empty_entry_template(entry_month, entry_year)
+                    st.session_state.cfg_confirm_scratch = False
+                    st.rerun()
+                else:
+                    st.error(f"❌ {message}")
+                    st.session_state.cfg_confirm_scratch = False
+
+    with col7:
+        if st.button("⏮️ Revert to Last Backup", type="secondary", use_container_width=True,
+                     help="Restores the most recent backup of portfolio_data_truth.csv"):
+            if 'cfg_confirm_revert' not in st.session_state:
+                st.session_state.cfg_confirm_revert = False
+            if not st.session_state.cfg_confirm_revert:
+                st.session_state.cfg_confirm_revert = True
+                st.warning("⚠️ This will restore the most recent backup. Click again to confirm.")
+                st.rerun()
+            else:
+                with st.spinner("Reverting to last backup..."):
+                    success, message = revert_to_last_backup()
+                if success:
+                    st.success(f"✅ {message}")
+                    st.cache_data.clear()
+                    st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv') \
+                        if os.path.exists('portfolio_data_truth.csv') else create_empty_entry_template(entry_month, entry_year)
+                    st.session_state.cfg_confirm_revert = False
+                    st.rerun()
+                else:
+                    st.error(f"❌ {message}")
+                    st.session_state.cfg_confirm_revert = False
     
     st.markdown("---")
     
@@ -785,66 +950,100 @@ with tab6:
         'purchase_price': st.column_config.NumberColumn('Purchase Price', min_value=0, step=0.01, format="%.2f", required=True)
     }
     
-    # Display editable dataframe
+    # Display editable dataframe — reversed so newest entries appear at top
+    display_df = st.session_state['portfolio_df'].iloc[::-1].reset_index(drop=True)
     edited_df = st.data_editor(
-        st.session_state['portfolio_df'],
+        display_df,
         column_config=column_config,
         num_rows="dynamic",
         width='stretch',
         hide_index=True,
         key="portfolio_editor"
     )
-    
-    # Update session state with edited data
-    st.session_state['portfolio_df'] = edited_df
+
+    # Reverse back to chronological order before storing in session state
+    # (preserves original append-order for CSV saves)
+    st.session_state['portfolio_df'] = edited_df.iloc[::-1].reset_index(drop=True)
     
     st.markdown("---")
     
-    # Save section
+    # ------------------------------------------------------------------ #
+    # Validation alert dialog                                              #
+    # ------------------------------------------------------------------ #
+    @st.dialog("⚠️ Validation Errors — Cannot Save")
+    def _show_validation_errors_dialog(invalid_df: pd.DataFrame, valid_df: pd.DataFrame) -> None:
+        """Modal dialog shown when save is attempted with invalid rows."""
+        st.error(
+            f"**{len(invalid_df)} row(s) failed validation** and cannot be saved. "
+            "Review the errors below, fix them in the editor, then try saving again."
+        )
+        # Show the invalid rows with their error messages
+        error_cols = [c for c in ['month', 'year', 'account_name', 'symbol', 'validation_error']
+                      if c in invalid_df.columns]
+        st.dataframe(invalid_df[error_cols], hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔙 Fix Errors & Cancel", type="secondary", use_container_width=True):
+                st.rerun()   # closes the dialog
+        with col_b:
+            save_anyway_disabled = len(valid_df) == 0
+            if st.button(
+                f"💾 Save {len(valid_df)} Valid Rows Anyway",
+                type="primary",
+                use_container_width=True,
+                disabled=save_anyway_disabled,
+            ):
+                _do_save(valid_df)
+
+    def _do_save(df_to_save: pd.DataFrame) -> None:
+        """Perform the actual CSV save with backup."""
+        try:
+            if os.path.exists('portfolio_data_truth.csv'):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_name = f'portfolio_data_truth_{timestamp}.csv'
+                shutil.copy2('portfolio_data_truth.csv', backup_name)
+                st.info(f"✅ Backed up existing data to {backup_name}")
+            df_to_save.to_csv('portfolio_data_truth.csv', index=False)
+            st.success(f"✅ Successfully saved {len(df_to_save)} rows to portfolio_data_truth.csv")
+            st.balloons()
+        except Exception as e:
+            st.error(f"Error saving portfolio data: {e}")
+
+    # ------------------------------------------------------------------ #
+    # Save section UI                                                      #
+    # ------------------------------------------------------------------ #
     st.subheader("Save Portfolio Data")
-    
+
     col_save1, col_save2 = st.columns(2)
-    
+
     with col_save1:
         st.info(f"**Current rows:** {len(edited_df)}")
-        
-        # Validate data before saving
+
+        # Live validation summary (always visible)
         if len(edited_df) > 0:
             valid_df, invalid_df = validate_portfolio_dataframe(edited_df)
-            
             if len(invalid_df) > 0:
-                st.warning(f"⚠️ {len(invalid_df)} rows have validation errors")
-                with st.expander("View Validation Errors"):
-                    st.dataframe(invalid_df[['month', 'year', 'symbol', 'validation_error']], width='stretch')
-            
+                st.warning(f"⚠️ {len(invalid_df)} row(s) have validation errors — fix before saving.")
             if len(valid_df) > 0:
-                st.success(f"✅ {len(valid_df)} rows are valid and ready to save")
-    
+                st.success(f"✅ {len(valid_df)} row(s) are valid and ready to save.")
+        else:
+            valid_df = pd.DataFrame()
+            invalid_df = pd.DataFrame()
+
     with col_save2:
-        if st.button("💾 Save Portfolio Data", type="primary", width='stretch', disabled=len(edited_df) == 0):
-            # Validate the data
-            valid_df, invalid_df = validate_portfolio_dataframe(edited_df)
-            
-            if len(invalid_df) > 0:
-                st.error(f"Cannot save: {len(invalid_df)} rows have validation errors. Please fix them first.")
-            elif len(valid_df) == 0:
-                st.error("No valid data to save")
+        if st.button("💾 Save Portfolio Data", type="primary", use_container_width=True, disabled=len(edited_df) == 0):
+            # Re-validate at save time
+            valid_df_save, invalid_df_save = validate_portfolio_dataframe(edited_df)
+
+            if len(invalid_df_save) > 0:
+                # Open blocking modal alert listing all errors
+                _show_validation_errors_dialog(invalid_df_save, valid_df_save)
+            elif len(valid_df_save) == 0:
+                st.error("No valid data to save.")
             else:
-                try:
-                    # Create timestamped backup of existing file
-                    if os.path.exists('portfolio_data_truth.csv'):
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        backup_name = f'portfolio_data_truth_{timestamp}.csv'
-                        shutil.copy2('portfolio_data_truth.csv', backup_name)
-                        st.info(f"✅ Backed up existing data to {backup_name}")
-                    
-                    # Save the new data
-                    valid_df.to_csv('portfolio_data_truth.csv', index=False)
-                    st.success(f"✅ Successfully saved {len(valid_df)} rows to portfolio_data_truth.csv")
-                    st.balloons()
-                    
-                except Exception as e:
-                    st.error(f"Error saving portfolio data: {e}")
+                _do_save(valid_df_save)
     
     # Display sample data format
     with st.expander("📋 View Sample Data Format"):
@@ -900,6 +1099,7 @@ with tab7:
                 "expense_inflation_rate": expense_inflation_rate,
                 "expected_rate_of_return": expected_rate_of_return,
                 "years_of_expenses_in_cash": years_of_expenses_in_cash,
+                "accumulation_cash_buffer_months": accumulation_cash_buffer_months,
             })
             
             config_mgr.update_section("healthcare", {
@@ -925,6 +1125,9 @@ with tab7:
                 "person1_annual_wages": person1_annual_wages,
                 "person2_annual_wages": person2_annual_wages,
                 "wage_inflation_rate": wage_inflation_rate,
+                "contribution_401k_percent": st.session_state.get("contribution_401k_percent", config_mgr.get("income", "contribution_401k_percent", 10.0)),
+                "contribution_roth_percent": st.session_state.get("contribution_roth_percent", config_mgr.get("income", "contribution_roth_percent", 5.0)),
+                "contribution_brokerage_percent": st.session_state.get("contribution_brokerage_percent", config_mgr.get("income", "contribution_brokerage_percent", 5.0)),
             })
             
             config_mgr.update_section("tax_strategy", {

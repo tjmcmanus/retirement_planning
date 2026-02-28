@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 from streamlit_card import card
 from streamlit_extras.metric_cards import style_metric_cards 
 from streamlit_extras.add_vertical_space import add_vertical_space
-from load_data import get_month_account_values,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month
-from withdrawal_strategy import build_withdrawal_strategy_display
+import graphviz
+from load_data import get_month_account_values,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month, get_portfolio_truth_by_month
+from strategy import build_withdrawal_strategy_display, build_accumulation_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
-from portfolio_data_entry import validate_ticker_symbol, validate_portfolio_dataframe, save_portfolio_data, create_empty_entry_template, load_previous_month_data, start_from_scratch, revert_to_last_backup
 from income_expense import build_income_expenses_display,calculate_taxes
 from components.sidebar import sidebar
 st.set_page_config(page_title="Retirement Planner", page_icon="😊", layout="wide")
@@ -140,6 +140,355 @@ currentDate = datetime.date.today()
 curr_year = currentDate.year
 curr_month = currentDate.month
 
+# ---------------------------------------------------------------------------
+# Module-level helpers shared across tabs
+# ---------------------------------------------------------------------------
+
+# Consistent color palette used by all charts
+COLOR_PALETTE = px.colors.qualitative.Pastel
+
+def format_currency(val) -> str:
+    """Format a numeric value as currency.
+    
+    Whole-number values are shown without decimals (e.g. $1,234).
+    Non-whole values are shown with 2 decimal places (e.g. $1,234.56).
+    Returns empty string for NaN/None.
+    """
+    if pd.isna(val):
+        return ""
+    try:
+        if val == int(val):
+            return f"${int(val):,}"
+        return f"${val:,.2f}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def render_balance_chart(balances_df: pd.DataFrame, title: str = "Projected Account Balances") -> None:
+    """Render a stacked-area chart for Cash / Taxable / Traditional / Roth balances.
+
+    Args:
+        balances_df: DataFrame with columns Year, Cash Balance, Taxable Balance,
+                     Traditional Balance, Roth Balance.
+        title: Chart title shown in the layout.
+    """
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=balances_df['Year'], y=balances_df['Cash Balance'],
+        name='Cash', mode='lines', stackgroup='one',
+        fillcolor='rgb(246, 207, 113)'
+    ))
+    fig.add_trace(go.Scatter(
+        x=balances_df['Year'], y=balances_df['Taxable Balance'],
+        name='Taxable', mode='lines', stackgroup='one',
+        fillcolor='rgb(254, 136, 177)'
+    ))
+    fig.add_trace(go.Scatter(
+        x=balances_df['Year'], y=balances_df['Traditional Balance'],
+        name='Traditional', mode='lines', stackgroup='one',
+        fillcolor='rgb(139, 224, 164)'
+    ))
+    fig.add_trace(go.Scatter(
+        x=balances_df['Year'], y=balances_df['Roth Balance'],
+        name='Roth', mode='lines', stackgroup='one',
+        fillcolor='rgb(180, 151, 231)'
+    ))
+    fig.update_layout(
+        title=title,
+        xaxis_title='Year',
+        yaxis_title='Balance ($)',
+        hovermode='x unified',
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+    st.plotly_chart(fig, width='stretch')
+
+
+def render_income_chart(strategy_df: pd.DataFrame, title: str = "Income Sources by Year") -> None:
+    """Render a stacked bar chart for Wages / Social Security / Portfolio Withdrawal.
+
+    Args:
+        strategy_df: DataFrame that may contain columns Wages, Social Security,
+                     Portfolio Withdrawal, and Total Income.
+        title: Chart title shown in the layout.
+    """
+    if 'Total Income' not in strategy_df.columns:
+        return
+
+    fig = go.Figure()
+    if 'Wages' in strategy_df.columns:
+        fig.add_trace(go.Bar(
+            x=strategy_df['Year'], y=strategy_df['Wages'],
+            name='Wages', marker_color='rgb(99, 110, 250)'
+        ))
+    if 'Social Security' in strategy_df.columns:
+        fig.add_trace(go.Bar(
+            x=strategy_df['Year'], y=strategy_df['Social Security'],
+            name='Social Security', marker_color='rgb(239, 85, 59)'
+        ))
+    if 'SS Benefits' in strategy_df.columns and 'Social Security' not in strategy_df.columns:
+        fig.add_trace(go.Bar(
+            x=strategy_df['Year'], y=strategy_df['SS Benefits'],
+            name='Social Security', marker_color='rgb(239, 85, 59)'
+        ))
+    if 'Portfolio Withdrawal' in strategy_df.columns:
+        fig.add_trace(go.Bar(
+            x=strategy_df['Year'], y=strategy_df['Portfolio Withdrawal'],
+            name='Portfolio Withdrawal', marker_color='rgb(0, 204, 150)'
+        ))
+    fig.update_layout(
+        title=title,
+        xaxis_title='Year',
+        yaxis_title='Amount ($)',
+        barmode='stack',
+        hovermode='x unified',
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+    st.plotly_chart(fig, width='stretch')
+
+
+# Shared column config for account balance tables (used by both Strategy phases)
+BALANCE_COLUMN_CONFIG: dict = {
+    "Year": st.column_config.NumberColumn("Year", format="%d"),
+    "Cash Balance": st.column_config.TextColumn("Cash"),
+    "Taxable Balance": st.column_config.TextColumn("Taxable"),
+    "Traditional Balance": st.column_config.TextColumn("Traditional"),
+    "Roth Balance": st.column_config.TextColumn("Roth"),
+    "DAF Balance": st.column_config.TextColumn("DAF"),
+    "Total Portfolio": st.column_config.TextColumn("Total Portfolio"),
+}
+
+
+def render_balance_table(balances_df: pd.DataFrame) -> None:
+    """Render a formatted account balances dataframe using the shared column config.
+
+    Applies format_currency() to all balance columns before display.
+
+    Args:
+        balances_df: DataFrame with Year and balance columns.
+    """
+    display = balances_df.copy()
+    balance_cols = ['Cash Balance', 'Taxable Balance', 'Traditional Balance',
+                    'Roth Balance', 'DAF Balance', 'Total Portfolio']
+    for col in balance_cols:
+        if col in display.columns:
+            display[col] = pd.to_numeric(display[col], errors='coerce').map(format_currency)
+    st.dataframe(display, column_config=BALANCE_COLUMN_CONFIG, hide_index=True, width='stretch')
+
+
+# Type-label mapping: account_type value → display label
+_ACCOUNT_TYPE_LABELS: dict[str, str] = {
+    "Cash":        "Cash",
+    "Brokerage":   "Investment",
+    "Traditional": "Tax Deferred",
+    "Roth":        "Tax Free",
+    "Real Estate": "Real Estate",
+}
+
+# Display order for account types
+_ACCOUNT_TYPE_ORDER: list[str] = [
+    "Cash", "Brokerage", "Traditional", "Roth", "Real Estate"
+]
+
+# Per-type background colors — match the chart palette used throughout the app
+# Cash=yellow, Brokerage=pink, Traditional=green, Roth=purple, Real Estate=orange
+_ACCOUNT_TYPE_COLORS: dict[str, str] = {
+    "Cash":        "rgba(246, 207, 113, 0.35)",   # yellow
+    "Brokerage":   "rgba(254, 136, 177, 0.35)",   # pink
+    "Traditional": "rgba(139, 224, 164, 0.35)",   # green
+    "Roth":        "rgba(180, 151, 231, 0.35)",   # purple
+    "Real Estate": "rgba(255, 190, 122, 0.35)",   # orange
+}
+
+# Darker left-border accent per type (solid strip for visual grouping)
+_ACCOUNT_TYPE_ACCENT: dict[str, str] = {
+    "Cash":        "rgb(246, 207, 113)",
+    "Brokerage":   "rgb(254, 136, 177)",
+    "Traditional": "rgb(139, 224, 164)",
+    "Roth":        "rgb(180, 151, 231)",
+    "Real Estate": "rgb(255, 190, 122)",
+}
+
+
+def render_net_worth_statement(
+    networth: pd.DataFrame,
+    detailed_df: pd.DataFrame,
+) -> None:
+    """Render a hierarchical net worth statement matching the user's layout.
+
+    Columns: Type | Type Total | Account Total | Account
+
+    Rows:
+    - One header row per account type (merged across its accounts) with type total
+    - One detail row per account within that type
+    - Total net worth row with MoM change
+    - YTD gains row
+    - Rolling 12-month gains row
+
+    Args:
+        networth: DataFrame with DatetimeIndex and columns
+                  cash, taxable, tax_deferred, tax_free, total.
+                  Must have at least 2 rows.
+        detailed_df: DataFrame with columns account_type, account_name, market_value
+                     for the current month (from get_networth_by_month).
+    """
+    # ------------------------------------------------------------------ #
+    # Aggregate account-level data                                         #
+    # ------------------------------------------------------------------ #
+    if detailed_df.empty:
+        st.warning("No account detail data available for net worth statement.")
+        return
+
+    acct_grp = (
+        detailed_df
+        .groupby(["account_type", "account_name"], as_index=False)["market_value"]
+        .sum()
+    )
+
+    # ------------------------------------------------------------------ #
+    # Compute summary figures from historical networth                     #
+    # ------------------------------------------------------------------ #
+    current_total = float(networth["total"].iloc[-1])
+    prior_total   = float(networth["total"].iloc[-2])
+    mom_change    = current_total - prior_total
+
+    # YTD: compare to first available entry in current calendar year
+    curr_year_idx = networth.index.year == networth.index[-1].year
+    ytd_start_val = float(networth.loc[curr_year_idx, "total"].iloc[0]) if curr_year_idx.any() else current_total
+    ytd_gain      = current_total - ytd_start_val
+
+    # Rolling 12-month: compare to entry 12 months ago (or earliest available)
+    twelve_ago = networth.index[-1] - pd.DateOffset(months=12)
+    older = networth[networth.index <= twelve_ago]
+    rolling_start = float(older["total"].iloc[-1]) if not older.empty else float(networth["total"].iloc[0])
+    rolling_gain  = current_total - rolling_start
+
+    # ------------------------------------------------------------------ #
+    # Build HTML table                                                     #
+    # ------------------------------------------------------------------ #
+    HDR_BG   = "#1a1a2e"
+    HDR_FG   = "white"
+    TOTAL_BG = "#e8f4fd"
+    SUMM_BG  = "#f8f9fa"
+    POS_CLR  = "#21c354"
+    NEG_CLR  = "#ff4b4b"
+    BORDER   = "1px solid #dee2e6"
+
+    def _fmt(v: float) -> str:
+        if v < 0:
+            return f"$({abs(v):,.2f})"
+        return f"${v:,.2f}"
+
+    def _chg_style(v: float) -> str:
+        return f"color:{POS_CLR};font-weight:600" if v >= 0 else f"color:{NEG_CLR};font-weight:600"
+
+    rows_html = ""
+
+    # Header row
+    rows_html += (
+        f'<tr style="background:{HDR_BG};color:{HDR_FG};font-size:12px;'
+        f'text-transform:uppercase;letter-spacing:.05em;">'
+        f'<th style="padding:8px 12px;text-align:left;">Type</th>'
+        f'<th style="padding:8px 12px;text-align:right;">Type Total</th>'
+        f'<th style="padding:8px 12px;text-align:right;">Account Total</th>'
+        f'<th style="padding:8px 12px;text-align:left;">Account</th>'
+        f'</tr>'
+    )
+
+    grand_total = 0.0
+
+    for acct_type in _ACCOUNT_TYPE_ORDER:
+        accounts = acct_grp[acct_grp["account_type"] == acct_type].copy()
+        if accounts.empty:
+            continue
+
+        type_label  = _ACCOUNT_TYPE_LABELS.get(acct_type, acct_type)
+        type_total  = float(accounts["market_value"].sum())
+        grand_total += type_total
+        n_accounts  = len(accounts)
+
+        # Per-type palette colors
+        row_bg     = _ACCOUNT_TYPE_COLORS.get(acct_type, "rgba(240,242,246,0.4)")
+        accent_clr = _ACCOUNT_TYPE_ACCENT.get(acct_type, "#cccccc")
+
+        # Shared cell style for account detail cells within this type group
+        td  = (f'style="padding:6px 12px;border:{BORDER};text-align:right;'
+               f'background:{row_bg};"')
+        tdl = (f'style="padding:6px 12px;border:{BORDER};text-align:left;'
+               f'background:{row_bg};"')
+
+        for i, (_, row) in enumerate(accounts.iterrows()):
+            acct_val  = float(row["market_value"])
+            acct_name = str(row["account_name"])
+
+            if i == 0:
+                # First account row: type label + type total with left accent border
+                rows_html += (
+                    f'<tr>'
+                    f'<td rowspan="{n_accounts}" style="padding:6px 12px;border:{BORDER};'
+                    f'border-left:4px solid {accent_clr};text-align:left;font-weight:700;'
+                    f'vertical-align:middle;background:{row_bg};">{type_label}</td>'
+                    f'<td rowspan="{n_accounts}" style="padding:6px 12px;border:{BORDER};'
+                    f'text-align:right;font-weight:600;vertical-align:middle;'
+                    f'background:{row_bg};">{_fmt(type_total)}</td>'
+                    f'<td {td}>{_fmt(acct_val)}</td>'
+                    f'<td {tdl}>{acct_name}</td>'
+                    f'</tr>'
+                )
+            else:
+                rows_html += (
+                    f'<tr>'
+                    f'<td {td}>{_fmt(acct_val)}</td>'
+                    f'<td {tdl}>{acct_name}</td>'
+                    f'</tr>'
+                )
+
+    # Total net worth row
+    mom_style = _chg_style(mom_change)
+    rows_html += (
+        f'<tr style="background:{TOTAL_BG};font-weight:700;font-size:14px;">'
+        f'<td style="padding:8px 12px;border:{BORDER};text-align:left;">Total net worth</td>'
+        f'<td style="padding:8px 12px;border:{BORDER};text-align:right;">{_fmt(grand_total)}</td>'
+        f'<td style="padding:8px 12px;border:{BORDER};text-align:right;{mom_style}">'
+        f'Change from last month</td>'
+        f'<td style="padding:8px 12px;border:{BORDER};text-align:right;{mom_style}">'
+        f'{_fmt(mom_change)}</td>'
+        f'</tr>'
+    )
+
+    # YTD gains row
+    ytd_style = _chg_style(ytd_gain)
+    rows_html += (
+        f'<tr style="background:{SUMM_BG};">'
+        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:left;'
+        f'font-style:italic;">Year to date gains (losses)</td>'
+        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:right;'
+        f'{ytd_style}">{_fmt(ytd_gain)}</td>'
+        f'</tr>'
+    )
+
+    # Rolling 12-month gains row
+    roll_style = _chg_style(rolling_gain)
+    rows_html += (
+        f'<tr style="background:{SUMM_BG};">'
+        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:left;'
+        f'font-style:italic;">Rolling 12 month gains (losses)</td>'
+        f'<td colspan="2" style="padding:6px 12px;border:{BORDER};text-align:right;'
+        f'{roll_style}">{_fmt(rolling_gain)}</td>'
+        f'</tr>'
+    )
+
+    as_of = networth.index[-1].strftime("%B %Y")
+    html = (
+        f'<h4 style="margin-bottom:6px;">📊 Net Worth Statement — {as_of}</h4>'
+        f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+        f'{rows_html}'
+        f'</table>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 st.header("Retirement planner")
 ##############################################################################################
 
@@ -148,69 +497,22 @@ sidebar()
 ##############################################################################################
 
 
-tab1, tab3, tab4, tab5 = st.tabs(["Dashboard", "Portfolio planner", "Retirement planner", "Withdrawal Strategy"])
+# Build historical net worth once at module scope — shared by Dashboard and Tax Planner tabs
+networth = build_historical_networth(num_months=12)
+
+tab1, tab3, tab_accum, tab_tax, tab_flow, tab5 = st.tabs(
+    ["📊 Dashboard", "💼 Portfolio", "📈 Strategy", "🧮 Tax Planner", "💸 Flow of Funds", "⚙️ Settings"]
+)
 with tab1:
-   # Build historical net worth using optimized portfolio truth data
-   networth = build_historical_networth(num_months=12)
-   
    # Check if we have enough data
    if networth.empty or len(networth) < 2:
        st.error("Insufficient historical data. Need at least 2 months of portfolio data.")
        st.stop()
-   
-   color_palette = px.colors.qualitative.Pastel
-   cg_income_lt=0
-   cg_income_st=0
-   interest=0
-   agi=0
-   col1row3, col1row4, col1row5, col1row6,col1row7 = st.columns(5)
-   with col1row3:
-       st.header(" ")
-       cash_value=networth["cash"].values[-1]
-       cash_value2=networth["cash"].values[-2]
-       change_last_month=(networth["cash"].values[-1]-networth["cash"].values[-2])
-       fcash_value=f"${cash_value:,.2f}"
-       fchange_last_month=f"{change_last_month:,.2f}"
-       st.metric(label="Cash", value=fcash_value, delta= fchange_last_month + " Monthly Change" )
-       #st.metric(label="Change from Last Month", value=fchange_last_month)
-   with col1row4:  
-       st.header(" ")
-       taxable_value=networth["taxable"].values[-1]
-       taxable_last_month=networth["taxable"].values[-1]-networth["taxable"].values[-2]
-       ftaxable_value=f"${taxable_value:,.2f}"
-       ftaxable_last_month=f"{taxable_last_month:,.2f}"    
-       st.metric(label="Brokerage", value=ftaxable_value, delta=ftaxable_last_month + " Monthly Change"  )
-       # st.metric(label="Change from Last Month", value=ftaxable_last_month)
-   with col1row5:   
-       st.header(" ")
-       roth_value=networth["tax_free"].values[-1]
-       roth_last_month=networth["tax_free"].values[-1]-networth["tax_free"].values[-2]
-       froth_value=f"${roth_value:,.2f}"
-       froth_last_month=f"{roth_last_month:,.2f}"
-       st.metric(label="Roth", value=froth_value, delta=froth_last_month+ " Monthly Change" )
-       #st.metric(label="Change from Last Month", value=froth_last_month)
-   with col1row6:   
-       st.header(" ")
-       trad_value=networth["tax_deferred"].values[-1]
-       trad_last_month=networth["tax_deferred"].values[-1]-networth["tax_deferred"].values[-2]
-       ftrad_value=f"${trad_value:,.2f}"
-       ftrad_last_month=f"{trad_last_month:,.2f}"
-       st.metric(label="Traditional", value=ftrad_value, delta=ftrad_last_month+ "Monthly Change" )
-       #st.metric(label="Change from Last Month", value=ftrad_last_month)
-   with col1row7:   
-       st.header(" ")
-       total_value=networth["total"].values[-1]
-       total_last_month=networth["total"].values[-1]-networth["total"].values[-2]
-       ftotal_value=f"${total_value:,.2f}"
-       ftotal_last_month=f"{total_last_month:,.2f}"
-       st.metric(label="Total Net Worth", value=ftotal_value, delta=ftotal_last_month+ " Monthly Change" )
-       #st.metric(label="Change from Last Month", value=ftotal_last_month)  
-   
-   add_vertical_space(2)
+
    row2_col1, row2_col2, row2_col3 = st.columns(3)
    with row2_col1:
        st.markdown('<h4 style="text-align: center;">Total Net Worth</h4>', unsafe_allow_html=True)
-       fig2 = px.histogram(networth, x=networth.index, y='total', nbins=10, color="total", color_discrete_sequence=color_palette)
+       fig2 = px.histogram(networth, x=networth.index, y='total', nbins=10, color="total", color_discrete_sequence=COLOR_PALETTE)
        
        # Calculate y-axis range with 10% padding
        y_min = networth['total'].min()
@@ -323,7 +625,7 @@ with tab1:
           #names=row_to_plot.index,    # Labels for the slices (column names)
            names=["Cash","Broker","Traditional","Roth"],    # Labels for the slices (column names)
            values=row_to_plot.values,  # Values for the slices
-           color_discrete_sequence=color_palette,
+           color_discrete_sequence=COLOR_PALETTE,
            title=' '
         )
        # Customize the chart (optional)
@@ -344,7 +646,88 @@ with tab1:
        )
        st.plotly_chart(fig, width='stretch')
    
-   add_vertical_space(2)
+   add_vertical_space(1)
+   # --- Net Worth Statement widget (formal balance-sheet view) ---
+   # Fetch account-level detail for current month to populate the hierarchy
+   try:
+       _nw_detailed_df, _ = get_networth_by_month(curr_month, curr_year)
+   except Exception:
+       _nw_detailed_df = pd.DataFrame()
+   render_net_worth_statement(networth, _nw_detailed_df)
+
+   # ------------------------------------------------------------------ #
+   # YoY Net Worth Trend Line                                             #
+   # ------------------------------------------------------------------ #
+   if len(networth) >= 2:
+       nw_trend_fig = go.Figure()
+       nw_trend_fig.add_trace(go.Scatter(
+           x=networth.index,
+           y=networth['total'],
+           mode='lines+markers',
+           name='Total Net Worth',
+           line=dict(color='#4c78a8', width=2),
+           marker=dict(size=6),
+           fill='tozeroy',
+           fillcolor='rgba(76,120,168,0.12)',
+           hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
+       ))
+       # Annotate MoM change on the last point
+       last_val  = float(networth['total'].iloc[-1])
+       prev_val  = float(networth['total'].iloc[-2])
+       mom_delta = last_val - prev_val
+       mom_pct   = (mom_delta / prev_val * 100) if prev_val else 0.0
+       arrow_clr = '#21c354' if mom_delta >= 0 else '#ff4b4b'
+       nw_trend_fig.add_annotation(
+           x=networth.index[-1], y=last_val,
+           text=f"{'▲' if mom_delta >= 0 else '▼'} ${abs(mom_delta):,.0f} ({mom_pct:+.1f}%)",
+           showarrow=True, arrowhead=2, arrowcolor=arrow_clr,
+           font=dict(color=arrow_clr, size=11),
+           bgcolor='white', bordercolor=arrow_clr, borderwidth=1,
+           ax=0, ay=-36,
+       )
+       nw_trend_fig.update_layout(
+           title='Net Worth Trend (12 months)',
+           xaxis_title='Month',
+           yaxis_title='Net Worth ($)',
+           plot_bgcolor='white', paper_bgcolor='white',
+           showlegend=False,
+           margin=dict(t=40, l=10, r=10, b=10),
+           yaxis=dict(tickformat='$,.0f'),
+       )
+       st.plotly_chart(nw_trend_fig, width='stretch')
+
+   # ------------------------------------------------------------------ #
+   # Tax Efficiency Score                                                 #
+   # ------------------------------------------------------------------ #
+   try:
+       _te_trad  = float(networth['tax_deferred'].iloc[-1]) if not networth.empty else 0.0
+       _te_roth  = float(networth['tax_free'].iloc[-1])     if not networth.empty else 0.0
+       _te_brok  = float(networth['taxable'].iloc[-1])      if not networth.empty else 0.0
+       _te_cash  = float(networth['cash'].iloc[-1])         if not networth.empty else 0.0
+       _te_total = _te_trad + _te_roth + _te_brok + _te_cash
+       # Tax efficiency = (tax-free + taxable) / total  (higher = more tax-efficient)
+       _te_score = ((_te_roth + _te_brok) / _te_total * 100) if _te_total > 0 else 0.0
+       # Roth ratio: proportion of retirement assets in Roth vs Traditional
+       _roth_ratio = (_te_roth / (_te_roth + _te_trad) * 100) if (_te_roth + _te_trad) > 0 else 0.0
+   except Exception:
+       _te_score = _roth_ratio = 0.0
+       _te_trad = _te_roth = _te_brok = _te_cash = _te_total = 0.0
+
+   st.markdown("#### 🧮 Tax Efficiency")
+   _te_col1, _te_col2, _te_col3, _te_col4 = st.columns(4)
+   with _te_col1:
+       _te_label = "🟢 Excellent" if _te_score >= 60 else ("🟡 Good" if _te_score >= 40 else "🔴 Improve")
+       st.metric("Tax Efficiency Score", f"{_te_score:.0f}%", help="(Roth + Taxable Brokerage) ÷ Total Portfolio. Higher = more tax-flexible assets.")
+       st.caption(_te_label)
+   with _te_col2:
+       st.metric("Roth Ratio", f"{_roth_ratio:.0f}%", help="Roth ÷ (Roth + Traditional). Higher = more tax-free retirement assets.")
+   with _te_col3:
+       st.metric("Tax-Deferred (Trad)", f"${_te_trad:,.0f}")
+   with _te_col4:
+       st.metric("Tax-Free (Roth)", f"${_te_roth:,.0f}")
+
+   add_vertical_space(1)
+
    tab1_row2_col1,tab1_row2_col2 = st.columns(2)
    with tab1_row2_col1:
        st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
@@ -357,7 +740,7 @@ with tab1:
        #print(mtd_spend)
       # monthly_balance = account_data.iloc[-1,1:15] # Select the first row
        fig_mtd_spend_by_cateogry = px.treemap(mtd_spend, path=['account_type','account_name'],
-                     values='market_value',color='market_value', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']), title="")
+                     values='market_value',color='market_value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']), title="")
        fig_mtd_spend_by_cateogry.data[0].textinfo = "label+text+value+percent root"
 
        #fig_mtd_spend_by_cateogry.update_layout(margin=dict(l=0,r=0,t=0,b=0))
@@ -371,7 +754,7 @@ with tab1:
         # Exclude the totals row (last row where Account == 'Portfolio Totals')
         portdf_no_totals = portdf_with_totals[portdf_with_totals['Account'] != 'Portfolio Totals'].copy()
         portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector'],
-        values='Current value',color='Current value', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
+        values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
         #values='Current value',color='Current value', title="")
         portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
         portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
@@ -379,13 +762,9 @@ with tab1:
 
         st.plotly_chart(portfolio_by_sector, width='stretch')
        
-portdf = build_portfolio_display()
-
-
-
 with tab3:
     
-    st.header("Portfolio")
+    st.header("💼 Portfolio")
     #add_vertical_space(2)
     portdf = build_portfolio_display()
     
@@ -405,19 +784,82 @@ with tab3:
     styled_portdf = portdf.style.set_table_styles(styles).map(color_negative_positive)
     styled_portdf_no_total = portdf_no_totals.style.set_table_styles(styles).map(color_negative_positive)
     
-    map_tab,details_tab,update_tab = st.tabs(["Map Of Portfolio", "Details", "Update Securities"])
+    map_tab, details_tab = st.tabs(["Map Of Portfolio", "Details"])
     with map_tab:
         st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
 
         portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector', 'Ticker'],
-            values='Current value',color='Current value', color_continuous_scale=color_palette,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
+            values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
                     #values='Current value',color='Current value', title="")
         portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
         portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
         portfolio_by_sector.update_layout(margin = dict(t=50, l=25, r=25, b=25))
 
         st.plotly_chart(portfolio_by_sector, width='stretch')
-        
+
+        # ------------------------------------------------------------------ #
+        # Portfolio Performance vs Benchmark                                   #
+        # ------------------------------------------------------------------ #
+        st.markdown("#### 📈 Portfolio Performance vs Benchmark")
+        if not networth.empty and len(networth) >= 2:
+            _bench_rate = 0.07 / 12  # 7% annual → monthly
+            _start_val  = float(networth['total'].iloc[0])
+            _bench_vals = [_start_val * ((1 + _bench_rate) ** i) for i in range(len(networth))]
+
+            _perf_fig = go.Figure()
+            _perf_fig.add_trace(go.Scatter(
+                x=networth.index,
+                y=networth['total'],
+                mode='lines+markers',
+                name='Your Portfolio',
+                line=dict(color='#4c78a8', width=2),
+                marker=dict(size=5),
+                hovertemplate='%{x|%b %Y}<br>Portfolio: $%{y:,.0f}<extra></extra>',
+            ))
+            _perf_fig.add_trace(go.Scatter(
+                x=networth.index,
+                y=_bench_vals,
+                mode='lines',
+                name='Benchmark (7% p.a.)',
+                line=dict(color='#f58518', width=2, dash='dash'),
+                hovertemplate='%{x|%b %Y}<br>Benchmark: $%{y:,.0f}<extra></extra>',
+            ))
+            # Shade the gap between portfolio and benchmark
+            _perf_fig.add_trace(go.Scatter(
+                x=list(networth.index) + list(networth.index[::-1]),
+                y=networth['total'].tolist() + _bench_vals[::-1],
+                fill='toself',
+                fillcolor='rgba(76,120,168,0.10)',
+                line=dict(color='rgba(255,255,255,0)'),
+                showlegend=False,
+                hoverinfo='skip',
+            ))
+            _last_port  = float(networth['total'].iloc[-1])
+            _last_bench = _bench_vals[-1]
+            _vs_bench   = _last_port - _last_bench
+            _vs_pct     = (_vs_bench / _last_bench * 100) if _last_bench else 0.0
+            _vs_clr     = '#21c354' if _vs_bench >= 0 else '#ff4b4b'
+            _vs_lbl     = f"{'▲' if _vs_bench >= 0 else '▼'} ${abs(_vs_bench):,.0f} ({_vs_pct:+.1f}%) vs benchmark"
+            _perf_fig.add_annotation(
+                x=networth.index[-1], y=_last_port,
+                text=_vs_lbl,
+                showarrow=True, arrowhead=2, arrowcolor=_vs_clr,
+                font=dict(color=_vs_clr, size=11),
+                bgcolor='white', bordercolor=_vs_clr, borderwidth=1,
+                ax=0, ay=-40,
+            )
+            _perf_fig.update_layout(
+                xaxis_title='Month',
+                yaxis_title='Portfolio Value ($)',
+                plot_bgcolor='white', paper_bgcolor='white',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                margin=dict(t=40, l=10, r=10, b=10),
+                yaxis=dict(tickformat='$,.0f'),
+            )
+            st.plotly_chart(_perf_fig, width='stretch')
+        else:
+            st.info("📈 Portfolio performance chart requires at least 2 months of historical data.")
+
     with details_tab:
         desired_height = (len(portdf) + 1) * 35 + 3
         st.dataframe(styled_portdf,height=desired_height,
@@ -450,680 +892,617 @@ with tab3:
         width='stretch',
         column_order=None)
 
-    with update_tab:
-        st.title('Manual Portfolio Data Entry')
-        st.markdown("Enter your monthly portfolio holdings below. The system will validate ticker symbols against Yahoo Finance and save to portfolio_data_truth.csv")
         
-        # Month/Year selection
-        col1, col2 = st.columns(2)
-        with col1:
-            entry_month = st.number_input("Month", min_value=1, max_value=12, value=curr_month, step=1)
-        with col2:
-            entry_year = st.number_input("Year", min_value=2000, max_value=2100, value=curr_year, step=1)
-        
-        # Initialize session state for the data editor
-        if 'portfolio_entries' not in st.session_state:
-            st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
-            st.session_state.last_loaded_month = entry_month
-            st.session_state.last_loaded_year = entry_year
-        
-        # Reload data if month/year changed
-        if 'last_loaded_month' not in st.session_state or 'last_loaded_year' not in st.session_state or \
-           st.session_state.last_loaded_month != entry_month or \
-           st.session_state.last_loaded_year != entry_year:
-            st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
-            st.session_state.last_loaded_month = entry_month
-            st.session_state.last_loaded_year = entry_year
-        
-        st.markdown("### Enter Portfolio Data")
-        
-        # Show info about data source
-        prev_month = entry_month - 1 if entry_month > 1 else 12
-        prev_year = entry_year if entry_month > 1 else entry_year - 1
-        
-        if len(st.session_state.portfolio_entries) > 1 or \
-           (len(st.session_state.portfolio_entries) == 1 and st.session_state.portfolio_entries['symbol'].iloc[0] != ''):
-            st.info(f"📋 Loaded {len(st.session_state.portfolio_entries)} entries from {prev_month}/{prev_year}. You can add, update, or delete rows as needed.")
-        else:
-            st.info("💡 No previous month data found. Add rows using the '+' button. For ticker symbols, use standard symbols (e.g., AAPL, GOOGL) or MF:CASH for cash holdings.")
-        
-        # Data editor with proper column configuration
-        edited_df = st.data_editor(
-            st.session_state.portfolio_entries,
-            num_rows="dynamic",
-            width='stretch',
-            column_config={
-                "month": st.column_config.NumberColumn(
-                    "Month",
-                    min_value=1,
-                    max_value=12,
-                    step=1,
-                    format="%d"
-                ),
-                "year": st.column_config.NumberColumn(
-                    "Year",
-                    min_value=2000,
-                    max_value=2100,
-                    step=1,
-                    format="%d"
-                ),
-                "account_name": st.column_config.TextColumn(
-                    "Account Name",
-                    help="e.g., PNC, Schwab, Fidelity",
-                    required=True
-                ),
-                "account_type": st.column_config.SelectboxColumn(
-                    "Account Type",
-                    options=["Cash", "Brokerage", "Traditional", "Roth"],
-                    required=True
-                ),
-                "symbol": st.column_config.TextColumn(
-                    "Ticker Symbol",
-                    help="Stock ticker or MF:CASH for cash",
-                    required=True
-                ),
-                "name": st.column_config.TextColumn(
-                    "Security Name",
-                    help="Will be auto-filled during validation"
-                ),
-                "sector": st.column_config.SelectboxColumn(
-                    "Sector",
-                    options=[
-                        "MF:Cash",
-                        "Stock/ETF",
-                        "MF:Large-Cap",
-                        "MF:Mid-Cap",
-                        "MF:Small-Cap",
-                        "MF:Reit",
-                        "MF:Global",
-                        "MF:Asia",
-                        "MF:Europe",
-                        "MF:Latin America",
-                        "Automotive",
-                        "Technology",
-                        "Communication Services",
-                        "Healthcare",
-                        "Consumer Defensive",
-                        "Financial Services",
-                        "Energy",
-                        "Industrials",
-                        "Real Estate",
-                        "Utilities",
-                        "Basic Materials",
-                        "Consumer Cyclical"
-                    ],
-                    help="Will be auto-filled during validation"
-                ),
-                "qty": st.column_config.NumberColumn(
-                    "Quantity",
-                    min_value=0,
-                    step=0.01,
-                    format="%.2f",
-                    required=True
-                ),
-                "purchase_price": st.column_config.NumberColumn(
-                    "Purchase Price",
-                    min_value=0,
-                    step=0.01,
-                    format="$%.2f",
-                    required=True
+
+
+with tab_accum:
+    st.header("📈 Strategy")
+    st.markdown("Plan and review your accumulation and withdrawal strategy across all life stages.")
+
+    # Phase toggle: Accumulation (pre-retirement) vs Withdrawal (distribution)
+    phase = st.radio(
+        "Planning Phase",
+        options=["📈 Accumulation (Pre-Retirement)", "💸 Withdrawal (Distribution)"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+
+    strategy_sub_tab, balances_sub_tab, charts_sub_tab = st.tabs(
+        ["📋 Annual Plan", "💰 Account Balances", "📊 Visualizations"]
+    )
+
+    if phase == "📈 Accumulation (Pre-Retirement)":
+        # ------------------------------------------------------------------ #
+        # ACCUMULATION PHASE                                                   #
+        # ------------------------------------------------------------------ #
+
+        # Read parameters from session state / config
+        try:
+            accum_rate_of_return_s = float(st.session_state.get("RATE", 6)) / 100
+        except (ValueError, TypeError):
+            accum_rate_of_return_s = 0.06
+
+        try:
+            from config import get_config_manager as _acfg_mgr
+            _acfg = _acfg_mgr()
+            accum_expense_inflation = _acfg.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100.0
+            accum_person1_name = _acfg.get("personal_info", "person1_name", "Person1")
+            accum_person2_name = _acfg.get("personal_info", "person2_name", "Person2")
+            accum_annual_expenses = _acfg.get("financial_assumptions", "expected_annual_expenses", 120_000)
+        except Exception:
+            accum_expense_inflation = 0.03
+            accum_person1_name = "Person1"
+            accum_person2_name = "Person2"
+            accum_annual_expenses = 120_000
+
+        # Parameters summary bar
+        ap_col1, ap_col2, ap_col3 = st.columns(3)
+        with ap_col1:
+            st.metric("Rate of Return", f"{accum_rate_of_return_s * 100:.1f}%")
+        with ap_col2:
+            st.metric("Expense Inflation", f"{accum_expense_inflation * 100:.1f}%")
+        with ap_col3:
+            st.metric("Annual Expenses", f"${accum_annual_expenses:,.0f}")
+
+        add_vertical_space(1)
+
+        try:
+            with st.spinner("Calculating accumulation strategy..."):
+                accum_strategy_df, accum_balances_df = build_accumulation_strategy_display(
+                    start_year=curr_year,
+                    growth_rate=1 + accum_rate_of_return_s,
+                    expense_inflation_rate=accum_expense_inflation,
+                    person1_name=accum_person1_name,
+                    person2_name=accum_person2_name,
                 )
-            },
-            hide_index=True
-        )
-        
-        # Update session state
-        st.session_state.portfolio_entries = edited_df
-        
-        # Action buttons
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            if st.button('🔍 Validate & Lookup Tickers', type="primary", width='stretch'):
-                with st.spinner("Validating ticker symbols with Yahoo Finance..."):
-                    # Filter out empty rows
-                    non_empty_df = edited_df[edited_df['symbol'].str.strip() != ''].copy()
-                    
-                    if non_empty_df.empty:
-                        st.warning("No entries to validate. Please add at least one row with a ticker symbol.")
-                    else:
-                        validation_results = []
-                        
-                        # Validate each ticker and auto-fill name/sector
-                        for idx, row in non_empty_df.iterrows():
-                            symbol = row['symbol'].strip().upper()
-                            is_valid, name, sector, error = validate_ticker_symbol(symbol)
-                            
-                            if is_valid:
-                                # Update name and sector in the dataframe
-                                non_empty_df.at[idx, 'name'] = name
-                                non_empty_df.at[idx, 'sector'] = sector
-                                validation_results.append({
-                                    'Symbol': symbol,
-                                    'Status': '✅ Valid',
-                                    'Name': name,
-                                    'Sector': sector
-                                })
-                            else:
-                                validation_results.append({
-                                    'Symbol': symbol,
-                                    'Status': '❌ Invalid',
-                                    'Name': '',
-                                    'Sector': error
-                                })
-                        
-                        # Update session state with validated data
-                        st.session_state.portfolio_entries = non_empty_df
-                        
-                        # Display validation results
-                        st.markdown("### Validation Results")
-                        results_df = pd.DataFrame(validation_results)
-                        st.dataframe(results_df, width='stretch', hide_index=True)
-                        
-                        # Check if all valid
-                        invalid_count = sum(1 for r in validation_results if '❌' in r['Status'])
-                        if invalid_count == 0:
-                            st.success(f"✅ All {len(validation_results)} ticker symbols validated successfully!")
-                        else:
-                            st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
-        
-        with col2:
-            if st.button('💾 Save to CSV', type="secondary", width='stretch'):
-                # Filter out empty rows
-                non_empty_df = edited_df[edited_df['symbol'].str.strip() != ''].copy()
-                
-                if non_empty_df.empty:
-                    st.warning("No entries to save. Please add at least one row.")
-                else:
-                    # Validate the dataframe
-                    valid_df, invalid_df = validate_portfolio_dataframe(non_empty_df)
-                    
-                    if not invalid_df.empty:
-                        st.error(f"❌ Found {len(invalid_df)} invalid entries. Please fix errors before saving:")
-                        st.dataframe(invalid_df[['symbol', 'account_name', 'validation_error']], width='stretch', hide_index=True)
-                    elif valid_df.empty:
-                        st.warning("No valid entries to save.")
-                    else:
-                        # Save to CSV
-                        success, message = save_portfolio_data(valid_df, append=True)
-                        
-                        if success:
-                            st.success(f"✅ {message}")
-                            st.info("🔄 Refreshing portfolio data and switching to Map view...")
-                            
-                            # Clear ALL caches to force reload of portfolio data
-                            st.cache_data.clear()
-                            
-                            # Reset the entry form
-                            st.session_state.portfolio_entries = create_empty_entry_template(entry_month, entry_year)
-                            
-                            # Force a complete page refresh to reload all data
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {message}")
-        
-        with col3:
-            if st.button('🔄 Reload Previous Month', width='stretch'):
-                st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
-                st.rerun()
-        
-        with col4:
-            if st.button('🆕 Start from Scratch', type="secondary", width='stretch'):
-                # Show confirmation dialog
-                if 'confirm_scratch' not in st.session_state:
-                    st.session_state.confirm_scratch = False
-                
-                if not st.session_state.confirm_scratch:
-                    st.session_state.confirm_scratch = True
-                    st.warning("⚠️ This will backup your current data and create a blank file. Click again to confirm.")
-                    st.rerun()
-                else:
-                    with st.spinner("Creating backup and blank file..."):
-                        success, message = start_from_scratch()
-                        
-                        if success:
-                            st.success(f"✅ {message}")
-                            st.info("🔄 Refreshing data...")
-                            
-                            # Clear caches and reset
-                            st.cache_data.clear()
-                            st.session_state.portfolio_entries = create_empty_entry_template(entry_month, entry_year)
-                            st.session_state.confirm_scratch = False
-                            
-                            # Force refresh
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {message}")
-                            st.session_state.confirm_scratch = False
-        
+
+            with strategy_sub_tab:
+                st.subheader("Annual Accumulation Plan")
+
+                display_df_a = accum_strategy_df.copy()
+
+                display_cols_a = [
+                    'Year', 'Age', 'Stage',
+                    'Wages', 'Trad→\nRoth', 'Trad→\nBrok',
+                    'Expenses', 'AGI', 'Federal Tax',
+                    'Cash Balance',
+                ]
+                available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
+                display_df_a = display_df_a[available_cols_a].copy()
+
+                numeric_cols_a = [c for c in available_cols_a if c not in ['Year', 'Age', 'Stage']]
+                for col in numeric_cols_a:
+                    display_df_a[col] = display_df_a[col].apply(format_currency)
+
+                accum_column_config = {
+                    "Year": st.column_config.NumberColumn("Year", format="%d"),
+                    "Age": st.column_config.TextColumn("Age"),
+                    "Stage": st.column_config.TextColumn("Life Stage"),
+                    "Wages": st.column_config.TextColumn("Wages"),
+                    "Trad→\nRoth": st.column_config.TextColumn("Trad→Roth"),
+                    "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok"),
+                    "Expenses": st.column_config.TextColumn("Expenses"),
+                    "AGI": st.column_config.TextColumn("AGI"),
+                    "Federal Tax": st.column_config.TextColumn("Fed Tax"),
+                    "Cash Balance": st.column_config.TextColumn("Cash End"),
+                }
+                st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, width='stretch')
+
+            with balances_sub_tab:
+                st.subheader("Account Balances Over Time")
+                render_balance_table(accum_balances_df)
+
+            with charts_sub_tab:
+                st.subheader("Portfolio Balance Projections")
+                render_balance_chart(accum_balances_df, title="Projected Account Balances (Accumulation)")
+                st.subheader("Income Sources Over Time")
+                render_income_chart(accum_strategy_df, title="Income Sources by Year (Accumulation)")
+
+        except Exception as e:
+            st.error(f"Error calculating accumulation strategy: {e}")
+            st.info("Please ensure all configuration parameters are properly set and try refreshing the data.")
+
+    else:
+        # ------------------------------------------------------------------ #
+        # WITHDRAWAL / DISTRIBUTION PHASE                                      #
+        # ------------------------------------------------------------------ #
+        # Get parameters from session state (set by sidebar)
+        try:
+            ssi_age_s = int(st.session_state.get("SSI_AGE", 70))
+            conv_tax_rate_s = float(st.session_state.get("CONV_TAX_RATE", 12))
+            annual_expenses_s = float(st.session_state.get("EXPENSE", 50000))
+            expense_multiplier_s = float(st.session_state.get("EXPENSE_MULTIPLIER", 4))
+            rate_of_return_s = float(st.session_state.get("RATE", 6)) / 100
+            daf_rate_s = float(st.session_state.get("DAF_RATE", 25)) / 100
+            planned_dist_2027_s = float(st.session_state.get("PLANNED_DIST_2027", 5000))
+        except (ValueError, TypeError):
+            ssi_age_s = 70; conv_tax_rate_s = 12; annual_expenses_s = 50000
+            expense_multiplier_s = 4; rate_of_return_s = 0.06
+            daf_rate_s = 0.25; planned_dist_2027_s = 75000
+
+        # Parameters summary bar
+        param_col1, param_col2, param_col3, param_col4 = st.columns(4)
+        with param_col1:
+            st.metric("Social Security Age", ssi_age_s)
+            st.metric("Annual Expenses", f"${annual_expenses_s:,.0f}")
+        with param_col2:
+            st.metric("Max Roth Conv Rate", f"{conv_tax_rate_s}%")
+            st.metric("Expense Multiplier", f"{expense_multiplier_s}x")
+        with param_col3:
+            st.metric("Rate of Return", f"{rate_of_return_s*100:.1f}%")
+        with param_col4:
+            st.metric("DAF Disbursement", f"{daf_rate_s*100:.0f}%")
+            st.metric("2027 Planned Dist", f"${planned_dist_2027_s:,.0f}")
+
+        add_vertical_space(1)
+
+        try:
+            max_conversion_rate = float(st.session_state.get("CONV_TAX_RATE", "24")) / 100.0
+        except (ValueError, TypeError):
+            max_conversion_rate = 0.24
+
+        try:
+            from config import get_config_manager as _cfg_mgr
+            _cfg = _cfg_mgr()
+            aca_marketplace_enrolled = _cfg.get("healthcare", "aca_marketplace_enrolled", False)
+            expense_inflation_rate = _cfg.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100.0
+            person1_name = _cfg.get("personal_info", "person1_name", "Person1")
+            person2_name = _cfg.get("personal_info", "person2_name", "Person2")
+        except Exception:
+            aca_marketplace_enrolled = False; expense_inflation_rate = 0.03
+            person1_name = "Person1"; person2_name = "Person2"
+
+        try:
+            with st.spinner("Calculating withdrawal strategy..."):
+                strategy_df_w, balances_df_w = build_withdrawal_strategy_display(
+                    start_year=curr_year,
+                    end_year=2050,
+                    growth_rate=1 + rate_of_return_s,
+                    expense_inflation_rate=expense_inflation_rate,
+                    person1_name=person1_name,
+                    person2_name=person2_name,
+                    max_conversion_rate=max_conversion_rate,
+                    aca_optimize=aca_marketplace_enrolled,
+                    ss_claiming_age=ssi_age_s
+                )
+
+            with strategy_sub_tab:
+                st.subheader("Year-by-Year Withdrawal Strategy")
+
+                display_df_w = strategy_df_w.copy()
+
+                # Prepend Cash Start column (prior year's Cash Balance)
+                try:
+                    _, summary_df_w = get_networth_by_month(curr_month, curr_year)
+                    actual_cash_start = float(
+                        summary_df_w[summary_df_w['account_type'] == 'Cash']['market_value'].sum()
+                    ) if not summary_df_w.empty else display_df_w.loc[display_df_w.index[0], 'Cash Balance']
+                except Exception:
+                    actual_cash_start = display_df_w.loc[display_df_w.index[0], 'Cash Balance']
+
+                display_df_w['Cash Start'] = display_df_w['Cash Balance'].shift(1)
+                display_df_w.loc[display_df_w.index[0], 'Cash Start'] = actual_cash_start
+
+                display_cols_w = [
+                    'Year', 'Age', 'Stage', 'Cash Start',
+                    'Wages', 'SS Benefits', 'RMD',
+                    'Trad→\nCash', 'Trad→\nBrok', 'Trad→\nRoth',
+                    'Brok→\nCash', 'Roth→\nCash',
+                    'Expenses', 'IRMAA Penalty', 'ACA Premium',
+                    'DAF Contribution', 'AGI', 'MAGI', 'Federal Tax', 'Cash Balance'
+                ]
+                available_cols_w = [c for c in display_cols_w if c in display_df_w.columns]
+                display_df_w = display_df_w[available_cols_w].copy()
+
+                numeric_cols_w = [c for c in available_cols_w if c not in ['Year', 'Age', 'Stage']]
+                for col in numeric_cols_w:
+                    display_df_w[col] = display_df_w[col].apply(format_currency)
+
+                withdrawal_column_config = {
+                    "Year": st.column_config.NumberColumn("Year", format="%d"),
+                    "Age": st.column_config.TextColumn("Age"),
+                    "Stage": st.column_config.TextColumn("Life Stage"),
+                    "Cash Start": st.column_config.TextColumn("Cash Start"),
+                    "Wages": st.column_config.TextColumn("Wages"),
+                    "SS Benefits": st.column_config.TextColumn("Social Security"),
+                    "RMD": st.column_config.TextColumn("RMD"),
+                    "Trad→\nCash": st.column_config.TextColumn("Trad→Cash"),
+                    "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok"),
+                    "Trad→\nRoth": st.column_config.TextColumn("Trad→Roth"),
+                    "Brok→\nCash": st.column_config.TextColumn("Brok→Cash"),
+                    "Roth→\nCash": st.column_config.TextColumn("Roth→Cash"),
+                    "Expenses": st.column_config.TextColumn("Expenses"),
+                    "IRMAA Penalty": st.column_config.TextColumn("IRMAA"),
+                    "ACA Premium": st.column_config.TextColumn("ACA"),
+                    "DAF Contribution": st.column_config.TextColumn("DAF Contrib"),
+                    "AGI": st.column_config.TextColumn("AGI"),
+                    "MAGI": st.column_config.TextColumn("MAGI"),
+                    "Federal Tax": st.column_config.TextColumn("Fed Tax"),
+                    "Cash Balance": st.column_config.TextColumn("Cash End"),
+                }
+                st.dataframe(display_df_w, column_config=withdrawal_column_config, hide_index=True, width='stretch')
+
+            with balances_sub_tab:
+                st.subheader("Account Balances Over Time")
+                render_balance_table(balances_df_w)
+
+            with charts_sub_tab:
+                st.subheader("Portfolio Balance Projections")
+                render_balance_chart(balances_df_w, title="Projected Account Balances (Withdrawal)")
+                st.subheader("Income Sources Over Time")
+                render_income_chart(strategy_df_w, title="Income Sources by Year (Withdrawal)")
+
+        except Exception as e:
+            st.error(f"Error calculating withdrawal strategy: {e}")
+            st.info("Please ensure all sidebar parameters are properly configured and try refreshing the data.")
+
+
+with tab_tax:
+    st.header("🧮 Tax Planner")
+    st.markdown("Estimate taxes, Roth conversions, and account changes for a given year.")
+    st.markdown("---")
+
+    # Use module-level networth; build a 2-row summary for current/prior month
+    try:
+        _tp_curr_val  = float(networth["cash"].iloc[-1])   if not networth.empty else 0.0
+        _tp_trad_val  = float(networth["tax_deferred"].iloc[-1]) if not networth.empty else 0.0
+        _tp_roth_val  = float(networth["tax_free"].iloc[-1])     if not networth.empty else 0.0
+        _tp_brok_val  = float(networth["taxable"].iloc[-1])      if not networth.empty else 0.0
+        cash_value    = _tp_curr_val
+        trad_value    = _tp_trad_val
+        roth_value    = _tp_roth_val
+        taxable_value = _tp_brok_val
+    except Exception:
+        cash_value = trad_value = roth_value = taxable_value = 0.0
+
+    with st.expander("Create estimated taxes for next year", expanded=True):
+        col5, col6, col7, col8, col14 = st.columns(5)
         with col5:
-            if st.button('⏮️ Revert to Last Backup', type="secondary", width='stretch'):
-                # Show confirmation dialog
-                if 'confirm_revert' not in st.session_state:
-                    st.session_state.confirm_revert = False
-                
-                if not st.session_state.confirm_revert:
-                    st.session_state.confirm_revert = True
-                    st.warning("⚠️ This will restore the most recent backup. Click again to confirm.")
-                    st.rerun()
-                else:
-                    with st.spinner("Reverting to last backup..."):
-                        success, message = revert_to_last_backup()
-                        
-                        if success:
-                            st.success(f"✅ {message}")
-                            st.info("🔄 Refreshing data...")
-                            
-                            # Clear caches and reload
-                            st.cache_data.clear()
-                            st.session_state.portfolio_entries = load_previous_month_data(entry_month, entry_year)
-                            st.session_state.confirm_revert = False
-                            
-                            # Force refresh
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {message}")
-                            st.session_state.confirm_revert = False
-        
-        # Display current data preview
-        st.markdown("---")
-        st.markdown("### Current Entries Preview")
-        non_empty_preview = edited_df[edited_df['symbol'].str.strip() != '']
-        if not non_empty_preview.empty:
-            st.dataframe(non_empty_preview, width='stretch', hide_index=True)
+            wages = st.number_input("Wages", key="tp_wages", on_change=clear_submit)
+        with col6:
+            deferred_distribution = st.number_input("Trad IRA Distribution", key="tp_trad_dist", on_change=clear_submit)
+        with col14:
+            interest = st.number_input("Interest", key="tp_interest", on_change=clear_submit)
+        with col7:
+            cg_income_lt = st.number_input("Long Term Cap Gains", key="tp_ltcg", on_change=clear_submit)
+        with col8:
+            cg_income_st = st.number_input("Short Term Cap Gains", key="tp_stcg", on_change=clear_submit)
+
+        col9, col10, col12, col11, col13 = st.columns(5)
+        with col9:
+            people = st.selectbox("Medicare Eligible", [0, 1, 2], key="tp_medicare", on_change=clear_submit)
+        with col10:
+            year = st.selectbox("Tax Year", [2023, 2024, 2025, 2026, 2027], key="tp_year", on_change=clear_submit, index=3)
+        with col12:
+            maxdaf = st.selectbox("Max Donor Advisor Fund", ['N', 'Y'], key="tp_maxdaf", on_change=clear_submit)
+        with col11:
+            if maxdaf == 'Y':
+                daf1 = st.number_input("Charitable Contrib", key="tp_daf1", disabled=True)
+            else:
+                daf1 = st.number_input("Charitable Contrib", key="tp_daf1b", on_change=clear_submit)
+        with col13:
+            headroom_rate = st.selectbox("Max Conversion Rate", [10, 12, 22, 24, 32, 35, 37], key="tp_headroom", on_change=clear_submit, index=3) / 100
+
+        col14b, col15, _col16, _col17, _col18 = st.columns(5)
+        with col14b:
+            roth_amount = st.number_input("Roth Conversion Amount", key="tp_roth_amt", on_change=clear_submit)
+        with col15:
+            pd_tax_amount = st.number_input("Estimated prepaid Fed taxes", key="tp_prepaid", on_change=clear_submit)
+        summarize_button = st.button("Project this years changes!", key="tp_summarize")
+
+    if summarize_button:
+        try:
+            taxratedf  = get_income_tax_brackets(year)
+            cgdf       = get_cap_gains_brackets(year)
+            irmaadf    = get_medicare_costs(year)
+            stddectdf  = get_std_deduction(year)
+            atmdf      = get_atm_costs(year)
+        except Exception as e:
+            st.error(f"Error loading tax data for year {year}: {e}")
+            st.stop()
+
+        try:
+            calc_daf = calc_daf_value(deferred_distribution + wages, interest, daf1, maxdaf)
+        except Exception as e:
+            st.error(f"Error calculating Donor Advisor Fund: {e}")
+            calc_daf = 0
+
+        try:
+            agi = calc_agi(deferred_distribution + wages + cg_income_st, interest, stddectdf, calc_daf)
+        except Exception as e:
+            st.error(f"Error calculating AGI: {e}")
+            st.stop()
+
+        try:
+            irmaa_fees_income = calculate_irmma_penalty(agi, irmaadf, people)
+        except Exception:
+            irmaa_fees_income = 0
+
+        try:
+            taxable_income, maxrate, uppermax = calculate_taxable_income(agi, taxratedf)
+        except Exception as e:
+            st.error(f"Error calculating taxable income: {e}")
+            st.stop()
+
+        try:
+            headroom_max = getUpperIncomeRate(headroom_rate, taxratedf)
+        except Exception:
+            headroom_max = 0
+
+        if maxrate > headroom_rate:
+            st.warning("Current tax rate exceeds target conversion rate")
+
+        lowerby = 0
+
+        try:
+            atm_lower, atm_deduction = getlower_atm_amount_n_deduction(year, atmdf)
+            std_deduction = get_std_deduction_by_year(year)
+            if uppermax >= (atm_lower + atm_deduction):
+                uppermax = atm_lower + atm_deduction
+        except Exception:
+            atm_lower, atm_deduction = 0, 0
+
+        try:
+            if roth_amount > 0:
+                conversions = roth_amount
+                conversion_tax = calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, agi, headroom_max, conversions)
+            else:
+                conversions, conversion_tax = calc_roth_conversions(maxrate, headroom_rate, uppermax, agi, headroom_max, lowerby)
+        except Exception as e:
+            st.error(f"Error calculating Roth conversion: {e}")
+            conversions, conversion_tax = 0, 0
+
+        try:
+            if conversions >= 0:
+                agi = calc_agi(deferred_distribution + wages + cg_income_st + conversions, interest, stddectdf, calc_daf)
+                taxable_income, maxrate, uppermax = calculate_taxable_income(agi, taxratedf)
+        except Exception:
+            pass
+
+        try:
+            cg_tax = 0 if cg_income_lt == 0 else calculate_cap_gains(agi, cgdf, cg_income_lt)
+        except Exception:
+            cg_tax = 0
+
+        try:
+            atm_tax, init_lowerby = calculate_atm(agi, cg_income_lt, atmdf)
+            if taxable_income > atm_tax:
+                atm_tax = 0
+        except Exception:
+            atm_tax, init_lowerby = 0, 0
+
+        try:
+            irmaa_fees_income_headroom = calculate_irmma_penalty(uppermax, irmaadf, people)
+        except Exception:
+            irmaa_fees_income_headroom = 0
+
+        # Display results
+        col1row3, col1row5, col1row6, col1row7, col1row8 = st.columns(5)
+        with col1row3:
+            st.markdown('##### Ordinary Income')
+            if 0 < (agi + conversions):
+                st.metric(label="Adjusted Gross Income", value=f"${agi:,.2f}")
+            if interest > 0:
+                st.metric(label="Interest", value=f"${interest:,.2f}")
+            if cg_income_st > 0:
+                st.metric(label="Short Term Capital Gains", value=f"${cg_income_st:,.2f}")
+            if cg_income_lt != 0:
+                st.metric(label="Long Term Capital Gains", value=f"${cg_income_lt:,.2f}")
+
+        with col1row5:
+            st.markdown('##### Taxes Owed')
+            state_tax = ((wages + cg_income_lt + cg_income_st + interest) * 0.03) if (wages + cg_income_lt + cg_income_st + interest) != 0 else 0
+            quarterly_state_tax = state_tax / 4
+            quarterly_fed_tax = (taxable_income + cg_tax - pd_tax_amount) / 4
+            if taxable_income > 0:
+                st.metric(label="Income Tax", value=f"${taxable_income + cg_tax - pd_tax_amount:,.2f}")
+                st.metric(label="Quarterly Fed Tax Payment", value=f"${quarterly_fed_tax:,.2f}")
+            if state_tax > 0:
+                st.metric(label="State Tax", value=f"${state_tax:,.2f}")
+                st.metric(label="Quarterly State Tax Payment", value=f"${quarterly_state_tax:,.2f}")
+            st.markdown('##### Other Costs')
+            if calc_daf > 0:
+                st.metric(label="Donor Advisory Fund", value=f"${calc_daf:,.2f}")
+            if cg_tax > 0:
+                st.metric(label="Long Term Capital Gains Tax", value=f"${cg_tax:,.2f}")
+            if irmaa_fees_income > 0:
+                st.metric(label="Medicare Surcharge", value=f"${irmaa_fees_income:,.2f}")
+            if irmaa_fees_income_headroom > 0 and conversions > 0:
+                st.metric(label="Medicare Cost w. Roth Conversion", value=f"${irmaa_fees_income_headroom:,.2f}")
+            if atm_tax > taxable_income:
+                st.metric(label="Additional ATM Taxes", value=f"${atm_tax - taxable_income:,.2f}")
+                st.metric(label="Decrease Income or LT Cap Gains by", value=f"${lowerby:,.2f}")
+
+        with col1row6:
+            st.markdown('##### Traditional Updates')
+            if deferred_distribution + conversions > 0:
+                st.metric(label="New Traditional Balance",
+                          value=f"${trad_value - deferred_distribution - conversions:,.2f}",
+                          delta=f"{-deferred_distribution - conversions:,.2f}")
+            else:
+                st.metric(label="Pre-Changes Traditional", value=f"${trad_value:,.2f}")
+
+        with col1row7:
+            st.markdown('##### Roth Updates')
+            if conversions > 0:
+                st.metric(label="New Roth Account Balance", value=f"${roth_value + conversions:,.2f}", delta=f"{conversions:,.2f}")
+                st.metric(label="Roth Conversion", value=f"${conversions:,.2f}")
+                st.metric(label="Estimated Roth Conversion Tax", value=f"${conversion_tax:,.2f}")
+            else:
+                st.metric(label="Pre-Changes Roth", value=f"${roth_value:,.2f}")
+
+        with col1row8:
+            st.markdown('##### Broker & Cash Updates')
+            new_cash_value = cash_value - state_tax - cg_tax - taxable_income + pd_tax_amount
+            new_broker_value = taxable_value - calc_daf + deferred_distribution
+            if new_cash_value != cash_value:
+                st.metric(label="New Cash Balance", value=f"${new_cash_value:,.2f}", delta=f"{new_cash_value - cash_value:,.2f}")
+            else:
+                st.metric(label="Pre-Changes Cash Balance", value=f"${cash_value:,.2f}")
+            if new_broker_value != taxable_value:
+                st.metric(label="New Broker Balance", value=f"${new_broker_value:,.2f}", delta=f"{new_broker_value - taxable_value:,.2f}")
+            else:
+                st.metric(label="Pre-Changes Broker Balance", value=f"${taxable_value:,.2f}")
+
+with tab_flow:
+    st.header("💸 Flow of Funds")
+    st.markdown("Visualize how money moves between your accounts and to charitable giving.")
+    st.markdown("---")
+
+    # Month/Year selector
+    _ff_col1, _ff_col2, _ = st.columns([1, 1, 4])
+    with _ff_col1:
+        _ff_month = st.selectbox("Month", range(1, 13), index=curr_month - 1, key="ff_month")
+    with _ff_col2:
+        _ff_years = [2024, 2025, 2026]
+        _ff_year_idx = _ff_years.index(curr_year) if curr_year in _ff_years else len(_ff_years) - 1
+        _ff_year = st.selectbox("Year", _ff_years, index=_ff_year_idx, key="ff_year")
+
+    flow_sub_tab, account_sub_tab = st.tabs(["Investment Flow", "Account Details"])
+
+    with account_sub_tab:
+        _ff_portfolio = get_portfolio_truth_by_month(_ff_month, _ff_year)
+        if not _ff_portfolio.empty:
+            _ff_portfolio = _ff_portfolio.copy()
+            _ff_portfolio['symbol'] = _ff_portfolio['symbol'].str.replace('^MF:', '', regex=True)
+            st.subheader("Holdings by Account")
+            for _acct_type in _ff_portfolio['account_type'].unique():
+                with st.expander(f"{_acct_type} Accounts"):
+                    _type_data = _ff_portfolio[_ff_portfolio['account_type'] == _acct_type]
+                    st.dataframe(_type_data[['account_name', 'symbol', 'name', 'qty', 'purchase_price']], hide_index=True, use_container_width=True)
         else:
-            st.info("No entries yet. Add rows above to get started.")
-        
+            st.warning(f"No portfolio data found for {_ff_month}/{_ff_year}")
 
+    with flow_sub_tab:
+        _ff_portfolio = get_portfolio_truth_by_month(_ff_month, _ff_year)
+        if not _ff_portfolio.empty:
+            _ff_accounts = _ff_portfolio.groupby(['account_name', 'account_type']).size().reset_index()
 
-with tab4:
-    column_1, column_2, column_3, column_4, column_5 = st.columns(5)
-    with column_1:
-        st.subheader("Current Value")
-        #st.write("Left Subheader")
-        networth=networth["total"].values[-1]
-        st.metric("Current Value", "${:,.2f}".format(networth))
-    with column_2:
-        st.subheader("Retirement Value")
-        st.metric("Retirement Value", "${:,.2f}".format(networth))
-    with column_3:
-        st.subheader("Progress")
-        st.metric("Progress", 100)
-    with column_4:
-        st.subheader("Monthly Income")
-        st.metric("Monthly Income", "${:,.2f}".format(12500))
-    with column_5:
-        st.subheader("Retirement Date")
-        st.metric("Retirement Date", '12/31/2026')
+            buckets = graphviz.Digraph()
+            buckets.attr(rankdir='LR')
+            buckets.attr('node', shape='box', style='rounded,filled', fillcolor='lightblue')
 
-    inflow_outflow_df, port_review_df = build_income_expenses_display()
-    
-    outflow_tab, portfolio_tab  = st.tabs(["Inflow/Outflow","Portfolio Value"])
-    with outflow_tab:
-        st.dataframe(inflow_outflow_df,    column_config={
-            "SSI Flows": st.column_config.NumberColumn(
-               "Social Security", # Column header name in UI
-                format="dollar"
-            ),
-            "Planned Distribution": st.column_config.NumberColumn(
-                "Planned Distribution", # Column header name in UI
-                format="dollar"
-            ),
-            "Roth Conversions": st.column_config.NumberColumn(
-               "Roth Conversions", # Column header name in UI
-                format="dollar"
-          ),
-            "RMD": st.column_config.NumberColumn(
-                "Req Min Distributions", # Column header name in UI
-                format="dollar"
-            ),
-            "Portfolio Withdrawal": st.column_config.NumberColumn(
-                "Cash Needs", # Column header name in UI
-                 format="dollar"
-            ),
-            "Total Inflows": st.column_config.NumberColumn(
-                "Annual Total Income", # Column header name in UI
-                format="dollar"
-            ),
-            "Taxes Owed": st.column_config.NumberColumn(
-                "Taxes Owed", # Column header name in UI
-                format="dollar"
-            ),
-            "Expenses": st.column_config.NumberColumn(
-                "Expenses", # Column header name in UI
-                format="dollar"
-            ),
-        },
-        hide_index=True,
-        width='stretch')
-        
-    with portfolio_tab:
-        st.dataframe(port_review_df,    column_config={
-            "Cash": st.column_config.NumberColumn(
-            "PNC Accounts", # Column header name in UI
-            format="dollar"
-            ),"Taxable": st.column_config.NumberColumn(
-            "Total Brokerage", # Column header name in UI
-            format="dollar"
-            ),"Tax Deferred": st.column_config.NumberColumn(
-            "Total 401k and IRAs", # Column header name in UI
-            format="dollar"
-            ),"Tax Free": st.column_config.NumberColumn(
-            "Total Roth", # Column header name in UI
-            format="dollar"
-            ),"Donor Advised Fund": st.column_config.NumberColumn(
-            "Remaining Donor Advised Fund", # Column header name in UI
-            format="dollar"
-            ),
-        },
-        hide_index=True,
-        width='stretch')
+            cash_accounts = []
+            brokerage_accounts = []
+            traditional_accounts = []
+            roth_accounts = []
+
+            for _, _row in _ff_accounts.iterrows():
+                _label = f"{_row['account_name']}\n({_row['account_type']})"
+                if _row['account_type'] == 'Cash':
+                    cash_accounts.append(_label)
+                    buckets.node(_label, fillcolor='lightgreen')
+                elif _row['account_type'] == 'Brokerage':
+                    brokerage_accounts.append(_label)
+                    buckets.node(_label, fillcolor='lightyellow')
+                elif _row['account_type'] == 'Traditional':
+                    traditional_accounts.append(_label)
+                    buckets.node(_label, fillcolor='lightcoral')
+                elif _row['account_type'] == 'Roth':
+                    roth_accounts.append(_label)
+                    buckets.node(_label, fillcolor='lavender')
+
+            buckets.node("Donor Advised\nFund", fillcolor='lightgray')
+
+            for trad in traditional_accounts:
+                for cash in cash_accounts:
+                    buckets.edge(trad, cash, "Withdrawals\n(stocks down)")
+            for brok in brokerage_accounts:
+                for cash in cash_accounts:
+                    buckets.edge(brok, cash, "Withdrawals\n(stocks up)")
+            for trad in traditional_accounts:
+                for brok in brokerage_accounts:
+                    buckets.edge(trad, brok, "RMDs/\nReplenish")
+            for trad in traditional_accounts:
+                for roth in roth_accounts:
+                    buckets.edge(trad, roth, "Roth\nConversions")
+            for roth in roth_accounts:
+                for cash in cash_accounts:
+                    buckets.edge(roth, cash, "Big\nPurchases")
+            for brok in brokerage_accounts:
+                buckets.edge(brok, "Donor Advised\nFund", "Charitable\nGiving")
+
+            st.graphviz_chart(buckets)
+
+            st.subheader("Account Summary")
+            _s_col1, _s_col2, _s_col3, _s_col4 = st.columns(4)
+            with _s_col1:
+                _d = _ff_portfolio[_ff_portfolio['account_type'] == 'Cash']
+                st.metric("Cash Accounts", f"${(_d['qty'] * _d['purchase_price']).sum():,.0f}")
+            with _s_col2:
+                _d = _ff_portfolio[_ff_portfolio['account_type'] == 'Brokerage']
+                st.metric("Brokerage Accounts", f"${(_d['qty'] * _d['purchase_price']).sum():,.0f}")
+            with _s_col3:
+                _d = _ff_portfolio[_ff_portfolio['account_type'] == 'Traditional']
+                st.metric("Traditional Accounts", f"${(_d['qty'] * _d['purchase_price']).sum():,.0f}")
+            with _s_col4:
+                _d = _ff_portfolio[_ff_portfolio['account_type'] == 'Roth']
+                st.metric("Roth Accounts", f"${(_d['qty'] * _d['purchase_price']).sum():,.0f}")
+
+            st.subheader("Flow Strategy Notes")
+            st.info("""
+            **Investment Flow Strategy:**
+            - **Traditional → Cash**: Withdraw from tax-deferred accounts when market is down
+            - **Brokerage → Cash**: Withdraw from taxable accounts when market is up (tax-efficient)
+            - **Traditional → Roth**: Convert to Roth during low-income years for tax optimization
+            - **Traditional → Brokerage**: Required Minimum Distributions (RMDs) after age 73
+            - **Roth → Cash**: Emergency funds or large purchases (tax-free withdrawals)
+            - **Brokerage → DAF**: Donate appreciated securities for tax deduction
+            """)
+        else:
+            st.warning(f"No portfolio data found for {_ff_month}/{_ff_year}")
 
 with tab5:
-    st.header("Withdrawal Strategy Analysis")
-    
-    # Get parameters from session state (set by sidebar)
-    try:
-        ssi_age = int(st.session_state.get("SSI_AGE", 70))
-        conv_tax_rate = float(st.session_state.get("CONV_TAX_RATE", 12))
-        annual_expenses = float(st.session_state.get("EXPENSE", 50000))
-        expense_multiplier = float(st.session_state.get("EXPENSE_MULTIPLIER", 4))
-        rate_of_return = float(st.session_state.get("RATE", 6)) / 100
-        daf_rate = float(st.session_state.get("DAF_RATE", 25)) / 100
-        planned_dist_2027 = float(st.session_state.get("PLANNED_DIST_2027", 5000))
-    except (ValueError, TypeError) as e:
-        st.error(f"Error reading sidebar parameters: {e}. Using default values.")
-        ssi_age = 70
-        conv_tax_rate = 12
-        annual_expenses = 50000
-        expense_multiplier = 4
-        rate_of_return = 0.06
-        daf_rate = 0.25
-        planned_dist_2027 = 75000
-    
-    # Display current parameters
-    st.subheader("Strategy Parameters")
-    param_col1, param_col2, param_col3, param_col4 = st.columns(4)
-    with param_col1:
-        st.metric("Social Security Age", ssi_age)
-        st.metric("Annual Expenses", f"${annual_expenses:,.0f}")
-    with param_col2:
-        st.metric("Max Roth Conv Tax Rate", f"{conv_tax_rate}%")
-        st.metric("Expense Multiplier", f"{expense_multiplier}x")
-    with param_col3:
-        st.metric("Max Conv Tax Rate", f"{conv_tax_rate}%")
-        st.metric("Rate of Return", f"{rate_of_return*100:.1f}%")
-    with param_col4:
-        st.metric("DAF Disbursement", f"{daf_rate*100:.0f}%")
-        st.metric("2027 Planned Dist", f"${planned_dist_2027:,.0f}")
-    
-    add_vertical_space(2)
-    
-    # Calculate withdrawal strategy
-    try:
-        # Get max conversion rate from sidebar (convert from percentage string to decimal)
-        max_conversion_rate_str = st.session_state.get("CONV_TAX_RATE", "24")
-        try:
-            max_conversion_rate = float(max_conversion_rate_str) / 100.0
-        except (ValueError, TypeError):
-            max_conversion_rate = 0.24  # Default to 24%
-        
-        # Get ACA marketplace enrollment and expense inflation from config
-        from config import get_config_manager
-        config_mgr = get_config_manager()
-        aca_marketplace_enrolled = config_mgr.get("healthcare", "aca_marketplace_enrolled", False)
-        expense_inflation_rate = config_mgr.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100.0
-        
-        with st.spinner("Calculating withdrawal strategy..."):
-            # Get person names from config
-            from config import get_config_manager
-            config_mgr = get_config_manager()
-            person1_name = config_mgr.get("personal_info", "person1_name", "Person1")
-            person2_name = config_mgr.get("personal_info", "person2_name", "Person2")
-            
-            strategy_df, balances_df = build_withdrawal_strategy_display(
-                start_year=curr_year,
-                end_year=2050,
-                growth_rate=1 + rate_of_return,
-                expense_inflation_rate=expense_inflation_rate,
-                person1_name=person1_name,
-                person2_name=person2_name,
-                max_conversion_rate=max_conversion_rate,
-                aca_optimize=aca_marketplace_enrolled,
-                ss_claiming_age=ssi_age
+    st.header("⚙️ Settings")
+    st.markdown("Configure planning parameters and open the full configuration page.")
+    st.markdown("---")
+
+    st.markdown("### 🎛️ Quick Parameters")
+    st.caption("Adjust strategy parameters below. Changes take effect immediately on the Strategy tab.")
+
+    # Reuse sidebar config definitions
+    from components.sidebar import (
+        SIDEBAR_NUMBER_CONFIGS,
+        VALIDATION_RULES,
+        _safe_float,
+        save_sidebar_value_to_config,
+        CACHE_CLEAR_KEYS,
+        clear_withdrawal_strategy_cache,
+    )
+
+    _qp_cols = st.columns(3)
+    for _i, (label, key, min_val, max_val, step, fmt, help_text, unit) in enumerate(SIDEBAR_NUMBER_CONFIGS):
+        current_raw = st.session_state.get(key, min_val)
+        current_val = _safe_float(current_raw, default=min_val)
+        current_val = max(min_val, min(max_val, current_val))
+        widget_key = f"_tab5_num_{key}"
+        with _qp_cols[_i % 3]:
+            new_val = st.number_input(
+                label=f"{label} ({unit})",
+                min_value=min_val,
+                max_value=max_val,
+                value=current_val,
+                step=step,
+                format=fmt,
+                help=help_text,
+                key=widget_key,
             )
-        
-        # Display strategy results in tabs
-        strategy_tab, balances_tab, charts_tab = st.tabs(["Annual Strategy", "Account Balances", "Visualizations"])
-        
-        with strategy_tab:
-            st.subheader("Year-by-Year Withdrawal Strategy")
-            
-            # Create a copy of strategy_df to add Cash Start column
-            display_df = strategy_df.copy()
-            
-            # Get actual current cash balance from portfolio data for first year
-            try:
-                _, summary_df = get_networth_by_month(curr_month, curr_year)
-                if not summary_df.empty:
-                    actual_cash_start = float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum())
-                else:
-                    # Fallback to first year's ending balance if no portfolio data
-                    actual_cash_start = display_df.loc[display_df.index[0], 'Cash Balance']
-            except Exception as e:
-                st.warning(f"Could not load current cash balance: {e}")
-                actual_cash_start = display_df.loc[display_df.index[0], 'Cash Balance']
-            
-            # Calculate Cash Start (previous year's Cash Balance)
-            # For first year, use actual current cash balance from portfolio
-            # For subsequent years, use previous year's ending Cash Balance
-            display_df['Cash Start'] = display_df['Cash Balance'].shift(1)
-            display_df.loc[display_df.index[0], 'Cash Start'] = actual_cash_start
-            
-            # Define columns to display (excluding balance columns except Cash Balance)
-            display_cols = [
-                'Year', 'Age', 'Stage',
-                # Cash positions
-                'Cash Start',
-                # Income sources
-                'Wages',
-                'SS Benefits',
-                'RMD',
-                # Account movements (fund transfers)
-                'Trad→\nCash',
-                'Trad→\nBrok',
-                'Trad→\nRoth',
-                'Brok→\nCash',
-                'Roth→\nCash',
-                # Expenses and costs
-                'Expenses',
-                'IRMAA Penalty',
-                'ACA Premium',
-                'DAF Contribution',
-                'AGI',
-                'MAGI',
-                'Federal Tax',
-                # Cash ending position
-                'Cash Balance'
-            ]
-            
-            available_cols = [col for col in display_cols if col in display_df.columns]
-            display_df = display_df[available_cols].copy()
-            
-            # Format numeric columns: show 2 decimals only if not a whole number
-            def format_currency(val):
-                """Format currency: whole numbers without decimals, non-whole with 2 decimals"""
-                if pd.isna(val):
-                    return ""
-                if val == int(val):
-                    return f"${int(val):,}"
-                else:
-                    return f"${val:,.2f}"
-            
-            # Apply formatting to all numeric columns (excluding Year, Age, Stage)
-            numeric_cols = [col for col in available_cols if col not in ['Year', 'Age', 'Stage']]
-            for col in numeric_cols:
-                if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(format_currency)
-            
-            # Configure column formatting with wrapped headers for account movements
-            column_config = {
-                "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "Age": st.column_config.TextColumn("Age"),
-                "Stage": st.column_config.TextColumn("Life Stage"),
-                # Cash positions
-                "Cash Start": st.column_config.TextColumn("Cash Start"),
-                # Income sources
-                "Wages": st.column_config.TextColumn("Wages"),
-                "SS Benefits": st.column_config.TextColumn("Social Security"),
-                "RMD": st.column_config.TextColumn("RMD"),
-                "Traditional Withdrawal": st.column_config.TextColumn("Trad Withdrawal"),
-                "Roth Conversion": st.column_config.TextColumn("Roth Conv"),
-                # Account movements (compact headers)
-                "Trad→\nCash": st.column_config.TextColumn("Trad→Cash"),
-                "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok"),
-                "Trad→\nRoth": st.column_config.TextColumn("Trad→Roth"),
-                "Brok→\nCash": st.column_config.TextColumn("Brok→Cash"),
-                "Roth→\nCash": st.column_config.TextColumn("Roth→Cash"),
-                "Roth→\nBrok": st.column_config.TextColumn("Roth→Brok"),
-                "Cash\nReplen": st.column_config.TextColumn("Cash Replen"),
-                "Brok\nReplen": st.column_config.TextColumn("Brok Replen"),
-                # Expenses and costs
-                "Expenses": st.column_config.TextColumn("Expenses"),
-                "IRMAA Penalty": st.column_config.TextColumn("IRMAA"),
-                "ACA Premium": st.column_config.TextColumn("ACA"),
-                "DAF Contribution": st.column_config.TextColumn("DAF Contrib"),
-                "AGI": st.column_config.TextColumn("AGI"),
-                "MAGI": st.column_config.TextColumn("MAGI"),
-                "Federal Tax": st.column_config.TextColumn("Fed Tax"),
-                # Additional details
-                "Taxable Withdrawal": st.column_config.TextColumn("Taxable Wdraw"),
-                "Roth Withdrawal": st.column_config.TextColumn("Roth Wdraw"),
-                "LTCG Harvested": st.column_config.TextColumn("LTCG"),
-                # Cash ending position
-                "Cash Balance": st.column_config.TextColumn("Cash End")
-            }
-            
-            st.dataframe(display_df, column_config=column_config, hide_index=True, use_container_width=True)
-        
-        with balances_tab:
-            st.subheader("Account Balances Over Time")
-            
-            # Ensure all numeric columns are properly typed
-            balances_display = balances_df.copy()
-            for col in ['Cash Balance', 'Taxable Balance', 'Traditional Balance', 'Roth Balance', 'DAF Balance', 'Total Portfolio']:
-                if col in balances_display.columns:
-                    balances_display[col] = pd.to_numeric(balances_display[col], errors='coerce').apply(format_currency)
-        
-            
-            # Configure column formatting for balances
-            balance_column_config = {
-                "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "Cash Balance": st.column_config.TextColumn("Cash"),
-                "Taxable Balance": st.column_config.TextColumn("Taxable"),
-                "Traditional Balance": st.column_config.TextColumn("Traditional"),
-                "Roth Balance": st.column_config.TextColumn("Roth"),
-                "DAF Balance": st.column_config.TextColumn("DAF"),
-                "Total Portfolio": st.column_config.TextColumn("Total Portfolio")
-            }
-            
-            st.dataframe(balances_display, column_config=balance_column_config, hide_index=True, width='stretch')
-        
-        with charts_tab:
-            st.subheader("Portfolio Balance Projections")
-            
-            # Create stacked area chart for account balances
-            fig_balances = go.Figure()
-            
-            fig_balances.add_trace(go.Scatter(
-                x=balances_df['Year'],
-                y=balances_df['Cash Balance'],
-                name='Cash',
-                mode='lines',
-                stackgroup='one',
-                fillcolor='rgb(246, 207, 113)'
-            ))
-            
-            fig_balances.add_trace(go.Scatter(
-                x=balances_df['Year'],
-                y=balances_df['Taxable Balance'],
-                name='Taxable',
-                mode='lines',
-                stackgroup='one',
-                fillcolor='rgb(254, 136, 177)'
-            ))
-            
-            fig_balances.add_trace(go.Scatter(
-                x=balances_df['Year'],
-                y=balances_df['Traditional Balance'],
-                name='Traditional',
-                mode='lines',
-                stackgroup='one',
-                fillcolor='rgb(139, 224, 164)'
-            ))
-            
-            fig_balances.add_trace(go.Scatter(
-                x=balances_df['Year'],
-                y=balances_df['Roth Balance'],
-                name='Roth',
-                mode='lines',
-                stackgroup='one',
-                fillcolor='rgb(180, 151, 231)'
-            ))
-            
-            fig_balances.update_layout(
-                title='Projected Account Balances',
-                xaxis_title='Year',
-                yaxis_title='Balance ($)',
-                hovermode='x unified',
-                plot_bgcolor='white',
-                paper_bgcolor='white'
-            )
-            
-            st.plotly_chart(fig_balances, width='stretch')
-            
-            # Create income sources chart
-            if 'Total Income' in strategy_df.columns:
-                st.subheader("Income Sources Over Time")
-                
-                fig_income = go.Figure()
-                
-                if 'Wages' in strategy_df.columns:
-                    fig_income.add_trace(go.Bar(
-                        x=strategy_df['Year'],
-                        y=strategy_df['Wages'],
-                        name='Wages',
-                        marker_color='rgb(99, 110, 250)'
-                    ))
-                
-                if 'Social Security' in strategy_df.columns:
-                    fig_income.add_trace(go.Bar(
-                        x=strategy_df['Year'],
-                        y=strategy_df['Social Security'],
-                        name='Social Security',
-                        marker_color='rgb(239, 85, 59)'
-                    ))
-                
-                if 'Portfolio Withdrawal' in strategy_df.columns:
-                    fig_income.add_trace(go.Bar(
-                        x=strategy_df['Year'],
-                        y=strategy_df['Portfolio Withdrawal'],
-                        name='Portfolio Withdrawal',
-                        marker_color='rgb(0, 204, 150)'
-                    ))
-                
-                fig_income.update_layout(
-                    title='Income Sources by Year',
-                    xaxis_title='Year',
-                    yaxis_title='Amount ($)',
-                    barmode='stack',
-                    hovermode='x unified',
-                    plot_bgcolor='white',
-                    paper_bgcolor='white'
-                )
-                
-                st.plotly_chart(fig_income, width='stretch')
-    
-    except Exception as e:
-        st.error(f"Error calculating withdrawal strategy: {e}")
-        st.info("Please ensure all sidebar parameters are properly configured and try refreshing the data.")
+            if new_val != current_val:
+                st.session_state[key] = str(new_val)
+                if key in CACHE_CLEAR_KEYS:
+                    clear_withdrawal_strategy_cache()
+                save_sidebar_value_to_config(key, new_val)
+            else:
+                st.session_state[key] = str(new_val)
+
+    # Inline validation warnings
+    for key, condition_fn, warning_msg in VALIDATION_RULES:
+        val = _safe_float(st.session_state.get(key, 0))
+        if condition_fn(val):
+            st.warning(warning_msg)
+
+    st.markdown("---")
+    st.markdown("### Full Configuration")
+    st.info("⚙️ Open the [Configuration page](configuration) to edit personal information, healthcare settings, Social Security, tax strategy, and portfolio data.")
+    st.markdown("---")

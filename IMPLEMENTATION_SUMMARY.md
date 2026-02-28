@@ -6,7 +6,7 @@ Successfully created a comprehensive 5-stage retirement withdrawal strategy modu
 
 ## What Was Built
 
-### 1. Core Module: `withdrawal_strategy.py`
+### 1. Core Module: `strategy.py`
 **Enhanced existing implementation with:**
 - ✅ Complete 5-stage life cycle implementation
 - ✅ ACA subsidy calculation function
@@ -15,13 +15,14 @@ Successfully created a comprehensive 5-stage retirement withdrawal strategy modu
 - ✅ Standalone execution capability
 
 **Key Features:**
-- **Stage 1: Accumulation** - Tax-efficient asset building while employed
-- **Stage 2: Early Retirement** - Aggressive Roth conversions, ACA optimization
-- **Stage 3: Medicare** - IRMAA-aware conversions
+- **Stage 1: Accumulation** - Wages routed to Traditional 401k, Roth, brokerage, and cash buffer at configurable rates; wages-based cash target
+- **Stage 2: Prep for Retirement** - Within 10 years of retirement; cash buffer ramps to 75% of full retirement reserve
+- **Stage 3: Early Retirement** - Aggressive Roth conversions, ACA optimization
+- **Stage 4: Medicare** - IRMAA-aware conversions
 - **Stage 4: Social Security** - SS taxation and IRMAA management
 - **Stage 5: RMD** - Required distribution compliance
 
-### 2. Example Script: `example_withdrawal_strategy.py`
+### 2. Example Script: `example_strategy.py`
 **Comprehensive demonstration with 4 scenarios:**
 - Example 1: Basic withdrawal strategy (default portfolio)
 - Example 2: Early retirement with aggressive conversions
@@ -31,7 +32,7 @@ Successfully created a comprehensive 5-stage retirement withdrawal strategy modu
 
 **Output:** CSV files for each scenario for further analysis
 
-### 3. Documentation: `WITHDRAWAL_STRATEGY_README.md`
+### 3. Documentation: `STRATEGY_README.md`
 **Complete 625-line guide covering:**
 - Installation and setup
 - Quick start examples
@@ -42,7 +43,7 @@ Successfully created a comprehensive 5-stage retirement withdrawal strategy modu
 - Troubleshooting guide
 - References and resources
 
-### 4. Test Suite: `test_withdrawal_strategy.py`
+### 4. Test Suite: `test_strategy.py`
 **Validation tests for:**
 - Portfolio balance calculations
 - Life stage determination logic
@@ -139,7 +140,7 @@ WithdrawalStrategyEngine
 
 ### Basic Usage
 ```python
-from withdrawal_strategy import build_withdrawal_strategy_display, PortfolioBalances
+from strategy import build_withdrawal_strategy_display, PortfolioBalances
 
 balances = PortfolioBalances(
     cash=55000, taxable=225000, 
@@ -155,24 +156,24 @@ strategy_df, balances_df = build_withdrawal_strategy_display(
 
 ### Run Examples
 ```bash
-python3 example_withdrawal_strategy.py
+python3 example_strategy.py
 ```
 
 ### Run Tests
 ```bash
-python3 test_withdrawal_strategy.py
+python3 test_strategy.py
 ```
 
 ## Files Created/Modified
 
 ### New Files
-1. ✅ `example_withdrawal_strategy.py` (304 lines)
-2. ✅ `WITHDRAWAL_STRATEGY_README.md` (625 lines)
-3. ✅ `test_withdrawal_strategy.py` (247 lines)
+1. ✅ `example_strategy.py` (304 lines)
+2. ✅ `STRATEGY_README.md` (625 lines)
+3. ✅ `test_strategy.py` (247 lines)
 4. ✅ `IMPLEMENTATION_SUMMARY.md` (this file)
 
 ### Modified Files
-1. ✅ `withdrawal_strategy.py` (enhanced with 250+ lines)
+1. ✅ `strategy.py` (enhanced with 250+ lines)
    - Added ACA subsidy calculation
    - Added example scenario generator
    - Added summary and reporting functions
@@ -211,7 +212,7 @@ TEST RESULTS: 6 passed, 0 failed
 
 ## Key Achievements
 
-1. ✅ **Complete 5-Stage Implementation**
+1. ✅ **Complete 6-Stage Implementation**
    - All life stages fully implemented
    - Smooth transitions between stages
    - Stage-specific optimization strategies
@@ -244,7 +245,7 @@ The module integrates seamlessly with the existing Streamlit app:
 
 ```python
 # In planning_app.py - Retirement Planner tab
-from withdrawal_strategy import build_withdrawal_strategy_display
+from strategy import build_withdrawal_strategy_display
 
 # Add to tab4 (Retirement planner)
 strategy_df, balances_df = build_withdrawal_strategy_display(

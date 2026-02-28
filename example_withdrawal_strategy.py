@@ -12,7 +12,7 @@ Usage:
     python example_withdrawal_strategy.py
 """
 
-from withdrawal_strategy import (
+from strategy import (
     PortfolioBalances,
     WithdrawalStrategyEngine,
     build_withdrawal_strategy_display,

@@ -8,7 +8,7 @@ the withdrawal strategy for Stage 4 (Social Security) and Stage 5 (RMD).
 
 import logging
 from config import get_config_manager
-from withdrawal_strategy import (
+from strategy import (
     WithdrawalStrategyEngine,
     PortfolioBalances,
     calculate_ssi_benefits_dynamic

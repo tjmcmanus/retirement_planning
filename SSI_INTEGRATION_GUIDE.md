@@ -6,7 +6,7 @@ The SSI calculator has been successfully integrated into the withdrawal strategy
 
 ## What Changed
 
-### 1. New Imports in [`withdrawal_strategy.py`](withdrawal_strategy.py:54)
+### 1. New Imports in [`strategy.py`](strategy.py:54)
 
 ```python
 from ssi_calculator import (
@@ -16,7 +16,7 @@ from ssi_calculator import (
 )
 ```
 
-### 2. New Helper Function: [`calculate_ssi_benefits_dynamic()`](withdrawal_strategy.py:73)
+### 2. New Helper Function: [`calculate_ssi_benefits_dynamic()`](strategy.py:73)
 
 This function calculates SSI benefits for a person in any given year:
 
@@ -38,7 +38,7 @@ def calculate_ssi_benefits_dynamic(year: int, person_name: str, birth_year: int,
 - Applies COLA adjustments for years since claiming
 - Fully integrated with config.py settings
 
-### 3. Updated [`calculate_multi_year_strategy()`](withdrawal_strategy.py:2691)
+### 3. Updated [`calculate_multi_year_strategy()`](strategy.py:2691)
 
 The main calculation method now:
 1. Reads SSI settings from [`config.py`](config.py:38)
@@ -50,7 +50,7 @@ The main calculation method now:
 
 ### Stage 4: Social Security (Pre-RMD)
 
-In [`Stage4SocialSecurity.calculate_strategy()`](withdrawal_strategy.py:2128), SSI benefits are:
+In [`Stage4SocialSecurity.calculate_strategy()`](strategy.py:2128), SSI benefits are:
 1. Added to cash at the beginning of the year
 2. Included in taxable income calculations (85% taxable)
 3. Used to reduce withdrawal needs from other accounts
@@ -76,7 +76,7 @@ taxable_ss = ss_benefits * TAXABLE_SS_RATE  # 85% taxable
 
 ### Stage 5: RMD (Post-RMD Age)
 
-In [`Stage5RMD.calculate_strategy()`](withdrawal_strategy.py:2380), SSI benefits are:
+In [`Stage5RMD.calculate_strategy()`](strategy.py:2380), SSI benefits are:
 1. Combined with RMD amounts for total income
 2. Used to determine additional withdrawal needs
 3. Factored into limited Roth conversion opportunities
@@ -291,10 +291,10 @@ INFO - Using CSV fallback for SSI: $128,184.00
 ## Code References
 
 - **SSI Calculator Module:** [`ssi_calculator.py`](ssi_calculator.py:1)
-- **Helper Function:** [`calculate_ssi_benefits_dynamic()`](withdrawal_strategy.py:73)
-- **Stage 4 Integration:** [`Stage4SocialSecurity.calculate_strategy()`](withdrawal_strategy.py:2128)
-- **Stage 5 Integration:** [`Stage5RMD.calculate_strategy()`](withdrawal_strategy.py:2380)
-- **Main Calculation:** [`calculate_multi_year_strategy()`](withdrawal_strategy.py:2639)
+- **Helper Function:** [`calculate_ssi_benefits_dynamic()`](strategy.py:73)
+- **Stage 4 Integration:** [`Stage4SocialSecurity.calculate_strategy()`](strategy.py:2128)
+- **Stage 5 Integration:** [`Stage5RMD.calculate_strategy()`](strategy.py:2380)
+- **Main Calculation:** [`calculate_multi_year_strategy()`](strategy.py:2639)
 - **Configuration:** [`config.py`](config.py:38)
 
 ## Summary

@@ -39,7 +39,7 @@ def _calculate_year_distributions(year: int, ssi_year: int,
     """
     Calculate planned distributions, DAF contributions, and conversions for a given year.
     
-    Note: Roth conversions are now handled by the BETR algorithm in withdrawal_strategy.py
+    Note: Roth conversions are now handled by the BETR algorithm in strategy.py
     This function only returns legacy conversion amounts for historical compatibility.
     
     Args:

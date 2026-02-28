@@ -9,7 +9,7 @@ Successfully implemented the account rebalancing feature for the retirement plan
 ## Changes Made
 
 ### 1. Updated YearlyStrategy Dataclass
-**File:** `withdrawal_strategy.py` (lines 479-555)
+**File:** `strategy.py` (lines 479-555)
 
 Added new fields to track all fund movements:
 - `cash_replenishment`: Total amount added to cash buffer
@@ -24,7 +24,7 @@ Added new fields to track all fund movements:
 Added `validate_fund_conservation()` method to verify all fund movements balance to zero.
 
 ### 2. Implemented Helper Functions
-**File:** `withdrawal_strategy.py` (lines 447-745)
+**File:** `strategy.py` (lines 447-745)
 
 #### `replenish_cash_buffer()`
 - Maintains 2-year cash buffer target
@@ -55,10 +55,16 @@ Added `validate_fund_conservation()` method to verify all fund movements balance
 ### 3. Integrated into All Life Stages
 
 #### Stage 1: Accumulation
+- Wages routed to Traditional 401k (pre-tax), Roth, and brokerage at configurable rates; surplus above cash target also flows to brokerage
 - Integrated rebalancing after contributions
 - Tracks fund movements for Roth conversions during accumulation
 
-#### Stage 2: Early Retirement
+#### Stage 2: Prep for Retirement
+- Same contribution routing as Stage 1
+- Cash buffer target linearly ramps from wages-based level to 75% of full retirement reserve over the 10-year prep window
+- Replaced manual balance calculations with `rebalance_accounts()`
+
+#### Stage 3: Early Retirement
 - Replaced manual balance calculations with `rebalance_accounts()`
 - Maintains aggressive Roth conversion strategy with proper fund tracking
 
@@ -125,7 +131,7 @@ Added `validate_fund_conservation()` method to verify all fund movements balance
 
 ## Documentation Updates Needed
 
-1. Update `WITHDRAWAL_STRATEGY_README.md` with:
+1. Update `STRATEGY_README.md` with:
    - Account Rebalancing Overview
    - Buffer Maintenance Strategy
    - Fund Movement Tracking
@@ -159,7 +165,7 @@ Added `validate_fund_conservation()` method to verify all fund movements balance
 
 ## Files Modified
 
-1. `withdrawal_strategy.py` - Core implementation
+1. `strategy.py` - Core implementation
 2. `ACCOUNT_REBALANCING_IMPLEMENTATION.md` - This documentation
 
 ## Estimated Implementation Time

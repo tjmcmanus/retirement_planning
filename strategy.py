@@ -1,12 +1,13 @@
 """
-Portfolio Withdrawal Strategy Module - 5 Stages of Life
+Portfolio Withdrawal Strategy Module - 6 Stages of Life
 
-This module implements a comprehensive withdrawal strategy across 5 life stages:
+This module implements a comprehensive withdrawal strategy across 6 life stages:
 1. Accumulation: Employed, earning wages, tax-efficient asset accumulation
-2. Early Retirement: Pre-Medicare, pre-SS, pre-RMD with BETR-optimized Roth conversions
-3. Medicare Stage: IRMAA optimization with BETR-based continued Roth conversions
-4. Social Security Stage: SS benefits + Medicare, pre-RMD optimization with BETR
-5. RMD Stage: Required Minimum Distributions with full retirement income
+2. Prep for Retirement: Employed, within 10 years of retirement, balance Roth/Traditional/Taxable
+3. Early Retirement: Pre-Medicare, pre-SS, pre-RMD with BETR-optimized Roth conversions
+4. Medicare Stage: IRMAA optimization with BETR-based continued Roth conversions
+5. Social Security Stage: SS benefits + Medicare, pre-RMD optimization with BETR
+6. RMD Stage: Required Minimum Distributions with full retirement income
 
 Key Features:
 - BETR (Break-Even Tax Rate) algorithm for optimal Roth conversion decisions
@@ -212,6 +213,70 @@ def calculate_cash_buffer_targets(expenses: float) -> Tuple[float, float]:
     return cash_target, taxable_target
 
 
+def calculate_cash_buffer_targets_accumulation(wages: float) -> float:
+    """
+    Calculate the target cash buffer for the accumulation phase.
+
+    During working years the cash target is expressed as a number of months of
+    gross wages rather than years of expenses.  The default is 6 months; the
+    user can adjust this between 3 and 24 months via the Configuration page.
+
+    Args:
+        wages: Annual gross wages (person1 + person2 combined)
+
+    Returns:
+        cash_target: Target cash balance (wages * months / 12)
+    """
+    from config import get_config_manager
+    try:
+        config_mgr = get_config_manager()
+        months = float(config_mgr.get(
+            'financial_assumptions', 'accumulation_cash_buffer_months', 6
+        ))
+    except Exception:
+        months = 6.0
+
+    # Clamp to the allowed UI range just in case the stored value is out of bounds
+    months = max(3.0, min(24.0, months))
+    return wages * months / 12.0
+
+def calculate_stage2_cash_target(wages: float, expenses: float,
+                                  years_to_retirement: int,
+                                  prep_window: int = 10) -> float:
+    """
+    Calculate the linearly-ramped cash buffer target for Stage 2 (Prep for Retirement).
+
+    At the *start* of Stage 2 (``years_to_retirement == prep_window``) the target
+    equals the wages-based accumulation buffer (same as Stage 1).  By the *end* of
+    Stage 2 (``years_to_retirement == 1``) the target has ramped up to **75 %** of
+    the full retirement cash reserve (``expenses × years_of_expenses_in_cash``).
+
+    Linear interpolation formula::
+
+        progress = (prep_window - years_to_retirement) / (prep_window - 1)
+        target   = accum_target + progress * (0.75 * retirement_target - accum_target)
+
+    Args:
+        wages:               Annual gross wages (combined).
+        expenses:            Annual living expenses.
+        years_to_retirement: Years remaining until the earlier retirement date.
+        prep_window:         Number of years that Stage 2 spans (default 10).
+
+    Returns:
+        cash_target: Interpolated cash buffer target for the current year.
+    """
+    accum_target = calculate_cash_buffer_targets_accumulation(wages)
+    retirement_cash_target, _ = calculate_cash_buffer_targets(expenses)
+    end_target = 0.75 * retirement_cash_target
+
+    # Clamp years_to_retirement to the valid window [1, prep_window]
+    years_to_retirement = max(1, min(prep_window, years_to_retirement))
+
+    # progress: 0.0 at the start of Stage 2, 1.0 in the final year
+    progress = (prep_window - years_to_retirement) / max(1, prep_window - 1)
+    return accum_target + progress * (end_target - accum_target)
+
+
 def calculate_buffer_ramp_up(current_year: int, start_year: int,
                              cash_target: float, taxable_target: float,
                              current_cash: float, current_taxable: float) -> Tuple[float, float]:
@@ -309,7 +374,7 @@ def optimize_rmd_lookback(strategies: list,
     logger.info("Starting RMD lookback optimization...")
     
     # Step 1: Analyze Stage 5 RMDs
-    rmd_years = [s for s in strategies if s.stage == "Stage 5: RMD"]
+    rmd_years = [s for s in strategies if s.stage == "Stage 6: RMD"]
     
     if not rmd_years:
         logger.info("No RMD years found - no optimization needed")
@@ -334,9 +399,10 @@ def optimize_rmd_lookback(strategies: list,
     
     # Step 3: Identify pre-RMD years for optimization
     pre_rmd_years = [s for s in strategies if s.stage in [
-        "Stage 2: Early Retirement",
-        "Stage 3: Medicare", 
-        "Stage 4: Social Security"
+        "Stage 2: Prep for Retirement",
+        "Stage 3: Early Retirement",
+        "Stage 4: Medicare",
+        "Stage 5: Social Security"
     ]]
     
     if not pre_rmd_years:
@@ -356,9 +422,10 @@ def optimize_rmd_lookback(strategies: list,
     years_adjusted = 0
     
     for year_strategy in strategies:
-        if year_strategy.stage in ["Stage 2: Early Retirement", 
-                                   "Stage 3: Medicare",
-                                   "Stage 4: Social Security"]:
+        if year_strategy.stage in ["Stage 2: Prep for Retirement",
+                                   "Stage 3: Early Retirement",
+                                   "Stage 4: Medicare",
+                                   "Stage 5: Social Security"]:
             # Calculate maximum additional conversion (limit to 15% of Traditional balance)
             max_additional_conversion = min(
                 additional_conversion_per_year,
@@ -1318,7 +1385,8 @@ class YearlyStrategy:
 def replenish_cash_buffer(balances: PortfolioBalances,
                           expenses: float,
                           age_primary: int,
-                          year: int) -> Tuple[PortfolioBalances, Dict[str, float]]:
+                          year: int,
+                          cash_target_override: Optional[float] = None) -> Tuple[PortfolioBalances, Dict[str, float]]:
     """
     Replenish cash buffer to target based on configured years of expenses
     
@@ -1333,13 +1401,19 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         expenses: Annual expenses for this year
         age_primary: Primary person's age
         year: Current year
+        cash_target_override: If provided, use this value as the cash target
+            instead of the expenses-based retirement target.  Used during the
+            accumulation phase where the target is wages-based.
     
     Returns:
         Tuple of (updated_balances, transaction_log)
         - updated_balances: PortfolioBalances after replenishment
         - transaction_log: Dict with all fund movements
     """
-    cash_target, _ = calculate_cash_buffer_targets(expenses)
+    if cash_target_override is not None:
+        cash_target = cash_target_override
+    else:
+        cash_target, _ = calculate_cash_buffer_targets(expenses)
     cash_deficit = max(0, cash_target - balances.cash)
     
     if cash_deficit < 100:  # Ignore trivial amounts
@@ -1554,7 +1628,8 @@ def rebalance_accounts(balances: PortfolioBalances,
                       federal_tax: float = 0.0,
                       irmaa_penalty: float = 0.0,
                       aca_premium: float = 0.0,
-                      medical_costs: float = 0.0) -> Tuple[PortfolioBalances, Dict[str, float]]:
+                      medical_costs: float = 0.0,
+                      cash_target_override: Optional[float] = None) -> Tuple[PortfolioBalances, Dict[str, float]]:
     """
     Execute all account rebalancing operations for a given year
     
@@ -1576,6 +1651,8 @@ def rebalance_accounts(balances: PortfolioBalances,
         irmaa_penalty: IRMAA penalty to deduct from cash
         aca_premium: ACA premium to deduct from cash
         medical_costs: Medical costs to deduct from cash
+        cash_target_override: If provided, pass to replenish_cash_buffer as the
+            cash target (used during accumulation for wages-based buffer).
     
     Returns:
         Tuple of (updated_balances, transaction_log)
@@ -1628,7 +1705,10 @@ def rebalance_accounts(balances: PortfolioBalances,
     logger.info(f"  Cash after deductions: ${balances.cash:,.2f}")
     
     # Step 2: Replenish cash buffer (after expenses paid)
-    balances, cash_txns = replenish_cash_buffer(balances, expenses, age_primary, year)
+    balances, cash_txns = replenish_cash_buffer(
+        balances, expenses, age_primary, year,
+        cash_target_override=cash_target_override
+    )
     transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
     transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
     transactions['roth_to_cash'] = cash_txns['roth_to_cash']
@@ -1745,17 +1825,51 @@ class Stage1Accumulation(LifeStage):
         std_deduction_df = get_std_deduction(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
-        # Calculate AGI after 401k contributions (pre-tax)
+        # -----------------------------------------------------------------------
+        # Compute contribution amounts from config rates (% of gross wages)
+        # -----------------------------------------------------------------------
+        try:
+            config_mgr = get_config_manager()
+            trad_pct  = float(config_mgr.get("income", "contribution_401k_percent",  10.0)) / 100.0
+            roth_pct  = float(config_mgr.get("income", "contribution_roth_percent",   5.0)) / 100.0
+            brok_pct  = float(config_mgr.get("income", "contribution_brokerage_percent", 5.0)) / 100.0
+        except Exception:
+            trad_pct, roth_pct, brok_pct = 0.10, 0.05, 0.05
+
+        # Clamp each rate to [0, 1] and ensure total ≤ 100 %
+        trad_pct = max(0.0, min(1.0, trad_pct))
+        roth_pct = max(0.0, min(1.0, roth_pct))
+        brok_pct = max(0.0, min(1.0, brok_pct))
+        total_pct = trad_pct + roth_pct + brok_pct
+        if total_pct > 1.0:
+            scale = 1.0 / total_pct
+            trad_pct *= scale; roth_pct *= scale; brok_pct *= scale
+
+        # Dollar amounts withheld from gross wages before take-home
+        contribution_401k  = wages * trad_pct   # pre-tax → reduces AGI
+        contribution_roth  = wages * roth_pct   # after-tax Roth (no AGI reduction)
+        contribution_brok  = wages * brok_pct   # after-tax brokerage
+
+        # -----------------------------------------------------------------------
+        # Calculate AGI: gross wages minus pre-tax 401k contribution
+        # -----------------------------------------------------------------------
         agi = wages - contribution_401k
-        
+
         # Determine current tax bracket
         taxable_income = agi - std_deduction
         federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
-        
+
         logger.debug(f"AGI: ${agi:,.2f}, Tax bracket: {max_rate:.1%}, Tax: ${federal_tax:,.2f}")
-        
+        logger.debug(
+            f"Stage 1 contributions — Traditional 401k: ${contribution_401k:,.0f} "
+            f"({trad_pct:.0%}), Roth: ${contribution_roth:,.0f} ({roth_pct:.0%}), "
+            f"Brokerage: ${contribution_brok:,.0f} ({brok_pct:.0%})"
+        )
+
+        # -----------------------------------------------------------------------
         # Consider Roth conversions during accumulation using BETR
         # Only convert if in favorable tax bracket (≤ max_conversion_rate)
+        # -----------------------------------------------------------------------
         roth_conversion = 0
         if balances.traditional > 0 and max_rate <= max_conversion_rate:
             try:
@@ -1764,11 +1878,11 @@ class Stage1Accumulation(LifeStage):
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
                     max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
-                
+
                 # Calculate conversion room in current bracket
                 current_income = agi
                 conversion_room = max(0, target_bracket_upper - current_income - std_deduction)
-                
+
                 if conversion_room > 10000:  # Only convert if meaningful room
                     proposed_conversion = min(conversion_room, balances.traditional * 0.15)
                     if proposed_conversion > 1000:  # Meaningful minimum
@@ -1783,9 +1897,9 @@ class Stage1Accumulation(LifeStage):
                             years_to_withdrawal=max(1, 73 - age_primary),
                             annual_return=0.07
                         )
-                        
+
                         betr_results = calculate_betr(betr_inputs)
-                        
+
                         if betr_results.conversion_recommended:
                             roth_conversion = proposed_conversion
                             logger.info(f"Stage 1 Roth conversion: ${roth_conversion:,.0f} "
@@ -1793,34 +1907,58 @@ class Stage1Accumulation(LifeStage):
                                       f"Current rate: {max_rate:.1%})")
                         else:
                             logger.debug(f"BETR {betr_results.betr:.2%} - conversion not recommended")
-                        
+
             except (ValueError, Exception) as e:
                 logger.debug(f"Could not calculate BETR conversion: {e}")
-        
+
         # Calculate tax on conversion if any
         if roth_conversion > 0:
             total_income = agi + roth_conversion
             taxable_income_with_conversion = total_income - std_deduction
             federal_tax, _, _ = calculate_taxable_income(taxable_income_with_conversion, tax_brackets)
-        
-        # Add after-tax wages to cash (wages minus federal tax)
-        after_tax_wages = wages - federal_tax
-        
-        # Update balances with contributions and wages (before rebalancing)
+
+        # -----------------------------------------------------------------------
+        # Compute take-home cash after tax and after-tax contributions
+        # Take-home = gross wages - federal tax - Roth contribution - brokerage contribution
+        # (Traditional 401k is pre-tax so it already reduced AGI; it does NOT come out of
+        #  take-home again — it was never in the paycheck to begin with.)
+        # -----------------------------------------------------------------------
+        after_tax_wages = wages - federal_tax - contribution_roth - contribution_brok
+
+        # -----------------------------------------------------------------------
+        # Update balances: route each dollar to the right account
+        # -----------------------------------------------------------------------
+        # Cash target for this year (wages-based buffer)
+        accum_cash_target = calculate_cash_buffer_targets_accumulation(wages)
+
+        # How much cash do we need to add to reach the target?
+        cash_shortfall = max(0.0, accum_cash_target - (balances.cash + after_tax_wages))
+
+        # If after-tax wages exceed what's needed to top up cash, route the surplus
+        # to brokerage (on top of the explicit brokerage contribution).
+        cash_to_add = min(after_tax_wages, accum_cash_target - balances.cash)
+        cash_to_add = max(0.0, cash_to_add)  # never negative
+        surplus_to_brokerage = max(0.0, after_tax_wages - cash_to_add)
+
         balances_with_contributions = PortfolioBalances(
-            cash=balances.cash + after_tax_wages,
-            taxable=balances.taxable,
+            cash=balances.cash + cash_to_add,
+            taxable=balances.taxable + contribution_brok + surplus_to_brokerage,
             traditional=balances.traditional + contribution_401k,
             roth=balances.roth + contribution_roth,
             daf=balances.daf
         )
-        
-        logger.info(f"Year {year}: Added after-tax wages ${after_tax_wages:,.2f} to cash (wages ${wages:,.2f} - tax ${federal_tax:,.2f})")
+
+        logger.info(
+            f"Year {year}: wages=${wages:,.0f}, tax=${federal_tax:,.0f}, "
+            f"trad401k=${contribution_401k:,.0f}, roth=${contribution_roth:,.0f}, "
+            f"brok_contrib=${contribution_brok:,.0f}, "
+            f"cash_added=${cash_to_add:,.0f}, surplus_to_brok=${surplus_to_brokerage:,.0f}"
+        )
         
         # Calculate ACA premium based on configuration
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         
-        # Execute account rebalancing (includes Roth conversion)
+        # Execute account rebalancing (includes Roth conversion and expense payment)
         new_balances, transactions = rebalance_accounts(
             balances=balances_with_contributions,
             expenses=expenses,
@@ -1831,7 +1969,8 @@ class Stage1Accumulation(LifeStage):
             federal_tax=federal_tax,
             irmaa_penalty=0.0,
             aca_premium=aca_premium,
-            medical_costs=0.0
+            medical_costs=0.0,
+            cash_target_override=accum_cash_target,
         )
         
         # Calculate MAGI for this year
@@ -1873,26 +2012,275 @@ class Stage1Accumulation(LifeStage):
         )
 
 
-class Stage2EarlyRetirement(LifeStage):
+class Stage2PrepForRetirement(LifeStage):
     """
-    Stage 2: Early Retirement (Pre-Medicare, Pre-SS, Pre-RMD)
+    Stage 2: Prep for Retirement (within 10 years of planned retirement)
+    - Still employed with wages
+    - Focus: balance Roth, Traditional, and Taxable account ratios
+    - Evaluate Roth 401k vs Traditional 401k based on prior-year taxes
+    - Backdoor Roth: contribute to Traditional IRA then convert (if income too high for direct Roth)
+    - Mega backdoor Roth via employer 401k after-tax contributions
+    - If Traditional accounts are too large, redirect new savings to taxable brokerage
+      (funds future Roth conversions in early retirement)
+    - Healthcare costs still covered by employer / payroll deductions
+    """
+
+    # Number of years before retirement that this stage activates
+    PREP_WINDOW_YEARS: int = 10
+
+    def __init__(self):
+        super().__init__(
+            "Stage 2: Prep for Retirement",
+            "Within 10 years of retirement — balance Roth/Traditional/Taxable, optimize contribution type"
+        )
+
+    def applies(self, age_primary: int, age_spouse: int, year: int,
+                has_wages: bool, has_ss: bool) -> bool:
+        """Applies when employed AND within PREP_WINDOW_YEARS of the earlier retirement date."""
+        if not has_wages:
+            return False
+        try:
+            config_mgr = get_config_manager()
+            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
+            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
+            p1_ret_year = p1_birth_year + p1_ret_age
+
+            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
+            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
+            p2_ret_year = p2_birth_year + p2_ret_age
+
+            # Use the earlier of the two retirement years
+            earliest_retirement_year = min(p1_ret_year, p2_ret_year)
+            years_to_retirement = earliest_retirement_year - year
+            return 0 < years_to_retirement <= self.PREP_WINDOW_YEARS
+        except Exception:
+            return False
+
+    def calculate_strategy(self, year: int, balances: PortfolioBalances,
+                           expenses: float, wages: float = 0,
+                           contribution_401k: float = 0,
+                           contribution_roth: float = 0,
+                           **kwargs) -> YearlyStrategy:
+        """
+        Calculate pre-retirement optimisation strategy.
+
+        Key decisions made each year:
+        1. Assess whether Roth 401k or Traditional 401k is more tax-efficient
+           (compare current marginal rate vs expected retirement rate).
+        2. If Traditional balance is already large relative to Roth, redirect
+           new 401k contributions to Roth 401k instead.
+        3. If income is too high for a direct Roth IRA contribution, execute a
+           backdoor Roth (contribute to empty Traditional IRA → immediate conversion).
+        4. If Traditional balance is very large, consider investing new savings in
+           taxable brokerage to fund future Roth conversions in early retirement.
+        5. Use BETR to validate any Roth conversion is beneficial.
+        """
+        logger.debug(f"Stage 2 Prep calculation for year {year}, wages=${wages:,.2f}")
+
+        age_primary = kwargs.get('age_primary', 0)
+        age_spouse = kwargs.get('age_spouse', 0)
+        max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
+
+        # Get tax data
+        tax_brackets = get_income_tax_brackets(year)
+        std_deduction_df = get_std_deduction(year)
+        std_deduction = std_deduction_df.iloc[0]['deduction']
+
+        # AGI after pre-tax 401k contributions
+        agi = wages - contribution_401k
+        taxable_income = agi - std_deduction
+        federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
+
+        logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
+
+        # -----------------------------------------------------------------------
+        # Decision 1: Should new 401k contributions go Roth or Traditional?
+        # Rule: if current marginal rate <= expected retirement rate → Traditional
+        #       if current marginal rate >  expected retirement rate → Roth 401k
+        # -----------------------------------------------------------------------
+        expected_retirement_rate = max_conversion_rate  # proxy for retirement bracket
+        prefer_roth_401k = max_rate > expected_retirement_rate
+
+        # -----------------------------------------------------------------------
+        # Decision 2: Is Traditional balance disproportionately large?
+        # Heuristic: if Traditional > 2× Roth, redirect contributions to Roth
+        # -----------------------------------------------------------------------
+        trad_heavy = (balances.roth > 0 and balances.traditional > 2 * balances.roth)
+        if trad_heavy:
+            prefer_roth_401k = True
+            logger.info(f"Year {year}: Traditional (${balances.traditional:,.0f}) > 2× Roth "
+                        f"(${balances.roth:,.0f}) — redirecting contributions to Roth 401k")
+
+        # -----------------------------------------------------------------------
+        # Decision 3: Backdoor Roth IRA
+        # Execute if income exceeds direct Roth IRA contribution limit (~$161k single / $240k MFJ 2024)
+        # Assumes Traditional IRA is kept empty for this purpose.
+        # -----------------------------------------------------------------------
+        ROTH_IRA_INCOME_LIMIT = 240_000  # MFJ 2024 phase-out upper bound
+        IRA_CONTRIBUTION_LIMIT = 7_000   # 2024 limit (age < 50); 8_000 if ≥ 50
+        backdoor_roth_amount = 0.0
+        if agi > ROTH_IRA_INCOME_LIMIT:
+            backdoor_roth_amount = IRA_CONTRIBUTION_LIMIT
+            logger.info(f"Year {year}: AGI ${agi:,.0f} exceeds Roth IRA limit — "
+                        f"executing backdoor Roth ${backdoor_roth_amount:,.0f}")
+
+        # -----------------------------------------------------------------------
+        # Decision 4: BETR-validated Roth conversion
+        # Only convert if in a favorable bracket AND Traditional is large
+        # -----------------------------------------------------------------------
+        roth_conversion = 0.0
+        if balances.traditional > 0 and max_rate <= max_conversion_rate:
+            try:
+                target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
+                    max_conversion_rate, pd.DataFrame(tax_brackets)
+                )
+                current_income = agi
+                conversion_room = max(0, target_bracket_upper - current_income - std_deduction)
+
+                if conversion_room > 10_000:
+                    proposed_conversion = min(conversion_room, balances.traditional * 0.10)
+                    if proposed_conversion > 1_000:
+                        betr_inputs = BETRInputs(
+                            current_marginal_rate=max_rate,
+                            expected_future_rate=max_conversion_rate,
+                            conversion_amount=proposed_conversion,
+                            traditional_ira_balance=balances.traditional,
+                            pay_from_taxable=True,
+                            taxable_account_balance=balances.taxable,
+                            years_to_withdrawal=max(1, 73 - age_primary),
+                            annual_return=0.07
+                        )
+                        betr_results = calculate_betr(betr_inputs)
+                        if betr_results.conversion_recommended:
+                            roth_conversion = proposed_conversion
+                            logger.info(f"Stage 2 Prep Roth conversion: ${roth_conversion:,.0f} "
+                                        f"(BETR: {betr_results.betr:.2%}, rate: {max_rate:.1%})")
+                        else:
+                            logger.debug(f"BETR {betr_results.betr:.2%} — conversion not recommended")
+            except Exception as e:
+                logger.debug(f"Could not calculate BETR conversion in Stage 2 Prep: {e}")
+
+        # Recalculate tax including any conversion
+        if roth_conversion > 0:
+            total_income = agi + roth_conversion
+            taxable_with_conv = total_income - std_deduction
+            federal_tax, _, _ = calculate_taxable_income(taxable_with_conv, tax_brackets)
+
+        after_tax_wages = wages - federal_tax
+
+        # Update balances — backdoor Roth moves cash → Roth (net zero on Traditional IRA)
+        balances_updated = PortfolioBalances(
+            cash=balances.cash + after_tax_wages,
+            taxable=balances.taxable,
+            traditional=balances.traditional + (0 if prefer_roth_401k else contribution_401k),
+            roth=balances.roth + (contribution_401k if prefer_roth_401k else 0)
+                 + contribution_roth + backdoor_roth_amount,
+            daf=balances.daf
+        )
+
+        logger.info(f"Year {year} Stage 2 Prep: after-tax wages ${after_tax_wages:,.2f}, "
+                    f"prefer_roth_401k={prefer_roth_401k}, backdoor_roth=${backdoor_roth_amount:,.0f}")
+
+        # ACA premium — not applicable (employer-sponsored healthcare)
+        aca_premium = 0.0
+
+        # Calculate ramped cash buffer target for Stage 2:
+        # linearly scales from the wages-based accumulation target (Stage 1 level)
+        # up to 75 % of the full retirement cash reserve over the 10-year prep window.
+        try:
+            config_mgr = get_config_manager()
+            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
+            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
+            p1_ret_year = p1_birth_year + p1_ret_age
+            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
+            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
+            p2_ret_year = p2_birth_year + p2_ret_age
+            earliest_retirement_year = min(p1_ret_year, p2_ret_year)
+            years_to_retirement = max(1, earliest_retirement_year - year)
+        except Exception:
+            years_to_retirement = self.PREP_WINDOW_YEARS // 2  # safe fallback
+
+        accum_cash_target = calculate_stage2_cash_target(
+            wages=wages,
+            expenses=expenses,
+            years_to_retirement=years_to_retirement,
+            prep_window=self.PREP_WINDOW_YEARS,
+        )
+        logger.debug(
+            f"Stage 2 Prep cash target: ${accum_cash_target:,.0f} "
+            f"(wages=${wages:,.0f}, years_to_retirement={years_to_retirement}, "
+            f"progress={(self.PREP_WINDOW_YEARS - years_to_retirement) / max(1, self.PREP_WINDOW_YEARS - 1):.0%})"
+        )
+
+        # Execute rebalancing (includes Roth conversion if any)
+        new_balances, transactions = rebalance_accounts(
+            balances=balances_updated,
+            expenses=expenses,
+            roth_conversion=roth_conversion,
+            year=year,
+            age_primary=age_primary,
+            stage=self.name,
+            federal_tax=federal_tax,
+            irmaa_penalty=0.0,
+            aca_premium=aca_premium,
+            medical_costs=0.0,
+            cash_target_override=accum_cash_target,
+        )
+
+        magi = roth_conversion  # wages covered by employer; no SS, no traditional withdrawal
+
+        return YearlyStrategy(
+            year=year,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            stage=self.name,
+            wages=wages,
+            ss_benefits=0,
+            rmd_amount=0,
+            traditional_withdrawal=0,
+            taxable_withdrawal=0,
+            roth_withdrawal=0,
+            roth_conversion=roth_conversion,
+            ltcg_harvested=0,
+            daf_contribution=0,
+            expenses=expenses,
+            agi=agi,
+            magi=magi,
+            federal_tax=federal_tax,
+            irmaa_penalty=0,
+            aca_premium=aca_premium,
+            balances=new_balances,
+            cash_replenishment=transactions['cash_replenishment'],
+            brokerage_replenishment=transactions['brokerage_replenishment'],
+            traditional_to_cash=transactions['traditional_to_cash'],
+            traditional_to_brokerage=transactions['traditional_to_brokerage'],
+            brokerage_to_cash=transactions['brokerage_to_cash'],
+            roth_to_cash=transactions['roth_to_cash'],
+            roth_to_brokerage=transactions['roth_to_brokerage'],
+            conversion_executed=transactions['conversion_executed']
+        )
+
+
+class Stage3EarlyRetirement(LifeStage):
+    """
+    Stage 3: Early Retirement (Pre-Medicare, Pre-SS, Pre-RMD)
     - No wages, no SS benefits yet
     - Optimize Roth conversions (low/no income years)
     - Use LTCG to fund living expenses (0% or 15% rate)
     - Consider ACA subsidies (keep income below 400% FPL)
     - 4% withdrawal strategy
     """
-    
+
     def __init__(self):
         super().__init__(
-            "Stage 2: Early Retirement",
+            "Stage 3: Early Retirement",
             "Pre-Medicare, pre-SS, pre-RMD - Roth conversion opportunity"
         )
-    
+
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
         """Applies when retired but before Medicare and SS"""
-        return (not has_wages and not has_ss and 
+        return (not has_wages and not has_ss and
                 age_primary < MEDICARE_AGE and age_spouse < MEDICARE_AGE)
     
     def calculate_strategy(self, year: int, balances: PortfolioBalances,
@@ -2092,18 +2480,18 @@ class Stage2EarlyRetirement(LifeStage):
         )
 
 
-class Stage3Medicare(LifeStage):
+class Stage4Medicare(LifeStage):
     """
-    Stage 3: Medicare Stage (Pre-SS, Pre-RMD)
+    Stage 4: Medicare Stage (Pre-SS, Pre-RMD)
     - On Medicare, optimize for IRMAA
     - Continue Roth conversions but watch IRMAA thresholds
     - IRMAA based on MAGI from 2 years prior
     - Balance conversions vs IRMAA penalties
     """
-    
+
     def __init__(self):
         super().__init__(
-            "Stage 3: Medicare",
+            "Stage 4: Medicare",
             "On Medicare, optimizing for IRMAA while continuing Roth conversions"
         )
     
@@ -2346,18 +2734,18 @@ class Stage3Medicare(LifeStage):
         )
 
 
-class Stage4SocialSecurity(LifeStage):
+class Stage5SocialSecurity(LifeStage):
     """
-    Stage 4: Social Security Stage (SS + Medicare, Pre-RMD)
+    Stage 5: Social Security Stage (SS + Medicare, Pre-RMD)
     - Collecting SS benefits
     - On Medicare (IRMAA considerations)
     - Continue strategic Roth conversions
     - Balance SS taxation (up to 85% taxable)
     """
-    
+
     def __init__(self):
         super().__init__(
-            "Stage 4: Social Security",
+            "Stage 5: Social Security",
             "Collecting SS + Medicare, pre-RMD optimization"
         )
     
@@ -2609,19 +2997,19 @@ class Stage4SocialSecurity(LifeStage):
         )
 
 
-class Stage5RMD(LifeStage):
+class Stage6RMD(LifeStage):
     """
-    Stage 5: RMD Stage (Full Retirement)
+    Stage 6: RMD Stage (Full Retirement)
     - Required Minimum Distributions from Traditional accounts
     - SS benefits + Medicare
     - RMDs may push into higher tax brackets
     - Limited Roth conversion opportunity
     - Focus on tax-efficient withdrawal sequencing
     """
-    
+
     def __init__(self):
         super().__init__(
-            "Stage 5: RMD",
+            "Stage 6: RMD",
             "RMD age - managing required distributions with SS and Medicare"
         )
     
@@ -2840,12 +3228,13 @@ class WithdrawalStrategyEngine:
     def __init__(self):
         self.stages = [
             Stage1Accumulation(),
-            Stage2EarlyRetirement(),
-            Stage3Medicare(),
-            Stage4SocialSecurity(),
-            Stage5RMD()
+            Stage2PrepForRetirement(),
+            Stage3EarlyRetirement(),
+            Stage4Medicare(),
+            Stage5SocialSecurity(),
+            Stage6RMD()
         ]
-        logger.info("Withdrawal Strategy Engine initialized with 5 life stages")
+        logger.info("Withdrawal Strategy Engine initialized with 6 life stages")
     
     def determine_stage(self, age_primary: int, age_spouse: int, year: int,
                        has_wages: bool, has_ss: bool) -> LifeStage:
@@ -3321,6 +3710,105 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
     logger.info("=" * 80)
     
     return strategy_df, cast(pd.DataFrame, balances_df)
+
+
+def build_accumulation_strategy_display(start_year: Optional[int] = None,
+                                        end_year: Optional[int] = None,
+                                        **kwargs) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Build accumulation (pre-retirement) strategy display.
+
+    Runs the same WithdrawalStrategyEngine as the withdrawal display but scopes
+    the projection to the years *before* the earliest retirement date so only
+    Stage 1 (Accumulation) and Stage 2 (Prep for Retirement) rows appear.
+
+    Args:
+        start_year: Starting year (defaults to current year).
+        end_year:   Ending year (defaults to the year before the earliest
+                    retirement date, or start_year + 10 if config unavailable).
+        **kwargs:   Forwarded to the engine (growth_rate, expense_inflation_rate, …).
+
+    Returns:
+        Tuple of (strategy_df, balances_df) — same column schema as
+        build_withdrawal_strategy_display().
+    """
+    if start_year is None:
+        start_year = datetime.now().year
+
+    if end_year is None:
+        try:
+            config_mgr = get_config_manager()
+            p1_birth_year = int(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01").split('-')[0])
+            p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
+            p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
+            p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
+            earliest_retirement = min(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
+            # Project up to (but not including) the retirement year
+            end_year = max(start_year, earliest_retirement - 1)
+        except Exception:
+            end_year = start_year + 10
+
+    logger.info(f"Building accumulation strategy display: {start_year}-{end_year}")
+
+    # Load current portfolio balances (same logic as withdrawal display)
+    try:
+        current_month = datetime.now().month
+        detailed_df, summary_df = get_networth_by_month(current_month, start_year)
+
+        if summary_df.empty:
+            logger.warning("No portfolio data found for accumulation display, using defaults")
+            initial_balances = PortfolioBalances(
+                cash=50_000, taxable=200_000, traditional=300_000, roth=100_000, daf=0
+            )
+        else:
+            initial_balances = PortfolioBalances(
+                cash=float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum()),
+                taxable=float(summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum()),
+                traditional=float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum()),
+                roth=float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum()),
+                daf=0
+            )
+    except Exception as e:
+        logger.error(f"Error loading portfolio data for accumulation display: {e}")
+        initial_balances = PortfolioBalances(
+            cash=50_000, taxable=200_000, traditional=300_000, roth=100_000, daf=0
+        )
+
+    # Load initial expenses
+    from config import get_value_with_session_override
+    try:
+        initial_expenses = float(get_value_with_session_override(
+            'financial_assumptions', 'expected_annual_expenses', 'EXPENSE',
+            kwargs.get('initial_expenses', 120_000)
+        ))
+    except (ImportError, AttributeError, KeyError) as e:
+        logger.debug(f"Using default expenses for accumulation display: {e}")
+        initial_expenses = kwargs.get('initial_expenses', 120_000)
+
+    kwargs_filtered = {k: v for k, v in kwargs.items() if k not in ['initial_balances', 'initial_expenses']}
+
+    engine = WithdrawalStrategyEngine()
+    strategy_df = engine.calculate_multi_year_strategy(
+        start_year=start_year,
+        end_year=end_year,
+        initial_balances=initial_balances,
+        initial_expenses=initial_expenses,
+        **kwargs_filtered
+    )
+
+    # Filter to accumulation stages only (belt-and-suspenders guard)
+    accum_stages = {"Stage 1: Accumulation", "Stage 2: Prep for Retirement"}
+    if not strategy_df.empty and 'Stage' in strategy_df.columns:
+        strategy_df = strategy_df[strategy_df['Stage'].isin(list(accum_stages))].reset_index(drop=True)
+
+    balances_df = strategy_df[[
+        'Year', 'Cash Balance', 'Taxable Balance',
+        'Traditional Balance', 'Roth Balance', 'DAF Balance', 'Total Portfolio'
+    ]].copy()
+
+    logger.info(f"Accumulation strategy: {len(strategy_df)} years calculated")
+
+    return cast(pd.DataFrame, strategy_df), cast(pd.DataFrame, balances_df)
 
 
 def calculate_aca_subsidy(magi: float, year: int, household_size: int = 2) -> Tuple[float, float]:

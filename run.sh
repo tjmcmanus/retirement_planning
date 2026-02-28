@@ -61,7 +61,7 @@ REQUIRED_MODULES=(
     "portfolio.py"
     "portfolio_data_entry.py"
     "income_expense.py"
-    "withdrawal_strategy.py"
+    "strategy.py"
     "betr_roth_conversion.py"
     "ssibenefits.py"
     "config.py"

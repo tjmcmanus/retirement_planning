@@ -31,7 +31,13 @@ Access the configuration page through the Streamlit sidebar or by navigating to 
 - Set expected annual expenses
 - Configure expense inflation rate
 - Set expected investment return rate
-- Define years of expenses to keep in cash
+- Define years of expenses to keep in cash (retirement phase)
+- **Accumulation Phase: Cash Buffer** — set how many months of wages to keep in cash during working years (3–24 months, default 6)
+- **Accumulation Phase: Contribution Rates** — set what percentage of gross wages flows to each account type:
+  - **Traditional 401k (%)** — pre-tax contribution; reduces AGI (default 10%)
+  - **Roth 401k / IRA (%)** — after-tax Roth contribution (default 5%)
+  - **Brokerage (%)** — after-tax taxable brokerage contribution (default 5%)
+  - Remaining take-home cash fills the cash buffer first; any surplus above the target also flows to brokerage
 - View calculated cash reserve recommendations
 
 #### Healthcare Tab
@@ -124,11 +130,20 @@ The sidebar now automatically loads values from the configuration file:
     "person2_birth_date": "1967-01-01",
     "person2_retirement_age": 62
   },
+  "income": {
+    "person1_annual_wages": 120000,
+    "person2_annual_wages": 80000,
+    "wage_inflation_rate": 3.0,
+    "contribution_401k_percent": 10.0,
+    "contribution_roth_percent": 5.0,
+    "contribution_brokerage_percent": 5.0
+  },
   "financial_assumptions": {
     "expected_annual_expenses": 50000,
     "expense_inflation_rate": 3.0,
     "expected_rate_of_return": 6.0,
-    "years_of_expenses_in_cash": 4
+    "years_of_expenses_in_cash": 4,
+    "accumulation_cash_buffer_months": 6
   },
   "healthcare": {
     "aca_insurance_monthly": 0,
