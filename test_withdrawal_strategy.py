@@ -7,7 +7,7 @@ to ensure the module is working correctly.
 """
 
 import sys
-from withdrawal_strategy import (
+from strategy import (
     PortfolioBalances,
     WithdrawalStrategyEngine,
     YearlyStrategy,
@@ -117,7 +117,7 @@ def test_strategy_calculation():
     print("\nTesting Strategy Calculation...")
     
     try:
-        from withdrawal_strategy import build_withdrawal_strategy_display
+        from strategy import build_withdrawal_strategy_display
         
         # Create simple test scenario
         balances = PortfolioBalances(

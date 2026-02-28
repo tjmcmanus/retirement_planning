@@ -77,7 +77,7 @@ REM Check for required Python module files
 echo Checking for required Python modules...
 set MISSING_COUNT=0
 
-set "REQUIRED_MODULES=planning_app.py load_data.py calculations.py portfolio.py portfolio_data_entry.py income_expense.py withdrawal_strategy.py betr_roth_conversion.py ssibenefits.py config.py components\sidebar.py"
+set "REQUIRED_MODULES=planning_app.py load_data.py calculations.py portfolio.py portfolio_data_entry.py income_expense.py strategy.py betr_roth_conversion.py ssibenefits.py config.py components\sidebar.py"
 
 for %%f in (%REQUIRED_MODULES%) do (
     if not exist "%%f" (

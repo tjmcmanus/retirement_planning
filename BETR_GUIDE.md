@@ -277,7 +277,7 @@ print_betr_report(results, inputs)
 
 ```python
 from betr_roth_conversion import optimize_conversion_amount
-from withdrawal_strategy import PortfolioBalances
+from strategy import PortfolioBalances
 
 # Get current portfolio balances
 balances = PortfolioBalances(
@@ -531,7 +531,7 @@ python3 betr_roth_conversion.py
 
 - **Related Modules**:
   - [`calculations.py`](calculations.py) - Tax calculations
-  - [`withdrawal_strategy.py`](withdrawal_strategy.py) - Withdrawal strategies
+  - [`strategy.py`](strategy.py) - Withdrawal strategies
   - [`load_data.py`](load_data.py) - Tax bracket data
 
 ## Support

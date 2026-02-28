@@ -29,11 +29,16 @@ DEFAULT_CONFIG = {
         "expense_inflation_rate": 3.0,
         "expected_rate_of_return": 6.0,
         "years_of_expenses_in_cash": 4,
+        "accumulation_cash_buffer_months": 6,
     },
     "income": {
         "person1_annual_wages": 0,  # Annual wages/salary for person 1
         "person2_annual_wages": 0,  # Annual wages/salary for person 2
         "wage_inflation_rate": 3.0,  # Annual wage increase percentage
+        # Accumulation-phase contribution rates (% of gross wages, 0–100)
+        "contribution_401k_percent": 10.0,   # Pre-tax Traditional 401k contribution rate
+        "contribution_roth_percent": 5.0,    # Roth 401k / Roth IRA contribution rate
+        "contribution_brokerage_percent": 5.0,  # After-tax brokerage contribution rate
     },
     "social_security": {
         "person1_ssi_age": 70,

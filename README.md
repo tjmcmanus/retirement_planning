@@ -5,7 +5,7 @@ A comprehensive Streamlit-based financial planning application for retirement ta
 ## Overview
 
 This application helps users plan their retirement by:
-- **5-Stage Withdrawal Strategy**: Comprehensive life-cycle planning from accumulation through RMD phase
+- **6-Stage Life-Cycle Strategy**: Comprehensive planning from accumulation through RMD phase, including a dedicated pre-retirement prep stage
 - **Roth Conversion Optimization**: Intelligent conversions to minimize lifetime tax burden
 - **Tax Projection**: Multi-year federal and state tax calculations
 - **Portfolio Management**: Real-time tracking with Yahoo Finance integration
@@ -40,18 +40,19 @@ Complete configuration management system with portfolio data entry:
 
 See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for complete configuration documentation.
 
-### ✨ New: 5-Stage Withdrawal Strategy Module
-Complete retirement withdrawal strategy implementation covering all life phases:
-- **Stage 1: Accumulation** - Tax-efficient asset building while employed
-- **Stage 2: Early Retirement** - Aggressive Roth conversions, ACA optimization
-- **Stage 3: Medicare** - IRMAA-aware conversion strategies
-- **Stage 4: Social Security** - SS taxation and benefit optimization
-- **Stage 5: RMD** - Required distribution compliance and management
+### ✨ New: 6-Stage Life-Cycle Strategy Module
+Complete retirement life-cycle strategy implementation covering all phases:
+- **Stage 1: Accumulation** - Tax-efficient asset building; wages routed to Traditional 401k, Roth, brokerage, and cash buffer (configurable contribution rates)
+- **Stage 2: Prep for Retirement** - Within 10 years of retirement; cash buffer ramps from wages-based target up to 75% of full retirement reserve
+- **Stage 3: Early Retirement** - Aggressive Roth conversions, ACA optimization
+- **Stage 4: Medicare** - IRMAA-aware conversion strategies
+- **Stage 5: Social Security** - SS taxation and benefit optimization
+- **Stage 6: RMD** - Required distribution compliance and management
 
-See [`WITHDRAWAL_STRATEGY_README.md`](WITHDRAWAL_STRATEGY_README.md) for complete documentation.
+See [`STRATEGY_README.md`](STRATEGY_README.md) for complete documentation.
 
 ### 🆕 NEW: Advanced Tax Planning & Healthcare Features
-Comprehensive tax optimization and healthcare cost modeling in [`withdrawal_strategy.py`](withdrawal_strategy.py):
+Comprehensive tax optimization and healthcare cost modeling in [`strategy.py`](strategy.py):
 - **State Tax Planning**: Multi-state calculations with retirement-friendly state handling
   - No-tax states (FL, TX, WA, NV, SD, WY, AK, TN, NH)
   - Retirement-friendly states with full exemptions (PA, IL, MS)
@@ -83,14 +84,14 @@ Configurable debug logging throughout [`calculations.py`](calculations.py):
 - See [`LOGGING_GUIDE.md`](LOGGING_GUIDE.md) for usage
 
 ### 📊 Example Scenarios
-Four pre-built withdrawal strategy scenarios in [`example_withdrawal_strategy.py`](example_withdrawal_strategy.py):
+Four pre-built withdrawal strategy scenarios in [`example_strategy.py`](example_strategy.py):
 1. Basic retirement strategy ($1.1M portfolio)
 2. Early retirement with aggressive conversions ($1.5M portfolio)
 3. High-income IRMAA optimization ($3.7M portfolio)
 4. Custom scenario builder
 
 ### 🧪 Test Suite
-Comprehensive validation in [`test_withdrawal_strategy.py`](test_withdrawal_strategy.py):
+Comprehensive validation in [`test_strategy.py`](test_strategy.py):
 - Portfolio balance calculations
 - Life stage determination
 - ACA subsidy calculations
@@ -422,11 +423,12 @@ retirement_planning/
 ├── planning_app.py                    # Main Streamlit application
 ├── config.py                          # Configuration management system
 ├── portfolio_data_entry.py            # Portfolio data entry and validation
-├── withdrawal_strategy.py             # 5-stage withdrawal strategy engine
+├── strategy.py             # 6-stage life-cycle strategy engine
 ├── betr_roth_conversion.py            # BETR Roth conversion algorithm
 ├── ssi_calculator.py                  # Dynamic SSI benefit calculator
 ├── generate_ssi_schedule.py           # SSI schedule generation script
-├── example_withdrawal_strategy.py     # Example scenarios and runner
+├── example_withdrawal_strategy.py  # Withdrawal strategy example scenarios
+├── example_accumulation_strategy.py  # Accumulation phase example scenarios
 ├── income_expense.py                  # Income/expense projections with RMD
 ├── calculations.py                    # Tax calculation functions (with logging)
 ├── load_data.py                       # Data loading utilities
@@ -449,7 +451,7 @@ retirement_planning/
 ├── BETR_GUIDE.md                      # BETR Roth conversion guide
 ├── SSI_CALCULATOR_GUIDE.md            # SSI calculator documentation
 ├── SSI_INTEGRATION_GUIDE.md           # SSI integration with withdrawal strategy
-├── WITHDRAWAL_STRATEGY_README.md      # Withdrawal strategy documentation
+├── STRATEGY_README.md      # Withdrawal strategy documentation
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation details
 ├── ACCOUNT_REBALANCING_IMPLEMENTATION.md  # Account rebalancing feature
 ├── BETR_CORRECTION_NOTES.md           # BETR algorithm corrections
@@ -538,8 +540,8 @@ retirement_planning/
 
 ## Key Modules & Functions
 
-### Withdrawal Strategy ([`withdrawal_strategy.py`](withdrawal_strategy.py))
-**NEW: Complete 5-stage retirement withdrawal engine with advanced tax planning**
+### Withdrawal Strategy ([`strategy.py`](strategy.py))
+**Complete 6-stage life-cycle strategy engine with advanced tax planning**
 
 **Core Strategy Engine:**
 - `PortfolioBalances` - Portfolio account container
@@ -640,7 +642,7 @@ retirement_planning/
   - Backup and restore procedures
   - API reference
   - Troubleshooting
-- **[`WITHDRAWAL_STRATEGY_README.md`](WITHDRAWAL_STRATEGY_README.md)** - Complete withdrawal strategy guide (625 lines)
+- **[`STRATEGY_README.md`](STRATEGY_README.md)** - Complete withdrawal strategy guide (625 lines)
   - Installation and setup
   - API documentation
   - Strategy explanations for each life stage
@@ -769,13 +771,13 @@ See [`ERRORS_FOUND.md`](ERRORS_FOUND.md) for complete analysis.
 ./run_strategy.sh
 
 # Or run directly with Python
-python3 example_withdrawal_strategy.py
+python3 example_strategy.py
 ```
 
 ### Using in Python Code
 
 ```python
-from withdrawal_strategy import (
+from strategy import (
     PortfolioBalances,
     build_withdrawal_strategy_display,
     generate_strategy_summary
@@ -819,7 +821,7 @@ streamlit run planning_app.py
 
 # Or for withdrawal strategy
 export LOG_LEVEL=DEBUG
-python3 example_withdrawal_strategy.py
+python3 example_strategy.py
 ```
 
 See [`LOGGING_GUIDE.md`](LOGGING_GUIDE.md) for complete logging documentation.
@@ -829,7 +831,7 @@ See [`LOGGING_GUIDE.md`](LOGGING_GUIDE.md) for complete logging documentation.
 ### Run Withdrawal Strategy Tests
 
 ```bash
-python3 test_withdrawal_strategy.py
+python3 test_strategy.py
 ```
 
 **Test Coverage:**
@@ -942,7 +944,7 @@ This project uses code from Stack Overflow (CC BY-SA 4.0) as noted in [`portfoli
 - ✅ **Configuration System**: Centralized settings management with JSON storage
 - ✅ **Portfolio Data Entry**: Interactive editor with validation and automatic backups
 - ✅ **Account Management**: Define and organize investment accounts by type
-- ✅ **5-Stage Withdrawal Strategy**: Complete life-cycle planning engine
+- ✅ **6-Stage Life-Cycle Strategy**: Complete planning engine from accumulation through RMD
 - ✅ **State Tax Planning**: Multi-state calculations with config integration
 - ✅ **AMT Calculation**: Full Alternative Minimum Tax with exemption phase-out
 - ✅ **NIIT Planning**: Net Investment Income Tax (3.8% surtax) calculation
@@ -973,7 +975,7 @@ For issues or questions:
 7. Consult official IRS and SSA resources for tax/benefit questions
 8. Review documentation files for detailed guidance:
    - [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) - Configuration system (NEW)
-   - [`WITHDRAWAL_STRATEGY_README.md`](WITHDRAWAL_STRATEGY_README.md) - Withdrawal strategies
+   - [`STRATEGY_README.md`](STRATEGY_README.md) - Withdrawal strategies
    - [`LOGGING_GUIDE.md`](LOGGING_GUIDE.md) - Debug logging
    - [`ERRORS_FOUND.md`](ERRORS_FOUND.md) - Bug fixes
    - [`IMPLEMENTATION_SUMMARY.md`](IMPLEMENTATION_SUMMARY.md) - Technical details
@@ -1273,7 +1275,7 @@ See development guidelines in the Contributing section above. Priority areas for
 
 - ⚙️ [Configuration Guide](CONFIG_GUIDE.md) - **START HERE**
 - 💰 [BETR Roth Conversion Guide](BETR_GUIDE.md) - **NEW**
-- 📖 [Withdrawal Strategy Guide](WITHDRAWAL_STRATEGY_README.md)
+- 📖 [Withdrawal Strategy Guide](STRATEGY_README.md)
 - 🔧 [Implementation Summary](IMPLEMENTATION_SUMMARY.md)
 - 🐛 [Bug Fixes & Analysis](ERRORS_FOUND.md)
 - 📝 [Logging Guide](LOGGING_GUIDE.md)

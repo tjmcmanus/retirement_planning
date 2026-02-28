@@ -6,9 +6,10 @@ A comprehensive Python module for calculating optimal retirement withdrawal stra
 
 This module implements a sophisticated withdrawal strategy that adapts to different life stages:
 
-1. **Stage 1: Accumulation** - Employed, earning wages, building assets tax-efficiently
-2. **Stage 2: Early Retirement** - Pre-Medicare, pre-SS, pre-RMD with aggressive Roth conversions
-3. **Stage 3: Medicare** - On Medicare, optimizing for IRMAA while continuing conversions
+1. **Stage 1: Accumulation** - Employed, earning wages; routes wages to Traditional 401k, Roth, brokerage, and cash buffer at configurable rates
+2. **Stage 2: Prep for Retirement** - Within 10 years of retirement; cash buffer linearly ramps from wages-based target to 75% of full retirement reserve
+3. **Stage 3: Early Retirement** - Pre-Medicare, pre-SS, pre-RMD with aggressive Roth conversions
+4. **Stage 4: Medicare** - On Medicare, optimizing for IRMAA while continuing conversions
 4. **Stage 4: Social Security** - Collecting SS + Medicare, balancing taxation
 5. **Stage 5: RMD** - Managing Required Minimum Distributions with full retirement income
 
@@ -25,7 +26,7 @@ This module implements a sophisticated withdrawal strategy that adapts to differ
 - **Threshold Optimization**: Avoids crossing IRMAA thresholds when possible
 - **Multi-Person Support**: Handles 1 or 2 people on Medicare
 
-### ACA Subsidy Optimization (Stage 2)
+### ACA Subsidy Optimization (Stage 3)
 - **FPL Calculations**: Keeps income below 400% Federal Poverty Level for maximum subsidies
 - **Premium Calculations**: Estimates net ACA premiums after subsidies
 
@@ -47,7 +48,7 @@ pip install pandas numpy streamlit yfinance
 ```
 
 ### Files Required
-- `withdrawal_strategy.py` - Main module
+- `strategy.py` - Main module
 - `load_data.py` - Data loading utilities
 - `calculations.py` - Tax calculation functions
 - `ssibenefits.py` - Social Security benefit calculations
@@ -66,7 +67,7 @@ pip install pandas numpy streamlit yfinance
 ### Basic Usage
 
 ```python
-from withdrawal_strategy import (
+from strategy import (
     PortfolioBalances,
     build_withdrawal_strategy_display,
     generate_strategy_summary,
@@ -108,7 +109,7 @@ strategy_df.to_csv("my_retirement_strategy.csv", index=False)
 ### Using Pre-Built Scenarios
 
 ```python
-from withdrawal_strategy import create_example_scenario
+from strategy import create_example_scenario
 
 # Load a pre-built scenario
 scenario = create_example_scenario("early_retire")
@@ -248,7 +249,7 @@ The `strategy_df` DataFrame contains:
 
 ## Examples
 
-See [`example_withdrawal_strategy.py`](example_withdrawal_strategy.py) for comprehensive examples:
+See [`example_strategy.py`](example_strategy.py) for comprehensive examples:
 
 1. **Basic Strategy** - Standard retirement scenario
 2. **Early Retirement** - Aggressive Roth conversions
@@ -258,13 +259,13 @@ See [`example_withdrawal_strategy.py`](example_withdrawal_strategy.py) for compr
 
 Run examples:
 ```bash
-python example_withdrawal_strategy.py
+python example_strategy.py
 ```
 
 ## Strategy Details by Stage
 
 ### Stage 1: Accumulation
-**When:** Still employed with wages  
+**When:** Still employed with wages (more than 10 years before retirement)
 **Focus:** Tax-efficient contributions  
 **Actions:**
 - Maximize 401k/IRA contributions
@@ -272,8 +273,17 @@ python example_withdrawal_strategy.py
 - Build emergency fund
 - No withdrawals
 
-### Stage 2: Early Retirement
-**When:** Retired, pre-Medicare, pre-SS, pre-RMD  
+### Stage 2: Prep for Retirement
+**When:** Still employed with wages, within 10 years of the earlier retirement date
+
+**Key behaviors:**
+- All Stage 1 contribution logic applies (Traditional 401k, Roth, brokerage)
+- Cash buffer target linearly ramps from the wages-based accumulation target (at 10 years out) to 75% of the full retirement cash reserve (at 1 year out)
+- BETR-validated Roth conversions continue if in a favorable bracket
+- Backdoor Roth IRA executed if income exceeds direct Roth IRA limit
+
+### Stage 3: Early Retirement
+**When:** Retired, pre-Medicare, pre-SS, pre-RMD
 **Focus:** Roth conversion opportunity  
 **Actions:**
 - Aggressive Roth conversions (fill 12% or 22% bracket)
@@ -374,7 +384,7 @@ The module integrates with the existing Streamlit retirement planning app:
 
 ```python
 # In planning_app.py
-from withdrawal_strategy import build_withdrawal_strategy_display
+from strategy import build_withdrawal_strategy_display
 
 # Add to retirement planner tab
 strategy_df, balances_df = build_withdrawal_strategy_display(
@@ -393,7 +403,7 @@ st.line_chart(balances_df.set_index('Year'))
 Create your own life stage strategy:
 
 ```python
-from withdrawal_strategy import LifeStage, YearlyStrategy
+from strategy import LifeStage, YearlyStrategy
 
 class CustomStage(LifeStage):
     def __init__(self):
@@ -471,7 +481,7 @@ Override tax calculation functions in `calculations.py` for:
 
 To extend this module:
 
-1. Add new life stages in `withdrawal_strategy.py`
+1. Add new life stages in `strategy.py`
 2. Implement custom tax strategies in `calculations.py`
 3. Add new data sources in `load_data.py`
 4. Create visualization functions for Streamlit

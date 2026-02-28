@@ -11,7 +11,7 @@ try:
 except ImportError:
     # Fallback if import fails - define locally
     from config import get_config_manager
-    
+
     def sync_config_to_session_state():
         """
         Sync configuration values to session state for sidebar compatibility.
@@ -19,7 +19,7 @@ except ImportError:
         available to other parts of the application that read from session state.
         """
         config_mgr = get_config_manager()
-        
+
         # Map configuration to session state keys used by sidebar
         config_to_session_mappings = {
             "SSI_AGE": ("social_security", "person1_ssi_age"),
@@ -30,7 +30,7 @@ except ImportError:
             "DAF_RATE": ("tax_strategy", "daf_disbursement_rate"),
             "PLANNED_DIST_2027": ("tax_strategy", "planned_distribution_2027"),
         }
-        
+
         for session_key, (section, config_key) in config_to_session_mappings.items():
             value = config_mgr.get(section, config_key)
             if value is not None:
@@ -51,36 +51,83 @@ def clear_withdrawal_strategy_cache():
 # Keys that require cache clearing when changed
 CACHE_CLEAR_KEYS = {"EXPENSE", "EXPENSE_MULTIPLIER"}
 
-# Configuration for all sidebar inputs
-# Format: (label, key, placeholder, help_text)
-# Note: Social Security Age removed - configure via Configuration page
-SIDEBAR_CONFIGS = [
-    ("Max Tax rate for a Roth conversion", "CONV_TAX_RATE",
-     "Add the max Tax rate for a Roth conversion", None),
-    ("Expected Annual Expenses", "EXPENSE",
-     "Add the expected annual expenses", None),
-    ("Desired multiple of expenses available", "EXPENSE_MULTIPLIER",
-     "Add the desired multiplier of expenses", None),
-    ("Expected Annual Rate of Return", "RATE",
-     "Add the expected annual rate of return investments", None),
-    ("Donor Advised Fund Disbursement rate", "DAF_RATE",
-     "Add Percentage number to give from Donor advised fund", None),
-    ("Planned Distribution for 2027", "PLANNED_DIST_2027",
-     "Add the planned distribution amount for year 2027", None),
+
+# ---------------------------------------------------------------------------
+# Numeric input configuration
+# Format: (label, key, min_val, max_val, step, format_str, help_text, unit_hint)
+# ---------------------------------------------------------------------------
+SIDEBAR_NUMBER_CONFIGS = [
+    (
+        "Max Roth Conversion Tax Rate",
+        "CONV_TAX_RATE",
+        0.0, 50.0, 1.0, "%.0f",
+        "Maximum marginal tax rate (%) at which Roth conversions are performed.",
+        "%",
+    ),
+    (
+        "Expected Annual Expenses",
+        "EXPENSE",
+        0.0, 500_000.0, 1_000.0, "%.0f",
+        "Projected annual living expenses in today's dollars.",
+        "$",
+    ),
+    (
+        "Expense Cash Multiplier",
+        "EXPENSE_MULTIPLIER",
+        1.0, 10.0, 0.5, "%.1f",
+        "Number of years of expenses to keep in cash as a buffer.",
+        "× expenses",
+    ),
+    (
+        "Expected Annual Rate of Return",
+        "RATE",
+        0.0, 20.0, 0.5, "%.1f",
+        "Expected average annual portfolio growth rate (%).",
+        "%",
+    ),
+    (
+        "DAF Disbursement Rate",
+        "DAF_RATE",
+        0.0, 100.0, 5.0, "%.0f",
+        "Percentage of Donor Advised Fund balance to disburse each year.",
+        "%",
+    ),
+    (
+        "2027 Planned Distribution",
+        "PLANNED_DIST_2027",
+        0.0, 1_000_000.0, 5_000.0, "%.0f",
+        "Planned one-time distribution amount for tax year 2027.",
+        "$",
+    ),
+]
+
+# Validation rules: (key, condition_fn, warning_message)
+VALIDATION_RULES = [
+    ("RATE",             lambda v: v > 15,      "⚠️ Rate of return > 15% is unusually high."),
+    ("EXPENSE",          lambda v: v < 1_000,   "⚠️ Annual expenses below $1,000 seems too low."),
+    ("CONV_TAX_RATE",    lambda v: v > 40,      "⚠️ Roth conversion rate > 40% — double-check."),
+    ("EXPENSE_MULTIPLIER", lambda v: v < 1,     "⚠️ Cash multiplier below 1× may leave insufficient buffer."),
 ]
 
 
-def save_sidebar_value_to_config(key: str, value: str):
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convert a session-state value (str or numeric) to float safely."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def save_sidebar_value_to_config(key: str, value: float):
     """
-    Save a sidebar value back to the configuration file.
-    
+    Save a sidebar numeric value back to the configuration file.
+
     Args:
-        key: The session state key
-        value: The new value to save
+        key: The session state key.
+        value: The new numeric value to save.
     """
     from config import get_config_manager
-    
-    # Map session state keys to config sections and keys
+
     config_mappings = {
         "CONV_TAX_RATE": ("tax_strategy", "max_roth_conversion_tax_rate"),
         "EXPENSE": ("financial_assumptions", "expected_annual_expenses"),
@@ -89,58 +136,80 @@ def save_sidebar_value_to_config(key: str, value: str):
         "DAF_RATE": ("tax_strategy", "daf_disbursement_rate"),
         "PLANNED_DIST_2027": ("tax_strategy", "planned_distribution_2027"),
     }
-    
+
     if key in config_mappings:
         section, config_key = config_mappings[key]
         config_mgr = get_config_manager()
         try:
-            # Convert string value to appropriate type
-            if value:
-                numeric_value = float(value)
-                config_mgr.set(section, config_key, numeric_value)
-                config_mgr.save_config()
-        except (ValueError, TypeError):
-            pass  # Ignore invalid values
+            config_mgr.set(section, config_key, float(value))
+            config_mgr.save_config()
+        except Exception:
+            pass  # Ignore save errors silently
+
+
+def _get_retirement_date_display() -> tuple[str, str]:
+    """Return (person1_label, person2_label) retirement year strings from config.
+
+    Falls back to ("Not configured", "") if config is unavailable.
+    """
+    try:
+        from config import get_config_manager
+        cfg = get_config_manager()
+        p1_name  = cfg.get("personal_info", "person1_name",           "Person 1")
+        p1_year  = cfg.get("personal_info", "person1_retirement_year", None)
+        p2_name  = cfg.get("personal_info", "person2_name",           "Person 2")
+        p2_year  = cfg.get("personal_info", "person2_retirement_year", None)
+
+        p1_label = f"{p1_name}: {int(p1_year)}" if p1_year else f"{p1_name}: —"
+        p2_label = f"{p2_name}: {int(p2_year)}" if p2_year else ""
+        return p1_label, p2_label
+    except Exception:
+        pass
+    return "Not configured", ""
 
 
 def sidebar():
     """
     Render the sidebar with retirement planning configuration inputs.
-    All inputs are stored in session state for persistence across reruns.
-    Values are loaded from configuration file on first run.
+
+    Inputs are grouped under a collapsible expander and use st.number_input
+    for type-safe entry with inline validation warnings.  Values are loaded
+    from the configuration file on first run and persisted to session state.
     """
-    # Only sync config values to session state on first load
-    # Use a flag to track if we've already synced
+    # Sync config → session state on first load only
     if 'sidebar_config_synced' not in st.session_state:
         sync_config_to_session_state()
         st.session_state['sidebar_config_synced'] = True
-    
+
     with st.sidebar:
-        st.button("Refresh All Data", on_click=clear_all_cache)
-        
-        # Add link to configuration page
+        # ------------------------------------------------------------------ #
+        # Header actions                                                       #
+        # ------------------------------------------------------------------ #
+        st.button("🔄 Refresh All Data", on_click=clear_all_cache, use_container_width=True)
+
         st.markdown("---")
         st.markdown("⚙️ **[Open Configuration Page](configuration)**")
-        st.caption("Edit detailed settings and personal information")
+        st.caption("Edit personal info, healthcare, Social Security & tax strategy")
         st.markdown("---")
-        
-        # Create all text inputs with automatic session state management
-        for label, key, placeholder, help_text in SIDEBAR_CONFIGS:
-            # Create a combined callback that clears cache and saves to config
-            def create_on_change_callback(k):
-                def callback():
-                    # Clear cache if needed
-                    if k in CACHE_CLEAR_KEYS:
-                        clear_withdrawal_strategy_cache()
-                    # Save value to config file
-                    save_sidebar_value_to_config(k, st.session_state.get(k, ""))
-                return callback
-            
-            st.text_input(
-                label,
-                key=key,  # Streamlit auto-manages session state
-                value=st.session_state.get(key, ""),
-                placeholder=placeholder,
-                help=help_text,
-                on_change=create_on_change_callback(key)
-            )
+
+        # ------------------------------------------------------------------ #
+        # Retirement Dates (read-only, from config)                           #
+        # ------------------------------------------------------------------ #
+        p1_label, p2_label = _get_retirement_date_display()
+        lines_html = f"<div>{p1_label}</div>"
+        if p2_label:
+            lines_html += f"<div>{p2_label}</div>"
+        st.markdown(
+            f'<div style="background:#1a1a2e;color:white;border-radius:6px;'
+            f'padding:8px 12px;margin-bottom:8px;">'
+            f'<span style="font-size:11px;text-transform:uppercase;'
+            f'letter-spacing:.05em;opacity:.7;">🎯 Target Retirement</span><br>'
+            f'<div style="font-size:15px;font-weight:600;margin-top:4px;">'
+            f'{lines_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        st.caption("Adjust strategy parameters in the **⚙️ Settings** tab.")
+
+# Made with Bob

@@ -40,7 +40,7 @@ Comprehensive review of all code and documentation files to identify gaps, incon
   - Wage inflation rate configuration
   - Examples of different configuration scenarios
 
-#### `WITHDRAWAL_STRATEGY_README.md`
+#### `STRATEGY_README.md`
 - **Missing**:
   - BETR algorithm integration details
   - Account rebalancing feature documentation
@@ -167,7 +167,7 @@ Comprehensive review of all code and documentation files to identify gaps, incon
    - Add configuration scenario examples
    - Update API reference with new methods
 
-3. **Update WITHDRAWAL_STRATEGY_README.md**
+3. **Update STRATEGY_README.md**
    - Add BETR integration section
    - Add account rebalancing documentation
    - Add buffer maintenance strategy
@@ -260,7 +260,7 @@ Comprehensive review of all code and documentation files to identify gaps, incon
 - [x] Create DOCUMENTATION_REVIEW_SUMMARY.md (this file)
 - [ ] Update README.md with missing modules
 - [ ] Update CONFIG_GUIDE.md with income section
-- [ ] Update WITHDRAWAL_STRATEGY_README.md with BETR and rebalancing
+- [ ] Update STRATEGY_README.md with BETR and rebalancing
 - [ ] Create PORTFOLIO_DATA_ENTRY_GUIDE.md
 
 ### Follow-up Actions:

@@ -1,71 +1,72 @@
 month,year,account_name,account_type,symbol,name,sector,qty,purchase_price
-11,2025,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,95050.0,1.0
-11,2025,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,1250.0,120.0
-11,2025,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
-11,2025,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,1250.0,95.0
-11,2025,PNC,Cash,MF:CASH,Money Market,MF:Cash,54200.0,1.0
-11,2025,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,75.0,140.0
-11,2025,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,150.0,165.0
-11,2025,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,400.0,62.5
-11,2025,Schwab,Brokerage,META,Meta Platforms,Technology,60.0,450.0
-11,2025,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,90900.0,1.0
-11,2025,Schwab,Roth,MF:CASH,Money Market,MF:Cash,55650.0,1.0
-11,2025,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
-11,2025,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
-11,2025,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
-11,2025,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
-11,2025,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
-11,2025,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
-12,2025,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,86250.0,1.0
-12,2025,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2200,120.0
-12,2025,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
-12,2025,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,2250.0,95.0
-12,2025,PNC,Cash,MF:CASH,Money Market,MF:Cash,55000.0,1.0
-12,2025,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,75.0,140.0
-12,2025,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,150.0,165.0
-12,2025,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,400.0,62.5
-12,2025,Schwab,Brokerage,META,Meta Platforms,Technology,60.0,450.0
-12,2025,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,87500.0,1.0
-12,2025,Schwab,Roth,MF:CASH,Money Market,MF:Cash,53550.0,1.0
-12,2025,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
-12,2025,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
-12,2025,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
-12,2025,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
-12,2025,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
-12,2025,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
-1,2026,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,100000.0,1.0
-1,2026,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0
-1,2026,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
-1,2026,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0
-1,2026,PNC,Cash,MF:CASH,Money Market,MF:Cash,200000.0,1.0
-1,2026,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,75.0,140.0
-1,2026,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0
-1,2026,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,1400.0,62.5
-1,2026,Schwab,Brokerage,META,Meta Platforms,Technology,160.0,450.0
-1,2026,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,87500.0,1.0
-1,2026,Schwab,Roth,MF:CASH,Money Market,MF:Cash,53550.0,1.0
-1,2026,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
-1,2026,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
-1,2026,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
-1,2026,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
-1,2026,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
-1,2026,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
-2,2026,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,100000.0,1.0
-2,2026,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0
-2,2026,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
-2,2026,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0
-2,2026,PNC,Cash,MF:CASH,Money Market,MF:Cash,200000.0,1.0
-2,2026,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,175.0,140.0
-2,2026,Schwab,Brokerage,IBM,International Business Machines,Technology,500.0,215.0
-2,2026,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0
-2,2026,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,1400.0,62.5
-2,2026,Schwab,Brokerage,META,Meta Platforms,Technology,160.0,450.0
-2,2026,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,90900.0,1.0
-2,2026,Schwab,Roth,MF:CASH,Money Market,MF:Cash,55650.0,1.0
-2,2026,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
-2,2026,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
-2,2026,Schwab,Roth,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2
-2,2026,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
-2,2026,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
-2,2026,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
+2,2026,Schwab,Traditional,MF:CASH,Money Market,MF:Cash,20000.0,1.0
 2,2026,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
+2,2026,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
+2,2026,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
+2,2026,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
+2,2026,Schwab,Roth,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2
+2,2026,Vanguard,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
+2,2026,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
+2,2026,Schwab,Roth,MF:CASH,Money Market,MF:Cash,55650.0,1.0
+2,2026,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,90900.0,1.0
+2,2026,Schwab,Brokerage,META,Meta Platforms,Technology,160.0,450.0
+2,2026,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,1400.0,62.5
+2,2026,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0
+2,2026,Schwab,Brokerage,IBM,International Business Machines,Technology,500.0,215.0
+2,2026,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,175.0,140.0
+2,2026,PNC,Cash,MF:CASH,Money Market,MF:Cash,200000.0,1.0
+2,2026,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0
+2,2026,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
+2,2026,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0
+2,2026,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,100000.0,1.0
+1,2026,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
+1,2026,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
+1,2026,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
+1,2026,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
+1,2026,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
+1,2026,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
+1,2026,Schwab,Roth,MF:CASH,Money Market,MF:Cash,53550.0,1.0
+1,2026,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,87500.0,1.0
+1,2026,Schwab,Brokerage,META,Meta Platforms,Technology,160.0,450.0
+1,2026,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,1400.0,62.5
+1,2026,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0
+1,2026,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,75.0,140.0
+1,2026,PNC,Cash,MF:CASH,Money Market,MF:Cash,200000.0,1.0
+1,2026,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0
+1,2026,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
+1,2026,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0
+1,2026,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,100000.0,1.0
+12,2025,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
+12,2025,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
+12,2025,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
+12,2025,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
+12,2025,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
+12,2025,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
+12,2025,Schwab,Roth,MF:CASH,Money Market,MF:Cash,53550.0,1.0
+12,2025,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,87500.0,1.0
+12,2025,Schwab,Brokerage,META,Meta Platforms,Technology,60.0,450.0
+12,2025,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,400.0,62.5
+12,2025,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,150.0,165.0
+12,2025,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,75.0,140.0
+12,2025,PNC,Cash,MF:CASH,Money Market,MF:Cash,55000.0,1.0
+12,2025,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,2250.0,95.0
+12,2025,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
+12,2025,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2200.0,120.0
+12,2025,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,86250.0,1.0
+11,2025,Schwab,Roth,VZ,Verizon,Communication Services,350.0,42.0
+11,2025,Schwab,Brokerage,TSLA,Tesla,Automotive,100.0,250.0
+11,2025,Schwab,Roth,T,AT&T,Communication Services,800.0,20.0
+11,2025,Schwab,Roth,PG,Procter & Gamble,Consumer Defensive,200.0,155.0
+11,2025,Schwab,Brokerage,NVDA,NVIDIA,Technology,80.0,500.0
+11,2025,Schwab,Brokerage,NFLX,Netflix,Communication Services,50.0,600.0
+11,2025,Schwab,Roth,MF:CASH,Money Market,MF:Cash,55650.0,1.0
+11,2025,Schwab,Brokerage,MF:CASH,Money Market,MF:Cash,90900.0,1.0
+11,2025,Schwab,Brokerage,META,Meta Platforms,Technology,60.0,450.0
+11,2025,Schwab,Roth,KO,Coca-Cola,Consumer Defensive,400.0,62.5
+11,2025,Schwab,Roth,JNJ,Johnson & Johnson,Healthcare,150.0,165.0
+11,2025,Schwab,Brokerage,GOOGL,Alphabet Class A,Technology,75.0,140.0
+11,2025,PNC,Cash,MF:CASH,Money Market,MF:Cash,54200.0,1.0
+11,2025,Fidelity,Traditional,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,1250.0,95.0
+11,2025,Fidelity,Traditional,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0
+11,2025,Fidelity,Traditional,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,1250.0,120.0
+11,2025,Fidelity,Traditional,MF:CASH,Money Market,MF:Cash,95050.0,1.0
