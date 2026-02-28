@@ -26,6 +26,26 @@ Advanced Roth conversion analysis based on Vanguard research:
 
 See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_conversion.py`](betr_roth_conversion.py) for implementation.
 
+## Recent Updates (February 2026 — Latest)
+
+### ⚖️ New: Portfolio Rebalancing with Tax-Efficient Suggestions (2026-02-28)
+- **Full portfolio rebalancing engine** (`portfolio_rebalancing.py`) — classifies every holding as Cash / Bonds / Stocks using sector keywords and computes drift from configurable targets
+- **5% drift threshold** — triggers rebalancing when any asset class deviates more than the threshold (configurable) from its target allocation
+- **Tax-efficient action priority**: (1) rebalance inside Traditional/Roth first (no tax event), (2) tax-loss harvest in Brokerage, (3) redirect contributions/dividends
+- **Account-location rules** enforced automatically:
+  - Bonds → Traditional IRA (ordinary income deferred); Municipal bonds & Treasuries may stay in Brokerage
+  - Stocks → Roth (tax-free growth) preferred; Brokerage acceptable (LTCG rates)
+  - Brokerage cash cushion ≥ 10% of brokerage value (MF:CASH)
+- **New ⚖️ Rebalancing sub-tab** inside the 💼 Portfolio tab with:
+  - Target allocation inputs (Cash %, Bonds %, Stocks %, Drift Threshold %)
+  - Live allocation metrics with drift delta indicators
+  - Stacked bar chart (Current vs Target) + donut pie chart of current mix
+  - Colour-coded action cards ordered by priority with tax-impact labels
+  - Account-location warnings and recommendations
+  - 📚 Rebalancing Strategy Guide expander
+
+See [`PORTFOLIO_REBALANCING_GUIDE.md`](PORTFOLIO_REBALANCING_GUIDE.md) for full documentation.
+
 ## Recent Updates (February 2026)
 
 ### 🎯 New: Configuration System & Portfolio Data Management
@@ -143,7 +163,12 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed configuration instructions
 - **Cost Basis Tracking**: Monitor gains/losses across holdings
 - **Sector Allocation**: Visualize portfolio diversification
 - **Tax-Advantaged Account Management**: Separate tracking for taxable, traditional, and Roth accounts
-- **Editable Portfolio**: Add, remove, or modify holdings (roadmap feature)
+- **🌾 Tax Harvesting**: Identify loss/gain harvesting opportunities with wash-sale-safe replacement suggestions
+- **⚖️ Portfolio Rebalancing** *(NEW)*: Full Cash/Bonds/Stocks rebalancing engine with 5% drift detection, tax-efficient action plan, and account-location guidance
+  - Configurable target allocation (default 10% Cash / 10% Bonds / 80% Stocks)
+  - Prioritises rebalancing inside tax-advantaged accounts (no tax event)
+  - Enforces optimal asset location rules (bonds in Traditional, stocks in Roth)
+  - Maintains ≥ 10% Brokerage cash cushion (MF:CASH)
 
 ### 4. Strategy Tab
 - **Accumulation Phase**: Year-by-year projection during working years (Stage 1 & 2)
@@ -425,16 +450,18 @@ retirement_planning/
 ├── planning_app.py                    # Main Streamlit application
 ├── config.py                          # Configuration management system
 ├── portfolio_data_entry.py            # Portfolio data entry and validation
-├── strategy.py             # 6-stage life-cycle strategy engine
+├── strategy.py                        # 6-stage life-cycle strategy engine
 ├── betr_roth_conversion.py            # BETR Roth conversion algorithm
 ├── ssi_calculator.py                  # Dynamic SSI benefit calculator
 ├── generate_ssi_schedule.py           # SSI schedule generation script
-├── example_withdrawal_strategy.py  # Withdrawal strategy example scenarios
-├── example_accumulation_strategy.py  # Accumulation phase example scenarios
+├── example_withdrawal_strategy.py     # Withdrawal strategy example scenarios
+├── example_accumulation_strategy.py   # Accumulation phase example scenarios
 ├── income_expense.py                  # Income/expense projections with RMD
 ├── calculations.py                    # Tax calculation functions (with logging)
 ├── load_data.py                       # Data loading utilities
 ├── portfolio.py                       # Portfolio management functions
+├── tax_harvesting.py                  # Tax loss/gain harvesting analysis
+├── portfolio_rebalancing.py           # ⚖️ NEW: Portfolio rebalancing engine
 ├── ssibenefits.py                     # Social Security benefit lookups
 ├── editable_table.py                  # Standalone table editor demo
 ├── components/
@@ -453,7 +480,8 @@ retirement_planning/
 ├── BETR_GUIDE.md                      # BETR Roth conversion guide
 ├── SSI_CALCULATOR_GUIDE.md            # SSI calculator documentation
 ├── SSI_INTEGRATION_GUIDE.md           # SSI integration with withdrawal strategy
-├── STRATEGY_README.md      # Withdrawal strategy documentation
+├── STRATEGY_README.md                 # Withdrawal strategy documentation
+├── PORTFOLIO_REBALANCING_GUIDE.md     # ⚖️ NEW: Portfolio rebalancing guide
 ├── IMPLEMENTATION_SUMMARY.md          # Implementation details
 ├── ACCOUNT_REBALANCING_IMPLEMENTATION.md  # Account rebalancing feature
 ├── BETR_CORRECTION_NOTES.md           # BETR algorithm corrections
@@ -622,6 +650,22 @@ retirement_planning/
 - `calculate_current_value()` - Compute current portfolio value
 - `calculate_cost_basis()` - Track investment cost basis
 
+### Tax Harvesting ([`tax_harvesting.py`](tax_harvesting.py))
+- `build_harvesting_analysis()` - Build brokerage gain/loss table with live prices
+- `classify_harvest_opportunities()` - Classify each position (Harvest Loss / Harvest Gain / Monitor / Hold)
+- `compute_harvest_summary()` - Aggregate harvestable losses and gains
+- `compute_net_tax_impact()` - Estimate net tax savings from recommended actions
+- `check_market_drop_trigger()` - Flag positions down ≥ N% from cost basis
+- `get_replacement_detail()` - Return wash-sale-safe replacement suggestions
+
+### Portfolio Rebalancing ([`portfolio_rebalancing.py`](portfolio_rebalancing.py)) *(NEW)*
+- `compute_rebalance_plan()` - Full rebalancing analysis: classify holdings, detect drift, generate action plan
+- `build_rebalance_display_df()` - Asset-class summary DataFrame (Current %, Target %, Drift %, Delta $)
+- `build_actions_display_df()` - Prioritised action list DataFrame
+- `build_holdings_by_class_df()` - All holdings annotated with asset class
+- `_classify_asset()` - Classify a holding as Cash / Bonds / Stocks from sector keywords
+- `_location_guidance()` - Return account-location guidance text for an asset class
+
 ### Data Loading ([`load_data.py`](load_data.py))
 - `get_income_tax_brackets()` - Load tax brackets for specified year
 - `get_cap_gains_brackets()` - Load capital gains rates
@@ -637,20 +681,20 @@ retirement_planning/
 
 ### Core Documentation
 - **[`README.md`](README.md)** (this file) - Main application documentation
-- **[`CONFIG_GUIDE.md`](CONFIG_GUIDE.md)** - Configuration system guide (NEW - 256 lines)
+- **[`CONFIG_GUIDE.md`](CONFIG_GUIDE.md)** - Configuration system guide
   - Configuration page walkthrough
   - Portfolio data entry instructions
   - Account management
   - Backup and restore procedures
   - API reference
   - Troubleshooting
-- **[`STRATEGY_README.md`](STRATEGY_README.md)** - Complete withdrawal strategy guide (625 lines)
+- **[`STRATEGY_README.md`](STRATEGY_README.md)** - Complete withdrawal strategy guide
   - Installation and setup
   - API documentation
   - Strategy explanations for each life stage
   - Tax optimization techniques
   - Integration examples
-- **[`BETR_GUIDE.md`](BETR_GUIDE.md)** - BETR Roth conversion guide (NEW - 600 lines)
+- **[`BETR_GUIDE.md`](BETR_GUIDE.md)** - BETR Roth conversion guide
   - BETR methodology explanation
   - Quick start examples
   - API reference
@@ -659,27 +703,38 @@ retirement_planning/
   - Decision framework
   - Best practices
   - Troubleshooting guide
+- **[`PORTFOLIO_REBALANCING_GUIDE.md`](PORTFOLIO_REBALANCING_GUIDE.md)** *(NEW)* - Portfolio rebalancing guide
+  - Rebalancing concepts and the 5% drift rule
+  - Asset classification (Cash / Bonds / Stocks)
+  - Account-location rules (bonds in Traditional, stocks in Roth)
+  - Tax-efficient rebalancing priority order
+  - Brokerage cash cushion (≥ 10% MF:CASH)
+  - API reference for `portfolio_rebalancing.py`
+  - Integration with tax harvesting
 
 ### Implementation Details
-- **[`IMPLEMENTATION_SUMMARY.md`](IMPLEMENTATION_SUMMARY.md)** - Development summary (307 lines)
+- **[`IMPLEMENTATION_SUMMARY.md`](IMPLEMENTATION_SUMMARY.md)** - Development summary
   - What was built
   - Key capabilities
   - Technical architecture
   - Test results
   - Integration points
+- **[`ACCOUNT_REBALANCING_IMPLEMENTATION.md`](ACCOUNT_REBALANCING_IMPLEMENTATION.md)** - Strategy-level account rebalancing (buffer maintenance)
 
 ### Technical Guides
-- **[`LOGGING_GUIDE.md`](LOGGING_GUIDE.md)** - Debug logging configuration (129 lines)
+- **[`LOGGING_GUIDE.md`](LOGGING_GUIDE.md)** - Debug logging configuration
   - Enabling debug output
   - Log levels and format
   - Functions with logging
   - Usage examples
 
-- **[`ERRORS_FOUND.md`](ERRORS_FOUND.md)** - Bug fixes and code analysis (193 lines)
+- **[`ERRORS_FOUND.md`](ERRORS_FOUND.md)** - Bug fixes and code analysis
   - Fixed syntax errors
   - Code quality observations
   - Testing recommendations
   - Security considerations
+
+- **[`DOCUMENTATION_REVIEW_SUMMARY.md`](DOCUMENTATION_REVIEW_SUMMARY.md)** - Documentation gap analysis and action items
 
 ## Government Resources & References
 
@@ -1260,6 +1315,50 @@ For issues or questions:
   - Scheduled review reminders
   - Change notification system
   - Shared decision tracking
+
+#### 15. Brokerage Account Direct Access
+**Priority: Medium - Significant usability improvement for real-time portfolio accuracy**
+
+Direct integration with brokerage platforms to automatically retrieve account balances, holdings, and transaction history, eliminating manual CSV data entry and ensuring the planner always reflects current portfolio state.
+
+- **Supported Brokerage Platforms (Planned)**
+  - Fidelity — OAuth 2.0 / Fidelity Developer API
+  - Vanguard — Vanguard API (when publicly available) or screen-scraping fallback
+  - Schwab — Charles Schwab Developer API (TD Ameritrade successor)
+  - Merrill Lynch / Bank of America — Merrill API or Plaid aggregation
+  - E*TRADE / Morgan Stanley — E*TRADE API v1
+  - Interactive Brokers — IBKR Client Portal Web API
+- **Account Data Retrieved**
+  - Current account balances (taxable brokerage, traditional IRA, Roth IRA, 401(k)/403(b))
+  - Individual holdings with ticker symbols, share counts, and current market values
+  - Cost basis per lot for accurate capital gains / tax-loss harvesting calculations
+  - Recent transaction history (buys, sells, dividends, transfers)
+  - Pending transactions and settlement status
+- **Aggregation & Normalization**
+  - Unified account model mapping brokerage-specific data to internal [`portfolio_data_truth.csv`](portfolio_data_truth.csv) schema
+  - Automatic account-type classification (taxable, tax-deferred, tax-free)
+  - Multi-brokerage consolidation into a single portfolio view
+  - Currency normalization for international accounts
+- **Sync & Refresh**
+  - Scheduled nightly sync to keep data current without manual intervention
+  - On-demand manual refresh button in the Portfolio Planner tab
+  - Delta sync — only fetch changed positions to minimize API rate-limit usage
+  - Conflict detection when manual edits differ from brokerage data
+- **Security & Privacy**
+  - OAuth 2.0 token-based authentication — no passwords stored locally
+  - Read-only API scopes (no trading or transfer permissions requested)
+  - Encrypted credential storage using OS keychain (macOS Keychain / Windows Credential Manager)
+  - Optional local-only mode — all data stays on device, no cloud transmission
+  - Token expiry and automatic re-authentication prompts
+- **Fallback & Resilience**
+  - Graceful degradation to manual CSV entry when API is unavailable
+  - Cached last-known values displayed with staleness indicator
+  - Error reporting with actionable guidance (e.g., re-authenticate, check API quota)
+- **Implementation Notes**
+  - Plaid Financial API as a universal aggregation layer for institutions without direct APIs
+  - Open Finance / FDX (Financial Data Exchange) standard compliance where supported
+  - Rate-limit-aware request scheduling to avoid API bans
+  - Audit log of all data pulls for reproducibility and debugging
 
 ### Contributions Welcome
 See development guidelines in the Contributing section above. Priority areas for community contributions:

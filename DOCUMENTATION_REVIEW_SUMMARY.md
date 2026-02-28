@@ -1,5 +1,6 @@
 # Documentation Review Summary
-Date: 2026-02-27
+Last Updated: 2026-02-28
+Original Review Date: 2026-02-27
 
 ## Overview
 Comprehensive review of all code and documentation files to identify gaps, inconsistencies, and needed updates.
@@ -256,36 +257,46 @@ Comprehensive review of all code and documentation files to identify gaps, incon
 
 ## Action Items Summary
 
-### Immediate Actions (This Session):
+### Completed (2026-02-28):
 - [x] Create DOCUMENTATION_REVIEW_SUMMARY.md (this file)
-- [ ] Update README.md with missing modules
-- [ ] Update CONFIG_GUIDE.md with income section
-- [ ] Update STRATEGY_README.md with BETR and rebalancing
-- [ ] Create PORTFOLIO_DATA_ENTRY_GUIDE.md
+- [x] Update README.md — added `tax_harvesting.py`, `portfolio_rebalancing.py` to project structure, Key Modules, and Features sections; added new "Recent Updates" entry for portfolio rebalancing
+- [x] Update README.md — added **Future Enhancements §15: Brokerage Account Direct Access** covering Fidelity/Vanguard/Schwab/IBKR APIs, Plaid aggregation, OAuth 2.0 security, sync strategy, and fallback resilience
+- [x] Update IMPLEMENTATION_SUMMARY.md — added portfolio rebalancing feature summary, updated file lists and dates
+- [x] Create PORTFOLIO_REBALANCING_GUIDE.md — full 330-line guide covering concepts, API reference, examples, and troubleshooting
 
-### Follow-up Actions:
-- [ ] Update IMPLEMENTATION_SUMMARY.md
-- [ ] Create INCOME_EXPENSE_GUIDE.md
-- [ ] Update SSI_INTEGRATION_GUIDE.md
-- [ ] Create centralized LOGGING_GUIDE.md
-- [ ] Create ERROR_HANDLING_GUIDE.md
-- [ ] Create DATA_FILES_GUIDE.md
-- [ ] Add test documentation
+### Completed (2026-02-27):
+- [x] Create DOCUMENTATION_REVIEW_SUMMARY.md (this file)
+
+### Still Pending:
+- [ ] Update CONFIG_GUIDE.md with income section (`person1_annual_wages`, `wage_inflation_rate`, `aca_marketplace_enrolled`)
+- [ ] Update STRATEGY_README.md with BETR integration and buffer maintenance strategy
+- [ ] Create PORTFOLIO_DATA_ENTRY_GUIDE.md — user workflow, validation rules, CSV format
+- [ ] Create INCOME_EXPENSE_GUIDE.md — module overview, function docs, RMD handling
+- [ ] Update SSI_INTEGRATION_GUIDE.md — add income_expense.py integration examples
+- [ ] Create DATA_FILES_GUIDE.md — document all CSV files, dependencies, regeneration
+- [ ] Add test documentation (coverage report, running guide, test data requirements)
 - [ ] Standardize formatting across all docs
 - [ ] Add cross-references between docs
 
+### New Documentation Added (2026-02-28):
+- [x] `PORTFOLIO_REBALANCING_GUIDE.md` — Portfolio rebalancing concepts, API, examples
+- [x] `README.md` updated — new "Recent Updates" section for rebalancing feature
+- [x] `IMPLEMENTATION_SUMMARY.md` updated — rebalancing feature summary at top
+
 ## Conclusion
 
-The codebase is well-structured and functional, but documentation has not kept pace with recent developments. Key gaps include:
+The codebase is well-structured and functional. Documentation has been significantly improved in the 2026-02-28 update. Remaining gaps:
 
-1. **Missing documentation** for newer modules (portfolio_data_entry, income_expense)
-2. **Outdated documentation** for core files (README, IMPLEMENTATION_SUMMARY)
-3. **Incomplete integration documentation** (BETR, account rebalancing, SSI calculator)
-4. **Missing user guides** for key workflows (portfolio data entry, configuration scenarios)
+1. **Missing documentation** for `income_expense.py` and `portfolio_data_entry.py` modules
+2. **Incomplete integration documentation** for BETR algorithm in `STRATEGY_README.md`
+3. **Missing user guides** for portfolio data entry workflow and configuration scenarios
+4. **CONFIG_GUIDE.md** needs income section (`wages`, `wage_inflation_rate`, `aca_marketplace_enrolled`)
 
-Priority should be given to updating README.md and creating documentation for user-facing features (portfolio data entry, configuration).
+The new `PORTFOLIO_REBALANCING_GUIDE.md` and updated `README.md` / `IMPLEMENTATION_SUMMARY.md`
+bring the documentation substantially up to date for the portfolio management features.
 
 ---
-**Review Date**: 2026-02-27
+**Original Review Date**: 2026-02-27
+**Last Updated**: 2026-02-28
 **Reviewer**: Bob
-**Status**: Documentation gaps identified, updates in progress
+**Status**: Partially complete — rebalancing docs added; CONFIG/STRATEGY/income_expense docs still pending

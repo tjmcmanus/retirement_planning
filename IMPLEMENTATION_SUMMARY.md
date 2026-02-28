@@ -1,4 +1,54 @@
-# Portfolio Withdrawal Strategy Implementation Summary
+# Financial Planner — Implementation Summary
+
+> **Last Updated:** 2026-02-28
+> Covers all major features implemented through the current date.
+
+---
+
+## Latest Feature: Portfolio Rebalancing (2026-02-28)
+
+### What Was Built
+
+#### New Module: [`portfolio_rebalancing.py`](portfolio_rebalancing.py)
+A complete portfolio rebalancing engine that:
+- **Classifies every holding** as Cash / Bonds / Stocks using sector keywords (`MF:CASH`, bond/treasury/municipal keywords, etc.)
+- **Detects drift** — triggers when any asset class deviates more than a configurable threshold (default 5%) from its target
+- **Generates a tax-efficient action plan** in priority order:
+  1. Rebalance inside Traditional / Roth accounts (no tax event)
+  2. Tax-loss harvest in Brokerage to fund rebalancing trades
+  3. Redirect new contributions / dividends to under-weight classes
+  4. Top up Brokerage MF:CASH cushion if below 10%
+- **Enforces account-location rules**:
+  - Bonds → Traditional IRA (ordinary income deferred); Municipal bonds & Treasuries may stay in Brokerage
+  - Stocks → Roth (tax-free growth) preferred; Brokerage acceptable (LTCG rates)
+  - Brokerage cash cushion ≥ 10% of brokerage value (MF:CASH)
+
+**Key public API:**
+| Function | Purpose |
+|---|---|
+| `compute_rebalance_plan()` | Full analysis: classify, detect drift, generate actions |
+| `build_rebalance_display_df()` | Asset-class summary (Current %, Target %, Drift %, Delta $) |
+| `build_actions_display_df()` | Prioritised action list |
+| `build_holdings_by_class_df()` | All holdings annotated with asset class |
+
+**Key data classes:** `RebalanceReport`, `AssetClassSummary`, `HoldingDetail`, `RebalanceAction`
+
+#### New UI: ⚖️ Rebalancing Sub-tab in [`planning_app.py`](planning_app.py)
+Added as the 4th sub-tab inside the 💼 Portfolio tab:
+- Target allocation inputs (Cash %, Bonds %, Stocks %, Drift Threshold %)
+- Live allocation metrics with drift delta indicators (🔴 over/under-weight, 🟢 on target)
+- Stacked bar chart (Current vs Target) + donut pie chart of current mix
+- Brokerage cash cushion status
+- Account-location warnings (⚠️ bonds in Brokerage, 💡 stocks in Traditional, etc.)
+- Colour-coded action cards ordered by priority with tax-impact labels
+- 📚 Rebalancing Strategy Guide expander with asset-location table
+
+#### New Documentation: [`PORTFOLIO_REBALANCING_GUIDE.md`](PORTFOLIO_REBALANCING_GUIDE.md)
+Comprehensive guide covering concepts, API reference, and integration with tax harvesting.
+
+---
+
+## Portfolio Withdrawal Strategy Implementation Summary
 
 ## Overview
 
@@ -167,13 +217,20 @@ python3 test_strategy.py
 
 ## Files Created/Modified
 
-### New Files
+### New Files (2026-02-28 — Portfolio Rebalancing)
+1. ✅ `portfolio_rebalancing.py` (~380 lines) — full rebalancing engine
+2. ✅ `PORTFOLIO_REBALANCING_GUIDE.md` — dedicated guide
+
+### Modified Files (2026-02-28 — Portfolio Rebalancing)
+1. ✅ `planning_app.py` — added ⚖️ Rebalancing sub-tab, updated imports
+
+### New Files (2026-02-22 — Withdrawal Strategy)
 1. ✅ `example_strategy.py` (304 lines)
 2. ✅ `STRATEGY_README.md` (625 lines)
 3. ✅ `test_strategy.py` (247 lines)
 4. ✅ `IMPLEMENTATION_SUMMARY.md` (this file)
 
-### Modified Files
+### Modified Files (2026-02-22 — Withdrawal Strategy)
 1. ✅ `strategy.py` (enhanced with 250+ lines)
    - Added ACA subsidy calculation
    - Added example scenario generator
@@ -304,6 +361,7 @@ The module is ready for immediate use in the retirement planning application and
 
 ---
 
-**Implementation Date:** February 22, 2026  
-**Author:** IBM Bob  
+**Portfolio Rebalancing Implementation Date:** February 28, 2026
+**Withdrawal Strategy Implementation Date:** February 22, 2026
+**Author:** Bob
 **Status:** ✅ Complete and Tested
