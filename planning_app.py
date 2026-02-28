@@ -1139,7 +1139,7 @@ with tab3:
 
         # ── User inputs ────────────────────────────────────────────────────
         st.markdown("#### ⚙️ Analysis Parameters")
-        _h_col1, _h_col2, _h_col3, _h_col4 = st.columns(4)
+        _h_col1, _h_col2, _h_col3, _h_col4, _h_col5 = st.columns(5)
         with _h_col1:
             _h_agi = st.number_input(
                 "Estimated AGI (current year, $)",
@@ -1182,6 +1182,16 @@ with tab3:
                 help="Flag positions that have declined this % or more from cost basis "
                      "(simulates the 'S&P 500 drops 10%' trigger).",
                 key="harvest_drop_pct",
+            )
+        with _h_col5:
+            _h_gain_thresh = st.number_input(
+                "Gain Harvest Threshold ($)",
+                min_value=0,
+                max_value=100_000,
+                value=500,
+                step=100,
+                help="Minimum unrealized gain (absolute value) to flag a position for gain harvesting.",
+                key="harvest_gain_thresh",
             )
 
         st.markdown("---")
@@ -1239,8 +1249,8 @@ with tab3:
                     _h_analysis,
                     estimated_agi=float(_h_agi),
                     year=_h_year,
-                    loss_threshold=-float(_h_loss_thresh),
-                    gain_threshold=float(_h_loss_thresh),
+                    loss_threshold=-max(float(_h_loss_thresh), 1.0),  # loss_threshold must be negative; UI input is positive; guard against 0
+                    gain_threshold=float(_h_gain_thresh),
                 )
 
                 # Summary metrics
@@ -1296,14 +1306,14 @@ with tab3:
                     st.markdown("#### 💰 Estimated Tax Impact of Recommended Actions")
                     _ti_c1, _ti_c2, _ti_c3, _ti_c4 = st.columns(4)
                     with _ti_c1:
-                        st.metric("Net Position (Gains − Losses)", f"${_h_tax_impact['net_position']:,.0f}")
+                        st.metric("Net Position (Gains − Losses)", f"${_h_tax_impact.net_position:,.0f}")
                     with _ti_c2:
-                        st.metric("Tax on Net Gains", f"${_h_tax_impact['tax_on_net_gains']:,.0f}")
+                        st.metric("Tax on Net Gains", f"${_h_tax_impact.tax_on_net_gains:,.0f}")
                     with _ti_c3:
-                        st.metric("Ordinary Income Offset", f"${_h_tax_impact['ordinary_income_offset']:,.0f}",
+                        st.metric("Ordinary Income Offset", f"${_h_tax_impact.ordinary_income_offset:,.0f}",
                                   help="Up to $3,000 of net losses can offset ordinary income.")
                     with _ti_c4:
-                        _net_impact = _h_tax_impact['net_tax_impact']
+                        _net_impact = _h_tax_impact.net_tax_impact
                         _impact_label = f"${abs(_net_impact):,.0f} {'Savings' if _net_impact >= 0 else 'Owed'}"
                         st.metric(
                             "Net Tax Impact",

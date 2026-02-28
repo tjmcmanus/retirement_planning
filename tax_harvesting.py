@@ -26,13 +26,44 @@ MF:CASH is treated as cash/money-market (no gain/loss analysis needed).
 from __future__ import annotations
 
 import datetime
+import logging
+from dataclasses import dataclass
 from typing import Optional, cast
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
-from load_data import get_cap_gains_brackets  # noqa: F401
-from portfolio import getPortfolioData, get_current_price
+from load_data import get_cap_gains_brackets, _fetch_current_prices  # noqa: F401
+from portfolio import getPortfolioData
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Result type for compute_net_tax_impact
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class HarvestDecision:
+    """Typed, immutable result of _classify_row / _classify_gain_row."""
+    recommendation: str
+    action_detail:  str
+
+
+@dataclass(frozen=True)
+class NetTaxImpact:
+    """Typed, immutable result of compute_net_tax_impact."""
+    total_harvestable_losses: float
+    total_harvestable_gains:  float
+    net_position:             float
+    ltcg_rate:                float
+    tax_on_net_gains:         float
+    ordinary_income_offset:   float
+    ordinary_income_savings:  float
+    net_tax_impact:           float
+    marginal_ordinary_rate:   float
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -43,6 +74,9 @@ BROKERAGE_ACCOUNT_TYPE = "Brokerage"
 
 # Holding-period threshold in days (IRS: > 1 year = long-term)
 LONG_TERM_DAYS = 365
+
+# IRS annual cap on net capital loss deductible against ordinary income (IRC §1211(b))
+MAX_ORDINARY_LOSS_OFFSET = 3_000.0
 
 # ---------------------------------------------------------------------------
 # Wash-sale replacement map
@@ -140,17 +174,47 @@ DEFAULT_REPLACEMENT = [
     {"symbol": "VTI",  "name": "Vanguard Total Stock Market","reason": "Total market exposure"},
 ]
 
+
+def _format_replacements(symbol: str) -> str:
+    """Return a display string of up to 2 wash-sale replacement suggestions."""
+    replacements = WASH_SALE_REPLACEMENTS.get(symbol, DEFAULT_REPLACEMENT)
+    return ", ".join(f"{r['symbol']} ({r['reason']})" for r in replacements[:2])
+
+
+def _fmt_money(value: float) -> str:
+    """Format a dollar amount as '$1,234' (no cents, comma-separated)."""
+    return f"${value:,.0f}"
+
+
+def _resolve_prices(
+    symbols: list[str],
+    fallback: pd.Series,
+) -> dict[str, float]:
+    """
+    Fetch live prices for *symbols*; fall back to *fallback* for any that fail.
+
+    Args:
+        symbols:  List of ticker symbols to fetch.
+        fallback: Series indexed by symbol containing purchase prices used
+                  when a live price cannot be retrieved.
+
+    Returns:
+        Mapping of symbol → resolved price (float).
+    """
+    raw = _fetch_current_prices(symbols)
+    failed = [s for s, p in raw.items() if p is None]
+    if failed:
+        logger.warning("Could not fetch prices for: %s", failed)
+        st.warning(f"Could not fetch prices for: {failed}")
+    return {
+        s: float(p) if p is not None else float(fallback.at[s])
+        for s, p in raw.items()
+    }
+
+
 # ---------------------------------------------------------------------------
 # Holding-period estimation
 # ---------------------------------------------------------------------------
-
-def _estimate_purchase_date(month: int, year: int) -> datetime.date:
-    """
-    Estimate the purchase date from the portfolio snapshot month/year.
-    We use the 1st of the month as a conservative estimate.
-    """
-    return datetime.date(year, month, 1)
-
 
 def _holding_period_days(purchase_date: datetime.date, as_of: Optional[datetime.date] = None) -> int:
     """Return the number of days a position has been held."""
@@ -179,10 +243,11 @@ def get_ltcg_rate_for_income(agi: float, year: int) -> float:
         return 0.15  # fallback
     for _, row in brackets.sort_values(by="lower").iterrows():
         if agi <= float(row["upper"]):
-            return float(row["rate"])
+            return float(str(row["rate"]).strip())
     return 0.20
 
 
+@st.cache_data(ttl=3600)
 def get_ltcg_zero_threshold(year: int) -> float:
     """Return the upper income limit for the 0% LTCG bracket."""
     brackets = cast(pd.DataFrame, get_cap_gains_brackets(year))
@@ -197,6 +262,41 @@ def get_ltcg_zero_threshold(year: int) -> float:
 # ---------------------------------------------------------------------------
 # Core analysis: build the brokerage gain/loss table
 # ---------------------------------------------------------------------------
+
+def _enrich_with_prices(
+    df: pd.DataFrame,
+    qty: pd.Series,
+    px: pd.Series,
+) -> pd.DataFrame:
+    """
+    Fetch live prices and add derived valuation columns to *df* in-place.
+
+    Adds: ``Current Price``, ``Current Value``, ``Cost Basis``,
+    ``Unrealized G/L``, ``Return %``.
+
+    Args:
+        df:  Brokerage holdings frame (modified in-place and returned).
+        qty: Float Series of share quantities, index-aligned with *df*.
+        px:  Float Series of purchase prices, index-aligned with *df*.
+
+    Returns:
+        The same *df* with the five new columns populated.
+    """
+    price_map = _resolve_prices(
+        df["symbol"].tolist(),
+        cast(pd.Series, px.set_axis(df["symbol"])),
+    )
+    df["Current Price"]  = df["symbol"].map(price_map)  # type: ignore[arg-type]
+    df["Current Value"]  = qty * df["Current Price"]
+    df["Cost Basis"]     = qty * px
+    df["Unrealized G/L"] = df["Current Value"] - df["Cost Basis"]
+    df["Return %"] = np.where(
+        df["Cost Basis"] != 0,
+        df["Unrealized G/L"] / df["Cost Basis"] * 100,
+        0.0,
+    )
+    return df
+
 
 @st.cache_data(ttl=300)
 def build_harvesting_analysis(month: int, year: int) -> pd.DataFrame:
@@ -217,70 +317,216 @@ def build_harvesting_analysis(month: int, year: int) -> pd.DataFrame:
     """
     portfolio = getPortfolioData(month=month, year=year)
 
-    # Filter to Brokerage accounts only
-    brokerage = cast(pd.DataFrame, portfolio[portfolio["account_type"] == BROKERAGE_ACCOUNT_TYPE].copy())
+    # Filter to Brokerage accounts only, excluding cash — single-pass combined mask
+    mask = (
+        (portfolio["account_type"] == BROKERAGE_ACCOUNT_TYPE)
+        & (portfolio["symbol"] != CASH_SYMBOL)
+    )
+    df = cast(pd.DataFrame, portfolio[mask].copy())
 
-    # Exclude cash
-    brokerage = cast(pd.DataFrame, brokerage[brokerage["symbol"] != CASH_SYMBOL].copy())
-
-    if brokerage.empty:
+    if df.empty:
         return pd.DataFrame()
 
-    rows = []
     today = datetime.date.today()
 
-    for _, row in brokerage.iterrows():
-        symbol       = str(row["symbol"])
-        account_name = str(row["account_name"])
-        qty          = float(row["qty"])
-        purchase_px  = float(row["purchase_price"])
+    # ── Cast numeric columns once; bind locals for reuse below ─────────────
+    df[["qty", "purchase_price"]] = df[["qty", "purchase_price"]].astype(float)
+    qty = cast(pd.Series, df["qty"])
+    px  = cast(pd.Series, df["purchase_price"])
 
-        # Current market price
-        try:
-            current_px = get_current_price(symbol)
-        except Exception:
-            current_px = purchase_px  # fallback to cost if price unavailable
+    # ── Batch price fetch + derived valuation columns ───────────────────────
+    _enrich_with_prices(df, qty, px)
 
-        current_value = qty * current_px
-        cost_basis    = qty * purchase_px
-        unrealized_gl = current_value - cost_basis
-        pct_return    = (unrealized_gl / cost_basis * 100) if cost_basis != 0 else 0.0
+    # ── Vectorized date arithmetic ──────────────────────────────────────────
+    fallback_date = datetime.date(year, month, 1)
+    purchase_ts = pd.to_datetime(df["purchase_date"], errors="coerce").fillna(
+        pd.Timestamp(fallback_date)
+    )
+    df["Days Held"] = (pd.Timestamp(today) - purchase_ts).dt.days
+    df["Gain Type"] = np.where(df["Days Held"] > LONG_TERM_DAYS, "Long-Term", "Short-Term")
 
-        # Holding period — use snapshot month/year as proxy for purchase date
-        purchase_date = _estimate_purchase_date(month, year)
-        days_held     = _holding_period_days(purchase_date, as_of=today)
-        gain_type     = _gain_type(days_held)
+    # ── Build output DataFrame with canonical column names ──────────────────
+    df = df.assign(
+        Account            = df["account_name"].astype(str),
+        Symbol             = df["symbol"].astype(str),
+        Name               = df["name"].fillna(df["symbol"]).astype(str),
+        Sector             = df["sector"].fillna("").astype(str),
+        Qty                = qty,
+        Replacements       = df["symbol"].map(_format_replacements),  # type: ignore[arg-type]
+        **{"Purchase Price": px},
+    )
 
-        # Replacement suggestions
-        replacements: list[dict] = WASH_SALE_REPLACEMENTS.get(symbol, DEFAULT_REPLACEMENT)  # type: ignore[assignment]
-        replacement_str = ", ".join(
-            f"{r['symbol']} ({r['reason']})" for r in replacements[:2]
+    output_columns = [
+        "Account", "Symbol", "Name", "Sector", "Qty",
+        "Purchase Price", "Current Price", "Current Value",
+        "Cost Basis", "Unrealized G/L", "Return %",
+        "Days Held", "Gain Type", "Replacements",
+    ]
+    # Sort: losses first (most negative), then gains (most positive)
+    return df[output_columns].sort_values("Unrealized G/L", ascending=True).reset_index(drop=True)  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Harvest opportunity classifier — row-level helpers
+# ---------------------------------------------------------------------------
+
+_VALID_GAIN_TYPES = {"Long-Term", "Short-Term"}
+_VALID_LTCG_RATES = {0.0, 0.15, 0.20}
+
+# ---------------------------------------------------------------------------
+# Action-detail message templates
+# Centralised here so _classify_row and the vectorised path in
+# classify_harvest_opportunities share identical wording.
+# ---------------------------------------------------------------------------
+_DETAIL_HARVEST_LOSS    = (
+    "Sell to realize {loss} loss. "
+    "Replace with wash-sale-safe alternative within same day. "
+    "Loss offsets gains or up to {max_offset} of ordinary income."
+)
+_DETAIL_HARVEST_GAIN_0  = (
+    "Sell to realize {gl} LT gain at 0% rate. "
+    "Repurchase same security to reset cost basis higher. "
+    "Remaining 0% headroom: {headroom}."
+)
+_DETAIL_MONITOR_15      = (
+    "LT gain of {gl} would be taxed at 15%. "
+    "Consider deferring or offsetting with harvested losses. "
+    "Need {headroom} income reduction for 0% rate."
+)
+_DETAIL_HOLD_20         = (
+    "LT gain of {gl} would be taxed at 20%. "
+    "Defer realization or offset with harvested losses."
+)
+_DETAIL_MONITOR_ST      = (
+    "ST gain of {gl} taxed as ordinary income. "
+    "Wait for long-term treatment (hold {days_to_lt} more days)."
+)
+_DETAIL_SMALL_LOSS      = (
+    "Loss of {loss} is below harvest threshold. Monitor for larger decline."
+)
+_DETAIL_SMALL_GAIN      = (
+    "Gain of {gl} is below harvest threshold. Hold position."
+)
+
+
+def _validate_classify_inputs(
+    days_held: int,
+    gain_type: str,
+    ltcg_rate: float,
+) -> None:
+    """
+    Raise ValueError for any out-of-contract input to _classify_row.
+
+    Extracted so that the validation logic can be tested independently and
+    reused without duplicating the error messages.
+
+    Raises:
+        ValueError: if days_held < 0, gain_type is unrecognised, or
+                    ltcg_rate is not one of 0.0 / 0.15 / 0.20.
+    """
+    if days_held < 0:
+        raise ValueError(f"days_held must be >= 0, got {days_held}")
+    if gain_type not in _VALID_GAIN_TYPES:
+        raise ValueError(
+            f"Unknown gain_type {gain_type!r}; expected one of {sorted(_VALID_GAIN_TYPES)}"
+        )
+    if ltcg_rate not in _VALID_LTCG_RATES:
+        raise ValueError(
+            f"Unexpected ltcg_rate {ltcg_rate}; expected one of {sorted(_VALID_LTCG_RATES)}"
         )
 
-        rows.append({
-            "Account":          account_name,
-            "Symbol":           symbol,
-            "Name":             row.get("name", symbol),
-            "Sector":           row.get("sector", ""),
-            "Qty":              qty,
-            "Purchase Price":   purchase_px,
-            "Current Price":    current_px,
-            "Current Value":    current_value,
-            "Cost Basis":       cost_basis,
-            "Unrealized G/L":   unrealized_gl,
-            "Return %":         pct_return,
-            "Days Held":        days_held,
-            "Gain Type":        gain_type,
-            "Replacements":     replacement_str,
-        })
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
+def _classify_gain_row(
+    gl: float,
+    gain_type: str,
+    ltcg_rate: float,
+    headroom_to_zero: float,
+    days_held: int,
+) -> HarvestDecision:
+    """
+    Return a HarvestDecision for a position where gl >= gain_threshold.
 
-    # Sort: losses first (most negative), then gains (most positive)
-    df = df.sort_values("Unrealized G/L", ascending=True).reset_index(drop=True)
-    return df
+    Extracted from _classify_row so the gain-path logic can be tested and
+    extended independently (e.g. adding a new LTCG rate requires only a new
+    case here, not a change to _classify_row).
+    """
+    match (gain_type, ltcg_rate):
+        case ("Long-Term", 0.0):
+            return HarvestDecision(
+                "🟢 Harvest Gain (0% LTCG)",
+                _DETAIL_HARVEST_GAIN_0.format(
+                    gl=_fmt_money(gl), headroom=_fmt_money(headroom_to_zero)
+                ),
+            )
+        case ("Long-Term", 0.15):
+            return HarvestDecision(
+                "🟡 Monitor (15% LTCG)",
+                _DETAIL_MONITOR_15.format(
+                    gl=_fmt_money(gl), headroom=_fmt_money(headroom_to_zero)
+                ),
+            )
+        case ("Long-Term", _):
+            # ltcg_rate == 0.20 (validated upstream; any other positive rate falls here)
+            return HarvestDecision(
+                "🔴 Hold (20% LTCG)",
+                _DETAIL_HOLD_20.format(gl=_fmt_money(gl)),
+            )
+        case _:
+            # Short-Term — always taxed as ordinary income regardless of LTCG rate
+            days_to_lt = max(0, LONG_TERM_DAYS - days_held)
+            return HarvestDecision(
+                "🟡 Monitor (ST — Ordinary Rate)",
+                _DETAIL_MONITOR_ST.format(
+                    gl=_fmt_money(gl), days_to_lt=days_to_lt
+                ),
+            )
+
+
+def _classify_row(
+    gl: float,
+    gain_type: str,
+    days_held: int,
+    ltcg_rate: float,
+    headroom_to_zero: float,
+    loss_threshold: float,
+    gain_threshold: float,
+) -> HarvestDecision:
+    """
+    Return a HarvestDecision for a single holding.
+
+    All threshold comparisons and string formatting are centralised here so
+    that classify_harvest_opportunities() is a thin orchestrator and this
+    helper can be tested independently without constructing a DataFrame.
+
+    Raises:
+        ValueError: if days_held < 0, gain_type is unrecognised, or
+                    ltcg_rate is not one of 0.0 / 0.15 / 0.20.
+    """
+    _validate_classify_inputs(days_held, gain_type, ltcg_rate)
+
+    if gl <= loss_threshold:
+        return HarvestDecision(
+            "🔴 Harvest Loss",
+            _DETAIL_HARVEST_LOSS.format(
+                loss=_fmt_money(abs(gl)),
+                max_offset=_fmt_money(MAX_ORDINARY_LOSS_OFFSET),
+            ),
+        )
+
+    if gl >= gain_threshold:
+        return _classify_gain_row(gl, gain_type, ltcg_rate, headroom_to_zero, days_held)
+
+    if gl < 0:  # abs(gl) < abs(loss_threshold) — small loss, below harvest threshold
+        return HarvestDecision(
+            "⚪ Small Loss — Monitor",
+            _DETAIL_SMALL_LOSS.format(loss=_fmt_money(abs(gl))),
+        )
+
+    # Invariant: 0 <= gl < gain_threshold (small gain, below harvest threshold)
+    return HarvestDecision(
+        "⚪ Small Gain — Hold",
+        _DETAIL_SMALL_GAIN.format(gl=_fmt_money(gl)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -317,66 +563,101 @@ def classify_harvest_opportunities(
     if analysis_df.empty:
         return analysis_df
 
-    df = analysis_df.copy()
-    ltcg_rate = get_ltcg_rate_for_income(estimated_agi, year)
-    zero_threshold = get_ltcg_zero_threshold(year)
+    ltcg_rate        = get_ltcg_rate_for_income(estimated_agi, year)
+    zero_threshold   = get_ltcg_zero_threshold(year)
     headroom_to_zero = max(0.0, zero_threshold - estimated_agi)
 
-    recommendations = []
-    action_details  = []
+    # ── Up-front column-level validation (replaces per-row guards in _classify_row) ──
+    gl        = analysis_df["Unrealized G/L"].astype(float)
+    gain_type = analysis_df["Gain Type"].astype(str)
+    days_held = analysis_df["Days Held"].astype(int)
 
-    for _, row in df.iterrows():
-        gl        = float(row["Unrealized G/L"])
-        gain_type = row["Gain Type"]
+    if (days_held < 0).any():
+        bad = days_held[days_held < 0].tolist()
+        raise ValueError(f"days_held must be >= 0; got negative values: {bad}")
+    unknown_types = set(gain_type.unique()) - _VALID_GAIN_TYPES
+    if unknown_types:
+        raise ValueError(
+            f"Unknown gain_type values {sorted(unknown_types)}; "
+            f"expected one of {sorted(_VALID_GAIN_TYPES)}"
+        )
+    if ltcg_rate not in _VALID_LTCG_RATES:
+        raise ValueError(
+            f"Unexpected ltcg_rate {ltcg_rate}; expected one of {sorted(_VALID_LTCG_RATES)}"
+        )
 
-        if gl <= loss_threshold:
-            # Loss harvesting opportunity
-            rec    = "🔴 Harvest Loss"
-            detail = (
-                f"Sell to realize ${abs(gl):,.0f} loss. "
-                f"Replace with wash-sale-safe alternative within same day. "
-                f"Loss offsets gains or up to $3,000 of ordinary income."
-            )
-        elif gl >= gain_threshold and gain_type == "Long-Term" and ltcg_rate == 0.0:
-            # Gain harvesting at 0% — reset cost basis tax-free
-            rec    = "🟢 Harvest Gain (0% LTCG)"
-            detail = (
-                f"Sell to realize ${gl:,.0f} LT gain at 0% rate. "
-                f"Repurchase same security to reset cost basis higher. "
-                f"Remaining 0% headroom: ${headroom_to_zero:,.0f}."
-            )
-        elif gl >= gain_threshold and gain_type == "Long-Term" and ltcg_rate == 0.15:
-            rec    = "🟡 Monitor (15% LTCG)"
-            detail = (
-                f"LT gain of ${gl:,.0f} would be taxed at 15%. "
-                f"Consider deferring or offsetting with harvested losses. "
-                f"Need ${headroom_to_zero:,.0f} income reduction for 0% rate."
-            )
-        elif gl >= gain_threshold and gain_type == "Short-Term":
-            rec    = "🟡 Monitor (ST — Ordinary Rate)"
-            detail = (
-                f"ST gain of ${gl:,.0f} taxed as ordinary income. "
-                f"Wait for long-term treatment (hold {max(0, LONG_TERM_DAYS - int(row['Days Held']))} more days)."
-            )
-        elif abs(gl) < abs(loss_threshold) and gl < 0:
-            rec    = "⚪ Small Loss — Monitor"
-            detail = f"Loss of ${abs(gl):,.0f} is below harvest threshold. Monitor for larger decline."
-        elif 0 <= gl < gain_threshold:
-            rec    = "⚪ Small Gain — Hold"
-            detail = f"Gain of ${gl:,.0f} is below harvest threshold. Hold position."
-        else:
-            rec    = "⚪ Hold"
-            detail = "No immediate harvesting action recommended."
+    # ── Vectorized Recommendation column via np.select ───────────────────────
+    is_harvest_loss = gl <= loss_threshold
+    is_large_gain   = gl >= gain_threshold
+    is_lt           = gain_type == "Long-Term"
+    is_small_loss   = (gl < 0) & ~is_harvest_loss
 
-        recommendations.append(rec)
-        action_details.append(detail)
+    rec = np.select(
+        [
+            is_harvest_loss,
+            is_large_gain & is_lt & (ltcg_rate == 0.0),
+            is_large_gain & is_lt & (ltcg_rate == 0.15),
+            is_large_gain & is_lt,          # ltcg_rate == 0.20 fallthrough
+            is_large_gain & ~is_lt,         # Short-Term gain
+            is_small_loss,
+        ],
+        [
+            "🔴 Harvest Loss",
+            "🟢 Harvest Gain (0% LTCG)",
+            "🟡 Monitor (15% LTCG)",
+            "🔴 Hold (20% LTCG)",
+            "🟡 Monitor (ST — Ordinary Rate)",
+            "⚪ Small Loss — Monitor",
+        ],
+        default="⚪ Small Gain — Hold",
+    )
 
-    df["Recommendation"] = recommendations
-    df["Action Detail"]  = action_details
-    df["LTCG Rate"]      = f"{ltcg_rate:.0%}"
-    df["0% Headroom"]    = headroom_to_zero
+    # ── Action Detail: vectorized string construction via np.select ──────────
+    # Reuses the boolean masks already computed for `rec`; scalar values
+    # (ltcg_rate, headroom_to_zero) are broadcast automatically by numpy.
+    days_to_lt = (LONG_TERM_DAYS - days_held).clip(lower=0)
 
-    return df
+    detail = np.select(
+        [
+            is_harvest_loss,
+            is_large_gain & is_lt & (ltcg_rate == 0.0),
+            is_large_gain & is_lt & (ltcg_rate == 0.15),
+            is_large_gain & is_lt,          # ltcg_rate == 0.20 fallthrough
+            is_large_gain & ~is_lt,         # Short-Term gain
+            is_small_loss,
+        ],
+        [
+            "Sell to realize " + gl.abs().map(_fmt_money) + " loss. "
+            "Replace with wash-sale-safe alternative within same day. "
+            f"Loss offsets gains or up to {_fmt_money(MAX_ORDINARY_LOSS_OFFSET)} of ordinary income.",
+
+            "Sell to realize " + gl.map(_fmt_money) + " LT gain at 0% rate. "
+            "Repurchase same security to reset cost basis higher. "
+            f"Remaining 0% headroom: {_fmt_money(headroom_to_zero)}.",
+
+            "LT gain of " + gl.map(_fmt_money) + " would be taxed at 15%. "
+            "Consider deferring or offsetting with harvested losses. "
+            f"Need {_fmt_money(headroom_to_zero)} income reduction for 0% rate.",
+
+            "LT gain of " + gl.map(_fmt_money) + " would be taxed at 20%. "
+            "Defer realization or offset with harvested losses.",
+
+            "ST gain of " + gl.map(_fmt_money) + " taxed as ordinary income. "
+            "Wait for long-term treatment (hold "
+            + days_to_lt.astype(str) + " more days).",
+
+            "Loss of " + gl.abs().map(_fmt_money) + " is below harvest threshold. "
+            "Monitor for larger decline.",
+        ],
+        default="Gain of " + gl.map(_fmt_money) + " is below harvest threshold. Hold position.",
+    )
+
+    return analysis_df.assign(**{
+        "Recommendation": rec,
+        "Action Detail":  detail,
+        "LTCG Rate":      f"{ltcg_rate:.0%}",
+        "0% Headroom":    headroom_to_zero,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +685,9 @@ def compute_harvest_summary(classified_df: pd.DataFrame) -> dict:
             "ltcg_rate":                  "N/A",
             "zero_headroom":              0.0,
         }
+
+    if 'Recommendation' not in classified_df.columns:
+        raise ValueError('classified_df must be the output of classify_harvest_opportunities()')
 
     gains  = classified_df[classified_df["Unrealized G/L"] > 0]["Unrealized G/L"].sum()
     losses = classified_df[classified_df["Unrealized G/L"] < 0]["Unrealized G/L"].sum()
@@ -489,53 +773,52 @@ def compute_net_tax_impact(
     estimated_agi: float,
     year: int,
     marginal_ordinary_rate: float = 0.22,
-) -> dict:
+) -> NetTaxImpact:
     """
     Estimate the tax impact of executing all recommended harvesting actions.
 
     Assumptions:
       - Harvested losses first offset harvested gains (netting)
-      - Remaining net loss offsets up to $3,000 of ordinary income
+      - Remaining net loss offsets up to MAX_ORDINARY_LOSS_OFFSET of ordinary income
       - Remaining net gain taxed at applicable LTCG rate
 
-    Returns a dict with estimated tax savings / liability.
+    Returns a NetTaxImpact dataclass with estimated tax savings / liability.
     """
-    if classified_df.empty:
-        return {}
-
     ltcg_rate = get_ltcg_rate_for_income(estimated_agi, year)
 
-    loss_mask = classified_df["Recommendation"].str.startswith("🔴")
-    gain_mask = classified_df["Recommendation"].str.startswith("🟢")
+    if classified_df.empty:
+        return NetTaxImpact(
+            total_harvestable_losses = 0.0,
+            total_harvestable_gains  = 0.0,
+            net_position             = 0.0,
+            ltcg_rate                = ltcg_rate,
+            tax_on_net_gains         = 0.0,
+            ordinary_income_offset   = 0.0,
+            ordinary_income_savings  = 0.0,
+            net_tax_impact           = 0.0,
+            marginal_ordinary_rate   = marginal_ordinary_rate,
+        )
 
-    total_losses = abs(classified_df.loc[loss_mask, "Unrealized G/L"].sum())
-    total_gains  = classified_df.loc[gain_mask, "Unrealized G/L"].sum()
+    is_loss          = classified_df["Recommendation"].str.startswith("🔴")
+    total_losses_abs = classified_df.loc[is_loss,  "Unrealized G/L"].abs().sum()
+    total_gains      = classified_df.loc[~is_loss, "Unrealized G/L"].sum()  # naturally positive
+    net              = total_gains - total_losses_abs  # positive = net gain, negative = net loss
 
-    net = total_gains - total_losses  # positive = net gain, negative = net loss
+    tax_on_gains     = max(0.0, net) * ltcg_rate
+    ordinary_offset  = max(0.0, min(-net, MAX_ORDINARY_LOSS_OFFSET))
+    ordinary_savings = ordinary_offset * marginal_ordinary_rate
+    net_tax_impact   = ordinary_savings - tax_on_gains
 
-    if net >= 0:
-        # Net gain — taxed at LTCG rate
-        tax_on_gains = net * ltcg_rate
-        ordinary_offset = 0.0
-        ordinary_savings = 0.0
-        net_tax_impact = -tax_on_gains  # negative = tax owed
-    else:
-        # Net loss — offset up to $3,000 of ordinary income
-        tax_on_gains = 0.0
-        ordinary_offset = min(abs(net), 3000.0)
-        ordinary_savings = ordinary_offset * marginal_ordinary_rate
-        net_tax_impact = ordinary_savings  # positive = tax savings
-
-    return {
-        "total_harvestable_losses":  total_losses,
-        "total_harvestable_gains":   total_gains,
-        "net_position":              net,
-        "ltcg_rate":                 ltcg_rate,
-        "tax_on_net_gains":          tax_on_gains,
-        "ordinary_income_offset":    ordinary_offset,
-        "ordinary_income_savings":   ordinary_savings,
-        "net_tax_impact":            net_tax_impact,
-        "marginal_ordinary_rate":    marginal_ordinary_rate,
-    }
+    return NetTaxImpact(
+        total_harvestable_losses = total_losses_abs,
+        total_harvestable_gains  = total_gains,
+        net_position             = net,
+        ltcg_rate                = ltcg_rate,
+        tax_on_net_gains         = tax_on_gains,
+        ordinary_income_offset   = ordinary_offset,
+        ordinary_income_savings  = ordinary_savings,
+        net_tax_impact           = net_tax_impact,
+        marginal_ordinary_rate   = marginal_ordinary_rate,
+    )
 
 # Made with Bob

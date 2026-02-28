@@ -178,7 +178,7 @@ def load_portfolio_truth():
    
    Returns:
        pd.DataFrame: Complete dataset with columns:
-           month, year, account_name, account_type, symbol, name, sector, qty, purchase_price
+           month, year, account_name, account_type, symbol, name, sector, qty, purchase_price, purchase_date
    """
    portfolio_truth = pd.read_csv('portfolio_data_truth.csv')
    return portfolio_truth
