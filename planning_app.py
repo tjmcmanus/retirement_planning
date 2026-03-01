@@ -1560,6 +1560,42 @@ with tab3:
 
                 st.markdown("---")
 
+                # ── Educational expander ───────────────────────────────────
+                with st.expander("📚 How Tax Harvesting Works — Strategy Guide", expanded=False):
+                    st.markdown("""
+**Tax Loss Harvesting**
+- Sell a position with an unrealized loss to "realize" the loss for tax purposes.
+- Immediately buy a *similar but not identical* security to maintain your market exposure.
+- The realized loss offsets capital gains dollar-for-dollar. If losses exceed gains, up to **$3,000/year** can offset ordinary income. Excess losses carry forward indefinitely.
+- **Wash Sale Rule:** You cannot buy the same (or substantially identical) security within **30 days before or after** the sale. Violating this rule disallows the loss.
+
+**Tax Gain Harvesting (at 0% LTCG Rate)**
+- When your income falls in the **0% long-term capital gains bracket**, you can sell appreciated positions and pay *zero federal tax* on the gain.
+- Immediately repurchase the same security to reset your cost basis higher — reducing future taxable gains.
+- This is most powerful during low-income years: early retirement, sabbaticals, or years with large deductions.
+
+**Stock Indexing Strategy**
+- Periodically review your brokerage account for positions that have declined ≥ 10% from cost basis (or from a recent market high).
+- Replace losers with similar ETFs or stocks in the same sector to maintain your target allocation.
+- Example: S&P 500 drops 10% → sell NVDA (down 15%) → buy AMD or SOXX → book the loss, stay invested in semiconductors.
+
+**Long-Term vs Short-Term**
+- **Long-Term (LT):** Held > 1 year. Taxed at 0%, 15%, or 20% depending on income.
+- **Short-Term (ST):** Held ≤ 1 year. Taxed as ordinary income (10%–37%).
+- Prefer to harvest LT gains at 0% and LT losses (same rate benefit as ST losses but with better holding-period optics).
+
+**Account Location**
+- Only **Brokerage (taxable)** accounts are relevant. Gains/losses in Traditional IRA, Roth IRA, or 401(k) accounts are not taxable events.
+
+**Donor Advised Fund (DAF) Bundling**
+- A DAF is a charitable giving account: you contribute assets, receive an immediate tax deduction, and recommend grants to charities over time.
+- **Bundling:** Instead of giving $5,000/year (never exceeding the standard deduction), contribute $15,000 every 3 years — itemize in the bundle year, take the standard deduction in the other 2 years.
+- **Appreciated securities:** Donate long-term appreciated stock directly to the DAF. You deduct the full fair-market value AND pay zero capital gains tax on the embedded gain.
+- **IRS limits:** Securities donations deductible up to 30% of AGI; cash up to 60% of AGI. Excess carries forward 5 years (IRC §170(d)).
+                    """)
+
+                st.markdown("---")
+
                 # ── DAF Bundling Advisor ───────────────────────────────────
                 st.markdown("#### 🏦 Donor Advised Fund (DAF) Bundling Advisor")
                 st.caption(
@@ -1569,51 +1605,61 @@ with tab3:
                     "capital gains tax entirely while still claiming the full fair-market-value deduction."
                 )
 
-                _daf_col1, _daf_col2, _daf_col3, _daf_col4 = st.columns(4)
-                with _daf_col1:
-                    _daf_annual_giving = st.number_input(
-                        "Annual Charitable Giving ($)",
-                        min_value=0,
-                        max_value=500_000,
-                        value=5_000,
-                        step=500,
-                        help="Your normal annual charitable giving amount. The bundling strategy "
-                             "front-loads multiple years into one DAF contribution.",
-                        key="daf_annual_giving",
-                    )
-                with _daf_col2:
-                    _daf_years_bundle = st.number_input(
-                        "Years to Bundle",
-                        min_value=2,
-                        max_value=5,
-                        value=3,
-                        step=1,
-                        help="How many years of giving to front-load into a single DAF contribution. "
-                             "Typically 2–5 years. The DAF then distributes grants over those years.",
-                        key="daf_years_bundle",
-                    )
-                with _daf_col3:
-                    _daf_std_deduction = st.number_input(
-                        "Standard Deduction ($)",
-                        min_value=0,
-                        max_value=100_000,
-                        value=30_000,
-                        step=500,
-                        help="Your standard deduction for the bundle year (2025 MFJ: $30,000). "
-                             "Bundling is only beneficial when the DAF contribution exceeds this.",
-                        key="daf_std_deduction",
-                    )
-                with _daf_col4:
-                    _daf_marginal_rate = st.number_input(
-                        "Marginal Tax Rate (%)",
-                        min_value=0,
-                        max_value=50,
-                        value=22,
-                        step=1,
-                        help="Your federal marginal income tax rate in the bundle year. "
-                             "Higher rates = greater tax savings from itemizing.",
-                        key="daf_marginal_rate",
-                    )
+                with st.form("daf_inputs_form", border=False):
+                    _daf_col1, _daf_col2, _daf_col3, _daf_col4, _daf_col5 = st.columns([3, 2, 3, 2, 1])
+                    with _daf_col1:
+                        _daf_annual_giving = st.number_input(
+                            "Annual Charitable Giving ($)",
+                            min_value=0,
+                            max_value=500_000,
+                            value=st.session_state.get("daf_annual_giving_val", 5_000),
+                            step=500,
+                            help="Your normal annual charitable giving amount. The bundling strategy "
+                                 "front-loads multiple years into one DAF contribution.",
+                        )
+                    with _daf_col2:
+                        _daf_years_bundle = st.number_input(
+                            "Years to Bundle",
+                            min_value=2,
+                            max_value=5,
+                            value=st.session_state.get("daf_years_bundle_val", 3),
+                            step=1,
+                            help="How many years of giving to front-load into a single DAF contribution. "
+                                 "Typically 2–5 years. The DAF then distributes grants over those years.",
+                        )
+                    with _daf_col3:
+                        _daf_std_deduction = st.number_input(
+                            "Standard Deduction ($)",
+                            min_value=0,
+                            max_value=100_000,
+                            value=st.session_state.get("daf_std_deduction_val", 30_000),
+                            step=500,
+                            help="Your standard deduction for the bundle year (2025 MFJ: $30,000). "
+                                 "Bundling is only beneficial when the DAF contribution exceeds this.",
+                        )
+                    with _daf_col4:
+                        _daf_marginal_rate = st.number_input(
+                            "Marginal Tax Rate (%)",
+                            min_value=0,
+                            max_value=50,
+                            value=st.session_state.get("daf_marginal_rate_val", 22),
+                            step=1,
+                            help="Your federal marginal income tax rate in the bundle year. "
+                                 "Higher rates = greater tax savings from itemizing.",
+                        )
+                    with _daf_col5:
+                        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+                        _daf_submitted = st.form_submit_button("Update", use_container_width=True)
+                    if _daf_submitted:
+                        st.session_state["daf_annual_giving_val"]  = int(_daf_annual_giving)
+                        st.session_state["daf_years_bundle_val"]   = int(_daf_years_bundle)
+                        st.session_state["daf_std_deduction_val"]  = int(_daf_std_deduction)
+                        st.session_state["daf_marginal_rate_val"]  = int(_daf_marginal_rate)
+
+                _daf_annual_giving  = st.session_state.get("daf_annual_giving_val",  5_000)
+                _daf_years_bundle   = st.session_state.get("daf_years_bundle_val",   3)
+                _daf_std_deduction  = st.session_state.get("daf_std_deduction_val",  30_000)
+                _daf_marginal_rate  = st.session_state.get("daf_marginal_rate_val",  22)
 
                 # Identify DAF donation candidates from the harvesting analysis
                 _daf_candidates = identify_daf_candidates(_h_analysis)
@@ -1731,40 +1777,51 @@ with tab3:
                         "have been held > 1 year with meaningful gains."
                     )
 
-                st.markdown("---")
-
-                # ── Educational expander ───────────────────────────────────
-                with st.expander("📚 How Tax Harvesting Works — Strategy Guide", expanded=False):
+                # ── DAF Strategy Guide expander ────────────────────────────
+                with st.expander("📚 Donor Advised Fund (DAF) Bundling — Strategy Guide", expanded=False):
                     st.markdown("""
-**Tax Loss Harvesting**
-- Sell a position with an unrealized loss to "realize" the loss for tax purposes.
-- Immediately buy a *similar but not identical* security to maintain your market exposure.
-- The realized loss offsets capital gains dollar-for-dollar. If losses exceed gains, up to **$3,000/year** can offset ordinary income. Excess losses carry forward indefinitely.
-- **Wash Sale Rule:** You cannot buy the same (or substantially identical) security within **30 days before or after** the sale. Violating this rule disallows the loss.
+**What is a Donor Advised Fund (DAF)?**
+- A DAF is a charitable giving account sponsored by a public charity (e.g., Fidelity Charitable, Schwab Charitable, Vanguard Charitable).
+- You make an irrevocable contribution, receive an **immediate tax deduction**, and then recommend grants to your chosen charities over time — on your own schedule.
 
-**Tax Gain Harvesting (at 0% LTCG Rate)**
-- When your income falls in the **0% long-term capital gains bracket**, you can sell appreciated positions and pay *zero federal tax* on the gain.
-- Immediately repurchase the same security to reset your cost basis higher — reducing future taxable gains.
-- This is most powerful during low-income years: early retirement, sabbaticals, or years with large deductions.
+**The Bundling Strategy**
+- Most taxpayers give small amounts annually (e.g., $5,000/yr) that never exceed the standard deduction, so they receive **no incremental tax benefit**.
+- **Bundling** front-loads 2–5 years of giving into a single DAF contribution (e.g., $15,000 every 3 years).
+- In the bundle year you **itemize** and deduct the full contribution; in the off-years you take the standard deduction.
+- Net result: you give the same total amount to charity but capture **thousands of dollars in additional tax savings**.
 
-**Stock Indexing Strategy**
-- Periodically review your brokerage account for positions that have declined ≥ 10% from cost basis (or from a recent market high).
-- Replace losers with similar ETFs or stocks in the same sector to maintain your target allocation.
-- Example: S&P 500 drops 10% → sell NVDA (down 15%) → buy AMD or SOXX → book the loss, stay invested in semiconductors.
+**Donating Appreciated Securities (the Power Move)**
+- Instead of donating cash, transfer **long-term appreciated stock or ETFs** directly to the DAF.
+- You deduct the **full fair-market value** of the securities — not just your cost basis.
+- You pay **zero capital gains tax** on the embedded gain (the gain is never "realized").
+- Example: You own 50 shares of a stock worth $10,000 with a cost basis of $2,000. Donate to DAF → deduct $10,000, avoid $1,200 in capital gains tax (at 15% LTCG rate). Net benefit vs. selling first and donating cash: **$1,200 saved**.
 
-**Long-Term vs Short-Term**
-- **Long-Term (LT):** Held > 1 year. Taxed at 0%, 15%, or 20% depending on income.
-- **Short-Term (ST):** Held ≤ 1 year. Taxed as ordinary income (10%–37%).
-- Prefer to harvest LT gains at 0% and LT losses (same rate benefit as ST losses but with better holding-period optics).
+**IRS Deduction Limits (IRC §170)**
+| Contribution Type | AGI Deduction Limit |
+|---|---|
+| Cash to DAF | 60% of AGI |
+| Appreciated securities to DAF | 30% of AGI |
+| Combined (cash + securities) | 60% of AGI |
+- Contributions exceeding the AGI limit **carry forward for up to 5 years**.
 
-**Account Location**
-- Only **Brokerage (taxable)** accounts are relevant. Gains/losses in Traditional IRA, Roth IRA, or 401(k) accounts are not taxable events.
+**Step-by-Step: How to Execute**
+1. Open a DAF account at Fidelity Charitable, Schwab Charitable, or Vanguard Charitable (free, takes ~15 minutes).
+2. Identify long-term appreciated securities in your brokerage account (held > 1 year, meaningful unrealized gain).
+3. Initiate an **in-kind transfer** of the securities to your DAF — do **not** sell them first.
+4. The DAF sells the securities internally (no capital gains to you) and invests the proceeds.
+5. Claim the deduction on Schedule A in the bundle year.
+6. Recommend grants to your chosen charities from the DAF over the following years.
 
-**Donor Advised Fund (DAF) Bundling**
-- A DAF is a charitable giving account: you contribute assets, receive an immediate tax deduction, and recommend grants to charities over time.
-- **Bundling:** Instead of giving $5,000/year (never exceeding the standard deduction), contribute $15,000 every 3 years — itemize in the bundle year, take the standard deduction in the other 2 years.
-- **Appreciated securities:** Donate long-term appreciated stock directly to the DAF. You deduct the full fair-market value AND pay zero capital gains tax on the embedded gain.
-- **IRS limits:** Securities donations deductible up to 30% of AGI; cash up to 60% of AGI. Excess carries forward 5 years (IRC §170(d)).
+**When Bundling Makes Sense**
+- 🟢 **Strong case:** Your bundled contribution exceeds the standard deduction AND you have appreciated securities to donate.
+- 🟡 **Moderate case:** Bundled contribution exceeds the standard deduction but only cash is available.
+- 🔴 **Weak case:** Bundled contribution does not exceed the standard deduction — no itemizing benefit (though the CG tax avoidance on securities still applies).
+
+**Key Risks & Considerations**
+- DAF contributions are **irrevocable** — once contributed, funds must eventually go to charity.
+- You control the *timing* of grants but cannot reclaim the assets for personal use.
+- The DAF sponsor invests the assets; choose an investment option aligned with your time horizon for grantmaking.
+- State income tax deductibility varies — check your state's rules.
                     """)
 
         except Exception as _h_err:

@@ -126,9 +126,13 @@ The sidebar now automatically loads values from the configuration file:
     "person1_name": "Tom",
     "person1_birth_date": "1965-01-01",
     "person1_retirement_age": 62,
+    "person1_retirement_year": 2026,
     "person2_name": "Sarah",
     "person2_birth_date": "1967-01-01",
-    "person2_retirement_age": 62
+    "person2_retirement_age": 62,
+    "person2_retirement_year": 2028,
+    "retirement_state": "FL",
+    "children": []
   },
   "income": {
     "person1_annual_wages": 120000,
@@ -149,7 +153,8 @@ The sidebar now automatically loads values from the configuration file:
     "aca_insurance_monthly": 0,
     "aca_start_age": 62,
     "aca_end_age": 65,
-    "medicare_start_age": 65
+    "medicare_start_age": 65,
+    "aca_marketplace_enrolled": false
   },
   "social_security": {
     "person1_ssi_age": 70,
@@ -158,10 +163,19 @@ The sidebar now automatically loads values from the configuration file:
     "person2_ssi_amount": 0
   },
   "tax_strategy": {
-    "roth_conversion_at_ssi_age": 5000,
-    "max_roth_conversion_tax_rate": 12,
-    "daf_disbursement_rate": 25,
-    "planned_distribution_2027": 75000
+    "max_roth_conversion_tax_rate": 12
+  },
+  "charitable_giving": {
+    "annual_charitable_giving": 0,
+    "charitable_giving_start_age": 65,
+    "charitable_giving_end_age": 95,
+    "charitable_giving_inflation_rate": 2.0,
+    "has_daf": false,
+    "daf_provider": "",
+    "daf_initial_contribution": 0,
+    "daf_annual_contribution": 0,
+    "daf_contribution_start_age": 60,
+    "daf_contribution_end_age": 75
   },
   "portfolio_accounts": {
     "accounts": [
@@ -185,6 +199,105 @@ The sidebar now automatically loads values from the configuration file:
   }
 }
 ```
+
+## Configuration Field Reference
+
+### `personal_info` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `person1_name` | string | `"Tom"` | Display name for person 1 |
+| `person1_birth_date` | string | `"1965-01-01"` | Birth date in `YYYY-MM-DD` format |
+| `person1_retirement_age` | int | `62` | Planned retirement age for person 1 |
+| `person1_retirement_year` | int | current year | Calendar year person 1 retires; wages stop after this year |
+| `person2_name` | string | `"Sarah"` | Display name for person 2 |
+| `person2_birth_date` | string | `"1967-01-01"` | Birth date in `YYYY-MM-DD` format |
+| `person2_retirement_age` | int | `62` | Planned retirement age for person 2 |
+| `person2_retirement_year` | int | current year | Calendar year person 2 retires; wages stop after this year |
+| `retirement_state` | string | `"FL"` | Two-letter state abbreviation for retirement location (used for future state-tax calculations) |
+| `children` | list | `[]` | Optional list of `{"name": str, "birth_date": "YYYY-MM-DD"}` entries |
+
+### `income` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `person1_annual_wages` | float | `0` | Current annual gross wages/salary for person 1 |
+| `person2_annual_wages` | float | `0` | Current annual gross wages/salary for person 2 |
+| `wage_inflation_rate` | float | `3.0` | Annual wage growth percentage applied to project future wages |
+| `contribution_401k_percent` | float | `10.0` | Percentage of gross wages contributed to a pre-tax Traditional 401k; reduces AGI |
+| `contribution_roth_percent` | float | `5.0` | Percentage of gross wages contributed to a Roth 401k or Roth IRA |
+| `contribution_brokerage_percent` | float | `5.0` | Percentage of gross wages contributed to an after-tax taxable brokerage account |
+
+**Notes:**
+- Wages are projected forward using `wage_inflation_rate` from the current calendar year.
+- Wages for each person stop in the year equal to their `person1_retirement_year` / `person2_retirement_year`.
+- The three contribution percentages are applied to gross wages. Remaining take-home cash fills the cash buffer first; any surplus above the target also flows to brokerage.
+- Use [`ConfigManager.get_annual_wages(year)`](config.py:266) to retrieve inflation-adjusted wages for any future year.
+- Use [`ConfigManager.has_wages_in_year(year)`](config.py:302) to check whether either person is still working.
+
+### `financial_assumptions` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `expected_annual_expenses` | float | `50000` | Annual living expenses in today's dollars |
+| `expense_inflation_rate` | float | `3.0` | Annual expense growth percentage |
+| `expected_rate_of_return` | float | `6.0` | Expected annual portfolio return percentage |
+| `years_of_expenses_in_cash` | int | `4` | Number of years of expenses to hold in cash during retirement |
+| `accumulation_cash_buffer_months` | int | `6` | Months of wages to keep in cash during working years (3–24) |
+
+### `healthcare` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `aca_insurance_monthly` | float | `0` | Monthly ACA marketplace premium (before subsidies) |
+| `aca_start_age` | int | `62` | Age at which ACA coverage begins |
+| `aca_end_age` | int | `65` | Age at which ACA coverage ends (Medicare begins) |
+| `medicare_start_age` | int | `65` | Age at which Medicare coverage begins |
+| `aca_marketplace_enrolled` | bool | `false` | Set to `true` when actively enrolled in an ACA marketplace plan; enables ACA subsidy optimization in the withdrawal strategy (Stage 3 keeps MAGI below 400% FPL to maximize premium tax credits) |
+
+### `social_security` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `person1_ssi_age` | int | `70` | Age at which person 1 claims Social Security (62–70) |
+| `person1_ssi_amount` | float | `0` | Person 1's estimated monthly benefit **at age 67** (Full Retirement Age); the SSI calculator adjusts for early/delayed claiming automatically |
+| `person2_ssi_age` | int | `70` | Age at which person 2 claims Social Security (62–70) |
+| `person2_ssi_amount` | float | `0` | Person 2's estimated monthly benefit at age 67 (FRA) |
+
+### `tax_strategy` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_roth_conversion_tax_rate` | int | `12` | Maximum marginal tax rate (%) at which Roth conversions are performed; the BETR algorithm uses this as the upper bracket limit |
+
+### `charitable_giving` Section
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `annual_charitable_giving` | float | `0` | Annual direct charitable giving amount |
+| `charitable_giving_start_age` | int | `65` | Age at which charitable giving begins |
+| `charitable_giving_end_age` | int | `95` | Age at which charitable giving ends |
+| `charitable_giving_inflation_rate` | float | `2.0` | Annual inflation rate applied to charitable giving amounts |
+| `has_daf` | bool | `false` | Whether a Donor Advised Fund (DAF) is in use |
+| `daf_provider` | string | `""` | Name of the DAF provider (e.g., "Fidelity Charitable") |
+| `daf_initial_contribution` | float | `0` | One-time initial contribution to the DAF |
+| `daf_annual_contribution` | float | `0` | Annual contribution to the DAF |
+| `daf_contribution_start_age` | int | `60` | Age at which annual DAF contributions begin |
+| `daf_contribution_end_age` | int | `75` | Age at which annual DAF contributions end |
+
+**Notes:**
+- DAF contributions are deductible in the year contributed, providing an immediate tax benefit.
+- The `income_expense.py` simulation applies a 25% annual spend-down rate to the DAF balance.
+- DAF disbursements reduce taxable income in the year of the contribution (not the disbursement).
+
+### `portfolio_accounts` Section
+
+Defines the investment accounts used when entering portfolio holdings. Each entry in the `accounts` list has:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `account_name` | string | Display name (e.g., `"Schwab"`, `"Fidelity"`) |
+| `account_type` | string | One of: `"Cash"`, `"Brokerage"`, `"Traditional"`, `"Roth"` |
 
 ## API Reference
 
@@ -216,6 +329,105 @@ age = config_mgr.calculate_age("1965-01-01")
 
 # Get person's current age
 age = config_mgr.get_person_age(1)  # Person 1 or 2
+
+# Get inflation-adjusted wages for a future year
+wages = config_mgr.get_annual_wages(2028)
+
+# Check whether either person has wages in a given year
+working = config_mgr.has_wages_in_year(2028)
+```
+
+## Configuration Scenarios
+
+### Scenario 1: Single Person, Already Retired
+
+```json
+{
+  "personal_info": {
+    "person1_name": "Alex",
+    "person1_birth_date": "1960-06-15",
+    "person1_retirement_age": 65,
+    "person1_retirement_year": 2025,
+    "person2_name": "",
+    "person2_birth_date": "1960-01-01",
+    "person2_retirement_year": 2025
+  },
+  "income": {
+    "person1_annual_wages": 0,
+    "person2_annual_wages": 0,
+    "wage_inflation_rate": 3.0,
+    "contribution_401k_percent": 0,
+    "contribution_roth_percent": 0,
+    "contribution_brokerage_percent": 0
+  }
+}
+```
+
+### Scenario 2: Couple with Different Retirement Ages
+
+```json
+{
+  "personal_info": {
+    "person1_name": "Tom",
+    "person1_birth_date": "1965-01-01",
+    "person1_retirement_age": 62,
+    "person1_retirement_year": 2027,
+    "person2_name": "Sarah",
+    "person2_birth_date": "1967-06-01",
+    "person2_retirement_age": 60,
+    "person2_retirement_year": 2027
+  },
+  "income": {
+    "person1_annual_wages": 120000,
+    "person2_annual_wages": 80000,
+    "wage_inflation_rate": 3.0,
+    "contribution_401k_percent": 10.0,
+    "contribution_roth_percent": 5.0,
+    "contribution_brokerage_percent": 5.0
+  }
+}
+```
+
+### Scenario 3: Early Retirement with ACA Coverage
+
+```json
+{
+  "personal_info": {
+    "person1_retirement_year": 2026
+  },
+  "income": {
+    "person1_annual_wages": 0,
+    "person2_annual_wages": 0
+  },
+  "healthcare": {
+    "aca_insurance_monthly": 850,
+    "aca_start_age": 60,
+    "aca_end_age": 65,
+    "medicare_start_age": 65,
+    "aca_marketplace_enrolled": true
+  }
+}
+```
+> When `aca_marketplace_enrolled` is `true`, the withdrawal strategy (Stage 3) optimizes income to stay below 400% of the Federal Poverty Level to maximize ACA premium tax credits.
+
+### Scenario 4: High-Income with DAF Strategy
+
+```json
+{
+  "tax_strategy": {
+    "max_roth_conversion_tax_rate": 24
+  },
+  "charitable_giving": {
+    "annual_charitable_giving": 20000,
+    "charitable_giving_start_age": 60,
+    "has_daf": true,
+    "daf_provider": "Fidelity Charitable",
+    "daf_initial_contribution": 100000,
+    "daf_annual_contribution": 25000,
+    "daf_contribution_start_age": 58,
+    "daf_contribution_end_age": 72
+  }
+}
 ```
 
 ## Best Practices

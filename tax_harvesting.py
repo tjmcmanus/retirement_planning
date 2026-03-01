@@ -621,7 +621,7 @@ _REC_LABELS: dict[str, str] = {
     "harvest_loss":  "🔴 Harvest Loss",
     "gain_lt_0pct":  "🟢 Harvest Gain (0% LTCG)",
     "gain_lt_15pct": "🟡 Monitor (15% LTCG)",
-    "gain_lt_20pct": "🔴 Hold (20% LTCG)",
+    "gain_lt_20pct": "⚪ Hold (20% LTCG)",
     "gain_st":       "🟡 Monitor (ST — Ordinary Rate)",
     "small_loss":    "⚪ Small Loss — Monitor",
 }
@@ -983,6 +983,10 @@ def identify_daf_candidates(
     - Has a significant unrealized gain (avoids capital gains tax on donation)
     - Donating FMV to DAF = full FMV deduction + zero capital gains tax
 
+    Short-term positions are excluded: the IRS limits the deduction to cost
+    basis (not FMV) for short-term appreciated property, so the tax benefit
+    is minimal compared to long-term holdings.
+
     Args:
         analysis_df: Output of build_harvesting_analysis() — brokerage holdings
                      with Current Value, Cost Basis, Unrealized G/L, Days Held,
@@ -1172,8 +1176,8 @@ def analyze_daf_bundling(
             recommendation         = "⚪ Bundling not beneficial — contribution below standard deduction",
             notes                  = [
                 f"Your {years_to_bundle}-year bundled contribution of "
-                f"${bundled_target:,.0f} does not exceed the standard deduction "
-                f"(${standard_deduction:,.0f}). Consider bundling more years or "
+                f"\\${bundled_target:,.0f} does not exceed the standard deduction "
+                f"(\\${standard_deduction:,.0f}). Consider bundling more years or "
                 f"increasing annual giving to make itemizing worthwhile."
             ],
         )
@@ -1194,9 +1198,9 @@ def analyze_daf_bundling(
     cash_needed     = cash_needed_raw
     if cash_needed > combined_limit:
         notes.append(
-            f"⚠️ Cash portion of contribution (${cash_needed_raw:,.0f}) exceeds the "
-            f"60% AGI cash deduction sub-limit (${combined_limit:,.0f}). "
-            f"Cash contribution capped at ${combined_limit:,.0f}; excess is not deductible."
+            f"⚠️ Cash portion of contribution (\\${cash_needed_raw:,.0f}) exceeds the "
+            f"60% AGI cash deduction sub-limit (\\${combined_limit:,.0f}). "
+            f"Cash contribution capped at \\${combined_limit:,.0f}; excess is not deductible."
         )
         cash_needed = combined_limit
 
@@ -1219,21 +1223,21 @@ def analyze_daf_bundling(
     if incremental_deduction < 1_000:
         recommendation = "🟡 Marginal benefit — small incremental deduction over standard"
         notes.append(
-            f"Bundled contribution of ${bundled_target:,.0f} exceeds the standard "
-            f"deduction by only ${incremental_deduction:,.0f}. Tax savings are modest."
+            f"Bundled contribution of \\${bundled_target:,.0f} exceeds the standard "
+            f"deduction by only \\${incremental_deduction:,.0f}. Tax savings are modest."
         )
     else:
         recommendation = "🟢 Bundle recommended — significant tax savings identified"
         notes.append(
-            f"Front-loading {years_to_bundle} years of giving (${bundled_target:,.0f}) "
-            f"into a single DAF contribution generates ~${tax_savings:,.0f} in incremental "
+            f"Front-loading {years_to_bundle} years of giving (\\${bundled_target:,.0f}) "
+            f"into a single DAF contribution generates ~\\${tax_savings:,.0f} in incremental "
             f"federal tax savings vs. taking the standard deduction each year."
         )
 
     if used_candidates:
         notes.append(
             f"Donate {len(used_candidates)} appreciated security position(s) "
-            f"(FMV ${securities_value:,.0f}) to avoid ~${avoided_cg_total:,.0f} "
+            f"(FMV \\${securities_value:,.0f}) to avoid ~\\${avoided_cg_total:,.0f} "
             f"in capital gains tax. Donate securities BEFORE selling."
         )
     else:
@@ -1244,14 +1248,14 @@ def analyze_daf_bundling(
 
     if carryforward > 0:
         notes.append(
-            f"${carryforward:,.0f} of your contribution exceeds the AGI deduction limit "
+            f"\\${carryforward:,.0f} of your contribution exceeds the AGI deduction limit "
             f"and carries forward for up to 5 years (IRC §170(d))."
         )
 
     if cash_needed > 0:
         notes.append(
             f"After securities donations, contribute an additional "
-            f"${cash_needed:,.0f} cash to reach your {years_to_bundle}-year bundled target."
+            f"\\${cash_needed:,.0f} cash to reach your {years_to_bundle}-year bundled target."
         )
 
     return DAFBundlingAnalysis(
