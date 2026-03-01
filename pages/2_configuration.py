@@ -1072,7 +1072,7 @@ with tab6:
     # Display accounts in a data editor
     accounts_df = pd.DataFrame(st.session_state['accounts_list'])
     if accounts_df.empty:
-        accounts_df = pd.DataFrame(columns=['account_name', 'account_type'])
+        accounts_df = pd.DataFrame(columns=pd.Index(['account_name', 'account_type']))
     
     col_acc1, col_acc2, col_acc3 = st.columns([2, 1, 1])
     
@@ -1128,13 +1128,13 @@ with tab6:
                 st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
             except Exception as e:
                 st.error(f"Error loading portfolio data: {e}")
-                st.session_state['portfolio_df'] = pd.DataFrame(columns=[
+                st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
                     'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
-                ])
+                ]))
         else:
-            st.session_state['portfolio_df'] = pd.DataFrame(columns=[
+            st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
                 'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
-            ])
+            ]))
     
     # Month/Year selector for loading prior month data
     _now = datetime.now()
@@ -1220,9 +1220,9 @@ with tab6:
 
     with col4:
         if st.button("🗑️ Clear All", use_container_width=True):
-            st.session_state['portfolio_df'] = pd.DataFrame(columns=[
+            st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
                 'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
-            ])
+            ]))
             st.rerun()
 
     # File management buttons — row 2 (ticker validation & backup/restore)
@@ -1728,7 +1728,7 @@ with tab7:
 
     re_df = pd.DataFrame(st.session_state['real_estate_list'])
     if re_df.empty:
-        re_df = pd.DataFrame(columns=['property_name', 'address', 'purchase_price'])
+        re_df = pd.DataFrame(columns=pd.Index(['property_name', 'address', 'purchase_price']))
 
     # Ensure required columns exist
     for _col in ['property_name', 'address', 'purchase_price']:
@@ -1809,14 +1809,14 @@ with tab7:
     if not edited_re_df.empty:
         st.markdown("**Delete a property:**")
         _del_cols = st.columns(min(len(edited_re_df), 4))
-        for _idx, _row in edited_re_df.iterrows():
-            _prop_label = str(_row.get('property_name', f'Row {_idx + 1}')) or f'Row {_idx + 1}'
-            _col_idx = int(_idx) % 4
+        for _enum_idx, (_, _row) in enumerate(edited_re_df.iterrows()):
+            _prop_label = str(_row.get('property_name', f'Row {_enum_idx + 1}')) or f'Row {_enum_idx + 1}'
+            _col_idx = _enum_idx % 4
             with _del_cols[_col_idx]:
-                if st.button(f"🗑️ {_prop_label}", key=f"del_re_{_idx}", help=f"Delete '{_prop_label}'"):
+                if st.button(f"🗑️ {_prop_label}", key=f"del_re_{_enum_idx}", help=f"Delete '{_prop_label}'"):
                     _updated = [
                         r for i, r in enumerate(st.session_state['real_estate_list'])
-                        if i != _idx
+                        if i != _enum_idx
                     ]
                     st.session_state['real_estate_list'] = _updated
                     st.rerun()
@@ -1824,7 +1824,8 @@ with tab7:
     # Summary metrics
     if not edited_re_df.empty and 'purchase_price' in edited_re_df.columns:
         _re_prices = pd.to_numeric(edited_re_df['purchase_price'], errors='coerce')
-        total_re_value = float(_re_prices.fillna(0).sum())
+        _re_series: pd.Series = pd.Series(_re_prices)  # type: ignore[assignment]
+        total_re_value = float(_re_series.fillna(0).sum())
         st.markdown("---")
         re_m1, re_m2 = st.columns(2)
         with re_m1:

@@ -7,7 +7,7 @@ import pandas as pd
 import yfinance as yf
 #import streamlit as st
 from datetime import datetime
-from typing import Tuple, Optional
+from typing import Tuple, Optional, cast
 import logging
 import os
 import shutil
@@ -106,7 +106,7 @@ def validate_portfolio_entry(row: pd.Series) -> Tuple[bool, str]:
     # Check required fields
     required_fields = ['month', 'year', 'account_name', 'account_type', 'symbol', 'qty', 'purchase_price']
     for field in required_fields:
-        if field not in row or pd.isna(row[field]) or str(row[field]).strip() == '':
+        if field not in row or bool(pd.isna(row[field])) or str(row[field]).strip() == '':
             errors.append(f"Missing required field: {field}")
     
     if errors:
@@ -207,7 +207,7 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
             return False, f"Missing required columns: {missing_cols}"
         
         # Select only required columns in correct order
-        new_data = new_data[required_columns].copy()
+        new_data = cast(pd.DataFrame, new_data[required_columns].copy())
         
         # Convert numeric columns to appropriate types
         new_data['month'] = new_data['month'].astype(int)
@@ -233,7 +233,7 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
                 existing_data_filtered = existing_data[mask].copy()
                 
                 # Combine filtered existing data with new data
-                combined_data = pd.concat([existing_data_filtered, new_data], ignore_index=True)
+                combined_data: pd.DataFrame = cast(pd.DataFrame, pd.concat([existing_data_filtered, new_data], ignore_index=True))
                 
                 # Sort by year, month, account_name, symbol
                 combined_data = combined_data.sort_values(['year', 'month', 'account_name', 'symbol'])
@@ -335,7 +335,7 @@ def load_previous_month_data(month: int, year: int) -> pd.DataFrame:
             prev_data['year'] = year
             
             logger.info(f"Loaded {len(prev_data)} entries from {prev_month}/{prev_year}")
-            return prev_data
+            return cast(pd.DataFrame, prev_data)
         else:
             logger.info(f"No data found for {prev_month}/{prev_year}, creating empty template")
             return create_empty_entry_template(month, year)
@@ -383,10 +383,10 @@ def create_blank_portfolio_file() -> Tuple[bool, str]:
     """
     try:
         # Create DataFrame with just headers
-        blank_df = pd.DataFrame(columns=[
+        blank_df = pd.DataFrame(columns=pd.Index([
             'month', 'year', 'account_name', 'account_type',
             'symbol', 'name', 'sector', 'qty', 'purchase_price'
-        ])
+        ]))
         
         # Save to file
         blank_df.to_csv(PORTFOLIO_TRUTH_FILE, index=False)

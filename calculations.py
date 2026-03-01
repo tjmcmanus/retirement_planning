@@ -8,6 +8,7 @@ import logging
 import warnings
 from datetime import date
 from datetime import datetime
+from typing import Literal
 from load_data import get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, load_rmd_data
 
 # Configure logging
@@ -54,24 +55,23 @@ def calc_roth_conversions_tax(
     if conversion <= 0:
         return 0.0
 
-    current_bracket_space = max(0.0, uppermax - agi)
-    headroom_bracket_space = max(0.0, headroom_max - uppermax)
-    total_bracket_space = current_bracket_space + headroom_bracket_space
+    current_space  = max(0.0, uppermax - agi)           # room left in current bracket
+    headroom_space = max(0.0, headroom_max - uppermax)  # width of next bracket
 
-    logger.debug(
-        f"Bracket spaces: current={current_bracket_space:,.2f}, headroom={headroom_bracket_space:,.2f}"
-    )
-
-    if conversion > total_bracket_space:
-        excess = conversion - total_bracket_space
+    if conversion > current_space + headroom_space:
         raise ValueError(
-            f"Conversion exceeds both current bracket and headroom bracket by {excess:,.2f}. "
+            f"Conversion exceeds both current bracket and headroom bracket by "
+            f"{conversion - current_space - headroom_space:,.2f}. "
             "No third-rate bracket is defined to handle this overflow."
         )
 
-    current_portion = min(conversion, current_bracket_space)
-    headroom_portion = max(0.0, conversion - current_bracket_space)
-    conversion_tax = (current_portion * maxrate) + (headroom_portion * headroom_rate)
+    logger.debug(
+        f"Bracket spaces: current={current_space:,.2f}, headroom={headroom_space:,.2f}"
+    )
+
+    current_portion  = min(conversion, current_space)
+    headroom_portion = max(0.0, conversion - current_space)
+    conversion_tax   = (current_portion * maxrate) + (headroom_portion * headroom_rate)
 
     logger.debug(
         f"Conversion tax: current_portion={current_portion:,.2f} @ {maxrate:.0%}, "
@@ -160,13 +160,21 @@ def calc_agi(joint_gross_income, interest, stddectdf, daf):
 _DAF_CASH_LIMIT_PCT: float = 0.60
 _DAF_SECURITIES_LIMIT_PCT: float = 0.30
 
+# Lookup table: contribution_type → (AGI limit fraction, human-readable label)
+# Add new contribution types here without touching calc_daf_value.
+_CONTRIBUTION_LIMITS: dict[str, tuple[float, str]] = {
+    "cash":       (_DAF_CASH_LIMIT_PCT,       "60% (cash)"),
+    "securities": (_DAF_SECURITIES_LIMIT_PCT, "30% (appreciated securities)"),
+}
+
 
 def calc_daf_value(
     joint_gross_income: float,
     interest: float,
     daf1: float,
-    maxdaf: str,
-    contribution_type: str = "cash",
+    maxdaf: Literal["Y", "N"] | str,
+    contribution_type: Literal["cash", "securities"] = "cash",
+    stddectdf: pd.DataFrame | None = None,
 ) -> float:
     """
     Calculate the deductible Donor Advised Fund (DAF) contribution amount.
@@ -188,47 +196,64 @@ def calc_daf_value(
                             anything else → use daf1 if within the limit.
         contribution_type:  "cash" (default) or "securities".  Determines
                             which AGI limit applies (60% vs 30%).
+        stddectdf:          Standard deduction DataFrame (from get_std_deduction).
+                            Used to compute AGI = gross_income - std_deduction
+                            per IRC §170.  If None or empty, gross income is used
+                            as a conservative fallback.
 
     Returns:
         float: Deductible DAF contribution amount (AGI-limited).
+
+    Raises:
+        ValueError: If contribution_type is not a recognised key in
+                    _CONTRIBUTION_LIMITS.
     """
-    total_income = joint_gross_income + interest
+    # Validate contribution type early — raises ValueError for unsupported values
+    # so misconfiguration is caught immediately rather than silently using the
+    # wrong AGI limit.
+    if contribution_type not in _CONTRIBUTION_LIMITS:
+        raise ValueError(
+            f"Unsupported contribution_type {contribution_type!r}. "
+            f"Expected one of: {list(_CONTRIBUTION_LIMITS)}"
+        )
+    limit_pct, limit_label = _CONTRIBUTION_LIMITS[contribution_type]
 
-    # Select the correct AGI limit based on contribution type
-    if contribution_type == "securities":
-        limit_pct = _DAF_SECURITIES_LIMIT_PCT
-        limit_label = "30% (appreciated securities)"
-    else:
-        limit_pct = _DAF_CASH_LIMIT_PCT
-        limit_label = "60% (cash)"
+    # Guard clause: no DAF requested — short-circuit before any arithmetic.
+    if maxdaf == "N":
+        logger.debug("DAF: None (maxdaf='N')")
+        return 0.0
 
-    max_daf_limit = total_income * limit_pct
+    # Compute the AGI-based ceiling per IRC §170: the deduction limit is a
+    # percentage of AGI, not gross income.  AGI = gross_income - std_deduction.
+    total_income  = joint_gross_income + interest
+    std_deduction = calculate_std_deduction(total_income, stddectdf) if stddectdf is not None else 0.0
+    agi           = total_income - std_deduction
+    max_daf_limit = agi * limit_pct
 
     logger.debug(
         f"calc_daf_value: gross_income={joint_gross_income:,.2f}, "
-        f"interest={interest:,.2f}, maxdaf={maxdaf}, "
+        f"interest={interest:,.2f}, std_deduction={std_deduction:,.2f}, "
+        f"agi={agi:,.2f}, maxdaf={maxdaf}, "
         f"type={contribution_type}, limit={limit_label}, "
         f"max_limit=${max_daf_limit:,.2f}"
     )
 
-    # Determine DAF amount based on maxdaf flag
+    # Maximum allowable contribution.
     if maxdaf == "Y":
-        daf = max_daf_limit
-        logger.debug(f"DAF: Maximum ({limit_label}) = ${daf:,.2f}")
-    elif maxdaf == "N":
-        daf = 0.0
-        logger.debug("DAF: None (maxdaf='N')")
-    elif 0 <= daf1 <= max_daf_limit:
-        daf = daf1
-        logger.debug(f"DAF: Custom amount = ${daf:,.2f}")
-    else:
-        daf = 0.0
-        logger.warning(
-            f"DAF: Requested amount (daf1={daf1:,.2f}) exceeds {limit_label} "
-            f"limit ${max_daf_limit:,.2f} or is negative — defaulting to 0"
-        )
+        logger.debug(f"DAF: Maximum ({limit_label}) = ${max_daf_limit:,.2f}")
+        return max_daf_limit
 
-    return daf
+    # Custom amount: use daf1 when it is non-negative and within the AGI limit.
+    if 0 <= daf1 <= max_daf_limit:
+        logger.debug(f"DAF: Custom amount = ${daf1:,.2f}")
+        return daf1
+
+    # daf1 is negative or exceeds the AGI limit — default to 0.
+    logger.warning(
+        f"DAF: Requested amount (daf1={daf1:,.2f}) exceeds {limit_label} "
+        f"limit ${max_daf_limit:,.2f} or is negative — defaulting to 0"
+    )
+    return 0.0
     
 def getUpperIncomeRate(taxrate, year_tax_brackets_df):
     """
@@ -546,32 +571,26 @@ def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> tu
             - max_rate: Highest tax rate that applies to this income
             - upper_max: Upper limit of the highest bracket that applies
     """
-    if income < 0:
-        logger.warning(f"calculate_taxable_income: negative income={income} received; returning zero tax.")
-        return 0.0, 0.0, 0.0
-    if income == 0:
+    if income <= 0:
+        if income < 0:
+            logger.warning(f"calculate_taxable_income: negative income={income} received; returning zero tax.")
         return 0.0, 0.0, 0.0
 
     logger.debug(f"calculate_taxable_income: income=${income:,.2f}")
-
-    lower = tax_brackets_df['lower'].to_numpy()
-    upper = tax_brackets_df['upper'].to_numpy()
-    rate  = tax_brackets_df['rate'].to_numpy()
 
     # Vectorized bracket calculation: clip income above each bracket's floor to the
     # bracket width. Brackets are non-overlapping and cumulative (each bracket's
     # lower == previous bracket's upper), so this gives the correct marginal amount
     # without double-counting lower-bracket income.
-    taxable_in_bracket = np.clip(income - lower, 0.0, upper - lower)
-    bracket_tax        = np.floor(taxable_in_bracket * rate)
+    taxable_in_bracket = (income - tax_brackets_df['lower']).clip(0.0, tax_brackets_df['upper'] - tax_brackets_df['lower'])
+    bracket_tax        = np.floor(taxable_in_bracket * tax_brackets_df['rate'])
     total_tax          = float(bracket_tax.sum())
 
     # Highest bracket that income reaches (taxable_in_bracket > 0)
     active = taxable_in_bracket > 0
     if active.any():
-        last      = int(np.where(active)[0][-1])
-        max_rate  = float(rate[last])
-        upper_max = float(upper[last])
+        max_rate  = float(tax_brackets_df.loc[active, 'rate'].iloc[-1])
+        upper_max = float(tax_brackets_df.loc[active, 'upper'].iloc[-1])
     else:
         max_rate  = 0.0
         upper_max = 0.0

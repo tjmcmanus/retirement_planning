@@ -98,7 +98,7 @@ def get_current_dividend(symbol, month=None, year=None):
     dividends_data = ticker.dividends
     # Find the latest dividend payment date (ex-date) and amount
     if not dividends_data.empty:
-       latest_dividend_date = dividends_data.index[-1].strftime('%D')
+       latest_dividend_date = pd.DatetimeIndex(dividends_data.index)[-1].strftime('%m/%d/%Y')
        latest_dividend_amount = dividends_data.iloc[-1]* get_qty(symbol, month=month, year=year)
        annual_dividend_count = get_dividend_frequency(symbol)
        annual_dividend_amount = latest_dividend_amount * annual_dividend_count
@@ -184,11 +184,11 @@ def getPortfolioData(month=None, year=None):
             portdf = get_portfolio_truth_by_month(effective_month, effective_year)
 
     if portdf.empty:
-        return pd.DataFrame(columns=['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date'])
+        return pd.DataFrame(columns=pd.Index(['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date']))
 
     # Select the required columns, now including account_name for unique identification
     selected_columns = ['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date']
-    df_selected = portdf[selected_columns]
+    df_selected = pd.DataFrame(portdf[selected_columns])
 
     # Remove duplicates based on account_name and symbol combination
     df_selected = df_selected.drop_duplicates(subset=['account_name', 'symbol'], keep='first')
@@ -244,6 +244,33 @@ PORTFOLIO_DISPLAY_COLUMNS = [
     'Dividend date', 'Dividend Amount', 'annual dividend amount', 'dividend yield',
 ]
 
+def _build_totals_row(portdf: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute portfolio-wide totals and return them as a single-row DataFrame
+    aligned to the same columns as *portdf*.
+
+    Numeric columns are summed; all other columns are left as NaN so that
+    pandas can correctly infer dtypes during the subsequent concat (avoids
+    FutureWarning about empty/all-NA entries).
+    """
+    numeric_cols = ['Current value', 'Cost Basis', 'Net Return', 'annual dividend amount']
+    sums = portdf[numeric_cols].sum()
+    total_yield = (
+        sums['annual dividend amount'] / sums['Cost Basis']
+        if sums['Cost Basis'] > 0 else 0
+    )
+    totals = pd.Series({
+        'Account':                'Portfolio Totals',
+        'Current value':          sums['Current value'],
+        'Cost Basis':             sums['Cost Basis'],
+        'Net Return':             sums['Net Return'],
+        'annual dividend amount': sums['annual dividend amount'],
+        'dividend yield':         total_yield,
+    })
+    # Align to the full column set; missing columns become NaN automatically.
+    return totals.reindex(portdf.columns).to_frame().T
+
+
 @st.cache_data()
 def build_portfolio_display(month=None, year=None):
     """
@@ -257,88 +284,52 @@ def build_portfolio_display(month=None, year=None):
     # empty DataFrame that still carries the expected column schema so that
     # callers can safely reference columns like 'Account' without a KeyError.
     if portfolio_data.empty:
-        return pd.DataFrame(columns=PORTFOLIO_DISPLAY_COLUMNS)
-
+        return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
     # Pre-fetch per-symbol data once to avoid redundant external calls for
     # symbols that appear across multiple accounts.
     unique_symbols = portfolio_data['symbol'].unique()
-    price_cache    = {s: get_current_price(s)                            for s in unique_symbols}
-    sector_cache   = {s: get_sector(s, month=month, year=year)           for s in unique_symbols}
-    name_cache     = {s: get_ticker_name(s, month=month, year=year)      for s in unique_symbols}
-    dividend_cache = {s: get_current_dividend(s, month=month, year=year) for s in unique_symbols}
+    price_cache  = {s: get_current_price(s)                            for s in unique_symbols}
+    sector_cache = {s: get_sector(s, month=month, year=year)           for s in unique_symbols}
+    name_cache   = {s: get_ticker_name(s, month=month, year=year)      for s in unique_symbols}
+    div_cache    = {s: get_current_dividend(s, month=month, year=year) for s in unique_symbols}
 
-    # Accumulate rows as dicts; build the DataFrame once to avoid O(n²)
-    # resize overhead from repeated in-place appends.
-    rows = []
-    for _, row in portfolio_data.iterrows():
-        account_name   = row['account_name']
-        symbol         = row['symbol']
-        tax_type       = row['account_type']
-        qty            = row['qty']
-        purchase_price = row['purchase_price']
+    # Build a flat per-symbol lookup DataFrame (Suggestion 3).
+    # Unpacking the dividend tuple here keeps the downstream merge + assign clean.
+    lookup = pd.DataFrame({
+        'symbol':                 unique_symbols,
+        'Price':                  [price_cache[s]     for s in unique_symbols],
+        'Sector':                 [sector_cache[s]    for s in unique_symbols],
+        'Name':                   [name_cache[s]      for s in unique_symbols],
+        'Dividend date':          [div_cache[s][0]    for s in unique_symbols],
+        'Dividend Amount':        [div_cache[s][1]    for s in unique_symbols],
+        'annual dividend amount': [div_cache[s][2]    for s in unique_symbols],
+    })
 
-        display_ticker = "Cash" if symbol == "MF:CASH" else symbol
+    # Merge lookup data with portfolio rows, then derive all computed columns
+    # in a single vectorized pass — no per-row Python loop (Suggestion 1).
+    # Direct bracket assignment is used for column names that contain spaces,
+    # since .assign() only accepts valid Python identifiers as keyword args.
+    merged = portfolio_data.merge(lookup, on='symbol', how='left')
 
-        pricef                                    = price_cache[symbol]
-        sector                                    = sector_cache[symbol]
-        name                                      = name_cache[symbol]
-        divy_date, divy_amtf, annual_divy_amountf = dividend_cache[symbol]
+    merged['Account']                = merged['account_name']
+    merged['Tax Type']               = merged['account_type']
+    merged['Ticker']                 = merged['symbol'].where(merged['symbol'] != 'MF:CASH', 'Cash')
+    merged['Quantity']               = merged['qty'].map(format_quantity)
+    merged['Current value']          = merged['qty'] * merged['Price']
+    merged['Cost Basis']             = merged['qty'] * merged['purchase_price']
+    merged['Net Return']             = merged['Current value'] - merged['Cost Basis']
+    merged['dividend yield']         = (
+        merged['annual dividend amount']
+        .div(merged['Cost Basis'])
+        .where(merged['Cost Basis'] > 0, other=0)
+    )
 
-        current_value = qty * pricef
-        cost_basis    = qty * purchase_price
-        net_return    = current_value - cost_basis
-        divy_yield    = annual_divy_amountf / cost_basis if cost_basis > 0 else 0
+    portdf: pd.DataFrame = pd.DataFrame(merged[PORTFOLIO_DISPLAY_COLUMNS])
 
-        rows.append({
-            'Account':                account_name,
-            'Tax Type':               tax_type,
-            'Ticker':                 display_ticker,
-            'Name':                   name,
-            'Sector':                 sector,
-            'Quantity':               format_quantity(qty),
-            'Price':                  pricef,
-            'Current value':          current_value,
-            'Cost Basis':             cost_basis,
-            'Net Return':             net_return,
-            'Dividend date':          divy_date,
-            'Dividend Amount':        divy_amtf,
-            'annual dividend amount': annual_divy_amountf,
-            'dividend yield':         divy_yield,
-        })
-
-    portdf = pd.DataFrame(rows)
-
-    # Append totals row at the bottom.
+    # Append totals row at the bottom (Suggestion 2 + 4).
     if not portdf.empty:
-        total_current_value   = portdf['Current value'].sum()
-        total_cost_basis      = portdf['Cost Basis'].sum()
-        total_net_return      = portdf['Net Return'].sum()
-        total_annual_dividend = portdf['annual dividend amount'].sum()
-        total_dividend_yield  = total_annual_dividend / total_cost_basis if total_cost_basis > 0 else 0
-
-        totals_row = pd.DataFrame([{
-            'Account':                'Portfolio Totals',
-            'Tax Type':               '',
-            'Ticker':                 '',
-            'Name':                   '',
-            'Sector':                 '',
-            'Quantity':               '',
-            'Price':                  None,
-            'Current value':          total_current_value,
-            'Cost Basis':             total_cost_basis,
-            'Net Return':             total_net_return,
-            'Dividend date':          '',
-            'Dividend Amount':        None,
-            'annual dividend amount': total_annual_dividend,
-            'dividend yield':         total_dividend_yield,
-        }])
-
-        # Replace empty strings with NaN in the totals row so that pandas can
-        # correctly infer result dtypes during concat (avoids FutureWarning about
-        # empty/all-NA entries changing dtype inference in a future version).
-        totals_row = totals_row.replace('', pd.NA)
-        portdf = pd.concat([portdf, totals_row], ignore_index=True)
+        portdf = pd.DataFrame(pd.concat([portdf, _build_totals_row(portdf)], ignore_index=True))
 
     return portdf
 

@@ -329,31 +329,44 @@ def build_harvesting_analysis(month: int, year: int) -> pd.DataFrame:
 
     today = datetime.date.today()
 
-    # ── Cast numeric columns once; bind locals for reuse below ─────────────
+    # ── Cast numeric columns once ───────────────────────────────────────────
     df[["qty", "purchase_price"]] = df[["qty", "purchase_price"]].astype(float)
-    qty = cast(pd.Series, df["qty"])
-    px  = cast(pd.Series, df["purchase_price"])
 
     # ── Batch price fetch + derived valuation columns ───────────────────────
-    _enrich_with_prices(df, qty, px)
-
-    # ── Vectorized date arithmetic ──────────────────────────────────────────
-    fallback_date = datetime.date(year, month, 1)
-    purchase_ts = pd.to_datetime(df["purchase_date"], errors="coerce").fillna(
-        pd.Timestamp(fallback_date)
+    _enrich_with_prices(
+        df,
+        cast(pd.Series, df["qty"]),
+        cast(pd.Series, df["purchase_price"]),
     )
+
+    # ── Vectorized date arithmetic — drop rows with unparseable dates ───────
+    purchase_ts = pd.to_datetime(df["purchase_date"], errors="coerce")
+    invalid_mask = purchase_ts.isna()
+    if invalid_mask.any():
+        bad_symbols = df.loc[invalid_mask, "symbol"].tolist()
+        logger.warning(
+            "Dropping %d row(s) with unparseable purchase_date: %s",
+            len(bad_symbols),
+            bad_symbols,
+        )
+        valid = ~invalid_mask
+        df = df.loc[valid]
+        purchase_ts = purchase_ts.loc[valid]
+
     df["Days Held"] = (pd.Timestamp(today) - purchase_ts).dt.days
     df["Gain Type"] = np.where(df["Days Held"] > LONG_TERM_DAYS, "Long-Term", "Short-Term")
 
     # ── Build output DataFrame with canonical column names ──────────────────
+    # Pre-compute replacement strings once per unique symbol (not once per row)
+    repl_map = {sym: _format_replacements(sym) for sym in df["symbol"].unique()}
     df = df.assign(
-        Account            = df["account_name"].astype(str),
-        Symbol             = df["symbol"].astype(str),
-        Name               = df["name"].fillna(df["symbol"]).astype(str),
-        Sector             = df["sector"].fillna("").astype(str),
-        Qty                = qty,
-        Replacements       = df["symbol"].map(_format_replacements),  # type: ignore[arg-type]
-        **{"Purchase Price": px},
+        Account        = df["account_name"].astype(str),
+        Symbol         = df["symbol"].astype(str),
+        Name           = df["name"].fillna(df["symbol"]).astype(str),
+        Sector         = df["sector"].fillna("").astype(str),
+        Qty            = df["qty"],
+        Replacements   = df["symbol"].map(repl_map),  # type: ignore[arg-type]
+        **{"Purchase Price": df["purchase_price"]},
     )
 
     output_columns = [
@@ -363,7 +376,8 @@ def build_harvesting_analysis(month: int, year: int) -> pd.DataFrame:
         "Days Held", "Gain Type", "Replacements",
     ]
     # Sort: losses first (most negative), then gains (most positive)
-    return df[output_columns].sort_values("Unrealized G/L", ascending=True).reset_index(drop=True)  # type: ignore[return-value]
+    df.sort_values("Unrealized G/L", ascending=True, inplace=True)  # type: ignore[call-overload]
+    return df[output_columns].reset_index(drop=True)  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +544,140 @@ def _classify_row(
 
 
 # ---------------------------------------------------------------------------
+# Harvest opportunity classifier — vectorized helpers
+# ---------------------------------------------------------------------------
+
+def _validate_classify_dataframe(
+    gl: pd.Series,
+    gain_type: pd.Series,
+    days_held: pd.Series,
+    ltcg_rate: float,
+) -> None:
+    """
+    Vectorized counterpart of _validate_classify_inputs for DataFrame paths.
+
+    Raises ValueError for any out-of-contract column values so that
+    classify_harvest_opportunities() can delegate all validation here and
+    remain a clean pipeline.
+
+    Raises:
+        ValueError: if any days_held < 0, any gain_type is unrecognised, or
+                    ltcg_rate is not one of 0.0 / 0.15 / 0.20.
+    """
+    if (days_held < 0).any():
+        bad = days_held[days_held < 0].tolist()
+        raise ValueError(f"days_held must be >= 0; got negative values: {bad}")
+    unknown_types = set(gain_type.unique()) - _VALID_GAIN_TYPES
+    if unknown_types:
+        raise ValueError(
+            f"Unknown gain_type values {sorted(unknown_types)}; "
+            f"expected one of {sorted(_VALID_GAIN_TYPES)}"
+        )
+    if ltcg_rate not in _VALID_LTCG_RATES:
+        raise ValueError(
+            f"Unexpected ltcg_rate {ltcg_rate}; expected one of {sorted(_VALID_LTCG_RATES)}"
+        )
+
+
+def _build_harvest_flags(
+    gl: pd.Series,
+    gain_type: pd.Series,
+    loss_threshold: float,
+    gain_threshold: float,
+    ltcg_rate: float,
+) -> dict[str, np.ndarray]:
+    """
+    Return an ordered dict of named boolean arrays covering every harvest category.
+
+    Both the Recommendation and Action Detail np.select calls consume
+    ``list(flags.values())`` as their conditions argument, ensuring the two
+    calls are always in sync — adding or reordering a category requires a
+    single edit here rather than two separate edits.
+
+    Keys (in priority order, matching np.select evaluation):
+        harvest_loss  — unrealized loss at or beyond loss_threshold
+        gain_lt_0pct  — large LT gain, 0% LTCG rate
+        gain_lt_15pct — large LT gain, 15% LTCG rate
+        gain_lt_20pct — large LT gain, 20% LTCG rate (fallthrough)
+        gain_st       — large ST gain (ordinary-income rate)
+        small_loss    — small loss below harvest threshold
+    """
+    is_harvest_loss = (gl <= loss_threshold).to_numpy()
+    is_large_gain   = (gl >= gain_threshold).to_numpy()
+    is_lt           = (gain_type == "Long-Term").to_numpy()
+    is_small_loss   = (gl < 0).to_numpy() & ~is_harvest_loss
+    return {
+        "harvest_loss":  is_harvest_loss,
+        "gain_lt_0pct":  is_large_gain & is_lt & (ltcg_rate == 0.0),
+        "gain_lt_15pct": is_large_gain & is_lt & (ltcg_rate == 0.15),
+        "gain_lt_20pct": is_large_gain & is_lt,   # 0.20 fallthrough
+        "gain_st":       is_large_gain & ~is_lt,  # Short-Term gain
+        "small_loss":    is_small_loss,
+    }
+
+
+# Recommendation label for each flag key — order must match _build_harvest_flags.
+_REC_LABELS: dict[str, str] = {
+    "harvest_loss":  "🔴 Harvest Loss",
+    "gain_lt_0pct":  "🟢 Harvest Gain (0% LTCG)",
+    "gain_lt_15pct": "🟡 Monitor (15% LTCG)",
+    "gain_lt_20pct": "🔴 Hold (20% LTCG)",
+    "gain_st":       "🟡 Monitor (ST — Ordinary Rate)",
+    "small_loss":    "⚪ Small Loss — Monitor",
+}
+
+
+def _build_detail_series(
+    flags: dict[str, np.ndarray],
+    gl: pd.Series,
+    days_held: pd.Series,
+    headroom_to_zero: float,
+) -> np.ndarray:
+    """
+    Return a numpy array of Action Detail strings, one per DataFrame row.
+
+    Uses the module-level template constants (_DETAIL_*) via .format() so
+    that wording changes need only be made in one place.  The ``flags`` dict
+    produced by _build_harvest_flags() is consumed directly, keeping the
+    conditions list in sync with the Recommendation np.select call.
+
+    Args:
+        flags:           Ordered dict from _build_harvest_flags().
+        gl:              Unrealized G/L Series (float).
+        days_held:       Days Held Series (int).
+        headroom_to_zero: Scalar dollars remaining in the 0% LTCG bracket.
+    """
+    # days_to_lt is only used in the Short-Term branch; computed here so it
+    # lives alongside the data it describes rather than floating in the caller.
+    days_to_lt = (LONG_TERM_DAYS - days_held).clip(lower=0)
+
+    return np.select(
+        list(flags.values()),
+        [
+            _DETAIL_HARVEST_LOSS.format(
+                loss=gl.abs().map(_fmt_money),
+                max_offset=_fmt_money(MAX_ORDINARY_LOSS_OFFSET),
+            ),
+            _DETAIL_HARVEST_GAIN_0.format(
+                gl=gl.map(_fmt_money),
+                headroom=_fmt_money(headroom_to_zero),
+            ),
+            _DETAIL_MONITOR_15.format(
+                gl=gl.map(_fmt_money),
+                headroom=_fmt_money(headroom_to_zero),
+            ),
+            _DETAIL_HOLD_20.format(gl=gl.map(_fmt_money)),
+            _DETAIL_MONITOR_ST.format(
+                gl=gl.map(_fmt_money),
+                days_to_lt=days_to_lt.astype(str),
+            ),
+            _DETAIL_SMALL_LOSS.format(loss=gl.abs().map(_fmt_money)),
+        ],
+        default=_DETAIL_SMALL_GAIN.format(gl=gl.map(_fmt_money)),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Harvest opportunity classifier
 # ---------------------------------------------------------------------------
 
@@ -567,90 +715,15 @@ def classify_harvest_opportunities(
     zero_threshold   = get_ltcg_zero_threshold(year)
     headroom_to_zero = max(0.0, zero_threshold - estimated_agi)
 
-    # ── Up-front column-level validation (replaces per-row guards in _classify_row) ──
-    gl        = analysis_df["Unrealized G/L"].astype(float)
-    gain_type = analysis_df["Gain Type"].astype(str)
-    days_held = analysis_df["Days Held"].astype(int)
+    gl        = cast(pd.Series, analysis_df["Unrealized G/L"].astype(float))
+    gain_type = cast(pd.Series, analysis_df["Gain Type"].astype(str))
+    days_held = cast(pd.Series, analysis_df["Days Held"].astype(int))
 
-    if (days_held < 0).any():
-        bad = days_held[days_held < 0].tolist()
-        raise ValueError(f"days_held must be >= 0; got negative values: {bad}")
-    unknown_types = set(gain_type.unique()) - _VALID_GAIN_TYPES
-    if unknown_types:
-        raise ValueError(
-            f"Unknown gain_type values {sorted(unknown_types)}; "
-            f"expected one of {sorted(_VALID_GAIN_TYPES)}"
-        )
-    if ltcg_rate not in _VALID_LTCG_RATES:
-        raise ValueError(
-            f"Unexpected ltcg_rate {ltcg_rate}; expected one of {sorted(_VALID_LTCG_RATES)}"
-        )
+    _validate_classify_dataframe(gl, gain_type, days_held, ltcg_rate)
 
-    # ── Vectorized Recommendation column via np.select ───────────────────────
-    is_harvest_loss = gl <= loss_threshold
-    is_large_gain   = gl >= gain_threshold
-    is_lt           = gain_type == "Long-Term"
-    is_small_loss   = (gl < 0) & ~is_harvest_loss
-
-    rec = np.select(
-        [
-            is_harvest_loss,
-            is_large_gain & is_lt & (ltcg_rate == 0.0),
-            is_large_gain & is_lt & (ltcg_rate == 0.15),
-            is_large_gain & is_lt,          # ltcg_rate == 0.20 fallthrough
-            is_large_gain & ~is_lt,         # Short-Term gain
-            is_small_loss,
-        ],
-        [
-            "🔴 Harvest Loss",
-            "🟢 Harvest Gain (0% LTCG)",
-            "🟡 Monitor (15% LTCG)",
-            "🔴 Hold (20% LTCG)",
-            "🟡 Monitor (ST — Ordinary Rate)",
-            "⚪ Small Loss — Monitor",
-        ],
-        default="⚪ Small Gain — Hold",
-    )
-
-    # ── Action Detail: vectorized string construction via np.select ──────────
-    # Reuses the boolean masks already computed for `rec`; scalar values
-    # (ltcg_rate, headroom_to_zero) are broadcast automatically by numpy.
-    days_to_lt = (LONG_TERM_DAYS - days_held).clip(lower=0)
-
-    detail = np.select(
-        [
-            is_harvest_loss,
-            is_large_gain & is_lt & (ltcg_rate == 0.0),
-            is_large_gain & is_lt & (ltcg_rate == 0.15),
-            is_large_gain & is_lt,          # ltcg_rate == 0.20 fallthrough
-            is_large_gain & ~is_lt,         # Short-Term gain
-            is_small_loss,
-        ],
-        [
-            "Sell to realize " + gl.abs().map(_fmt_money) + " loss. "
-            "Replace with wash-sale-safe alternative within same day. "
-            f"Loss offsets gains or up to {_fmt_money(MAX_ORDINARY_LOSS_OFFSET)} of ordinary income.",
-
-            "Sell to realize " + gl.map(_fmt_money) + " LT gain at 0% rate. "
-            "Repurchase same security to reset cost basis higher. "
-            f"Remaining 0% headroom: {_fmt_money(headroom_to_zero)}.",
-
-            "LT gain of " + gl.map(_fmt_money) + " would be taxed at 15%. "
-            "Consider deferring or offsetting with harvested losses. "
-            f"Need {_fmt_money(headroom_to_zero)} income reduction for 0% rate.",
-
-            "LT gain of " + gl.map(_fmt_money) + " would be taxed at 20%. "
-            "Defer realization or offset with harvested losses.",
-
-            "ST gain of " + gl.map(_fmt_money) + " taxed as ordinary income. "
-            "Wait for long-term treatment (hold "
-            + days_to_lt.astype(str) + " more days).",
-
-            "Loss of " + gl.abs().map(_fmt_money) + " is below harvest threshold. "
-            "Monitor for larger decline.",
-        ],
-        default="Gain of " + gl.map(_fmt_money) + " is below harvest threshold. Hold position.",
-    )
+    flags  = _build_harvest_flags(gl, gain_type, loss_threshold, gain_threshold, ltcg_rate)
+    rec    = np.select(list(flags.values()), list(_REC_LABELS.values()), default="⚪ Small Gain — Hold")
+    detail = _build_detail_series(flags, gl, days_held, headroom_to_zero)
 
     return analysis_df.assign(**{
         "Recommendation": rec,
@@ -777,12 +850,22 @@ def compute_net_tax_impact(
     """
     Estimate the tax impact of executing all recommended harvesting actions.
 
+    Args:
+        classified_df: DataFrame produced by ``classify_harvest_opportunities``.
+            Must contain an ``"Unrealized G/L"`` column of floats (negative =
+            loss, positive = gain).
+        estimated_agi: Adjusted gross income used to look up the LTCG bracket.
+        year: Tax year for bracket lookup.
+        marginal_ordinary_rate: Marginal ordinary-income tax rate applied to
+            the ordinary-income offset (default 22%).
+
     Assumptions:
       - Harvested losses first offset harvested gains (netting)
       - Remaining net loss offsets up to MAX_ORDINARY_LOSS_OFFSET of ordinary income
       - Remaining net gain taxed at applicable LTCG rate
 
-    Returns a NetTaxImpact dataclass with estimated tax savings / liability.
+    Returns:
+        NetTaxImpact dataclass with estimated tax savings / liability.
     """
     ltcg_rate = get_ltcg_rate_for_income(estimated_agi, year)
 
@@ -799,13 +882,13 @@ def compute_net_tax_impact(
             marginal_ordinary_rate   = marginal_ordinary_rate,
         )
 
-    is_loss          = classified_df["Recommendation"].str.startswith("🔴")
-    total_losses_abs = classified_df.loc[is_loss,  "Unrealized G/L"].abs().sum()
-    total_gains      = classified_df.loc[~is_loss, "Unrealized G/L"].sum()  # naturally positive
+    gl               = classified_df["Unrealized G/L"]
+    total_losses_abs = abs(gl[gl < 0.0]).sum()
+    total_gains      = gl[gl >= 0.0].sum()           # naturally positive
     net              = total_gains - total_losses_abs  # positive = net gain, negative = net loss
 
-    tax_on_gains     = max(0.0, net) * ltcg_rate
-    ordinary_offset  = max(0.0, min(-net, MAX_ORDINARY_LOSS_OFFSET))
+    tax_on_gains     = np.clip(net, 0.0, None) * ltcg_rate
+    ordinary_offset  = np.clip(-net, 0.0, MAX_ORDINARY_LOSS_OFFSET)
     ordinary_savings = ordinary_offset * marginal_ordinary_rate
     net_tax_impact   = ordinary_savings - tax_on_gains
 
@@ -831,8 +914,10 @@ def compute_net_tax_impact(
 # IRS deduction limits for DAF contributions (IRC §170)
 # Cash contributions to a DAF: 60% of AGI (post-TCJA)
 # Appreciated securities donated to a DAF: 30% of AGI
+# Combined overall cap (IRC §170(b)(1)(G)): 60% of AGI
 DAF_CASH_DEDUCTION_LIMIT_PCT: float = 0.60
 DAF_SECURITIES_DEDUCTION_LIMIT_PCT: float = 0.30
+DAF_COMBINED_DEDUCTION_LIMIT_PCT: float = 0.60
 
 # Minimum unrealized gain to flag a security as a DAF donation candidate.
 # Donating low-cost-basis securities avoids capital gains tax entirely.
@@ -877,17 +962,18 @@ class DAFBundlingAnalysis:
     carryforward_amount:    float     # excess carried forward (5-year carryforward)
     tax_savings_vs_standard: float    # incremental tax savings vs. taking std deduction
     marginal_rate:          float
-    securities_candidates:  list      # list of DAFDonationCandidate
+    securities_candidates:  list[DAFDonationCandidate]
     total_securities_value: float     # total FMV of flagged securities
     total_avoided_cg_tax:   float     # total CG tax avoided by donating securities
     recommendation:         str
-    notes:                  list      # list of str
+    notes:                  list[str]
 
 
 def identify_daf_candidates(
     analysis_df: pd.DataFrame,
     min_gain: float = DAF_MIN_GAIN_FOR_DONATION,
     min_days: int = DAF_MIN_HOLDING_DAYS,
+    ltcg_rate: float = 0.15,
 ) -> list[DAFDonationCandidate]:
     """
     Identify brokerage securities that are strong candidates for DAF donation.
@@ -903,6 +989,8 @@ def identify_daf_candidates(
                      Gain Type columns.
         min_gain:    Minimum unrealized gain ($) to flag as a candidate.
         min_days:    Minimum holding period (days) to qualify as long-term.
+        ltcg_rate:   Applicable LTCG rate (0.0, 0.15, or 0.20) used to estimate
+                     avoided capital gains tax. Defaults to 0.15.
 
     Returns:
         List of DAFDonationCandidate sorted by unrealized_gain descending.
@@ -928,30 +1016,101 @@ def identify_daf_candidates(
     if candidates_df.empty:
         return []
 
-    results: list[DAFDonationCandidate] = []
-    for _, row in candidates_df.iterrows():
-        gain      = float(row["Unrealized G/L"])
-        cv        = float(row["Current Value"])
-        cb        = float(row["Cost Basis"])
-        gain_pct  = (gain / cb * 100) if cb > 0 else 0.0
-        # Estimated CG tax avoided: long-term gain × 15% (conservative mid-bracket estimate)
-        avoided   = gain * 0.15
+    # Explicit dtype cast — guards against object-dtype columns from arbitrary callers
+    candidates_df["Unrealized G/L"] = candidates_df["Unrealized G/L"].astype(float)
+    candidates_df["Cost Basis"]     = candidates_df["Cost Basis"].astype(float)
+    candidates_df["Current Value"]  = candidates_df["Current Value"].astype(float)
+    candidates_df["Days Held"]      = candidates_df["Days Held"].astype(int)
+    candidates_df["Qty"]            = candidates_df["Qty"].astype(float)
 
-        results.append(DAFDonationCandidate(
-            account        = str(row["Account"]),
-            symbol         = str(row["Symbol"]),
-            name           = str(row["Name"]),
-            qty            = float(row["Qty"]),
-            cost_basis     = cb,
-            current_value  = cv,
-            unrealized_gain= gain,
-            gain_pct       = gain_pct,
-            days_held      = int(row["Days Held"]),
-            gain_type      = str(row["Gain Type"]),
-            avoided_cg_tax = avoided,
-        ))
+    # Vectorized derived columns — computed once across all rows
+    candidates_df = candidates_df.assign(
+        gain_pct       = np.where(
+            candidates_df["Cost Basis"] > 0,
+            candidates_df["Unrealized G/L"] / candidates_df["Cost Basis"] * 100,
+            0.0,
+        ),
+        # Estimated CG tax avoided: long-term gain × applicable LTCG rate
+        avoided_cg_tax = candidates_df["Unrealized G/L"] * ltcg_rate,
+    )
 
-    return sorted(results, key=lambda c: c.unrealized_gain, reverse=True)
+    # Sort within pandas (highest gain first), then materialise result objects
+    candidates_df = candidates_df.sort_values("Unrealized G/L", ascending=False)
+
+    return [
+        DAFDonationCandidate(
+            account         = str(r["Account"]),
+            symbol          = str(r["Symbol"]),
+            name            = str(r["Name"]),
+            qty             = float(r["Qty"]),
+            cost_basis      = float(r["Cost Basis"]),
+            current_value   = float(r["Current Value"]),
+            unrealized_gain = float(r["Unrealized G/L"]),
+            gain_pct        = float(r["gain_pct"]),
+            days_held       = int(r["Days Held"]),
+            gain_type       = str(r["Gain Type"]),
+            avoided_cg_tax  = float(r["avoided_cg_tax"]),
+        )
+        for r in candidates_df.to_dict("records")
+    ]
+
+
+def _allocate_securities(
+    candidates: list[DAFDonationCandidate],
+    cap: float,
+    ltcg_rate: float,
+) -> tuple[list[DAFDonationCandidate], float, float]:
+    """
+    Greedily allocate securities donations up to *cap* (highest-gain first).
+
+    Fills whole positions first; if the next position would exceed the cap,
+    a proportional partial donation is created to exactly reach *cap*.
+
+    Args:
+        candidates: Sorted list of DAFDonationCandidate (highest gain first).
+        cap:        Maximum total FMV to allocate (min of bundled_target and
+                    the 30%-AGI securities deduction limit).
+        ltcg_rate:  Applicable LTCG rate used to compute avoided CG tax on
+                    any partial donation created here.
+
+    Returns:
+        Tuple of (used_candidates, total_value, avoided_cg_total).
+    """
+    used_candidates: list[DAFDonationCandidate] = []
+    securities_value = 0.0
+    avoided_cg_total = 0.0
+
+    for cand in candidates:
+        if securities_value >= cap:
+            break
+        remaining_room = cap - securities_value
+        if cand.current_value <= remaining_room:
+            used_candidates.append(cand)
+            securities_value += cand.current_value
+            avoided_cg_total += cand.avoided_cg_tax
+        else:
+            # Partial donation: donate enough shares to exactly fill remaining room.
+            partial_ratio = remaining_room / cand.current_value if cand.current_value > 0 else 0.0
+            partial_gain  = cand.unrealized_gain * partial_ratio
+            partial_avoid = partial_gain * ltcg_rate
+            used_candidates.append(DAFDonationCandidate(
+                account         = cand.account,
+                symbol          = cand.symbol,
+                name            = cand.name,
+                qty             = cand.qty * partial_ratio,
+                cost_basis      = cand.cost_basis * partial_ratio,
+                current_value   = remaining_room,
+                unrealized_gain = partial_gain,
+                gain_pct        = cand.gain_pct,
+                days_held       = cand.days_held,
+                gain_type       = cand.gain_type,
+                avoided_cg_tax  = partial_avoid,
+            ))
+            securities_value += remaining_room
+            avoided_cg_total += partial_avoid
+            break
+
+    return used_candidates, securities_value, avoided_cg_total
 
 
 def analyze_daf_bundling(
@@ -995,71 +1154,69 @@ def analyze_daf_bundling(
     years_to_bundle = max(1, min(years_to_bundle, 5))
     bundled_target  = annual_giving * years_to_bundle
 
+    # ── Early exit: bundled amount cannot beat the standard deduction ───────
+    if bundled_target <= standard_deduction:
+        return DAFBundlingAnalysis(
+            estimated_agi          = estimated_agi,
+            standard_deduction     = standard_deduction,
+            years_to_bundle        = years_to_bundle,
+            annual_giving          = annual_giving,
+            bundled_contribution   = bundled_target,
+            deductible_amount      = 0.0,
+            carryforward_amount    = 0.0,
+            tax_savings_vs_standard= 0.0,
+            marginal_rate          = marginal_rate,
+            securities_candidates  = [],
+            total_securities_value = 0.0,
+            total_avoided_cg_tax   = 0.0,
+            recommendation         = "⚪ Bundling not beneficial — contribution below standard deduction",
+            notes                  = [
+                f"Your {years_to_bundle}-year bundled contribution of "
+                f"${bundled_target:,.0f} does not exceed the standard deduction "
+                f"(${standard_deduction:,.0f}). Consider bundling more years or "
+                f"increasing annual giving to make itemizing worthwhile."
+            ],
+        )
+
     # ── Step 1: Allocate securities donations first (up to 30% AGI limit) ──
     securities_limit = estimated_agi * DAF_SECURITIES_DEDUCTION_LIMIT_PCT
-    securities_value = 0.0
-    avoided_cg_total = 0.0
-    used_candidates: list[DAFDonationCandidate] = []
-
-    for cand in securities_candidates:
-        if securities_value >= min(bundled_target, securities_limit):
-            break
-        remaining_room = min(bundled_target, securities_limit) - securities_value
-        if cand.current_value <= remaining_room:
-            used_candidates.append(cand)
-            securities_value  += cand.current_value
-            avoided_cg_total  += cand.avoided_cg_tax
-        else:
-            # Partial donation (donate enough shares to fill the room)
-            partial_ratio = remaining_room / cand.current_value if cand.current_value > 0 else 0
-            partial_gain  = cand.unrealized_gain * partial_ratio
-            partial_avoid = partial_gain * ltcg_rate
-            used_candidates.append(DAFDonationCandidate(
-                account         = cand.account,
-                symbol          = cand.symbol,
-                name            = cand.name,
-                qty             = cand.qty * partial_ratio,
-                cost_basis      = cand.cost_basis * partial_ratio,
-                current_value   = remaining_room,
-                unrealized_gain = partial_gain,
-                gain_pct        = cand.gain_pct,
-                days_held       = cand.days_held,
-                gain_type       = cand.gain_type,
-                avoided_cg_tax  = partial_avoid,
-            ))
-            securities_value  += remaining_room
-            avoided_cg_total  += partial_avoid
-            break
+    used_candidates, securities_value, avoided_cg_total = _allocate_securities(
+        candidates = securities_candidates,
+        cap        = min(bundled_target, securities_limit),
+        ltcg_rate  = ltcg_rate,
+    )
 
     # ── Step 2: Top up with cash to reach bundled target ───────────────────
-    cash_needed = max(0.0, bundled_target - securities_value)
-    cash_limit  = estimated_agi * DAF_CASH_DEDUCTION_LIMIT_PCT
+    notes: list[str] = []
+    combined_limit  = estimated_agi * DAF_COMBINED_DEDUCTION_LIMIT_PCT  # 60% overall cap (IRC §170(b)(1)(G))
 
-    # Total deductible = securities (30% limit) + cash (60% limit, but combined
-    # cannot exceed 60% of AGI per IRC §170(b)(1)(G))
+    cash_needed_raw = max(0.0, bundled_target - securities_value)
+    cash_needed     = cash_needed_raw
+    if cash_needed > combined_limit:
+        notes.append(
+            f"⚠️ Cash portion of contribution (${cash_needed_raw:,.0f}) exceeds the "
+            f"60% AGI cash deduction sub-limit (${combined_limit:,.0f}). "
+            f"Cash contribution capped at ${combined_limit:,.0f}; excess is not deductible."
+        )
+        cash_needed = combined_limit
+
+    # Total deductible = securities (30% sub-limit) + cash (60% sub-limit),
+    # capped at the 60% combined AGI ceiling per IRC §170(b)(1)(G).
     total_contribution = securities_value + cash_needed
-    combined_limit     = estimated_agi * DAF_CASH_DEDUCTION_LIMIT_PCT  # 60% overall cap
-    deductible_amount  = min(total_contribution, combined_limit)
-    carryforward       = max(0.0, total_contribution - deductible_amount)
+    deductible_amount  = min(
+        min(securities_value, securities_limit) + cash_needed,
+        combined_limit,
+    )
+    # Carryforward is based on the full intended contribution (before cash cap).
+    carryforward = max(0.0, (securities_value + cash_needed_raw) - deductible_amount)
 
     # ── Step 3: Incremental tax savings vs. taking standard deduction ───────
-    # Only the amount ABOVE the standard deduction generates incremental savings
-    itemized_deduction = deductible_amount
-    incremental_deduction = max(0.0, itemized_deduction - standard_deduction)
+    # Only the amount ABOVE the standard deduction generates incremental savings.
+    incremental_deduction = max(0.0, deductible_amount - standard_deduction)
     tax_savings = incremental_deduction * marginal_rate
 
     # ── Step 4: Build recommendation and notes ──────────────────────────────
-    notes: list[str] = []
-
-    if bundled_target <= standard_deduction:
-        recommendation = "⚪ Bundling not beneficial — contribution below standard deduction"
-        notes.append(
-            f"Your {years_to_bundle}-year bundled contribution of "
-            f"${bundled_target:,.0f} does not exceed the standard deduction "
-            f"(${standard_deduction:,.0f}). Consider bundling more years or "
-            f"increasing annual giving to make itemizing worthwhile."
-        )
-    elif incremental_deduction < 1_000:
+    if incremental_deduction < 1_000:
         recommendation = "🟡 Marginal benefit — small incremental deduction over standard"
         notes.append(
             f"Bundled contribution of ${bundled_target:,.0f} exceeds the standard "

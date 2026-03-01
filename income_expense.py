@@ -1,4 +1,5 @@
 import dataclasses
+import typing
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 YEAR_2026_CONVERSION = 100000
 YEAR_2027_DAF_RATIO = 0.33
 PRE_SSI_CONVERSION = 375000
-EXPENSE_DEFLATOR = 0.993  # Annual real-spending reduction factor
+EXPENSE_DEFLATOR = 0.993      # Annual real-spending reduction factor
+SSI_TAXABLE_FRACTION = 0.85   # IRS: up to 85 % of SSI benefits are taxable
 
 # Account type mapping for portfolio data
 ACCOUNT_TYPE_MAPPING = {
@@ -218,7 +220,7 @@ def _load_portfolio_data(current_month: int, current_year: int) -> dict[str, flo
         # Extract values by account_type - single groupby operation
         account_values = summary_df.groupby('account_type')['market_value'].sum()
         portfolio = {
-            dict_key: float(account_values.get(account_type, 0.0))
+            dict_key: float(account_values.get(account_type) or 0.0)
             for account_type, dict_key in ACCOUNT_TYPE_MAPPING.items()
         }
         
@@ -580,9 +582,55 @@ def _update_accounts(
 
 
 # ---------------------------------------------------------------------------
-# Proposal 1 — _simulate_year(): extracts the per-year orchestration so the
-# main loop becomes a thin driver and each year is independently testable.
+# _get_ssi_annual_benefit(): named lookup for combined SSI benefit
 # ---------------------------------------------------------------------------
+
+def _get_ssi_annual_benefit(
+    year: int,
+    person1_data: pd.DataFrame,
+    person2_data: pd.DataFrame,
+) -> float:
+    """
+    Return the combined annual SSI benefit for both persons in *year*.
+
+    Uses ``pd.Series.get()`` — the idiomatic pandas equivalent of the
+    ``if year in index`` guard — to avoid a two-step index probe and
+    eliminate the intermediate per-person variables.
+
+    Args:
+        year:         Calendar year to look up.
+        person1_data: SSI schedule for person 1, indexed by year.
+        person2_data: SSI schedule for person 2, indexed by year.
+
+    Returns:
+        float: Sum of both persons' monthly benefits multiplied by 12.
+               Returns 0.0 for any person whose year is not in the schedule.
+    """
+    return (
+        float(person1_data['monthly_benefit'].get(year) or 0.0)
+        + float(person2_data['monthly_benefit'].get(year) or 0.0)
+    ) * 12
+
+
+# ---------------------------------------------------------------------------
+# _simulate_year(): per-year orchestration — main loop is a thin driver
+# ---------------------------------------------------------------------------
+
+class YearResult(typing.NamedTuple):
+    """
+    Typed return value for :func:`_simulate_year`.
+
+    Using a ``NamedTuple`` instead of a raw ``tuple`` makes the contract
+    explicit and allows attribute access (``result.ie_row``) while remaining
+    fully compatible with the positional unpacking used by the caller::
+
+        state, annual_expenses, ie_row, port_row = _simulate_year(...)
+    """
+    new_state: SimulationState
+    new_expenses: float
+    ie_row: dict
+    port_row: dict
+
 
 def _simulate_year(
     year: int,
@@ -591,7 +639,7 @@ def _simulate_year(
     person1_data: pd.DataFrame,
     person2_data: pd.DataFrame,
     annual_expenses: float,
-) -> tuple[SimulationState, float, dict, dict]:
+) -> YearResult:
     """
     Run one year of the retirement simulation and return updated state plus
     the two row dicts consumed by the caller to build the output DataFrames.
@@ -606,7 +654,7 @@ def _simulate_year(
                          (the caller applies EXPENSE_DEFLATOR before passing).
 
     Returns:
-        tuple:
+        YearResult:
             new_state       – SimulationState after this year's activity.
             new_expenses    – annual_expenses after EXPENSE_DEFLATOR applied
                              (passed back so the caller can thread it forward).
@@ -621,13 +669,7 @@ def _simulate_year(
     age = f"{person2_age}/{person1_age}"
 
     # ── SSI benefits ──────────────────────────────────────────────────────────
-    person1_monthly = (
-        person1_data.loc[year, 'monthly_benefit'] if year in person1_data.index else 0.0
-    )
-    person2_monthly = (
-        person2_data.loc[year, 'monthly_benefit'] if year in person2_data.index else 0.0
-    )
-    monthly_benefit = (person1_monthly + person2_monthly) * 12
+    monthly_benefit = _get_ssi_annual_benefit(year, person1_data, person2_data)
 
     # ── Distributions (two-stage pipeline) ────────────────────────────────────
     # raw_* values are preserved because _calculate_rmd_and_update_trad may
@@ -643,7 +685,7 @@ def _simulate_year(
     )
 
     # ── Taxes ─────────────────────────────────────────────────────────────────
-    taxable_inflows = (monthly_benefit * 0.85) + planned_dist + conversions + rmd
+    taxable_inflows = (monthly_benefit * SSI_TAXABLE_FRACTION) + planned_dist + conversions + rmd
     taxes = calculate_taxes(taxable_inflows, daf, year)
 
     # ── Expenses & portfolio withdrawal ───────────────────────────────────────
@@ -652,16 +694,11 @@ def _simulate_year(
     portfolio_withdrawal = max(0.0, (new_expenses + taxes) - ssi_inflows)
     tot_inflows = ssi_inflows + portfolio_withdrawal
 
-    # ── Update accounts (Proposal B) ──────────────────────────────────────────
-    mid_state = SimulationState(
-        cash=state.cash,
-        tax_free=state.tax_free,
-        brokerage=state.brokerage,
-        trad_value=new_trad_value,
-        daf_in=state.daf_in,
-    )
+    # ── Update accounts ───────────────────────────────────────────────────────
+    # dataclasses.replace() produces a copy of *state* with only trad_value
+    # updated, avoiding the manual mid_state reconstruction.
     new_state = _update_accounts(
-        state=mid_state,
+        state=dataclasses.replace(state, trad_value=new_trad_value),
         cfg=cfg,
         monthly_benefit=monthly_benefit,
         portfolio_withdrawal=portfolio_withdrawal,
@@ -673,7 +710,7 @@ def _simulate_year(
         taxes=taxes,
     )
 
-    # ── Build output rows (Proposal 6 — row builders) ─────────────────────────
+    # ── Build output rows ─────────────────────────────────────────────────────
     ie_row = _build_ie_row(
         year=year,
         age=age,
@@ -695,7 +732,7 @@ def _simulate_year(
         daf_in=new_state.daf_in,
     )
 
-    return new_state, new_expenses, ie_row, port_row
+    return YearResult(new_state, new_expenses, ie_row, port_row)
 
 
 # ---------------------------------------------------------------------------
