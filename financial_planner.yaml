@@ -775,3 +775,881 @@
       RATE: [financial_assumptions, expected_rate_of_return]
       DAF_RATE: [tax_strategy, daf_disbursement_rate]
       PLANNED_DIST_2027: [tax_strategy, planned_distribution_2027]
+  strategy_module:
+    file: strategy.py
+    description: >
+      Core 6-stage life-cycle strategy engine. Determines the current retirement
+      stage, calculates year-by-year withdrawal and conversion recommendations,
+      integrates BETR Roth conversion algorithm, RMD lookback optimisation,
+      payroll tax calculation, and state income tax modelling.
+    constants:
+      NIIT_RATE: 0.038
+      MEDICARE_ELIGIBILITY_AGE: 65
+      SOCIAL_SECURITY_AGE: 70
+      RMD_START_AGE: 73
+      PART_D_ANNUAL_BASE_PREMIUM: 590
+      PART_B_ANNUAL_BASE_PREMIUM: 2106
+      IRMAA_LOOKBACK_YEARS: 2
+      ACA_SUBSIDY_CLIFF: 4.0
+      FEDERAL_POVERTY_LEVEL_COUPLE: 20120
+      PAYROLL_TAX_SS_RATE: 0.062
+      PAYROLL_TAX_MEDICARE_RATE: 0.0145
+      PAYROLL_TAX_SS_WAGE_BASE: 168600
+      ADDITIONAL_MEDICARE_TAX_RATE: 0.009
+      ADDITIONAL_MEDICARE_THRESHOLD_MFJ: 250000
+      FUTA_RATE: 0.006
+      FUTA_WAGE_BASE: 7000
+    life_stages:
+      stage_1_accumulation:
+        name: Accumulation
+        trigger: Both persons still working (retirement_year > current_year)
+        objectives:
+          - Maximize 401k and Roth IRA contributions
+          - Build taxable brokerage savings
+          - Maintain 6-month cash emergency buffer
+          - Minimize current-year tax liability
+        strategy:
+          - Contribute to 401k up to employer match, then Roth IRA, then brokerage
+          - Defer Roth conversions until income drops in retirement
+          - Track payroll taxes (FICA, Medicare, FUTA, SUTA)
+      stage_2_prep_for_retirement:
+        name: Prep for Retirement
+        trigger: One person retired, other still working
+        objectives:
+          - Begin transitioning to retirement income mix
+          - Start Roth conversion ladder if tax bracket allows
+          - Evaluate ACA marketplace enrollment
+        strategy:
+          - Partial Roth conversions up to max_roth_conversion_tax_rate bracket
+          - Maintain cash buffer at years_of_expenses_in_cash target
+      stage_3_early_retirement:
+        name: Early Retirement
+        trigger: Both retired, age < 65 (pre-Medicare)
+        objectives:
+          - Manage ACA subsidy cliff (keep MAGI below 400% FPL)
+          - Execute Roth conversion ladder
+          - Harvest tax losses and 0% LTCG gains
+          - Fund expenses from cash buffer, then brokerage
+        strategy:
+          - BETR-guided Roth conversions
+          - ACA subsidy optimisation via calculate_aca_subsidy()
+          - Sequence withdrawals: Cash → Brokerage → Traditional → Roth
+      stage_4_medicare:
+        name: Medicare
+        trigger: Oldest person reaches age 65
+        objectives:
+          - Enroll in Medicare Parts A, B, D
+          - Manage IRMAA surcharge via 2-year lookback
+          - Continue Roth conversion ladder
+        strategy:
+          - Monitor AGI 2 years prior to avoid IRMAA bracket jumps
+          - Calculate IRMAA penalty via calculate_irmma_penalty()
+          - Coordinate Part B + Part D premiums in expense projections
+      stage_5_social_security:
+        name: Social Security
+        trigger: Oldest person reaches SSI claiming age (default 70)
+        objectives:
+          - Optimise claiming age for maximum lifetime benefit
+          - Model spousal benefit coordination
+          - Manage 85% SS taxability threshold
+        strategy:
+          - Delay claiming to age 70 for maximum benefit
+          - Model COLA adjustments via ssi_calculator
+          - Reduce Roth conversions once SS income begins
+      stage_6_rmd:
+        name: RMD Distribution
+        trigger: Oldest person reaches age 73
+        objectives:
+          - Satisfy IRS Required Minimum Distributions
+          - Minimise RMD-driven tax bracket creep
+          - Coordinate RMDs with SS income and IRMAA
+        strategy:
+          - Calculate RMD via get_rmd_value() using rmd.csv life expectancy factors
+          - Pre-RMD Roth conversions via optimize_rmd_lookback()
+          - QCD (Qualified Charitable Distribution) for DAF-like tax benefit
+    key_functions:
+      build_withdrawal_strategy_display:
+        description: Main public API — returns DataFrame of year-by-year strategy
+        inputs: [config, networth_df, year_range]
+        outputs: styled DataFrame with stage, conversions, withdrawals, taxes
+      build_accumulation_strategy_display:
+        description: Accumulation-stage specific display builder
+        inputs: [config, networth_df]
+        outputs: DataFrame with contribution recommendations
+      calculate_payroll_taxes:
+        description: >
+          Computes FICA (6.2%), Medicare (1.45%), Additional Medicare (0.9%),
+          FUTA (0.6%), and SUTA (state-specific) for working years
+        inputs: [wages, state, year]
+        outputs: dict with each tax component
+      calculate_state_tax:
+        description: >
+          50-state + DC implementation. Handles no-tax states, retirement-income
+          exempt states, SS-exempt states, and flat/graduated rate states.
+        inputs: [agi, state, filing_status, year, retirement_income, ss_income]
+        outputs: state_tax_amount
+        data: _SUTA_BY_STATE dict (all 50 states + DC SUTA rates)
+      optimize_rmd_lookback:
+        description: >
+          Increases Roth conversions in years before RMD age to reduce future
+          RMD burden and associated tax bracket creep.
+        inputs: [current_age, rmd_age, traditional_balance, conversion_amount]
+        outputs: adjusted_conversion_amount
+      get_target_conversion_bracket:
+        description: Determines optimal Roth conversion amount to fill current bracket
+        inputs: [agi, filing_status, year, max_rate]
+        outputs: conversion_headroom
+      calculate_aca_subsidy:
+        description: >
+          Estimates ACA premium tax credit based on MAGI relative to FPL.
+          Warns when approaching 400% FPL cliff.
+        inputs: [magi, household_size, year, monthly_premium]
+        outputs: monthly_subsidy, annual_subsidy, cliff_warning
+
+  withdrawal_strategy_module:
+    file: withdrawal_strategy.py
+    description: >
+      Standalone withdrawal strategy engine (separate from strategy.py).
+      Implements the WithdrawalStrategyEngine class with multi-year projections
+      and DataFrame output. Used by example scripts and tests.
+    class: WithdrawalStrategyEngine
+    initialization:
+      parameters: [config, tax_data, rmd_data]
+    key_methods:
+      determine_stage:
+        description: Maps current age/year to one of 5 withdrawal stages
+        returns: stage_name (string)
+      calculate_multi_year_strategy:
+        description: Iterates year-by-year producing strategy recommendations
+        returns: list of strategy dicts
+      _strategies_to_dataframe:
+        description: Converts strategy list to styled pandas DataFrame
+        returns: DataFrame
+    public_api:
+      build_withdrawal_strategy_display:
+        description: Convenience wrapper around WithdrawalStrategyEngine
+      generate_strategy_summary:
+        description: Returns summary statistics dict
+      print_strategy_report:
+        description: Console-formatted strategy report
+      create_example_scenario:
+        description: Builds a sample scenario for testing/demo
+
+  calculations_module:
+    file: calculations.py
+    description: >
+      Core tax mathematics library. All functions are pure (no side effects)
+      and operate on scalar inputs. Used by strategy.py, income_expense.py,
+      and the Streamlit UI tabs.
+    key_functions:
+      calc_agi:
+        description: Computes Adjusted Gross Income from income components
+        inputs: [wages, ss_income, roth_conversion, cap_gains, other_income, deductions]
+        outputs: agi
+      calc_roth_conversions_tax:
+        description: Tax cost of a Roth conversion at marginal bracket
+        inputs: [conversion_amount, current_agi, filing_status, year]
+        outputs: tax_amount
+      calc_roth_conversions:
+        description: Optimal conversion amount to fill target bracket
+        inputs: [current_agi, target_bracket, filing_status, year]
+        outputs: conversion_amount
+      calc_daf_value:
+        description: >
+          DAF deduction value capped at 30% of AGI. Returns deduction amount
+          and carryforward if contribution exceeds limit.
+        inputs: [daf_contribution, agi]
+        outputs: deduction, carryforward
+      getUpperIncomeRate:
+        description: Returns marginal tax rate for given income level
+        inputs: [income, filing_status, year]
+        outputs: rate (float)
+      calculate_atm:
+        description: >
+          Alternative Minimum Tax calculation using atm.csv brackets.
+          Applies exemption, phase-out, and exception rate.
+        inputs: [agi, filing_status, year, iso_exercise_amount]
+        outputs: amt_amount
+      calculate_taxable_income:
+        description: Taxable income after standard/itemized deduction
+        inputs: [agi, filing_status, year, itemized_deductions]
+        outputs: taxable_income
+      calculate_cap_gains:
+        description: Long-term capital gains tax using cap_gains.csv brackets
+        inputs: [ltcg_amount, ordinary_income, filing_status, year]
+        outputs: cap_gains_tax
+      calculate_irmma_penalty:
+        description: >
+          IRMAA Medicare surcharge based on AGI from 2 years prior.
+          Returns combined Part B + Part D surcharge.
+        inputs: [prior_year_agi, year]
+        outputs: annual_irmaa_surcharge
+      get_rmd_value:
+        description: Required Minimum Distribution from Traditional/401k accounts
+        inputs: [account_balance, age]
+        outputs: rmd_amount
+        data: rmd.csv (life expectancy factors per IRS Uniform Lifetime Table)
+
+  betr_module:
+    file: betr_roth_conversion.py
+    description: >
+      Vanguard BETR (Break-Even Tax Rate) algorithm for Roth conversion
+      decisions. Introduced July 2025. Compares current marginal rate against
+      break-even rate to determine if conversion is beneficial.
+    dataclasses:
+      BETRInputs:
+        fields:
+          - current_marginal_rate (float)
+          - future_marginal_rate (float)
+          - years_to_withdrawal (int)
+          - expected_return (float)
+          - nontaxable_basis_ratio (float, default 0.0)
+          - has_backdoor_roth_opportunity (bool, default False)
+      BETRResults:
+        fields:
+          - betr (float, break-even tax rate)
+          - should_convert (bool)
+          - conversion_benefit (float, NPV advantage)
+          - explanation (str)
+    constants:
+      NONTAXABLE_BASIS_ADJUSTMENT_FACTOR: 0.05
+      BACKDOOR_ROTH_BENEFIT_FACTOR: 0.02
+    key_functions:
+      calculate_betr:
+        description: >
+          Core BETR calculation. Returns break-even tax rate below which
+          conversion is beneficial. Adjusts for non-taxable basis and
+          backdoor Roth opportunity.
+        inputs: BETRInputs
+        outputs: BETRResults
+      optimize_conversion_amount:
+        description: >
+          Iterates conversion amounts to find optimal size that maximises
+          after-tax wealth without exceeding target bracket.
+        inputs: [betr_inputs, current_agi, bracket_ceiling, traditional_balance]
+        outputs: optimal_conversion_amount
+
+  portfolio_module:
+    file: portfolio.py
+    description: >
+      Portfolio data retrieval, real-time price fetching, and display
+      construction. Integrates yfinance for live market data with 5-minute
+      Streamlit cache.
+    key_functions:
+      getPortfolioData:
+        description: >
+          Loads portfolio_data_truth.csv, fetches current prices via yfinance,
+          computes market value, gain/loss, and allocation percentages.
+        inputs: [month, year]
+        outputs: DataFrame with columns [symbol, name, qty, cost_basis,
+                 current_price, market_value, gain_loss, gain_loss_pct,
+                 account_type, account_name, sector]
+      get_current_price:
+        description: >
+          Fetches real-time price from yfinance. Returns 1.0 for CASH symbol.
+          Cached for 5 minutes via @st.cache_data(ttl=300).
+        inputs: [symbol]
+        outputs: price (float)
+      build_portfolio_display:
+        description: >
+          Constructs styled DataFrame for Streamlit display. Groups by
+          account_type, adds subtotals, appends Portfolio Totals row.
+        inputs: [portfolio_df]
+        outputs: styled DataFrame
+      color_negative_positive:
+        description: Pandas Styler function — red for losses, green for gains
+        inputs: [val]
+        outputs: CSS style string
+
+  tax_harvesting_module:
+    file: tax_harvesting.py
+    description: >
+      Tax-loss and tax-gain harvesting analysis for brokerage accounts.
+      Identifies harvest opportunities, computes net tax impact, and
+      suggests wash-sale-safe replacement securities.
+    dataclasses:
+      HarvestDecision:
+        fields:
+          - symbol (str)
+          - action (HARVEST_LOSS | HARVEST_GAIN | HOLD)
+          - unrealized_gain_loss (float)
+          - holding_period_days (int)
+          - is_long_term (bool)
+          - replacement_symbol (str, optional)
+          - replacement_name (str, optional)
+      NetTaxImpact:
+        fields:
+          - ordinary_income_offset (float, capped at $3,000/yr)
+          - ltcg_offset (float)
+          - estimated_tax_savings (float)
+          - carryforward_loss (float)
+    constants:
+      LONG_TERM_DAYS: 365
+      MAX_ORDINARY_LOSS_OFFSET: 3000
+      WASH_SALE_WINDOW_DAYS: 30
+    key_functions:
+      build_harvesting_analysis:
+        description: Main entry point — returns full harvest analysis DataFrame
+        inputs: [portfolio_df, current_year_agi, filing_status, year]
+        outputs: DataFrame with harvest recommendations
+      classify_harvest_opportunities:
+        description: Classifies each position as loss-harvest, gain-harvest, or hold
+        inputs: [portfolio_df, agi, filing_status, year]
+        outputs: list of HarvestDecision
+      compute_harvest_summary:
+        description: Aggregates total estimated tax savings across all decisions
+        inputs: [decisions]
+        outputs: summary dict
+      check_market_drop_trigger:
+        description: >
+          Flags positions with >10% drop from purchase price as priority
+          loss-harvest candidates.
+        inputs: [portfolio_df, threshold_pct]
+        outputs: flagged_positions list
+      get_replacement_detail:
+        description: >
+          Returns wash-sale-safe replacement ETF/fund for a given symbol.
+          Uses internal replacement map (e.g., VTI → SCHB, AGG → BND).
+        inputs: [symbol]
+        outputs: (replacement_symbol, replacement_name)
+      compute_net_tax_impact:
+        description: Calculates net tax savings considering ordinary + LTCG rates
+        inputs: [decisions, agi, filing_status, year]
+        outputs: NetTaxImpact
+
+  portfolio_rebalancing_module:
+    file: portfolio_rebalancing.py
+    description: >
+      Portfolio drift detection and rebalancing action plan. Compares current
+      allocation to target (Cash/Bonds/Stocks) and generates tax-efficient
+      buy/sell recommendations.
+    constants:
+      DEFAULT_DRIFT_THRESHOLD_PCT: 5.0
+      BOND_SECTOR_KEYWORDS: [Bond, Fixed Income, Treasury, TIPS, Municipal, MF:Bond]
+    key_functions:
+      compute_rebalance_plan:
+        description: >
+          Computes current vs target allocation, identifies drift, and
+          generates ordered action list (sell overweight → buy underweight).
+        inputs: [portfolio_df, target_cash_pct, target_bonds_pct,
+                 target_stocks_pct, drift_threshold_pct]
+        outputs: (actions_df, summary_dict)
+      build_rebalance_display_df:
+        description: Formats rebalancing summary for Streamlit display
+        inputs: [summary_dict]
+        outputs: styled DataFrame
+      build_actions_display_df:
+        description: Formats action list (buy/sell/hold) for Streamlit display
+        inputs: [actions_df]
+        outputs: styled DataFrame
+      build_holdings_by_class_df:
+        description: Groups holdings by asset class with subtotals
+        inputs: [portfolio_df]
+        outputs: DataFrame grouped by Cash/Bonds/Stocks
+
+  income_expense_module:
+    file: income_expense.py
+    description: >
+      Year-by-year income and expense projection engine. Produces the
+      Flow of Funds tab data and the income/expense chart. Integrates
+      DAF strategy, Roth conversions, and expense deflation.
+    constants:
+      YEAR_2026_CONVERSION: 100000
+      YEAR_2027_DAF_RATIO: 0.33
+      PRE_SSI_CONVERSION: 375000
+      EXPENSE_DEFLATOR: 0.993
+    key_functions:
+      build_income_expenses_display:
+        description: >
+          Main entry point. Returns DataFrame of annual income/expense
+          projections from current year through age 90.
+        inputs: [config, networth_df, ssi_data]
+        outputs: DataFrame with columns [year, age, income_sources...,
+                 expenses, taxes, net_cashflow, cumulative_networth]
+      calculate_taxes:
+        description: >
+          Comprehensive annual tax calculation including federal income tax,
+          FICA, state tax, IRMAA, AMT, NIIT, and cap gains tax.
+        inputs: [agi, wages, ss_income, ltcg, state, filing_status, year,
+                 roth_conversion, irmaa_prior_agi]
+        outputs: tax_breakdown dict
+      _calculate_year_distributions:
+        description: >
+          Determines withdrawal amounts from each account type for a given
+          year based on current stage and cash buffer status.
+        inputs: [year, config, account_balances, expenses, income]
+        outputs: distributions dict
+
+  ssi_calculator_module:
+    file: ssi_calculator.py
+    description: >
+      Dynamic Social Security benefit calculator. Computes benefits based on
+      claiming age, applies COLA adjustments, and generates multi-year
+      schedule. Replaces legacy ssibenefits.py lookup approach.
+    constants:
+      FULL_RETIREMENT_AGE: 67
+      MIN_CLAIMING_AGE: 62
+      MAX_BENEFIT_AGE: 70
+      DEFAULT_COLA_RATE: 0.02
+      EARLY_CLAIMING_REDUCTION_PER_MONTH: 0.00556
+      DELAYED_CLAIMING_CREDIT_PER_YEAR: 0.08
+    key_functions:
+      calculate_benefit_at_claiming_age:
+        description: >
+          Adjusts PIA (Primary Insurance Amount) for early or delayed claiming.
+          Early: 5/9% per month for first 36 months, 5/12% thereafter.
+          Delayed: 8% per year beyond FRA up to age 70.
+        inputs: [pia, claiming_age, full_retirement_age]
+        outputs: monthly_benefit
+      calculate_benefit_with_cola:
+        description: Projects benefit forward with annual COLA adjustments
+        inputs: [monthly_benefit, start_year, projection_years, cola_rate]
+        outputs: list of (year, monthly_benefit)
+      generate_ssi_schedule_from_config:
+        description: >
+          Reads config for both persons' SSI ages and amounts, generates
+          combined schedule, and writes to ssincome.csv.
+        inputs: [config]
+        outputs: ssincome.csv (side effect)
+      export_ssi_schedule_to_csv:
+        description: Writes SSI schedule DataFrame to ssincome.csv
+        inputs: [schedule_df, filepath]
+        outputs: None (file write)
+
+  ssibenefits_module:
+    file: ssibenefits.py
+    description: >
+      Legacy Social Security benefit lookup module. Reads ssincome.csv
+      directly. Retained for backward compatibility with older code paths.
+    key_functions:
+      get_age:
+        description: Returns person's age for a given year from config
+        inputs: [person, year, config]
+        outputs: age (int)
+      get_year:
+        description: Returns year when person reaches a given age
+        inputs: [person, age, config]
+        outputs: year (int)
+      get_monthly_benefit:
+        description: Looks up monthly SS benefit from ssincome.csv for year/person
+        inputs: [year, person]
+        outputs: monthly_benefit (float)
+
+  load_data_module:
+    file: load_data.py
+    description: >
+      Centralised data loading layer. All functions use @st.cache_data for
+      performance. Provides typed loaders for all CSV reference files and
+      portfolio data.
+    constants:
+      CASH_SYMBOL: CASH
+      CASH_PRICE: 1.0
+    cached_loaders:
+      get_income_tax_brackets:
+        description: Federal income tax brackets from income_rates.csv
+        inputs: [year]
+        outputs: DataFrame [rate, lower, upper]
+        cache: st.cache_data (no TTL)
+      get_cap_gains_brackets:
+        description: Long-term capital gains brackets from cap_gains.csv
+        inputs: [year]
+        outputs: DataFrame [rate, lower, upper]
+        cache: st.cache_data (no TTL)
+      get_std_deduction:
+        description: Standard deduction from standard.csv
+        inputs: [year, filing_status]
+        outputs: deduction (float)
+        cache: st.cache_data (no TTL)
+      get_medicare_costs:
+        description: IRMAA brackets and Part B/D premiums from irmaa.csv
+        inputs: [year]
+        outputs: DataFrame [lower, upper, part_b_premium, part_d_premium]
+        cache: st.cache_data (no TTL)
+      get_atm_costs:
+        description: AMT brackets from atm.csv
+        inputs: [year]
+        outputs: DataFrame [deduction, lower, upper, phase_out, rate, exception_rate]
+        cache: st.cache_data (no TTL)
+      get_net_worth:
+        description: >
+          Loads portfolio_data_truth.csv, fetches current prices, computes
+          net worth totals by account type for the most recent month/year.
+        inputs: []
+        outputs: networth DataFrame
+        cache: st.cache_data (no TTL)
+      get_networth_by_month:
+        description: >
+          Returns 12-month rolling net worth history for trend chart.
+          Iterates month/year combinations in portfolio_data_truth.csv.
+        inputs: []
+        outputs: DataFrame [month, year, account_type, total_value]
+        cache: st.cache_data (no TTL)
+      get_portfolio_truth_by_month:
+        description: Raw portfolio_data_truth.csv grouped by month/year
+        inputs: []
+        outputs: DataFrame
+        cache: st.cache_data (no TTL)
+      load_rmd_data:
+        description: RMD life expectancy factors from rmd.csv
+        inputs: []
+        outputs: DataFrame [age, life_expectancy_factor]
+        cache: st.cache_data (no TTL)
+      load_ssi_data:
+        description: Social Security income schedule from ssincome.csv
+        inputs: []
+        outputs: DataFrame [year, age, person, monthly_benefit]
+        cache: st.cache_data (no TTL)
+      get_annual_ssi_data:
+        description: Filters SSI data for a specific year
+        inputs: [year]
+        outputs: DataFrame row(s)
+
+  sidebar_component:
+    file: components/sidebar.py
+    description: >
+      Persistent sidebar with key financial parameters. Values are saved to
+      config.py (retirement_config.json) on change. Provides quick access
+      to the most frequently adjusted planning parameters.
+    key_function: sidebar()
+    config_groups:
+      SIDEBAR_NUMBER_CONFIGS:
+        description: List of (label, session_key, config_section, config_key, min, max, step, format)
+        entries:
+          - Annual Expenses (EXPENSE, financial_assumptions, expected_annual_expenses)
+          - Cash Buffer Years (EXPENSE_MULTIPLIER, financial_assumptions, years_of_expenses_in_cash)
+          - Rate of Return % (RATE, financial_assumptions, expected_rate_of_return)
+          - Max Roth Conv Rate % (CONV_TAX_RATE, tax_strategy, max_roth_conversion_tax_rate)
+          - SSI Claiming Age (SSI_AGE, social_security, person1_ssi_age)
+          - DAF Disbursement % (DAF_RATE, tax_strategy, daf_disbursement_rate)
+          - Planned 2027 Dist (PLANNED_DIST_2027, tax_strategy, planned_distribution_2027)
+    validation:
+      VALIDATION_RULES:
+        EXPENSE: [min=10000, max=500000]
+        EXPENSE_MULTIPLIER: [min=1, max=10]
+        RATE: [min=0.0, max=15.0]
+        CONV_TAX_RATE: [min=0, max=37]
+        SSI_AGE: [min=62, max=70]
+        DAF_RATE: [min=0, max=100]
+    cache_management:
+      CACHE_CLEAR_KEYS: List of st.cache_data functions to clear on sidebar change
+    persistence:
+      save_sidebar_value_to_config:
+        description: Writes sidebar value to ConfigManager and saves to JSON
+        inputs: [session_key, value]
+
+  constants:
+    description: Key constants defined across the codebase
+    strategy_py:
+      NIIT_RATE: 0.038
+      MEDICARE_ELIGIBILITY_AGE: 65
+      SOCIAL_SECURITY_AGE: 70
+      RMD_START_AGE: 73
+      PART_D_ANNUAL_BASE_PREMIUM: 590
+      PART_B_ANNUAL_BASE_PREMIUM: 2106
+      IRMAA_LOOKBACK_YEARS: 2
+      PAYROLL_TAX_SS_RATE: 0.062
+      PAYROLL_TAX_MEDICARE_RATE: 0.0145
+      PAYROLL_TAX_SS_WAGE_BASE: 168600
+      ADDITIONAL_MEDICARE_TAX_RATE: 0.009
+      ADDITIONAL_MEDICARE_THRESHOLD_MFJ: 250000
+      FUTA_RATE: 0.006
+      FUTA_WAGE_BASE: 7000
+    income_expense_py:
+      YEAR_2026_CONVERSION: 100000
+      YEAR_2027_DAF_RATIO: 0.33
+      PRE_SSI_CONVERSION: 375000
+      EXPENSE_DEFLATOR: 0.993
+    betr_roth_conversion_py:
+      NONTAXABLE_BASIS_ADJUSTMENT_FACTOR: 0.05
+      BACKDOOR_ROTH_BENEFIT_FACTOR: 0.02
+    tax_harvesting_py:
+      LONG_TERM_DAYS: 365
+      MAX_ORDINARY_LOSS_OFFSET: 3000
+      WASH_SALE_WINDOW_DAYS: 30
+    portfolio_rebalancing_py:
+      DEFAULT_DRIFT_THRESHOLD_PCT: 5.0
+    ssi_calculator_py:
+      FULL_RETIREMENT_AGE: 67
+      MIN_CLAIMING_AGE: 62
+      MAX_BENEFIT_AGE: 70
+      DEFAULT_COLA_RATE: 0.02
+    load_data_py:
+      CASH_SYMBOL: CASH
+      CASH_PRICE: 1.0
+    planning_app_py:
+      ACCOUNT_TYPE_MAP:
+        Cash: Cash & Equivalents
+        Brokerage: Taxable Brokerage
+        Traditional: Traditional (Pre-Tax)
+        Roth: Roth (After-Tax)
+
+  dependencies:
+    external_modules:
+      - streamlit>=1.28.0
+      - pandas>=2.0.0
+      - numpy>=1.24.0
+      - yfinance>=0.2.28
+      - plotly>=5.15.0
+      - graphviz>=0.20.0
+      - pyyaml>=6.0
+      - pytest>=7.4.0
+    internal_modules:
+      - planning_app.py (entry point)
+      - strategy.py (6-stage engine)
+      - withdrawal_strategy.py (WithdrawalStrategyEngine class)
+      - calculations.py (tax math)
+      - betr_roth_conversion.py (BETR algorithm)
+      - config.py (ConfigManager)
+      - load_data.py (cached data loaders)
+      - portfolio.py (portfolio data + yfinance)
+      - tax_harvesting.py (harvest analysis)
+      - portfolio_rebalancing.py (drift + rebalance)
+      - income_expense.py (flow of funds)
+      - ssi_calculator.py (dynamic SSI)
+      - ssibenefits.py (legacy SSI lookup)
+      - editable_table.py (Streamlit editable grid)
+      - portfolio_data_entry.py (portfolio CSV editor)
+      - generate_ssi_schedule.py (CLI SSI schedule generator)
+      - components/sidebar.py (persistent sidebar)
+      - pages/configuration.py (8-tab config UI)
+      - pages/estate_planning.py (estate checklist)
+    data_files:
+      csv_reference:
+        - income_rates.csv (federal income tax brackets)
+        - cap_gains.csv (LTCG brackets)
+        - irmaa.csv (Medicare IRMAA surcharges)
+        - atm.csv (AMT brackets)
+        - rmd.csv (RMD life expectancy factors)
+        - standard.csv (standard deductions)
+      portfolio_data:
+        - portfolio_data_truth.csv (primary holdings source of truth)
+        - portfolio_data_truth.2-entries.csv (minimal test fixture)
+        - financial_account_sample.csv (deprecated sample)
+        - financial_data_sample.csv (deprecated sample)
+      social_security:
+        - ssincome.csv (generated SS benefit schedule)
+      example_outputs:
+        - example1_strategy.csv
+        - example2_early_retire.csv
+        - example3_high_income.csv
+        - example4_custom.csv
+      config:
+        - retirement_config.json (runtime config, gitignored)
+        - estate_planning_data.json (estate checklist data, gitignored)
+
+  testing:
+    test_files:
+      test_calculations.py:
+        description: Unit tests for all calculations.py functions
+        coverage: [calc_agi, calc_roth_conversions_tax, calculate_atm,
+                   calculate_cap_gains, calculate_irmma_penalty, get_rmd_value]
+      test_withdrawal_strategy.py:
+        description: Tests for WithdrawalStrategyEngine and public API
+        coverage: [determine_stage, calculate_multi_year_strategy,
+                   build_withdrawal_strategy_display]
+      test_accumulation_strategy.py:
+        description: Tests for accumulation stage strategy
+        coverage: [build_accumulation_strategy_display, payroll_taxes]
+      test_betr_roth_conversion.py:
+        description: Tests for BETR algorithm correctness
+        coverage: [calculate_betr, optimize_conversion_amount, BETRInputs]
+      test_config.py:
+        description: Tests for ConfigManager persistence and defaults
+        coverage: [get, set, save_config, _merge_with_defaults]
+      test_logging.py:
+        description: Tests for logging configuration and LOG_LEVEL env var
+        coverage: [log level switching, debug output]
+      test_portfolio_entry.py:
+        description: Tests for portfolio data entry validation
+        coverage: [validate_portfolio_dataframe, validate_ticker_symbol]
+      test_ssi_calculator.py:
+        description: Tests for SSI benefit calculation accuracy
+        coverage: [calculate_benefit_at_claiming_age, calculate_benefit_with_cola]
+      test_ssi_integration.py:
+        description: Integration tests for SSI schedule generation
+        coverage: [generate_ssi_schedule_from_config, export_ssi_schedule_to_csv]
+      test_tax_harvesting.py:
+        description: Tests for tax harvesting analysis
+        coverage: [classify_harvest_opportunities, compute_net_tax_impact]
+    example_files:
+      example_withdrawal_strategy.py:
+        description: Demonstrates WithdrawalStrategyEngine with sample data
+      example_accumulation_strategy.py:
+        description: Demonstrates accumulation stage strategy with sample data
+    run_commands:
+      all_tests: pytest
+      specific: pytest test_calculations.py -v
+      with_coverage: pytest --cov=. --cov-report=html
+
+  integration:
+    streamlit_app:
+      entry_point: planning_app.py
+      run_commands:
+        unix: sh run.sh
+        windows: run.bat
+        manual: streamlit run planning_app.py --server.port 8502
+      port: 8502
+      headless: true (production)
+    page_routing:
+      main_app: planning_app.py (6 tabs)
+      configuration: pages/configuration.py (Streamlit page)
+      estate_planning: pages/estate_planning.py (Streamlit page)
+    config_integration:
+      load_on_startup: ConfigManager loads retirement_config.json
+      sync_to_session: sync_config_to_session_state() called on each page load
+      sidebar_persistence: save_sidebar_value_to_config() on widget change
+    data_flow:
+      portfolio_data: portfolio_data_truth.csv → load_data.py → portfolio.py → planning_app.py
+      tax_data: income_rates.csv + cap_gains.csv + irmaa.csv → load_data.py → calculations.py
+      ssi_data: ssincome.csv → load_data.py → ssibenefits.py / ssi_calculator.py
+      strategy: config + networth → strategy.py → planning_app.py Tab 2
+      income_expense: config + networth + ssi → income_expense.py → planning_app.py Tab 4
+
+  performance:
+    caching_strategy:
+      yfinance_prices:
+        function: get_current_price()
+        cache: st.cache_data(ttl=300) — 5-minute TTL
+        rationale: Avoid excessive API calls during session
+      csv_reference_data:
+        functions: [get_income_tax_brackets, get_cap_gains_brackets,
+                    get_std_deduction, get_medicare_costs, get_atm_costs,
+                    load_rmd_data, load_ssi_data]
+        cache: st.cache_data (no TTL — static reference data)
+      portfolio_data:
+        functions: [get_net_worth, get_networth_by_month, get_portfolio_truth_by_month]
+        cache: st.cache_data (no TTL — cleared on portfolio update)
+    cache_invalidation:
+      trigger: Sidebar value change or portfolio data save
+      mechanism: CACHE_CLEAR_KEYS list in sidebar.py — calls .clear() on each cached function
+    optimization_techniques:
+      - Vectorised pandas operations for portfolio calculations
+      - Single CSV read per session (cached)
+      - Lazy loading of yfinance data (only fetches symbols present in portfolio)
+      - DataFrame styling applied once, not per render
+
+  limitations:
+    current:
+      - Single-user application (no authentication or multi-user support)
+      - No Monte Carlo simulation (deterministic projections only)
+      - No automatic tax-lot tracking (cost basis entered manually)
+      - No direct brokerage API integration (manual CSV updates)
+      - State tax model is simplified (no local/city taxes)
+      - No Roth IRA 5-year rule tracking
+      - No Social Security spousal benefit optimisation algorithm
+      - Estate planning is checklist-only (no legal document generation)
+    assumptions:
+      - Married Filing Jointly throughout retirement
+      - Constant rate of return (no sequence-of-returns risk modelling)
+      - Inflation applied uniformly to expenses
+      - SS benefits claimed at configured age (no optimisation search)
+      - Medicare costs based on base premiums + IRMAA (no supplemental Medigap)
+      - All Roth conversions completed in calendar year shown
+    tax_planning_status:
+      implemented: [federal income tax, LTCG, AMT, NIIT, IRMAA, state tax,
+                    payroll taxes, DAF deduction, standard deduction]
+      not_implemented: [local/city taxes, Roth 5-year rule, QCD tracking,
+                        gift tax, estate tax calculation, SALT deduction cap]
+
+  future_enhancements:
+    planned:
+      - Monte Carlo simulation for sequence-of-returns risk
+      - Spousal Social Security benefit optimisation (file-and-suspend strategies)
+      - Direct brokerage API integration (Fidelity, Schwab, Vanguard)
+      - Roth IRA 5-year rule tracking per conversion
+      - QCD (Qualified Charitable Distribution) tracking and optimisation
+      - Multi-scenario comparison (optimistic / base / pessimistic)
+      - PDF report generation
+      - Email/notification reminders for annual review tasks
+    v2_0_additions:
+      - BETR Roth conversion algorithm (implemented July 2025)
+      - RMD lookback optimisation
+      - Portfolio rebalancing module
+      - Tax harvesting module
+      - Dynamic SSI calculator (replacing static lookup)
+      - Estate planning page
+      - Retirement Readiness Indicator (RRI)
+      - Flow-of-funds Graphviz diagram
+      - 8-tab configuration page
+      - State tax with 50-state implementation
+    account_rebalancing_implementation:
+      status: Partially implemented
+      reference: ACCOUNT_REBALANCING_IMPLEMENTATION.md
+      remaining:
+        - Buffer maintenance automation
+        - Roth conversion execution tracking
+        - Fund movement audit trail
+
+  documentation:
+    readme: README.md
+    guides:
+      - CONFIG_GUIDE.md (configuration system)
+      - STRATEGY_README.md (withdrawal strategy engine)
+      - BETR_GUIDE.md (BETR algorithm)
+      - BETR_CORRECTION_NOTES.md (algorithm corrections)
+      - LOGGING_GUIDE.md (logging configuration)
+      - SSI_CALCULATOR_GUIDE.md (SSI calculator)
+      - SSI_INTEGRATION_GUIDE.md (SSI integration)
+      - PORTFOLIO_REBALANCING_GUIDE.md (rebalancing)
+      - UX_REDESIGN_PLAN.md (UI redesign notes)
+      - ACCOUNT_REBALANCING_IMPLEMENTATION.md (rebalancing implementation)
+      - IMPLEMENTATION_SUMMARY.md (v2.0 implementation summary)
+      - DOCUMENTATION_REVIEW_SUMMARY.md (doc review)
+      - ERRORS_FOUND.md (known issues log)
+    references:
+      - Vanguard BETR methodology (2025)
+      - IRS Publication 590-B (RMD Uniform Lifetime Table)
+      - IRS Publication 946 (AMT)
+      - CMS Medicare IRMAA tables
+      - SSA OASDI benefit calculation rules
+
+  logging:
+    configuration:
+      env_var: LOG_LEVEL
+      default: WARNING
+      values: [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+      setup: logging.basicConfig() in each module
+    log_points:
+      - Config load/save operations
+      - Portfolio data fetch (yfinance calls)
+      - Strategy stage determination
+      - Tax calculation inputs/outputs (DEBUG level)
+      - Cache clear events
+      - SSI schedule generation
+    debug_usage:
+      enable: export LOG_LEVEL=DEBUG before running streamlit
+      guide: LOGGING_GUIDE.md
+
+  version_history:
+    v1.0:
+      description: Initial release with basic portfolio tracking and withdrawal strategy
+      features:
+        - 5-stage withdrawal strategy engine
+        - Basic tax calculations (federal income, LTCG)
+        - Static SSI lookup from ssincome.csv
+        - Simple portfolio display with yfinance prices
+        - ConfigManager with JSON persistence
+        - Streamlit multi-tab UI
+    v2.0:
+      description: >
+        Major enhancement release adding BETR algorithm, dynamic SSI calculator,
+        portfolio rebalancing, tax harvesting, estate planning, and comprehensive
+        tax modelling (AMT, NIIT, IRMAA, state tax, payroll taxes).
+      features:
+        - BETR Roth conversion algorithm (Vanguard 2025)
+        - 6th life stage (Prep for Retirement)
+        - RMD lookback optimisation
+        - Dynamic SSI calculator with COLA
+        - Portfolio rebalancing with drift detection
+        - Tax-loss and tax-gain harvesting
+        - Estate planning page with checklist and document tracker
+        - Retirement Readiness Indicator (RRI) composite score
+        - Flow-of-funds Graphviz diagram
+        - 8-tab configuration page
+        - 50-state income tax implementation
+        - Payroll tax calculation (FICA, Medicare, FUTA, SUTA)
+        - AMT calculation
+        - NIIT at 3.8%
+        - IRMAA with 2-year lookback
+        - DAF contribution optimisation
+        - Historical net worth trend chart
