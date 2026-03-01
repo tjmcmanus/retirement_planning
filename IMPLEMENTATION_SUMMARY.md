@@ -1,11 +1,30 @@
 # Financial Planner — Implementation Summary
 
-> **Last Updated:** 2026-02-28
+> **Last Updated:** 2026-03-01
 > Covers all major features implemented through the current date.
 
 ---
 
-## Latest Feature: Portfolio Rebalancing (2026-02-28)
+## Latest Update: Documentation Overhaul (2026-03-01)
+
+### What Was Updated
+
+#### Updated Documentation Files
+| File | Changes |
+|------|---------|
+| [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) | Added complete `income` section field reference; added `personal_info` retirement year fields (`person1_retirement_year`, `person2_retirement_year`, `retirement_state`, `children`); added `aca_marketplace_enrolled` explanation; added new `charitable_giving` section; added `portfolio_accounts` section; added 4 configuration scenario examples; updated JSON structure to match actual `config.py` defaults |
+| [`STRATEGY_README.md`](STRATEGY_README.md) | Corrected title from "5 Stages" to "6 Stages"; fixed duplicate Stage 4 numbering; added BETR Integration section with decision table and configuration reference; added cash buffer maintenance formulas for all stages; added Fund Movement Tracking table; added Emergency Distribution Protocol; updated `LifeStage` class list to all 6 stages |
+| [`SSI_INTEGRATION_GUIDE.md`](SSI_INTEGRATION_GUIDE.md) | Added "Integration with `income_expense.py`" section covering `generate_ssi_schedule_from_config()` usage, per-year lookup pattern, comparison table between Dashboard and Strategy tab SSI paths, SSI flow through simulation, manual schedule generation, and Dashboard-specific troubleshooting |
+
+#### New Documentation Files
+| File | Description |
+|------|-------------|
+| [`INCOME_EXPENSE_GUIDE.md`](INCOME_EXPENSE_GUIDE.md) | Complete guide for `income_expense.py` — architecture diagram, public API, all dataclasses (`SimulationConfig`, `SimulationState`, `YearResult`), all helper functions with signatures and examples, constants table, module integration map, logging reference, error handling table, troubleshooting |
+| [`PORTFOLIO_DATA_ENTRY_GUIDE.md`](PORTFOLIO_DATA_ENTRY_GUIDE.md) | Complete guide for `portfolio_data_entry.py` — CSV format specification, valid account types and sectors, `MF:CASH` special handling, first-time setup workflow, monthly update workflow, account change procedures, full API reference for all 9 functions, backup/restore procedures, troubleshooting, integration diagram |
+
+---
+
+## Previous Feature: Portfolio Rebalancing (2026-02-28)
 
 ### What Was Built
 

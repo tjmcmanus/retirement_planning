@@ -1,6 +1,6 @@
-# Retirement Portfolio Withdrawal Strategy - 5 Stages of Life
+# Retirement Portfolio Withdrawal Strategy - 6 Stages of Life
 
-A comprehensive Python module for calculating optimal retirement withdrawal strategies across 5 distinct life stages, with tax optimization, Roth conversions, IRMAA management, and ACA subsidy considerations.
+A comprehensive Python module for calculating optimal retirement withdrawal strategies across 6 distinct life stages, with tax optimization, Roth conversions, IRMAA management, and ACA subsidy considerations.
 
 ## Overview
 
@@ -10,13 +10,20 @@ This module implements a sophisticated withdrawal strategy that adapts to differ
 2. **Stage 2: Prep for Retirement** - Within 10 years of retirement; cash buffer linearly ramps from wages-based target to 75% of full retirement reserve
 3. **Stage 3: Early Retirement** - Pre-Medicare, pre-SS, pre-RMD with aggressive Roth conversions
 4. **Stage 4: Medicare** - On Medicare, optimizing for IRMAA while continuing conversions
-4. **Stage 4: Social Security** - Collecting SS + Medicare, balancing taxation
-5. **Stage 5: RMD** - Managing Required Minimum Distributions with full retirement income
+5. **Stage 5: Social Security** - Collecting SS + Medicare, balancing taxation
+6. **Stage 6: RMD** - Managing Required Minimum Distributions with full retirement income
 
 ## Key Features
 
+### BETR-Validated Roth Conversions
+- **Break-Even Tax Rate (BETR)**: Uses Vanguard's BETR methodology to determine whether a conversion is financially beneficial before executing it
+- **Tax Payment Source**: Accounts for whether conversion taxes are paid from taxable account (preferred) or IRA assets
+- **Nontaxable Basis**: Adjusts BETR for after-tax contributions in Traditional IRA
+- **Backdoor Roth Enablement**: Factors in future backdoor Roth contribution opportunities
+- **Bracket Optimization**: Converts up to `max_roth_conversion_tax_rate` (configured in `config.py`) each year
+
 ### Tax Optimization
-- **Roth Conversions**: Automatically calculates optimal conversion amounts to fill lower tax brackets
+- **Roth Conversions**: Automatically calculates optimal conversion amounts to fill lower tax brackets, validated by BETR analysis
 - **LTCG Harvesting**: Harvests long-term capital gains at 0% or 15% rates when beneficial
 - **Tax Bracket Management**: Stays within target tax brackets (12%, 22%, 24%)
 - **Standard Deduction**: Fully utilizes standard deduction each year
@@ -149,12 +156,13 @@ Contains a single year's withdrawal strategy with:
 - End-of-year balances
 
 #### `LifeStage` Classes
-Five stage-specific strategy calculators:
-- `Stage1Accumulation` - Working years
-- `Stage2EarlyRetirement` - Pre-Medicare retirement
-- `Stage3Medicare` - Medicare with IRMAA optimization
-- `Stage4SocialSecurity` - SS + Medicare
-- `Stage5RMD` - RMD compliance
+Six stage-specific strategy calculators:
+- [`Stage1Accumulation`](strategy.py:1) - Working years with configurable contribution rates
+- [`Stage2PrepForRetirement`](strategy.py:1) - Within 10 years of retirement; cash buffer ramp
+- [`Stage3EarlyRetirement`](strategy.py:1) - Pre-Medicare retirement with aggressive Roth conversions
+- [`Stage4Medicare`](strategy.py:1) - Medicare with IRMAA optimization
+- [`Stage5SocialSecurity`](strategy.py:1) - SS + Medicare taxation management
+- [`Stage6RMD`](strategy.py:1) - RMD compliance
 
 #### `WithdrawalStrategyEngine`
 Main calculation engine that:
@@ -266,69 +274,91 @@ python example_strategy.py
 
 ### Stage 1: Accumulation
 **When:** Still employed with wages (more than 10 years before retirement)
-**Focus:** Tax-efficient contributions  
+**Focus:** Tax-efficient contributions and cash buffer building
 **Actions:**
-- Maximize 401k/IRA contributions
-- Choose Roth vs Traditional based on tax bracket
-- Build emergency fund
-- No withdrawals
+- Route wages to Traditional 401k at `contribution_401k_percent` rate (pre-tax, reduces AGI)
+- Route wages to Roth 401k/IRA at `contribution_roth_percent` rate
+- Route wages to brokerage at `contribution_brokerage_percent` rate
+- Remaining take-home cash fills the cash buffer (target: `accumulation_cash_buffer_months` × monthly wages)
+- Any surplus above the cash buffer target also flows to brokerage
+- No portfolio withdrawals
+
+**Cash Buffer Target (Stage 1):**
+```
+target_cash = (person1_wages + person2_wages) / 12 × accumulation_cash_buffer_months
+```
 
 ### Stage 2: Prep for Retirement
 **When:** Still employed with wages, within 10 years of the earlier retirement date
 
 **Key behaviors:**
 - All Stage 1 contribution logic applies (Traditional 401k, Roth, brokerage)
-- Cash buffer target linearly ramps from the wages-based accumulation target (at 10 years out) to 75% of the full retirement cash reserve (at 1 year out)
+- Cash buffer target **linearly ramps** from the wages-based accumulation target (at 10 years out) to 75% of the full retirement cash reserve (at 1 year out)
 - BETR-validated Roth conversions continue if in a favorable bracket
 - Backdoor Roth IRA executed if income exceeds direct Roth IRA limit
 
+**Cash Buffer Ramp Formula:**
+```
+years_to_retirement = retirement_year - current_year
+ramp_fraction = (10 - years_to_retirement) / 9   # 0.0 at 10 yrs, 1.0 at 1 yr
+retirement_cash_target = expected_annual_expenses × years_of_expenses_in_cash
+target_cash = wages_target + ramp_fraction × (0.75 × retirement_cash_target - wages_target)
+```
+
 ### Stage 3: Early Retirement
 **When:** Retired, pre-Medicare, pre-SS, pre-RMD
-**Focus:** Roth conversion opportunity  
+**Focus:** Roth conversion opportunity
 **Actions:**
-- Aggressive Roth conversions (fill 12% or 22% bracket)
+- Aggressive BETR-validated Roth conversions (fill 12% or 22% bracket up to `max_roth_conversion_tax_rate`)
 - Harvest LTCG at 0% rate when possible
 - Use taxable account for living expenses
-- Optimize for ACA subsidies (keep MAGI < 400% FPL)
-- 4% withdrawal rate
+- Optimize for ACA subsidies when `aca_marketplace_enrolled = true` (keep MAGI < 400% FPL)
+- Maintain 2-year cash buffer + 3-year brokerage buffer
+
+**Cash Buffer Maintenance (Retirement Stages 3–6):**
+```
+cash_target    = expected_annual_expenses × 2          # 2-year cash cushion
+brokerage_min  = expected_annual_expenses × 3          # 3-year brokerage buffer
+```
+When cash falls below target, the engine draws from brokerage before touching Traditional or Roth accounts.
 
 **Tax Strategy:**
-- Convert Traditional → Roth up to target bracket
+- Convert Traditional → Roth up to `max_roth_conversion_tax_rate` bracket, subject to BETR validation
 - Harvest LTCG to fund expenses at 0% rate
-- Minimize taxable income for ACA subsidies
+- Minimize taxable income for ACA subsidies when enrolled
 
-### Stage 3: Medicare
-**When:** On Medicare, pre-SS, pre-RMD  
-**Focus:** IRMAA optimization  
+### Stage 4: Medicare
+**When:** On Medicare, pre-SS, pre-RMD
+**Focus:** IRMAA optimization
 **Actions:**
-- Continue Roth conversions but watch IRMAA thresholds
+- Continue BETR-validated Roth conversions but watch IRMAA thresholds
 - Balance conversion benefits vs IRMAA penalties
-- Stay below next IRMAA bracket
-- Use 2-year MAGI lookback for planning
+- Stay below next IRMAA bracket using 2-year MAGI lookback
+- Maintain 2-year cash + 3-year brokerage buffer
 
 **IRMAA Thresholds (2024):**
-- $103,000 - $129,000: +$69.90/month
-- $129,000 - $161,000: +$174.70/month
-- $161,000 - $193,000: +$279.50/month
+- $103,000 – $129,000: +$69.90/month
+- $129,000 – $161,000: +$174.70/month
+- $161,000 – $193,000: +$279.50/month
 - $193,000+: Higher penalties
 
-### Stage 4: Social Security
-**When:** Collecting SS, on Medicare, pre-RMD  
-**Focus:** SS taxation and IRMAA  
+### Stage 5: Social Security
+**When:** Collecting SS, on Medicare, pre-RMD
+**Focus:** SS taxation and IRMAA
 **Actions:**
-- Receive SS benefits (up to 85% taxable)
+- Receive SS benefits (up to 85% taxable); benefits calculated dynamically via [`ssi_calculator.py`](ssi_calculator.py:1)
 - Limited Roth conversions (SS increases MAGI)
 - Manage IRMAA with SS income
-- Supplement with portfolio withdrawals
+- Supplement with portfolio withdrawals as needed
 
 **Tax Considerations:**
 - 85% of SS is taxable at higher incomes
 - SS + conversions can trigger IRMAA
 - Balance conversion benefits vs higher taxation
 
-### Stage 5: RMD
-**When:** Age 73+ (SECURE Act 2.0)  
-**Focus:** RMD compliance and tax management  
+### Stage 6: RMD
+**When:** Age 73+ (SECURE Act 2.0)
+**Focus:** RMD compliance and tax management
 **Actions:**
 - Take Required Minimum Distributions
 - RMDs may fill lower tax brackets
@@ -336,9 +366,54 @@ python example_strategy.py
 - Focus on tax-efficient withdrawal sequencing
 
 **RMD Calculation:**
-- Traditional IRA balance ÷ Life Expectancy Factor
+- Traditional IRA balance ÷ Life Expectancy Factor (from `rmd.csv`)
 - Must withdraw by December 31 each year
 - 50% penalty for missed RMDs
+
+## BETR Integration
+
+The withdrawal strategy uses the BETR (Break-Even Tax Rate) algorithm from [`betr_roth_conversion.py`](betr_roth_conversion.py:1) to validate every Roth conversion before executing it.
+
+### How BETR Is Used in the Strategy
+
+```python
+from betr_roth_conversion import optimize_conversion_amount, BETRInputs, calculate_betr
+
+# In Stage 2 / Stage 3 — determine optimal conversion amount
+optimal_amount, betr_results = optimize_conversion_amount(
+    traditional_ira_balance=balances.traditional,
+    current_agi=current_agi,
+    target_tax_bracket=max_roth_conversion_tax_rate / 100,
+    year=current_year,
+    pay_from_taxable=True,
+    taxable_account_balance=balances.taxable
+)
+
+# Only convert if BETR analysis recommends it
+if betr_results.conversion_recommended:
+    execute_roth_conversion(optimal_amount)
+```
+
+### BETR Decision Logic
+
+| Condition | Action |
+|-----------|--------|
+| Expected future rate > BETR | ✅ Convert — financially beneficial |
+| Expected future rate ≤ BETR | ❌ Skip — not beneficial at this time |
+| IRMAA threshold would be crossed | ⚠️ Reduce conversion to stay below threshold |
+| ACA subsidy cliff would be hit | ⚠️ Reduce conversion to stay below 400% FPL |
+
+### Configuration
+
+The maximum tax rate for conversions is set in [`config.py`](config.py:59):
+```json
+"tax_strategy": {
+    "max_roth_conversion_tax_rate": 12
+}
+```
+Change this to `22` or `24` to allow conversions into higher brackets.
+
+See [`BETR_GUIDE.md`](BETR_GUIDE.md) for full BETR algorithm documentation.
 
 ## Tax Optimization Strategies
 
@@ -426,6 +501,26 @@ Override tax calculation functions in `calculations.py` for:
 - Net Investment Income Tax (NIIT)
 - Custom deductions
 
+## Fund Movement Tracking
+
+The engine tracks all fund movements across accounts each year:
+
+| Movement | Source | Destination | Tax Event |
+|----------|--------|-------------|-----------|
+| Roth conversion | Traditional | Roth | Ordinary income |
+| LTCG harvest | Taxable (sell) | Taxable (rebuy) | 0% or 15% LTCG |
+| RMD | Traditional | Cash/Brokerage | Ordinary income |
+| SS benefits | External | Cash | Up to 85% taxable |
+| Living expenses | Cash | Out | None |
+| Portfolio withdrawal | Brokerage → Traditional → Roth | Cash | Varies |
+
+### Emergency Distribution Protocol
+
+When cash falls below the 2-year buffer target:
+1. Draw from brokerage (taxable account) first — LTCG rates apply
+2. If brokerage exhausted, draw from Traditional — ordinary income rates
+3. Draw from Roth only as last resort — tax-free but reduces future tax-free growth
+
 ## Performance Considerations
 
 - **Caching**: Uses `@st.cache_data` for expensive calculations
@@ -500,7 +595,8 @@ This module is part of the retirement planning application.
 
 ## Author
 
-IBM Bob - 2026-02-22
+Bob — 2026-02-22
+Last Updated: 2026-03-01
 
 ---
 

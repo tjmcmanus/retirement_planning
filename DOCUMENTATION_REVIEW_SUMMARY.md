@@ -1,5 +1,5 @@
 # Documentation Review Summary
-Last Updated: 2026-02-28
+Last Updated: 2026-03-01
 Original Review Date: 2026-02-27
 
 ## Overview
@@ -257,6 +257,14 @@ Comprehensive review of all code and documentation files to identify gaps, incon
 
 ## Action Items Summary
 
+### Completed (2026-03-01):
+- [x] Update `CONFIG_GUIDE.md` — added complete `income` section field reference table; added `personal_info` retirement year fields (`person1_retirement_year`, `person2_retirement_year`, `retirement_state`, `children`); added `aca_marketplace_enrolled` explanation with ACA subsidy optimization note; added new `charitable_giving` section with all 10 fields; added `portfolio_accounts` section; added 4 configuration scenario examples; updated JSON structure to match actual `config.py` defaults
+- [x] Update `STRATEGY_README.md` — corrected title from "5 Stages" to "6 Stages"; fixed duplicate Stage 4 numbering; added BETR Integration section; added cash buffer maintenance formulas; added Fund Movement Tracking table; added Emergency Distribution Protocol; updated `LifeStage` class list
+- [x] Create `INCOME_EXPENSE_GUIDE.md` — complete module guide with architecture diagram, public API, all dataclasses, all helper functions, constants, integration map, logging reference, error handling, troubleshooting
+- [x] Create `PORTFOLIO_DATA_ENTRY_GUIDE.md` — CSV format spec, valid values, `MF:CASH` handling, first-time setup workflow, monthly update workflow, full API reference, backup/restore procedures, troubleshooting, integration diagram
+- [x] Update `SSI_INTEGRATION_GUIDE.md` — added "Integration with `income_expense.py`" section covering `generate_ssi_schedule_from_config()` usage, comparison table between Dashboard and Strategy tab SSI paths, SSI flow through simulation, manual schedule generation, Dashboard-specific troubleshooting
+- [x] Update `IMPLEMENTATION_SUMMARY.md` — added 2026-03-01 documentation overhaul entry at top
+
 ### Completed (2026-02-28):
 - [x] Create DOCUMENTATION_REVIEW_SUMMARY.md (this file)
 - [x] Update README.md — added `tax_harvesting.py`, `portfolio_rebalancing.py` to project structure, Key Modules, and Features sections; added new "Recent Updates" entry for portfolio rebalancing
@@ -267,16 +275,18 @@ Comprehensive review of all code and documentation files to identify gaps, incon
 ### Completed (2026-02-27):
 - [x] Create DOCUMENTATION_REVIEW_SUMMARY.md (this file)
 
-### Still Pending:
-- [ ] Update CONFIG_GUIDE.md with income section (`person1_annual_wages`, `wage_inflation_rate`, `aca_marketplace_enrolled`)
-- [ ] Update STRATEGY_README.md with BETR integration and buffer maintenance strategy
-- [ ] Create PORTFOLIO_DATA_ENTRY_GUIDE.md — user workflow, validation rules, CSV format
-- [ ] Create INCOME_EXPENSE_GUIDE.md — module overview, function docs, RMD handling
-- [ ] Update SSI_INTEGRATION_GUIDE.md — add income_expense.py integration examples
-- [ ] Create DATA_FILES_GUIDE.md — document all CSV files, dependencies, regeneration
+### Still Pending (lower priority):
+- [ ] Create `DATA_FILES_GUIDE.md` — document all CSV files, dependencies, regeneration procedures
 - [ ] Add test documentation (coverage report, running guide, test data requirements)
-- [ ] Standardize formatting across all docs
-- [ ] Add cross-references between docs
+- [ ] Standardize formatting across all docs (consistent heading levels, code block usage)
+
+### New Documentation Added (2026-03-01):
+- [x] `INCOME_EXPENSE_GUIDE.md` — Dashboard simulation module guide (340 lines)
+- [x] `PORTFOLIO_DATA_ENTRY_GUIDE.md` — Portfolio data entry workflow and API guide (310 lines)
+- [x] `CONFIG_GUIDE.md` updated — income section, retirement year fields, ACA flag, charitable giving, scenario examples
+- [x] `STRATEGY_README.md` updated — 6-stage correction, BETR integration, buffer maintenance, fund movement tracking
+- [x] `SSI_INTEGRATION_GUIDE.md` updated — income_expense.py integration section
+- [x] `IMPLEMENTATION_SUMMARY.md` updated — 2026-03-01 documentation overhaul entry
 
 ### New Documentation Added (2026-02-28):
 - [x] `PORTFOLIO_REBALANCING_GUIDE.md` — Portfolio rebalancing concepts, API, examples
@@ -285,18 +295,23 @@ Comprehensive review of all code and documentation files to identify gaps, incon
 
 ## Conclusion
 
-The codebase is well-structured and functional. Documentation has been significantly improved in the 2026-02-28 update. Remaining gaps:
+The codebase is well-structured and functional. Documentation is now substantially complete as of 2026-03-01.
 
-1. **Missing documentation** for `income_expense.py` and `portfolio_data_entry.py` modules
-2. **Incomplete integration documentation** for BETR algorithm in `STRATEGY_README.md`
-3. **Missing user guides** for portfolio data entry workflow and configuration scenarios
-4. **CONFIG_GUIDE.md** needs income section (`wages`, `wage_inflation_rate`, `aca_marketplace_enrolled`)
+**All high-priority and medium-priority documentation gaps have been resolved:**
 
-The new `PORTFOLIO_REBALANCING_GUIDE.md` and updated `README.md` / `IMPLEMENTATION_SUMMARY.md`
-bring the documentation substantially up to date for the portfolio management features.
+1. ✅ `income_expense.py` — fully documented in `INCOME_EXPENSE_GUIDE.md`
+2. ✅ `portfolio_data_entry.py` — fully documented in `PORTFOLIO_DATA_ENTRY_GUIDE.md`
+3. ✅ BETR algorithm integration — documented in updated `STRATEGY_README.md`
+4. ✅ `CONFIG_GUIDE.md` — income section, retirement year fields, ACA flag, charitable giving all added
+5. ✅ SSI integration with `income_expense.py` — documented in updated `SSI_INTEGRATION_GUIDE.md`
+6. ✅ 6-stage strategy correction — `STRATEGY_README.md` title and stage list corrected
+
+**Remaining lower-priority items:**
+- `DATA_FILES_GUIDE.md` — CSV file dependency documentation
+- Test coverage documentation
 
 ---
 **Original Review Date**: 2026-02-27
-**Last Updated**: 2026-02-28
+**Last Updated**: 2026-03-01
 **Reviewer**: Bob
-**Status**: Partially complete — rebalancing docs added; CONFIG/STRATEGY/income_expense docs still pending
+**Status**: ✅ All high/medium priority items complete — lower priority items remain
