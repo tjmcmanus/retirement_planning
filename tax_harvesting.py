@@ -822,3 +822,294 @@ def compute_net_tax_impact(
     )
 
 # Made with Bob
+
+
+# ---------------------------------------------------------------------------
+# Donor Advised Fund (DAF) bundling analysis
+# ---------------------------------------------------------------------------
+
+# IRS deduction limits for DAF contributions (IRC §170)
+# Cash contributions to a DAF: 60% of AGI (post-TCJA)
+# Appreciated securities donated to a DAF: 30% of AGI
+DAF_CASH_DEDUCTION_LIMIT_PCT: float = 0.60
+DAF_SECURITIES_DEDUCTION_LIMIT_PCT: float = 0.30
+
+# Minimum unrealized gain to flag a security as a DAF donation candidate.
+# Donating low-cost-basis securities avoids capital gains tax entirely.
+DAF_MIN_GAIN_FOR_DONATION: float = 500.0
+
+# Minimum holding period (days) for a security to qualify as long-term
+# appreciated property for DAF donation (IRS requires > 1 year).
+DAF_MIN_HOLDING_DAYS: int = 366
+
+
+@dataclass(frozen=True)
+class DAFDonationCandidate:
+    """A brokerage security flagged as a strong DAF donation candidate."""
+    account:        str
+    symbol:         str
+    name:           str
+    qty:            float
+    cost_basis:     float
+    current_value:  float
+    unrealized_gain: float
+    gain_pct:       float
+    days_held:      int
+    gain_type:      str   # 'Long-Term' or 'Short-Term'
+    avoided_cg_tax: float  # estimated capital gains tax avoided by donating vs. selling
+
+
+@dataclass(frozen=True)
+class DAFBundlingAnalysis:
+    """
+    Full DAF bundling recommendation for a tax year.
+
+    Bundling means concentrating multiple years of charitable giving into a
+    single high-deduction year (using the DAF as a pass-through), then
+    distributing grants to charities over subsequent years.
+    """
+    estimated_agi:          float
+    standard_deduction:     float
+    years_to_bundle:        int       # how many years of giving to front-load
+    annual_giving:          float     # normal annual charitable giving amount
+    bundled_contribution:   float     # total DAF contribution in the bundle year
+    deductible_amount:      float     # actual deductible amount (AGI-limited)
+    carryforward_amount:    float     # excess carried forward (5-year carryforward)
+    tax_savings_vs_standard: float    # incremental tax savings vs. taking std deduction
+    marginal_rate:          float
+    securities_candidates:  list      # list of DAFDonationCandidate
+    total_securities_value: float     # total FMV of flagged securities
+    total_avoided_cg_tax:   float     # total CG tax avoided by donating securities
+    recommendation:         str
+    notes:                  list      # list of str
+
+
+def identify_daf_candidates(
+    analysis_df: pd.DataFrame,
+    min_gain: float = DAF_MIN_GAIN_FOR_DONATION,
+    min_days: int = DAF_MIN_HOLDING_DAYS,
+) -> list[DAFDonationCandidate]:
+    """
+    Identify brokerage securities that are strong candidates for DAF donation.
+
+    The ideal DAF donation candidate is a long-term appreciated security:
+    - Held > 1 year (qualifies for FMV deduction, not just cost basis)
+    - Has a significant unrealized gain (avoids capital gains tax on donation)
+    - Donating FMV to DAF = full FMV deduction + zero capital gains tax
+
+    Args:
+        analysis_df: Output of build_harvesting_analysis() — brokerage holdings
+                     with Current Value, Cost Basis, Unrealized G/L, Days Held,
+                     Gain Type columns.
+        min_gain:    Minimum unrealized gain ($) to flag as a candidate.
+        min_days:    Minimum holding period (days) to qualify as long-term.
+
+    Returns:
+        List of DAFDonationCandidate sorted by unrealized_gain descending.
+    """
+    if analysis_df.empty:
+        return []
+
+    required = {"Symbol", "Account", "Name", "Qty", "Cost Basis",
+                "Current Value", "Unrealized G/L", "Days Held", "Gain Type"}
+    missing = required - set(analysis_df.columns)
+    if missing:
+        logger.warning("identify_daf_candidates: missing columns %s", missing)
+        return []
+
+    # Filter: long-term, meaningful gain
+    mask = (
+        (analysis_df["Unrealized G/L"] >= min_gain)
+        & (analysis_df["Days Held"] >= min_days)
+        & (analysis_df["Gain Type"] == "Long-Term")
+    )
+    candidates_df = analysis_df[mask].copy()
+
+    if candidates_df.empty:
+        return []
+
+    results: list[DAFDonationCandidate] = []
+    for _, row in candidates_df.iterrows():
+        gain      = float(row["Unrealized G/L"])
+        cv        = float(row["Current Value"])
+        cb        = float(row["Cost Basis"])
+        gain_pct  = (gain / cb * 100) if cb > 0 else 0.0
+        # Estimated CG tax avoided: long-term gain × 15% (conservative mid-bracket estimate)
+        avoided   = gain * 0.15
+
+        results.append(DAFDonationCandidate(
+            account        = str(row["Account"]),
+            symbol         = str(row["Symbol"]),
+            name           = str(row["Name"]),
+            qty            = float(row["Qty"]),
+            cost_basis     = cb,
+            current_value  = cv,
+            unrealized_gain= gain,
+            gain_pct       = gain_pct,
+            days_held      = int(row["Days Held"]),
+            gain_type      = str(row["Gain Type"]),
+            avoided_cg_tax = avoided,
+        ))
+
+    return sorted(results, key=lambda c: c.unrealized_gain, reverse=True)
+
+
+def analyze_daf_bundling(
+    estimated_agi:      float,
+    annual_giving:      float,
+    years_to_bundle:    int,
+    marginal_rate:      float,
+    standard_deduction: float,
+    ltcg_rate:          float,
+    securities_candidates: list[DAFDonationCandidate],
+    year:               int = 2024,
+) -> DAFBundlingAnalysis:
+    """
+    Compute a full DAF bundling recommendation.
+
+    Bundling strategy:
+    1. Front-load N years of charitable giving into one DAF contribution.
+    2. Donate appreciated securities (FMV deductible, zero CG tax) first.
+    3. Top up with cash to reach the bundled target.
+    4. Deduct the bundled amount (up to AGI limits) in the bundle year.
+    5. Distribute grants from the DAF to charities over subsequent years.
+
+    IRS limits (IRC §170):
+    - Appreciated securities donated to DAF: deductible up to 30% of AGI.
+    - Cash donated to DAF: deductible up to 60% of AGI.
+    - Excess carries forward up to 5 years.
+
+    Args:
+        estimated_agi:          Estimated AGI for the bundle year.
+        annual_giving:          Normal annual charitable giving amount.
+        years_to_bundle:        Number of years of giving to front-load (2–5).
+        marginal_rate:          Marginal federal income tax rate (e.g. 0.22).
+        standard_deduction:     Standard deduction for the filing status/year.
+        ltcg_rate:              Applicable LTCG rate (0.0, 0.15, or 0.20).
+        securities_candidates:  Output of identify_daf_candidates().
+        year:                   Tax year (for reference).
+
+    Returns:
+        DAFBundlingAnalysis dataclass with full recommendation details.
+    """
+    years_to_bundle = max(1, min(years_to_bundle, 5))
+    bundled_target  = annual_giving * years_to_bundle
+
+    # ── Step 1: Allocate securities donations first (up to 30% AGI limit) ──
+    securities_limit = estimated_agi * DAF_SECURITIES_DEDUCTION_LIMIT_PCT
+    securities_value = 0.0
+    avoided_cg_total = 0.0
+    used_candidates: list[DAFDonationCandidate] = []
+
+    for cand in securities_candidates:
+        if securities_value >= min(bundled_target, securities_limit):
+            break
+        remaining_room = min(bundled_target, securities_limit) - securities_value
+        if cand.current_value <= remaining_room:
+            used_candidates.append(cand)
+            securities_value  += cand.current_value
+            avoided_cg_total  += cand.avoided_cg_tax
+        else:
+            # Partial donation (donate enough shares to fill the room)
+            partial_ratio = remaining_room / cand.current_value if cand.current_value > 0 else 0
+            partial_gain  = cand.unrealized_gain * partial_ratio
+            partial_avoid = partial_gain * ltcg_rate
+            used_candidates.append(DAFDonationCandidate(
+                account         = cand.account,
+                symbol          = cand.symbol,
+                name            = cand.name,
+                qty             = cand.qty * partial_ratio,
+                cost_basis      = cand.cost_basis * partial_ratio,
+                current_value   = remaining_room,
+                unrealized_gain = partial_gain,
+                gain_pct        = cand.gain_pct,
+                days_held       = cand.days_held,
+                gain_type       = cand.gain_type,
+                avoided_cg_tax  = partial_avoid,
+            ))
+            securities_value  += remaining_room
+            avoided_cg_total  += partial_avoid
+            break
+
+    # ── Step 2: Top up with cash to reach bundled target ───────────────────
+    cash_needed = max(0.0, bundled_target - securities_value)
+    cash_limit  = estimated_agi * DAF_CASH_DEDUCTION_LIMIT_PCT
+
+    # Total deductible = securities (30% limit) + cash (60% limit, but combined
+    # cannot exceed 60% of AGI per IRC §170(b)(1)(G))
+    total_contribution = securities_value + cash_needed
+    combined_limit     = estimated_agi * DAF_CASH_DEDUCTION_LIMIT_PCT  # 60% overall cap
+    deductible_amount  = min(total_contribution, combined_limit)
+    carryforward       = max(0.0, total_contribution - deductible_amount)
+
+    # ── Step 3: Incremental tax savings vs. taking standard deduction ───────
+    # Only the amount ABOVE the standard deduction generates incremental savings
+    itemized_deduction = deductible_amount
+    incremental_deduction = max(0.0, itemized_deduction - standard_deduction)
+    tax_savings = incremental_deduction * marginal_rate
+
+    # ── Step 4: Build recommendation and notes ──────────────────────────────
+    notes: list[str] = []
+
+    if bundled_target <= standard_deduction:
+        recommendation = "⚪ Bundling not beneficial — contribution below standard deduction"
+        notes.append(
+            f"Your {years_to_bundle}-year bundled contribution of "
+            f"${bundled_target:,.0f} does not exceed the standard deduction "
+            f"(${standard_deduction:,.0f}). Consider bundling more years or "
+            f"increasing annual giving to make itemizing worthwhile."
+        )
+    elif incremental_deduction < 1_000:
+        recommendation = "🟡 Marginal benefit — small incremental deduction over standard"
+        notes.append(
+            f"Bundled contribution of ${bundled_target:,.0f} exceeds the standard "
+            f"deduction by only ${incremental_deduction:,.0f}. Tax savings are modest."
+        )
+    else:
+        recommendation = "🟢 Bundle recommended — significant tax savings identified"
+        notes.append(
+            f"Front-loading {years_to_bundle} years of giving (${bundled_target:,.0f}) "
+            f"into a single DAF contribution generates ~${tax_savings:,.0f} in incremental "
+            f"federal tax savings vs. taking the standard deduction each year."
+        )
+
+    if used_candidates:
+        notes.append(
+            f"Donate {len(used_candidates)} appreciated security position(s) "
+            f"(FMV ${securities_value:,.0f}) to avoid ~${avoided_cg_total:,.0f} "
+            f"in capital gains tax. Donate securities BEFORE selling."
+        )
+    else:
+        notes.append(
+            "No long-term appreciated securities identified for donation. "
+            "Consider a cash contribution to the DAF."
+        )
+
+    if carryforward > 0:
+        notes.append(
+            f"${carryforward:,.0f} of your contribution exceeds the AGI deduction limit "
+            f"and carries forward for up to 5 years (IRC §170(d))."
+        )
+
+    if cash_needed > 0:
+        notes.append(
+            f"After securities donations, contribute an additional "
+            f"${cash_needed:,.0f} cash to reach your {years_to_bundle}-year bundled target."
+        )
+
+    return DAFBundlingAnalysis(
+        estimated_agi          = estimated_agi,
+        standard_deduction     = standard_deduction,
+        years_to_bundle        = years_to_bundle,
+        annual_giving          = annual_giving,
+        bundled_contribution   = total_contribution,
+        deductible_amount      = deductible_amount,
+        carryforward_amount    = carryforward,
+        tax_savings_vs_standard= tax_savings,
+        marginal_rate          = marginal_rate,
+        securities_candidates  = used_candidates,
+        total_securities_value = securities_value,
+        total_avoided_cg_tax   = avoided_cg_total,
+        recommendation         = recommendation,
+        notes                  = notes,
+    )

@@ -9,10 +9,10 @@ from streamlit_card import card
 from streamlit_extras.metric_cards import style_metric_cards 
 from streamlit_extras.add_vertical_space import add_vertical_space
 import graphviz
-from load_data import get_month_account_values,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month, get_portfolio_truth_by_month
+from load_data import get_month_account_values,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month, get_portfolio_truth_by_month, get_latest_portfolio_month_year
 from strategy import build_withdrawal_strategy_display, build_accumulation_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
-from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display
+from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display,get_effective_portfolio_month_year
 from tax_harvesting import (
     build_harvesting_analysis,
     classify_harvest_opportunities,
@@ -22,6 +22,10 @@ from tax_harvesting import (
     compute_net_tax_impact,
     get_ltcg_zero_threshold,
     get_ltcg_rate_for_income,
+    identify_daf_candidates,
+    analyze_daf_bundling,
+    DAFDonationCandidate,
+    DAFBundlingAnalysis,
 )
 from portfolio_rebalancing import (
     compute_rebalance_plan,
@@ -156,6 +160,16 @@ def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
 currentDate = datetime.date.today()
 curr_year = currentDate.year
 curr_month = currentDate.month
+
+# Determine the effective portfolio month/year (falls back to most recent if
+# current month has no data yet).
+_eff_port_month, _eff_port_year = get_effective_portfolio_month_year(curr_month, curr_year)
+_portfolio_data_stale = (_eff_port_month != curr_month or _eff_port_year != curr_year)
+import calendar as _calendar
+_stale_label = (
+    f"{_calendar.month_name[_eff_port_month]} {_eff_port_year}"
+    if _portfolio_data_stale else ""
+)
 
 # ---------------------------------------------------------------------------
 # Module-level helpers shared across tabs
@@ -466,26 +480,29 @@ def _nw_type_rows(
     td_span  = f'style="{_td_base}border-left:4px solid {accent};text-align:left;font-weight:700;vertical-align:middle;"'
     td_total = f'style="{_td_base}text-align:right;font-weight:600;vertical-align:middle;"'
 
-    # Use itertuples() uniformly for all rows — consistent attribute access,
-    # avoids the mixed iloc[0]/label-index pattern that breaks on column rename.
-    rows: list[str] = []
-    for i, row in enumerate(accounts.itertuples(index=False)):
-        if i == 0:
-            rows.append(
-                f'<tr>'
-                f'<td rowspan="{n}" {td_span}>{label}</td>'
-                f'<td rowspan="{n}" {td_total}>{_fmt_currency(type_total)}</td>'
-                f'<td {td_r}>{_fmt_currency(float(row.market_value))}</td>'
-                f'<td {td_l}>{str(row.account_name)}</td>'
-                f'</tr>'
-            )
-        else:
-            rows.append(
-                f'<tr>'
-                f'<td {td_r}>{_fmt_currency(float(row.market_value))}</td>'
-                f'<td {td_l}>{str(row.account_name)}</td>'
-                f'</tr>'
-            )
+    # Cache the formatted total — loop-invariant value, computed once (Proposal B)
+    fmt_total = _fmt_currency(type_total)
+
+    # First row: carries rowspan cells for the type label and type total (Proposal A).
+    # The caller (_build_net_worth_html) guards against empty groups, so iloc[0] is safe.
+    first = accounts.iloc[0]
+    rows: list[str] = [
+        f'<tr>'
+        f'<td rowspan="{n}" {td_span}>{label}</td>'
+        f'<td rowspan="{n}" {td_total}>{fmt_total}</td>'
+        f'<td {td_r}>{_fmt_currency(float(first["market_value"]))}</td>'
+        f'<td {td_l}>{first["account_name"]}</td>'
+        f'</tr>'
+    ]
+
+    # Remaining rows: account value and name only — no branch needed
+    for row in accounts.iloc[1:].itertuples(index=False):
+        rows.append(
+            f'<tr>'
+            f'<td {td_r}>{_fmt_currency(float(getattr(row, "market_value")))}</td>'
+            f'<td {td_l}>{getattr(row, "account_name")}</td>'
+            f'</tr>'
+        )
     return rows
 
 
@@ -701,12 +718,9 @@ def render_net_worth_statement(
 
     # Append real estate rows from configuration
     re_rows = _get_real_estate_rows()
-    if not re_rows.empty:
-        combined_df = pd.concat([detailed_df, re_rows], ignore_index=True)
-    else:
-        combined_df = detailed_df
+    combined_df = pd.concat([detailed_df, re_rows], ignore_index=True) if not re_rows.empty else detailed_df
 
-    acct_grp: pd.DataFrame = pd.DataFrame(
+    acct_grp: pd.DataFrame = (
         combined_df
         .groupby(["account_type", "account_name"], as_index=False)["market_value"]
         .sum()
@@ -715,10 +729,10 @@ def render_net_worth_statement(
     # Augment only the current-month (last) row with real estate purchase prices.
     # Adding re_total to every historical row would inflate the baseline used by
     # _compute_net_worth_summary, causing MoM/YTD/rolling gains to be understated.
-    re_total = float(re_rows["market_value"].sum()) if not re_rows.empty else 0.0
+    re_total = re_rows["market_value"].sum()
     nw_augmented = networth.copy()
     if re_total > 0:
-        nw_augmented.iloc[-1, nw_augmented.columns.get_loc("total")] += re_total
+        nw_augmented.at[nw_augmented.index[-1], "total"] += re_total
 
     summary = _compute_net_worth_summary(nw_augmented)
     html    = _build_net_worth_html(acct_grp, summary)
@@ -736,6 +750,46 @@ sidebar()
 # Build historical net worth once at module scope — shared by Dashboard and Tax Planner tabs
 networth = build_historical_networth(num_months=12)
 
+# ---------------------------------------------------------------------------
+# Background portfolio pre-warming
+# ---------------------------------------------------------------------------
+# build_portfolio_display() makes many yfinance network calls and can take
+# 10-30 seconds on first load.  We kick it off in a background thread so the
+# Dashboard renders immediately while the data is fetched in parallel.
+# The @st.cache_data() decorator on build_portfolio_display ensures that once
+# the background thread populates the cache, all subsequent calls return
+# instantly without re-fetching.
+#
+# Thread-safety note: we use a module-level threading.Event (not session_state)
+# to signal completion because session_state writes from background threads are
+# not safe in Streamlit.  The Event is stored in st.session_state as a plain
+# Python object so it persists across reruns within the same session.
+import threading as _threading
+
+def _prewarm_portfolio_cache(month: int, year: int, done_event: "_threading.Event") -> None:
+    """Populate the build_portfolio_display cache in a background thread."""
+    try:
+        build_portfolio_display(month=month, year=year)
+    except Exception:
+        pass  # Errors will surface when the foreground code calls the function
+    finally:
+        done_event.set()
+
+# Only launch the background thread once per session (not on every rerun).
+# We store the Event in session_state so it survives Streamlit reruns.
+if "_portfolio_done_event" not in st.session_state:
+    _done_event = _threading.Event()
+    st.session_state["_portfolio_done_event"] = _done_event
+    _t = _threading.Thread(
+        target=_prewarm_portfolio_cache,
+        args=(_eff_port_month, _eff_port_year, _done_event),
+        daemon=True,
+    )
+    _t.start()
+
+# Convenience flag — True once the background thread has finished
+_portfolio_cache_ready: bool = st.session_state["_portfolio_done_event"].is_set()
+
 tab1, tab3, tab_accum, tab_tax, tab_flow, tab5 = st.tabs(
     ["📊 Dashboard", "💼 Portfolio", "📈 Strategy", "🧮 Tax Planner", "💸 Flow of Funds", "⚙️ Settings"]
 )
@@ -748,32 +802,45 @@ with tab1:
    row2_col1, row2_col2, row2_col3 = st.columns(3)
    with row2_col1:
        st.markdown('<h4 style="text-align: center;">Total Net Worth</h4>', unsafe_allow_html=True)
-       fig2 = px.histogram(networth, x=networth.index, y='total', nbins=10, color="total", color_discrete_sequence=COLOR_PALETTE)
-       
+
+       # Use bar chart (not histogram) so each month is its own bar with the
+       # exact month-start date as the label — histogram bins continuous dates
+       # and produces misaligned midpoint labels (e.g. "2026-03-08").
+       _nw_labels = networth.index.strftime("%b %Y")
+       fig2 = px.bar(
+           networth,
+           x=_nw_labels,
+           y='total',
+           color='total',
+           color_continuous_scale=COLOR_PALETTE,
+       )
+
        # Calculate y-axis range with 10% padding
        y_min = networth['total'].min()
        y_max = networth['total'].max()
        y_range = y_max - y_min
        y_axis_min = y_min - (y_range * 1)
        y_axis_max = y_max + (y_range * 0.1)
-       
+
        # Configure chart layout with consistent styling
        fig2.update_layout(
            autosize=True,
-           showlegend=False,  # Consolidated: legend disabled for cleaner histogram view
+           showlegend=False,
+           coloraxis_showscale=False,
            plot_bgcolor='white',
            paper_bgcolor='white',
            xaxis=dict(
                title='Date',
-               tickfont=dict(color='black')
+               tickfont=dict(color='black'),
+               tickangle=-45,
            ),
            yaxis=dict(
                title='Net Worth',
                tickfont=dict(color='black'),
-               range=[y_axis_min, y_axis_max]  # 10% padding above and below data
-           )
+               range=[y_axis_min, y_axis_max],
+           ),
        )
-       
+
        # Render chart with responsive width
        st.plotly_chart(fig2, width='stretch')
 
@@ -964,6 +1031,13 @@ with tab1:
 
    add_vertical_space(1)
 
+   if _portfolio_data_stale:
+       st.warning(
+           f"⚠️ No portfolio data found for {_calendar.month_name[curr_month]} {curr_year}. "
+           f"Showing **{_stale_label}** data instead. Please update your portfolio data.",
+           icon="⚠️",
+       )
+
    tab1_row2_col1,tab1_row2_col2 = st.columns(2)
    with tab1_row2_col1:
        st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
@@ -972,11 +1046,11 @@ with tab1:
     # CURRENT MONTH SPEND BY CATEGORY [TREEMAP CHART]
        # 2. Select the specific row to plot
 
-       mtd_spend = get_month_account_values(curr_month,curr_year)
+       mtd_spend, _, _ = get_month_account_values(_eff_port_month, _eff_port_year)
        #print(mtd_spend)
       # monthly_balance = account_data.iloc[-1,1:15] # Select the first row
        fig_mtd_spend_by_cateogry = px.treemap(mtd_spend, path=['account_type','account_name'],
-                     values='market_value',color='market_value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']), title="")
+                     values='market_value',color='market_value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']) if mtd_spend['market_value'].sum() != 0 else 0, title="")
        fig_mtd_spend_by_cateogry.data[0].textinfo = "label+text+value+percent root"
 
        #fig_mtd_spend_by_cateogry.update_layout(margin=dict(l=0,r=0,t=0,b=0))
@@ -986,23 +1060,46 @@ with tab1:
 
    with tab1_row2_col2:
         st.markdown('<h4 style="text-align: center;">Portfolio mix</h4>', unsafe_allow_html=True)
-        portdf_with_totals = build_portfolio_display()
-        # Exclude the totals row (last row where Account == 'Portfolio Totals')
-        portdf_no_totals = portdf_with_totals[portdf_with_totals['Account'] != 'Portfolio Totals'].copy()
-        portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector'],
-        values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
-        #values='Current value',color='Current value', title="")
-        portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
-        portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
-        portfolio_by_sector.update_layout(margin = dict(t=50, l=25, r=25, b=25))
+        if not _portfolio_cache_ready:
+            # Portfolio data is still loading in the background — show a
+            # non-blocking placeholder so the rest of the Dashboard renders
+            # immediately.  The auto-rerun at the bottom of the script will
+            # refresh the page once the background fetch completes.
+            st.info(
+                "⏳ Portfolio data is loading in the background… "
+                "The chart will appear automatically once prices are fetched.",
+                icon="📊",
+            )
+        else:
+            portdf_with_totals = build_portfolio_display(month=_eff_port_month, year=_eff_port_year)
+            # Exclude the totals row (last row where Account == 'Portfolio Totals')
+            portdf_no_totals = portdf_with_totals[portdf_with_totals['Account'] != 'Portfolio Totals'].copy()
+            if portdf_no_totals.empty:
+                st.info("No portfolio data available for the current month. Please add portfolio data via the Portfolio Data Entry page.")
+            else:
+                portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector'],
+                values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']) if portdf_no_totals['Current value'].sum() != 0 else 0, title="")
+                #values='Current value',color='Current value', title="")
+                portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
+                portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
+                portfolio_by_sector.update_layout(margin = dict(t=50, l=25, r=25, b=25))
 
-        st.plotly_chart(portfolio_by_sector, width='stretch')
+                st.plotly_chart(portfolio_by_sector, width='stretch')
 
 with tab3:
     
     st.header("💼 Portfolio")
+    if _portfolio_data_stale:
+        st.warning(
+            f"⚠️ No portfolio data found for {_calendar.month_name[curr_month]} {curr_year}. "
+            f"Showing **{_stale_label}** data instead. Please update your portfolio data.",
+            icon="⚠️",
+        )
     #add_vertical_space(2)
-    portdf = build_portfolio_display()
+    # Load portfolio data with a spinner so the tab renders immediately and
+    # shows progress feedback instead of a blank/frozen screen.
+    with st.spinner("📈 Building portfolio — fetching live prices…"):
+        portdf = build_portfolio_display(month=_eff_port_month, year=_eff_port_year)
     
     # Note: build_portfolio_display() already includes a totals row at the bottom
     #print(portdf)
@@ -1027,8 +1124,10 @@ with tab3:
     with map_tab:
         st.markdown('<h4 style="text-align: center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
 
+        _cv = portdf_no_totals['Current value']
+        _midpoint = np.average(_cv, weights=_cv) if _cv.sum() != 0 else 0
         portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector', 'Ticker'],
-            values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']), title="")
+            values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=_midpoint, title="")
                     #values='Current value',color='Current value', title="")
         portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
         portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
@@ -1445,6 +1544,179 @@ with tab3:
 
                 st.markdown("---")
 
+                # ── DAF Bundling Advisor ───────────────────────────────────
+                st.markdown("#### 🏦 Donor Advised Fund (DAF) Bundling Advisor")
+                st.caption(
+                    "A DAF lets you **front-load multiple years of charitable giving** into a single "
+                    "high-deduction year, then distribute grants to charities over time. "
+                    "Donating **low-cost-basis appreciated securities** (instead of cash) avoids "
+                    "capital gains tax entirely while still claiming the full fair-market-value deduction."
+                )
+
+                _daf_col1, _daf_col2, _daf_col3, _daf_col4 = st.columns(4)
+                with _daf_col1:
+                    _daf_annual_giving = st.number_input(
+                        "Annual Charitable Giving ($)",
+                        min_value=0,
+                        max_value=500_000,
+                        value=5_000,
+                        step=500,
+                        help="Your normal annual charitable giving amount. The bundling strategy "
+                             "front-loads multiple years into one DAF contribution.",
+                        key="daf_annual_giving",
+                    )
+                with _daf_col2:
+                    _daf_years_bundle = st.number_input(
+                        "Years to Bundle",
+                        min_value=2,
+                        max_value=5,
+                        value=3,
+                        step=1,
+                        help="How many years of giving to front-load into a single DAF contribution. "
+                             "Typically 2–5 years. The DAF then distributes grants over those years.",
+                        key="daf_years_bundle",
+                    )
+                with _daf_col3:
+                    _daf_std_deduction = st.number_input(
+                        "Standard Deduction ($)",
+                        min_value=0,
+                        max_value=100_000,
+                        value=30_000,
+                        step=500,
+                        help="Your standard deduction for the bundle year (2025 MFJ: $30,000). "
+                             "Bundling is only beneficial when the DAF contribution exceeds this.",
+                        key="daf_std_deduction",
+                    )
+                with _daf_col4:
+                    _daf_marginal_rate = st.number_input(
+                        "Marginal Tax Rate (%)",
+                        min_value=0,
+                        max_value=50,
+                        value=22,
+                        step=1,
+                        help="Your federal marginal income tax rate in the bundle year. "
+                             "Higher rates = greater tax savings from itemizing.",
+                        key="daf_marginal_rate",
+                    )
+
+                # Identify DAF donation candidates from the harvesting analysis
+                _daf_candidates = identify_daf_candidates(_h_analysis)
+
+                # Run bundling analysis
+                _daf_analysis = analyze_daf_bundling(
+                    estimated_agi      = float(_h_agi),
+                    annual_giving      = float(_daf_annual_giving),
+                    years_to_bundle    = int(_daf_years_bundle),
+                    marginal_rate      = float(_daf_marginal_rate) / 100.0,
+                    standard_deduction = float(_daf_std_deduction),
+                    ltcg_rate          = _h_ltcg_rate,
+                    securities_candidates = _daf_candidates,
+                    year               = _h_year,
+                )
+
+                # ── DAF summary metrics ────────────────────────────────────
+                _daf_m1, _daf_m2, _daf_m3, _daf_m4, _daf_m5 = st.columns(5)
+                with _daf_m1:
+                    st.metric(
+                        "Bundled Contribution",
+                        f"${_daf_analysis.bundled_contribution:,.0f}",
+                        help=f"{int(_daf_years_bundle)} years × ${float(_daf_annual_giving):,.0f}/yr",
+                    )
+                with _daf_m2:
+                    st.metric(
+                        "Deductible Amount",
+                        f"${_daf_analysis.deductible_amount:,.0f}",
+                        help="AGI-limited deductible amount (60% AGI cap for combined contributions).",
+                    )
+                with _daf_m3:
+                    _incr = max(0.0, _daf_analysis.deductible_amount - _daf_analysis.standard_deduction)
+                    st.metric(
+                        "Incremental Deduction",
+                        f"${_incr:,.0f}",
+                        help="Amount above the standard deduction — this is what actually reduces your taxes.",
+                    )
+                with _daf_m4:
+                    st.metric(
+                        "Est. Tax Savings",
+                        f"${_daf_analysis.tax_savings_vs_standard:,.0f}",
+                        delta=f"vs. standard deduction each year",
+                        delta_color="normal" if _daf_analysis.tax_savings_vs_standard > 0 else "off",
+                        help="Incremental federal tax savings from itemizing via DAF vs. taking the "
+                             "standard deduction every year.",
+                    )
+                with _daf_m5:
+                    st.metric(
+                        "CG Tax Avoided",
+                        f"${_daf_analysis.total_avoided_cg_tax:,.0f}",
+                        help="Estimated capital gains tax avoided by donating appreciated securities "
+                             "instead of selling them first.",
+                    )
+
+                # ── Recommendation banner ──────────────────────────────────
+                _rec_color = (
+                    "#f0fff4" if _daf_analysis.recommendation.startswith("🟢")
+                    else ("#fffbf0" if _daf_analysis.recommendation.startswith("🟡")
+                          else "#f8f9fa")
+                )
+                _rec_border = (
+                    "#21c354" if _daf_analysis.recommendation.startswith("🟢")
+                    else ("#ffa500" if _daf_analysis.recommendation.startswith("🟡")
+                          else "#adb5bd")
+                )
+                st.markdown(
+                    f'<div style="border-left:4px solid {_rec_border};background:{_rec_color};'
+                    f'padding:12px 16px;border-radius:6px;margin:12px 0;">'
+                    f'<div style="font-size:15px;font-weight:700;">{_daf_analysis.recommendation}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # ── Notes ──────────────────────────────────────────────────
+                for _note in _daf_analysis.notes:
+                    st.info(_note)
+
+                if _daf_analysis.carryforward_amount > 0:
+                    st.warning(
+                        f"⚠️ ${_daf_analysis.carryforward_amount:,.0f} of your contribution exceeds "
+                        f"the AGI deduction limit and carries forward for up to 5 years (IRC §170(d))."
+                    )
+
+                # ── Securities donation candidates table ───────────────────
+                if _daf_candidates:
+                    st.markdown("##### 📋 Appreciated Securities — DAF Donation Candidates")
+                    st.caption(
+                        "These long-term appreciated positions are ideal for DAF donation: "
+                        "you receive a deduction for the **full fair-market value** and pay "
+                        "**zero capital gains tax** on the embedded gain. "
+                        "Donate securities **before** selling them."
+                    )
+                    _daf_cand_rows = [
+                        {
+                            "Account":        c.account,
+                            "Symbol":         c.symbol,
+                            "Name":           c.name,
+                            "Qty":            f"{c.qty:,.2f}",
+                            "Cost Basis":     f"${c.cost_basis:,.0f}",
+                            "Current Value":  f"${c.current_value:,.0f}",
+                            "Unrealized Gain":f"${c.unrealized_gain:,.0f}",
+                            "Gain %":         f"{c.gain_pct:.1f}%",
+                            "Days Held":      c.days_held,
+                            "Gain Type":      c.gain_type,
+                            "CG Tax Avoided": f"${c.avoided_cg_tax:,.0f}",
+                        }
+                        for c in _daf_candidates
+                    ]
+                    _daf_cand_df = pd.DataFrame(_daf_cand_rows)
+                    st.dataframe(_daf_cand_df, hide_index=True, width='stretch')
+                else:
+                    st.info(
+                        "ℹ️ No long-term appreciated securities found in your brokerage account. "
+                        "Consider a cash contribution to the DAF, or wait until positions "
+                        "have been held > 1 year with meaningful gains."
+                    )
+
+                st.markdown("---")
+
                 # ── Educational expander ───────────────────────────────────
                 with st.expander("📚 How Tax Harvesting Works — Strategy Guide", expanded=False):
                     st.markdown("""
@@ -1471,6 +1743,12 @@ with tab3:
 
 **Account Location**
 - Only **Brokerage (taxable)** accounts are relevant. Gains/losses in Traditional IRA, Roth IRA, or 401(k) accounts are not taxable events.
+
+**Donor Advised Fund (DAF) Bundling**
+- A DAF is a charitable giving account: you contribute assets, receive an immediate tax deduction, and recommend grants to charities over time.
+- **Bundling:** Instead of giving $5,000/year (never exceeding the standard deduction), contribute $15,000 every 3 years — itemize in the bundle year, take the standard deduction in the other 2 years.
+- **Appreciated securities:** Donate long-term appreciated stock directly to the DAF. You deduct the full fair-market value AND pay zero capital gains tax on the embedded gain.
+- **IRS limits:** Securities donations deductible up to 30% of AGI; cash up to 60% of AGI. Excess carries forward 5 years (IRC §170(d)).
                     """)
 
         except Exception as _h_err:
@@ -2111,15 +2389,12 @@ with tab_accum:
             annual_expenses_s = float(st.session_state.get("EXPENSE", 50000))
             expense_multiplier_s = float(st.session_state.get("EXPENSE_MULTIPLIER", 4))
             rate_of_return_s = float(st.session_state.get("RATE", 6)) / 100
-            daf_rate_s = float(st.session_state.get("DAF_RATE", 25)) / 100
-            planned_dist_2027_s = float(st.session_state.get("PLANNED_DIST_2027", 5000))
         except (ValueError, TypeError):
             ssi_age_s = 70; conv_tax_rate_s = 12; annual_expenses_s = 50000
             expense_multiplier_s = 4; rate_of_return_s = 0.06
-            daf_rate_s = 0.25; planned_dist_2027_s = 75000
 
         # Parameters summary bar
-        param_col1, param_col2, param_col3, param_col4 = st.columns(4)
+        param_col1, param_col2, param_col3 = st.columns(3)
         with param_col1:
             st.metric("Social Security Age", ssi_age_s)
             st.metric("Annual Expenses", f"${annual_expenses_s:,.0f}")
@@ -2128,9 +2403,6 @@ with tab_accum:
             st.metric("Expense Multiplier", f"{expense_multiplier_s}x")
         with param_col3:
             st.metric("Rate of Return", f"{rate_of_return_s*100:.1f}%")
-        with param_col4:
-            st.metric("DAF Disbursement", f"{daf_rate_s*100:.0f}%")
-            st.metric("2027 Planned Dist", f"${planned_dist_2027_s:,.0f}")
 
         add_vertical_space(1)
 
@@ -2289,6 +2561,27 @@ with tab_tax:
         with col13:
             headroom_rate = st.selectbox("Max Conversion Rate", [10, 12, 22, 24, 32, 35, 37], key="tp_headroom", on_change=clear_submit, index=3) / 100
 
+        col_daf_type, col_daf_note, _col_daf3, _col_daf4, _col_daf5 = st.columns(5)
+        with col_daf_type:
+            daf_contribution_type = st.selectbox(
+                "DAF Contribution Type",
+                ["cash", "securities"],
+                key="tp_daf_type",
+                on_change=clear_submit,
+                help=(
+                    "**Cash:** deductible up to 60% of AGI (IRC §170). "
+                    "**Securities:** donate appreciated long-term stock directly — "
+                    "deductible up to 30% of AGI, and you avoid capital gains tax on the embedded gain."
+                ),
+            )
+        with col_daf_note:
+            _daf_limit_pct = "60%" if daf_contribution_type == "cash" else "30%"
+            st.info(
+                f"ℹ️ **{daf_contribution_type.title()} limit:** {_daf_limit_pct} of AGI. "
+                + ("Excess carries forward 5 years." if maxdaf == "Y" else ""),
+                icon=None,
+            )
+
         col14b, col15, _col16, _col17, _col18 = st.columns(5)
         with col14b:
             roth_amount = st.number_input("Roth Conversion Amount", key="tp_roth_amt", on_change=clear_submit)
@@ -2298,7 +2591,7 @@ with tab_tax:
 
     if summarize_button:
         try:
-            taxratedf  = get_income_tax_brackets(year)
+            taxratedf  = cast(pd.DataFrame, get_income_tax_brackets(year))
             cgdf       = cast(pd.DataFrame, get_cap_gains_brackets(year))
             irmaadf    = get_medicare_costs(year)
             stddectdf  = get_std_deduction(year)
@@ -2308,7 +2601,13 @@ with tab_tax:
             st.stop()
 
         try:
-            calc_daf = calc_daf_value(deferred_distribution + wages, interest, daf1, maxdaf)
+            calc_daf = calc_daf_value(
+                deferred_distribution + wages,
+                interest,
+                daf1,
+                maxdaf,
+                contribution_type=daf_contribution_type,
+            )
         except Exception as e:
             st.error(f"Error calculating Donor Advisor Fund: {e}")
             calc_daf = 0
@@ -2478,7 +2777,7 @@ with tab_flow:
             for _acct_type in cast(pd.Series, _ff_portfolio['account_type']).unique():
                 with st.expander(f"{_acct_type} Accounts"):
                     _type_data = _ff_portfolio[_ff_portfolio['account_type'] == _acct_type]
-                    st.dataframe(_type_data[['account_name', 'symbol', 'name', 'qty', 'purchase_price']], hide_index=True, use_container_width=True)
+                    st.dataframe(_type_data[['account_name', 'symbol', 'name', 'qty', 'purchase_price']], hide_index=True, width='stretch')
         else:
             st.warning(f"No portfolio data found for {_ff_month}/{_ff_year}")
 
@@ -2612,5 +2911,24 @@ with tab5:
 
     st.markdown("---")
     st.markdown("### Full Configuration")
-    st.info("⚙️ Open the [Configuration page](configuration) to edit personal information, healthcare settings, Social Security, tax strategy, and portfolio data.")
+    st.info("⚙️ Open the [Configuration page](2_configuration) to edit personal information, healthcare settings, Social Security, tax strategy, and portfolio data.")
     st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Auto-rerun while portfolio cache is warming up
+# ---------------------------------------------------------------------------
+# This block runs AFTER all tabs have been rendered so the full Dashboard
+# is visible to the user before any rerun is triggered.  Once the background
+# thread sets the Event (i.e. build_portfolio_display has finished), this
+# block stops scheduling reruns and the portfolio charts appear on the next
+# (and final) refresh.
+#
+# We wait on the threading.Event with a 2-second timeout so the render thread
+# yields briefly (preventing a tight CPU-spinning rerun loop) while still
+# allowing the page to be fully rendered and interactive.  The wait() call
+# returns True as soon as the background thread finishes, or False after 2 s —
+# either way we rerun so the UI picks up the completed cache.
+if not _portfolio_cache_ready:
+    _done_ev: "_threading.Event" = st.session_state["_portfolio_done_event"]
+    _done_ev.wait(timeout=2)   # Yields for up to 2 s; returns early if done
+    st.rerun()

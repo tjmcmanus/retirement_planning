@@ -382,11 +382,9 @@ def _initialize_simulation_config() -> SimulationConfig:
 
     expenses           = float(st.session_state.get("EXPENSE", "50000") or "50000")
     rate               = 1 + float(st.session_state.get("RATE", "6.0") or "6.0") / 100
-    daf_rate           = float(st.session_state.get("DAF_RATE", "25") or "25") / 100
+    daf_rate           = 0.25   # hardcoded: 25% annual DAF spend-down (no longer user-configurable)
     expense_multiplier = int(float(st.session_state.get("EXPENSE_MULTIPLIER", "4") or "4"))
-    planned_dist_2027  = float(
-        st.session_state.get("PLANNED_DIST_2027", "575000") or "575000"
-    )
+    planned_dist_2027  = 75000.0  # hardcoded: $75,000 planned 2027 distribution (no longer user-configurable)
 
     return SimulationConfig(
         expenses=expenses,

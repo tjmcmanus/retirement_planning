@@ -154,30 +154,67 @@ def calc_agi(joint_gross_income, interest, stddectdf, daf):
     
     return agi
         
-def calc_daf_value(joint_gross_income, interest, daf1, maxdaf):
+# IRS AGI deduction limits for DAF contributions (IRC §170)
+# Cash contributions to a public charity / DAF: 60% of AGI (post-TCJA)
+# Appreciated long-term capital property donated to a DAF: 30% of AGI
+_DAF_CASH_LIMIT_PCT: float = 0.60
+_DAF_SECURITIES_LIMIT_PCT: float = 0.30
+
+
+def calc_daf_value(
+    joint_gross_income: float,
+    interest: float,
+    daf1: float,
+    maxdaf: str,
+    contribution_type: str = "cash",
+) -> float:
     """
-    Calculate Donor Advised Fund (DAF) contribution value.
-    
-    DAF contributions are limited to 30% of AGI for cash contributions.
-    
+    Calculate the deductible Donor Advised Fund (DAF) contribution amount.
+
+    IRS deduction limits (IRC §170):
+    - **Cash** contributions to a DAF: up to **60% of AGI**.
+    - **Appreciated securities** (long-term capital property) donated to a DAF:
+      up to **30% of AGI**.  The donor avoids capital gains tax on the embedded
+      gain AND deducts the full fair-market value.
+    - Excess contributions carry forward for up to 5 years (IRC §170(d)).
+
     Args:
-        joint_gross_income: Joint gross income amount
-        interest: Interest and dividend income
-        daf1: Proposed DAF contribution amount
-        maxdaf: Flag to use maximum DAF ("Y") or no DAF ("N")
-        
+        joint_gross_income: Joint gross income (wages + distributions, etc.)
+        interest:           Interest and dividend income
+        daf1:               Proposed DAF contribution amount (used when maxdaf
+                            is neither "Y" nor "N")
+        maxdaf:             "Y" → use the maximum allowable amount for the
+                            contribution type; "N" → no DAF contribution;
+                            anything else → use daf1 if within the limit.
+        contribution_type:  "cash" (default) or "securities".  Determines
+                            which AGI limit applies (60% vs 30%).
+
     Returns:
-        float: Calculated DAF contribution amount
+        float: Deductible DAF contribution amount (AGI-limited).
     """
     total_income = joint_gross_income + interest
-    max_daf_limit = total_income * 0.3
-    
-    logger.debug(f"calc_daf_value: gross_income={joint_gross_income:,.2f}, interest={interest:,.2f}, maxdaf={maxdaf}")
-    
+
+    # Select the correct AGI limit based on contribution type
+    if contribution_type == "securities":
+        limit_pct = _DAF_SECURITIES_LIMIT_PCT
+        limit_label = "30% (appreciated securities)"
+    else:
+        limit_pct = _DAF_CASH_LIMIT_PCT
+        limit_label = "60% (cash)"
+
+    max_daf_limit = total_income * limit_pct
+
+    logger.debug(
+        f"calc_daf_value: gross_income={joint_gross_income:,.2f}, "
+        f"interest={interest:,.2f}, maxdaf={maxdaf}, "
+        f"type={contribution_type}, limit={limit_label}, "
+        f"max_limit=${max_daf_limit:,.2f}"
+    )
+
     # Determine DAF amount based on maxdaf flag
     if maxdaf == "Y":
         daf = max_daf_limit
-        logger.debug(f"DAF: Maximum (30% of income) = ${daf:,.2f}")
+        logger.debug(f"DAF: Maximum ({limit_label}) = ${daf:,.2f}")
     elif maxdaf == "N":
         daf = 0.0
         logger.debug("DAF: None (maxdaf='N')")
@@ -186,8 +223,11 @@ def calc_daf_value(joint_gross_income, interest, daf1, maxdaf):
         logger.debug(f"DAF: Custom amount = ${daf:,.2f}")
     else:
         daf = 0.0
-        logger.warning(f"DAF: Requested amount (daf1={daf1:,.2f}) exceeds limit {max_daf_limit:,.2f} or is negative — silently rejected, defaulting to 0")
-    
+        logger.warning(
+            f"DAF: Requested amount (daf1={daf1:,.2f}) exceeds {limit_label} "
+            f"limit ${max_daf_limit:,.2f} or is negative — defaulting to 0"
+        )
+
     return daf
     
 def getUpperIncomeRate(taxrate, year_tax_brackets_df):

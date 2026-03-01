@@ -7,11 +7,12 @@ a configurable threshold (default 5%) from its target weight.
 
 Key design decisions
 --------------------
-* **Asset classification** is driven by the ``sector`` field already stored in
-  the portfolio CSV.  Sectors that start with ``MF:Cash`` or the symbol
-  ``MF:CASH`` are treated as *Cash*.  Sectors that contain bond-related
-  keywords (Bond, Fixed, Treasury, Municipal, Income) are treated as *Bonds*.
-  Everything else is *Stocks*.
+* **Asset classification** is driven by the ``sector`` and ``name`` fields stored
+  in the portfolio CSV.  Sectors that start with ``MF:Cash`` or the symbol
+  ``MF:CASH`` are treated as *Cash*.  Sectors **or names** that contain bond-related
+  keywords (Bond, Fixed Income, Treasury, Municipal, Muni) are treated as *Bonds*.
+  Everything else is *Stocks*.  Checking the name is necessary because Yahoo Finance
+  classifies many bond closed-end funds and ETFs under ``Financial Services``.
 
 * **Account-location rules** (where to hold each asset class):
   - Bonds → prefer Traditional IRA (ordinary income on withdrawal anyway).
@@ -30,6 +31,7 @@ Only the *current* portfolio snapshot (latest month/year) is analysed.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -48,10 +50,15 @@ logger = logging.getLogger(__name__)
 
 CASH_SYMBOL = "MF:CASH"
 
-# Keywords that identify bond-like sectors (case-insensitive substring match)
-BOND_SECTOR_KEYWORDS = [
-    "bond", "fixed income", "treasury", "treasuries",
-    "municipal", "muni", "income", "fixed",
+# Regex patterns that identify bond-like sectors (case-insensitive whole-word match).
+# IMPORTANT: Use word-boundary anchors (\b) to avoid false substring matches.
+# Example failure without \b: "muni" matches inside "communication" → false positive.
+BOND_SECTOR_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r'\bbond\b',        re.IGNORECASE),
+    re.compile(r'\bfixed income\b', re.IGNORECASE),
+    re.compile(r'\btreasur(?:y|ies)\b', re.IGNORECASE),
+    re.compile(r'\bmunicipal\b',   re.IGNORECASE),
+    re.compile(r'\bmuni\b',        re.IGNORECASE),
 ]
 
 # Sectors / symbols that are always cash
@@ -74,18 +81,27 @@ DEFAULT_DRIFT_THRESHOLD_PCT = 5.0
 # Asset-class classification helpers
 # ---------------------------------------------------------------------------
 
-def _classify_asset(symbol: str, sector: str) -> str:
+def _classify_asset(symbol: str, sector: str, name: str = "") -> str:
     """
     Return 'Cash', 'Bonds', or 'Stocks' for a single holding.
 
     Classification logic (in priority order):
     1. Symbol == MF:CASH  → Cash
     2. Sector contains a cash keyword → Cash
-    3. Sector contains a bond keyword → Bonds
+    3. Sector OR name matches a bond pattern (whole-word regex) → Bonds
     4. Everything else → Stocks
+
+    Note: Bond patterns use word-boundary anchors (\b) to prevent false positives
+    such as "muni" matching inside "communication".
+
+    The ``name`` field is checked in addition to ``sector`` because Yahoo Finance
+    classifies many bond closed-end funds and ETFs (e.g. VPV — "Invesco Pennsylvania
+    Value Muni") under the generic ``Financial Services`` sector, making sector-only
+    classification unreliable for these instruments.
     """
     sym_upper    = symbol.upper()
     sector_lower = (sector or "").lower()
+    name_lower   = (name or "").lower()
 
     if sym_upper == CASH_SYMBOL:
         return "Cash"
@@ -94,17 +110,32 @@ def _classify_asset(symbol: str, sector: str) -> str:
         if kw in sector_lower:
             return "Cash"
 
-    for kw in BOND_SECTOR_KEYWORDS:
-        if kw in sector_lower:
+    for pattern in BOND_SECTOR_PATTERNS:
+        if pattern.search(sector_lower) or pattern.search(name_lower):
             return "Bonds"
 
     return "Stocks"
 
 
-def _is_municipal_or_treasury(sector: str) -> bool:
-    """Return True if the sector indicates a muni or treasury bond."""
-    s = (sector or "").lower()
-    return any(kw in s for kw in ("municipal", "muni", "treasury", "treasuries"))
+# Pre-compiled patterns for muni/treasury detection (word-boundary safe)
+_MUNI_TSY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r'\bmunicipal\b',        re.IGNORECASE),
+    re.compile(r'\bmuni\b',             re.IGNORECASE),
+    re.compile(r'\btreasur(?:y|ies)\b', re.IGNORECASE),
+]
+
+def _is_municipal_or_treasury(sector: str, name: str = "") -> bool:
+    """Return True if the sector or name indicates a muni or treasury bond.
+
+    Checks both ``sector`` and ``name`` because Yahoo Finance often returns
+    ``Financial Services`` as the sector for muni/treasury bond funds, while
+    the fund name (e.g. "Invesco Pennsylvania Value Muni") correctly identifies
+    the instrument type.
+
+    Uses whole-word regex matching to avoid false positives such as
+    'muni' matching inside 'communication'.
+    """
+    return any(p.search(sector or "") or p.search(name or "") for p in _MUNI_TSY_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -272,17 +303,18 @@ def compute_rebalance_plan(
     for _, row in raw.iterrows():
         sym    = str(row["symbol"])
         sector = str(row.get("sector", "") or "")
+        name   = str(row.get("name", sym) or sym)
         qty    = float(row["qty"])
         pp     = float(row["purchase_price"])
         cp     = price_map.get(sym, pp)
         cv     = qty * cp
         cb     = qty * pp
-        ac     = _classify_asset(sym, sector)
+        ac     = _classify_asset(sym, sector, name)
         holdings.append(HoldingDetail(
             account_name   = str(row["account_name"]),
             account_type   = str(row["account_type"]),
             symbol         = sym,
-            name           = str(row.get("name", sym) or sym),
+            name           = name,
             sector         = sector,
             qty            = qty,
             purchase_price = pp,
@@ -291,7 +323,7 @@ def compute_rebalance_plan(
             cost_basis     = cb,
             unrealized_gl  = cv - cb,
             asset_class    = ac,
-            is_muni_or_tsy = _is_municipal_or_treasury(sector),
+            is_muni_or_tsy = _is_municipal_or_treasury(sector, name),
         ))
 
     total_value = sum(h.current_value for h in holdings)
@@ -477,22 +509,33 @@ def compute_rebalance_plan(
             priority += 1
 
     # ── 7c. Redirect contributions / dividends ───────────────────────────────
+    # For contributions, use the optimal account type per asset class:
+    #   Bonds  → Traditional (mutual fund; ordinary income taxed on withdrawal anyway)
+    #   Stocks → Roth (ETF; tax-free growth on highest-return assets)
+    #   Cash   → Brokerage (liquidity cushion)
+    _CONTRIBUTION_ACCOUNT: dict[str, str] = {
+        "Bonds":  TRADITIONAL,
+        "Stocks": ROTH,
+        "Cash":   BROKERAGE,
+    }
     for uw in under_weight:
+        contrib_acct = _CONTRIBUTION_ACCOUNT.get(uw.asset_class, TRADITIONAL)
         actions.append(RebalanceAction(
             priority     = priority,
             action       = "Redirect Contributions",
             asset_class  = uw.asset_class,
-            symbol       = _suggest_symbol(uw.asset_class, TRADITIONAL),
-            account_name = "All accounts",
-            account_type = "All",
+            symbol       = _suggest_symbol(uw.asset_class, contrib_acct),
+            account_name = f"{contrib_acct} account (preferred)",
+            account_type = contrib_acct,
             amount       = abs(uw.delta_value),
             rationale    = (
                 f"{uw.asset_class} is under-weight by {abs(uw.drift_pct):.1f}%. "
                 f"Direct new contributions, dividends, and RMDs toward {uw.asset_class} "
+                f"in your {contrib_acct} account "
                 f"until the target of {uw.target_pct:.1f}% is restored."
             ),
             tax_impact    = "None (new money)",
-            location_note = _location_guidance(uw.asset_class, TRADITIONAL),
+            location_note = _location_guidance(uw.asset_class, contrib_acct),
         ))
         priority += 1
 
@@ -572,19 +615,38 @@ def _location_guidance(asset_class: str, account_type: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _suggest_symbol(asset_class: str, account_type: str) -> str:
-    """Return a representative ticker to buy for a given asset class and account type."""
+    """Return a representative ticker to buy for a given asset class and account type.
+
+    Account-type conventions:
+    - Traditional IRA  → Mutual funds (lower-cost, no bid/ask spread, ideal for
+                         tax-deferred accounts where intra-day liquidity is irrelevant)
+    - Roth IRA         → ETFs or individual stocks (tax-free growth; ETFs offer
+                         flexibility and tax efficiency)
+    - Brokerage        → ETFs or individual stocks (intra-day trading, tax-loss
+                         harvesting, LTCG rates)
+    """
     if asset_class == "Cash":
         return "MF:CASH"
+
     if asset_class == "Bonds":
-        if account_type == BROKERAGE:
-            return "VGIT (Intermediate Treasury ETF)"
-        return "VBTLX (Vanguard Total Bond Market)"
+        if account_type == TRADITIONAL:
+            # Mutual fund — ideal for tax-deferred bond income
+            return "VBTLX (Vanguard Total Bond Market Admiral)"
+        if account_type == ROTH:
+            # ETF — acceptable if bonds are held in Roth (though not ideal location)
+            return "BND (Vanguard Total Bond Market ETF)"
+        # Brokerage — ETF; prefer Treasuries/munis for tax efficiency
+        return "VGIT (Vanguard Intermediate-Term Treasury ETF)"
+
     # Stocks
+    if account_type == TRADITIONAL:
+        # Mutual fund — tax-deferred growth, no intra-day trading needed
+        return "VFIAX (Vanguard 500 Index Admiral)"
     if account_type == ROTH:
-        return "VFIAX (Vanguard 500 Index)"
-    if account_type == BROKERAGE:
+        # ETF — tax-free growth, flexibility
         return "VTI (Vanguard Total Market ETF)"
-    return "VFIAX (Vanguard 500 Index)"
+    # Brokerage — ETF for LTCG rates and tax-loss harvesting
+    return "VTI (Vanguard Total Market ETF)"
 
 
 # ---------------------------------------------------------------------------
