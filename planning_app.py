@@ -12,6 +12,38 @@ import graphviz
 from load_data import get_month_account_values,get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, get_networth_by_month, get_portfolio_truth_by_month, get_latest_portfolio_month_year
 from strategy import build_withdrawal_strategy_display, build_accumulation_strategy_display
 from calculations import calc_roth_conversions_tax, getlower_atm_amount_n_deduction,calc_roth_conversions,calc_agi,calc_daf_value,getUpperIncomeRate,calculate_atm, calculate_std_deduction,get_std_deduction_by_year, calculate_irmma_penalty, calculate_cap_gains, calculate_taxable_income
+from monte_carlo import (
+    MonteCarloInputs,
+    run_monte_carlo,
+    run_stress_tests,
+    run_longevity_analysis,
+    run_full_scenario_comparison,
+    build_fan_chart_df,
+    build_success_heatmap_df,
+    build_scenario_comparison_df,
+    generate_monte_carlo_report_csv,
+    get_safe_withdrawal_rate,
+    analyze_sequence_of_returns_risk,
+    PORTFOLIO_PRESETS,
+    STRESS_SCENARIOS,
+    LONGEVITY_SCENARIOS,
+)
+from advanced_strategies import (
+    build_rolling_tax_window,
+    calculate_qbi_deduction_full,
+    calculate_backdoor_roth,
+    calculate_mega_backdoor_roth,
+    calculate_nua_analysis,
+    calculate_qcd_optimization,
+    calculate_sepp,
+    build_multi_year_loss_harvesting_plan,
+    SEPP_METHODS,
+)
+from betr_roth_conversion import (
+    BETRInputs,
+    BETRResults,
+    calculate_betr,
+)
 from portfolio import get_portfolio_dividend_total,get_current_dividend,get_current_price,get_entry_in_portfolio,get_list_of_tickers,get_purchase_price,get_qty,getPortfolioData,calculate_cost_basis,calculate_current_value, get_ticker_name,get_sector,color_negative_positive,build_portfolio_display,get_effective_portfolio_month_year
 from tax_harvesting import (
     build_harvesting_analysis,
@@ -813,8 +845,9 @@ if "_portfolio_done_event" not in st.session_state:
 # Convenience flag — True once the background thread has finished
 _portfolio_cache_ready: bool = st.session_state["_portfolio_done_event"].is_set()
 
-tab1, tab3, tab_accum, tab_tax, tab_flow, tab5 = st.tabs(
-    ["📊 Dashboard", "💼 Portfolio", "📈 Strategy", "🧮 Tax Planner", "💸 Flow of Funds", "⚙️ Settings"]
+tab1, tab3, tab_accum, tab_tax, tab_advanced, tab_mc, tab_flow, tab5 = st.tabs(
+    ["📊 Dashboard", "💼 Portfolio", "📈 Strategy", "🧮 Tax Planner",
+     "🎯 Advanced Strategies", "🎲 Monte Carlo", "💸 Flow of Funds", "⚙️ Settings"]
 )
 with tab1:
    # Check if we have enough data
@@ -2846,6 +2879,627 @@ with tab_tax:
             else:
                 st.metric(label="Pre-Changes Broker Balance", value=f"${taxable_value:,.2f}")
 
+with tab_mc:
+    st.header("🎲 Monte Carlo Simulation")
+    st.markdown(
+        "Run 10,000+ retirement simulations to estimate the probability your portfolio "
+        "survives your lifetime under realistic market volatility."
+    )
+    st.markdown("---")
+
+    (
+        mc_sim_tab,
+        mc_stress_tab,
+        mc_longevity_tab,
+        mc_heatmap_tab,
+        mc_compare_tab,
+    ) = st.tabs([
+        "🎯 Run Simulation",
+        "⚠️ Stress Tests",
+        "🕐 Longevity Risk",
+        "🗺️ Success Heatmap",
+        "📊 Scenario Comparison",
+    ])
+
+    # -----------------------------------------------------------------------
+    # Shared sidebar inputs (stored in session state for reuse across sub-tabs)
+    # -----------------------------------------------------------------------
+    with st.sidebar.expander("🎲 Monte Carlo Settings", expanded=False):
+        _mc_portfolio = st.number_input(
+            "Starting Portfolio ($)", min_value=10_000, value=1_500_000,
+            step=50_000, key="mc_portfolio"
+        )
+        _mc_withdrawal = st.number_input(
+            "Annual Withdrawal ($)", min_value=1_000, value=80_000,
+            step=5_000, key="mc_withdrawal"
+        )
+        _mc_start_age = st.number_input(
+            "Retirement Age", min_value=40, max_value=80, value=62, key="mc_start_age"
+        )
+        _mc_end_age = st.number_input(
+            "Plan To Age", min_value=70, max_value=110, value=90, key="mc_end_age"
+        )
+        _mc_ss = st.number_input(
+            "Annual Social Security ($)", min_value=0, value=40_000,
+            step=1_000, key="mc_ss"
+        )
+        _mc_ss_age = st.number_input(
+            "SS Start Age", min_value=62, max_value=70, value=70, key="mc_ss_age"
+        )
+        _mc_inflation = st.slider(
+            "Inflation Rate", min_value=0.01, max_value=0.10,
+            value=0.029, step=0.001, format="%.1f%%", key="mc_inflation"
+        )
+        _mc_allocation = st.selectbox(
+            "Portfolio Allocation", list(PORTFOLIO_PRESETS.keys()),
+            index=1, key="mc_allocation"
+        )
+        _mc_n_sims = st.select_slider(
+            "Simulations", options=[1_000, 2_000, 5_000, 10_000, 20_000],
+            value=10_000, key="mc_n_sims"
+        )
+
+    def _build_mc_inputs() -> MonteCarloInputs:
+        return MonteCarloInputs(
+            initial_portfolio=float(st.session_state.get("mc_portfolio", 1_500_000)),
+            annual_withdrawal=float(st.session_state.get("mc_withdrawal", 80_000)),
+            start_age=int(st.session_state.get("mc_start_age", 62)),
+            end_age=int(st.session_state.get("mc_end_age", 90)),
+            portfolio_allocation=PORTFOLIO_PRESETS[
+                st.session_state.get("mc_allocation", "Moderate (70/30)")
+            ],
+            inflation_rate=float(st.session_state.get("mc_inflation", 0.029)),
+            withdrawal_growth_rate=float(st.session_state.get("mc_inflation", 0.029)),
+            social_security_annual=float(st.session_state.get("mc_ss", 40_000)),
+            ss_start_age=int(st.session_state.get("mc_ss_age", 70)),
+            n_simulations=int(st.session_state.get("mc_n_sims", 10_000)),
+            random_seed=42,
+        )
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 1: Run Simulation
+    # -----------------------------------------------------------------------
+    with mc_sim_tab:
+        st.subheader("🎯 Monte Carlo Simulation")
+        st.markdown(
+            "Configure inputs in the **Monte Carlo Settings** sidebar panel, then click Run."
+        )
+
+        # Quick input summary
+        _mc_c1, _mc_c2, _mc_c3, _mc_c4 = st.columns(4)
+        _mc_c1.metric("Starting Portfolio", f"${st.session_state.get('mc_portfolio', 1_500_000):,.0f}")
+        _mc_c2.metric("Annual Withdrawal", f"${st.session_state.get('mc_withdrawal', 80_000):,.0f}")
+        _mc_c3.metric("Retirement Age", str(st.session_state.get("mc_start_age", 62)))
+        _mc_c4.metric("Plan To Age", str(st.session_state.get("mc_end_age", 90)))
+
+        if st.button("▶️ Run Monte Carlo Simulation", key="mc_run", type="primary"):
+            with st.spinner(f"Running {st.session_state.get('mc_n_sims', 10_000):,} simulations…"):
+                try:
+                    _mc_inputs = _build_mc_inputs()
+                    _mc_result = run_monte_carlo(_mc_inputs)
+                    st.session_state["_mc_result"] = _mc_result
+                    st.session_state["_mc_inputs"] = _mc_inputs
+                except Exception as _mc_err:
+                    st.error(f"Simulation error: {_mc_err}")
+                    st.session_state.pop("_mc_result", None)
+
+        if "_mc_result" in st.session_state:
+            _r = st.session_state["_mc_result"]
+
+            # Success probability gauge
+            _sp = _r.success_probability
+            _sp_color = "🟢" if _sp >= 0.90 else ("🟡" if _sp >= 0.75 else "🔴")
+            st.markdown(f"## {_sp_color} Success Probability: **{_sp:.1%}**")
+            st.caption(
+                "Probability the portfolio survives to the plan end age across all simulations. "
+                "Target: ≥ 90% for high confidence."
+            )
+
+            # Key metrics
+            _rm1, _rm2, _rm3, _rm4 = st.columns(4)
+            _rm1.metric("Median Final Portfolio", f"${_r.median_final_portfolio:,.0f}")
+            _rm2.metric("10th Pct Final Portfolio", f"${_r.p10_final_portfolio:,.0f}")
+            _rm3.metric("90th Pct Final Portfolio", f"${_r.p90_final_portfolio:,.0f}")
+            _rm4.metric(
+                "P10 Depletion Age",
+                str(_r.years_to_depletion_p10) if _r.years_to_depletion_p10 else "Never ✅"
+            )
+
+            # Safe withdrawal rate
+            with st.spinner("Calculating safe withdrawal rate…"):
+                try:
+                    _swr = get_safe_withdrawal_rate(st.session_state["_mc_inputs"])
+                    _swr_pct = _swr / float(st.session_state.get("mc_portfolio", 1_500_000)) * 100
+                    st.info(
+                        f"💡 **Safe Withdrawal Rate at 90% confidence:** "
+                        f"${_swr:,.0f}/year ({_swr_pct:.2f}% of portfolio)"
+                    )
+                except Exception:
+                    pass
+
+            # Fan chart
+            st.markdown("#### 📈 Portfolio Outcome Fan Chart")
+            st.caption(
+                "Shaded bands show the range of outcomes across all simulations. "
+                "The dark line is the median (50th percentile)."
+            )
+            _fan_df = build_fan_chart_df(_r)
+            if not _fan_df.empty:
+                _fan_fig = go.Figure()
+
+                # Shaded bands (outermost to innermost)
+                _band_pairs = [(5, 95, "rgba(99,110,250,0.08)"),
+                               (10, 90, "rgba(99,110,250,0.12)"),
+                               (25, 75, "rgba(99,110,250,0.20)")]
+                for _lo, _hi, _color in _band_pairs:
+                    _fan_fig.add_trace(go.Scatter(
+                        x=list(_fan_df["age"]) + list(_fan_df["age"])[::-1],
+                        y=list(_fan_df[f"p{_hi}"]) + list(_fan_df[f"p{_lo}"])[::-1],
+                        fill="toself",
+                        fillcolor=_color,
+                        line=dict(color="rgba(0,0,0,0)"),
+                        name=f"P{_lo}–P{_hi}",
+                        showlegend=True,
+                    ))
+
+                # Median line
+                _fan_fig.add_trace(go.Scatter(
+                    x=_fan_df["age"], y=_fan_df["p50"],
+                    mode="lines", name="Median (P50)",
+                    line=dict(color="rgb(99,110,250)", width=2.5),
+                ))
+
+                # P10 line (danger zone)
+                _fan_fig.add_trace(go.Scatter(
+                    x=_fan_df["age"], y=_fan_df["p10"],
+                    mode="lines", name="P10 (Pessimistic)",
+                    line=dict(color="rgb(239,85,59)", width=1.5, dash="dash"),
+                ))
+
+                _fan_fig.update_layout(
+                    title="Portfolio Value Distribution by Age",
+                    xaxis_title="Age",
+                    yaxis_title="Portfolio Value ($)",
+                    yaxis_tickformat="$,.0f",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(_fan_fig, use_container_width=True)
+
+            # Success rate by age
+            st.markdown("#### ✅ Probability of Success by Age")
+            _sr_fig = go.Figure()
+            _sr_fig.add_trace(go.Scatter(
+                x=_fan_df["age"], y=_fan_df["success_rate"] * 100,
+                mode="lines+markers",
+                name="Success Rate",
+                line=dict(color="rgb(0,204,150)", width=2),
+                fill="tozeroy",
+                fillcolor="rgba(0,204,150,0.15)",
+            ))
+            _sr_fig.add_hline(y=90, line_dash="dash", line_color="orange",
+                              annotation_text="90% Target")
+            _sr_fig.update_layout(
+                title="Probability of Portfolio Survival by Age",
+                xaxis_title="Age",
+                yaxis_title="Success Rate (%)",
+                yaxis_range=[0, 105],
+            )
+            st.plotly_chart(_sr_fig, use_container_width=True)
+
+            # Sequence of returns risk
+            st.markdown("#### 🔀 Sequence-of-Returns Risk Analysis")
+            with st.spinner("Analyzing sequence risk…"):
+                try:
+                    _sor = analyze_sequence_of_returns_risk(st.session_state["_mc_inputs"])
+                    _sor_c1, _sor_c2, _sor_c3 = st.columns(3)
+                    _sor_c1.metric(
+                        "Worst-Sequence Success Rate",
+                        f"{_sor.get('worst_paths_success_rate', 0):.1%}",
+                        delta=f"{(_sor.get('worst_paths_success_rate', 0) - _sor.get('overall_success_probability', 0)):.1%}",
+                        delta_color="inverse",
+                    )
+                    _sor_c2.metric(
+                        "Avg First-5yr Return (Worst)",
+                        f"{_sor.get('avg_first5yr_return_worst', 0):.1%}"
+                    )
+                    _sor_c3.metric(
+                        "Depletion Age (Worst Median)",
+                        str(_sor.get("depletion_age_worst_median", "N/A"))
+                    )
+                    st.caption(
+                        "Sequence risk: retiring into a bear market dramatically reduces success. "
+                        "The worst 1% of sequences are shown above."
+                    )
+                except Exception as _sor_err:
+                    st.caption(f"Sequence analysis unavailable: {_sor_err}")
+
+            # Notes
+            with st.expander("ℹ️ Simulation Notes", expanded=False):
+                for _note in _r.notes:
+                    st.caption(_note)
+
+            # Download report
+            st.markdown("---")
+            _csv_bytes = generate_monte_carlo_report_csv(_r)
+            st.download_button(
+                label="📥 Download Monte Carlo Report (CSV)",
+                data=_csv_bytes,
+                file_name=f"monte_carlo_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="mc_download",
+            )
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 2: Stress Tests
+    # -----------------------------------------------------------------------
+    with mc_stress_tab:
+        st.subheader("⚠️ Stress Test Scenarios")
+        st.markdown(
+            "Test your portfolio against historical market crises and adverse scenarios."
+        )
+
+        _st_scenarios = st.multiselect(
+            "Select Stress Scenarios",
+            list(STRESS_SCENARIOS.keys()),
+            default=list(STRESS_SCENARIOS.keys()),
+            key="mc_stress_scenarios",
+        )
+
+        if st.button("▶️ Run Stress Tests", key="mc_stress_run", type="primary"):
+            with st.spinner("Running stress scenarios…"):
+                try:
+                    _st_inputs = _build_mc_inputs()
+                    _st_results = run_stress_tests(_st_inputs, _st_scenarios)
+                    st.session_state["_mc_stress_results"] = _st_results
+                    st.session_state["_mc_stress_inputs"] = _st_inputs
+                except Exception as _st_err:
+                    st.error(f"Stress test error: {_st_err}")
+
+        if "_mc_stress_results" in st.session_state:
+            _st_res = st.session_state["_mc_stress_results"]
+
+            # Summary table
+            st.markdown("#### Stress Test Summary")
+            _st_rows = []
+            for _s in _st_res:
+                _sp_icon = "🟢" if _s.success_probability >= 0.90 else ("🟡" if _s.success_probability >= 0.75 else "🔴")
+                _st_rows.append({
+                    "Scenario": _s.scenario_name,
+                    "Description": _s.description,
+                    "Success": f"{_sp_icon} {_s.success_probability:.1%}",
+                    "Median Final": f"${_s.median_final_portfolio:,.0f}",
+                    "P10 Final": f"${_s.p10_final_portfolio:,.0f}",
+                    "Depletion Age": str(_s.years_to_depletion_median) if _s.years_to_depletion_median else "Never",
+                })
+            st.dataframe(pd.DataFrame(_st_rows), use_container_width=True, hide_index=True)
+
+            # Median path comparison chart
+            st.markdown("#### Median Portfolio Path by Scenario")
+            _path_fig = go.Figure()
+            _ages = list(range(
+                int(st.session_state.get("mc_start_age", 62)),
+                int(st.session_state.get("mc_end_age", 90)),
+            ))
+            _colors = px.colors.qualitative.Plotly
+            for _i, _s in enumerate(_st_res):
+                if _s.portfolio_path_median:
+                    _path_fig.add_trace(go.Scatter(
+                        x=_ages[:len(_s.portfolio_path_median)],
+                        y=_s.portfolio_path_median,
+                        mode="lines",
+                        name=_s.scenario_name,
+                        line=dict(color=_colors[_i % len(_colors)], width=2),
+                    ))
+            _path_fig.update_layout(
+                title="Median Portfolio Path — Stress Scenarios",
+                xaxis_title="Age",
+                yaxis_title="Portfolio Value ($)",
+                yaxis_tickformat="$,.0f",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(_path_fig, use_container_width=True)
+
+            # Download
+            _st_csv = generate_monte_carlo_report_csv(
+                st.session_state.get("_mc_result", run_monte_carlo(_build_mc_inputs())),
+                stress_results=_st_res,
+            )
+            st.download_button(
+                label="📥 Download Stress Test Report (CSV)",
+                data=_st_csv,
+                file_name=f"stress_test_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="mc_stress_download",
+            )
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 3: Longevity Risk
+    # -----------------------------------------------------------------------
+    with mc_longevity_tab:
+        st.subheader("🕐 Longevity Risk Analysis")
+        st.markdown(
+            "How does your portfolio hold up if you live longer than expected? "
+            "Model outcomes to age 85, 90, 95, 100, and 105."
+        )
+
+        _lon_ages_selected = st.multiselect(
+            "Longevity Scenarios",
+            list(LONGEVITY_SCENARIOS.keys()),
+            default=list(LONGEVITY_SCENARIOS.keys()),
+            key="mc_longevity_scenarios",
+        )
+
+        if st.button("▶️ Run Longevity Analysis", key="mc_lon_run", type="primary"):
+            with st.spinner("Running longevity scenarios…"):
+                try:
+                    _lon_inputs = _build_mc_inputs()
+                    _lon_ages = {k: v for k, v in LONGEVITY_SCENARIOS.items() if k in _lon_ages_selected}
+                    _lon_results = run_longevity_analysis(_lon_inputs, _lon_ages)
+                    st.session_state["_mc_lon_results"] = _lon_results
+                except Exception as _lon_err:
+                    st.error(f"Longevity analysis error: {_lon_err}")
+
+        if "_mc_lon_results" in st.session_state:
+            _lon_res = st.session_state["_mc_lon_results"]
+
+            # Summary table
+            st.markdown("#### Longevity Scenario Summary")
+            _lon_rows = []
+            for _label, _mc in _lon_res.items():
+                _sp_icon = "🟢" if _mc.success_probability >= 0.90 else ("🟡" if _mc.success_probability >= 0.75 else "🔴")
+                _lon_rows.append({
+                    "Scenario": _label,
+                    "Plan To Age": _mc.inputs.end_age,
+                    "Success": f"{_sp_icon} {_mc.success_probability:.1%}",
+                    "Median Final": f"${_mc.median_final_portfolio:,.0f}",
+                    "P10 Final": f"${_mc.p10_final_portfolio:,.0f}",
+                    "P10 Depletion Age": str(_mc.years_to_depletion_p10) if _mc.years_to_depletion_p10 else "Never ✅",
+                })
+            st.dataframe(pd.DataFrame(_lon_rows), use_container_width=True, hide_index=True)
+
+            # Success probability by longevity chart
+            _lon_fig = go.Figure()
+            _lon_labels = list(_lon_res.keys())
+            _lon_success = [_lon_res[k].success_probability * 100 for k in _lon_labels]
+            _lon_colors = [
+                "rgb(0,204,150)" if s >= 90 else ("rgb(255,165,0)" if s >= 75 else "rgb(239,85,59)")
+                for s in _lon_success
+            ]
+            _lon_fig.add_trace(go.Bar(
+                x=_lon_labels,
+                y=_lon_success,
+                marker_color=_lon_colors,
+                text=[f"{s:.1f}%" for s in _lon_success],
+                textposition="outside",
+            ))
+            _lon_fig.add_hline(y=90, line_dash="dash", line_color="orange",
+                               annotation_text="90% Target")
+            _lon_fig.update_layout(
+                title="Success Probability by Longevity Scenario",
+                xaxis_title="Longevity Scenario",
+                yaxis_title="Success Probability (%)",
+                yaxis_range=[0, 110],
+            )
+            st.plotly_chart(_lon_fig, use_container_width=True)
+
+            # Median fan chart overlay for all longevity scenarios
+            st.markdown("#### Median Portfolio Path by Longevity")
+            _lon_path_fig = go.Figure()
+            _lon_colors_list = px.colors.qualitative.Plotly
+            for _i, (_label, _mc) in enumerate(_lon_res.items()):
+                _fan = build_fan_chart_df(_mc)
+                if not _fan.empty:
+                    _lon_path_fig.add_trace(go.Scatter(
+                        x=_fan["age"], y=_fan["p50"],
+                        mode="lines",
+                        name=_label,
+                        line=dict(color=_lon_colors_list[_i % len(_lon_colors_list)], width=2),
+                    ))
+            _lon_path_fig.update_layout(
+                title="Median Portfolio Path — Longevity Scenarios",
+                xaxis_title="Age",
+                yaxis_title="Portfolio Value ($)",
+                yaxis_tickformat="$,.0f",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(_lon_path_fig, use_container_width=True)
+
+            # Download
+            _lon_csv = generate_monte_carlo_report_csv(
+                st.session_state.get("_mc_result", run_monte_carlo(_build_mc_inputs())),
+                longevity_results=_lon_res,
+            )
+            st.download_button(
+                label="📥 Download Longevity Report (CSV)",
+                data=_lon_csv,
+                file_name=f"longevity_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="mc_lon_download",
+            )
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 4: Success Heatmap
+    # -----------------------------------------------------------------------
+    with mc_heatmap_tab:
+        st.subheader("🗺️ Success Probability Heatmap")
+        st.markdown(
+            "See how success probability changes across different withdrawal amounts "
+            "and portfolio allocations. Green = high confidence, Red = at risk."
+        )
+
+        _hm_col1, _hm_col2 = st.columns(2)
+        with _hm_col1:
+            _hm_base_withdrawal = st.number_input(
+                "Base Annual Withdrawal ($)", min_value=10_000, value=80_000,
+                step=5_000, key="hm_withdrawal"
+            )
+        with _hm_col2:
+            _hm_n_sims = st.select_slider(
+                "Simulations per Cell", options=[500, 1_000, 2_000],
+                value=1_000, key="hm_n_sims",
+                help="More simulations = more accurate but slower."
+            )
+
+        if st.button("▶️ Build Heatmap", key="mc_heatmap_run", type="primary"):
+            with st.spinner("Building heatmap (this may take 30–60 seconds)…"):
+                try:
+                    _hm_inputs = MonteCarloInputs(
+                        initial_portfolio=float(st.session_state.get("mc_portfolio", 1_500_000)),
+                        annual_withdrawal=float(_hm_base_withdrawal),
+                        start_age=int(st.session_state.get("mc_start_age", 62)),
+                        end_age=int(st.session_state.get("mc_end_age", 90)),
+                        portfolio_allocation=PORTFOLIO_PRESETS["Moderate (70/30)"],
+                        inflation_rate=float(st.session_state.get("mc_inflation", 0.029)),
+                        withdrawal_growth_rate=float(st.session_state.get("mc_inflation", 0.029)),
+                        social_security_annual=float(st.session_state.get("mc_ss", 40_000)),
+                        ss_start_age=int(st.session_state.get("mc_ss_age", 70)),
+                        n_simulations=int(_hm_n_sims),
+                        random_seed=42,
+                    )
+                    _hm_df = build_success_heatmap_df(_hm_inputs)
+                    st.session_state["_mc_heatmap_df"] = _hm_df
+                except Exception as _hm_err:
+                    st.error(f"Heatmap error: {_hm_err}")
+
+        if "_mc_heatmap_df" in st.session_state:
+            _hm_df = st.session_state["_mc_heatmap_df"]
+            st.markdown("#### Success Probability (%) by Withdrawal × Allocation")
+            st.caption("Values are success probability %. Green ≥ 90%, Yellow 75–90%, Red < 75%.")
+
+            # Style the dataframe
+            _hm_display = _hm_df.set_index("Annual Withdrawal")
+
+            def _color_success(val):
+                try:
+                    v = float(val)
+                    if v >= 90:
+                        return "background-color: rgba(0,204,150,0.4)"
+                    elif v >= 75:
+                        return "background-color: rgba(255,165,0,0.4)"
+                    else:
+                        return "background-color: rgba(239,85,59,0.4)"
+                except (ValueError, TypeError):
+                    return ""
+
+            st.dataframe(
+                _hm_display.style.applymap(_color_success),
+                use_container_width=True,
+            )
+
+            # Heatmap chart
+            _hm_fig = go.Figure(data=go.Heatmap(
+                z=_hm_display.values,
+                x=list(_hm_display.columns),
+                y=list(_hm_display.index),
+                colorscale=[
+                    [0.0, "rgb(239,85,59)"],
+                    [0.75, "rgb(255,165,0)"],
+                    [0.90, "rgb(0,204,150)"],
+                    [1.0, "rgb(0,150,100)"],
+                ],
+                zmin=0, zmax=100,
+                text=_hm_display.values,
+                texttemplate="%{text:.0f}%",
+                colorbar=dict(title="Success %"),
+            ))
+            _hm_fig.update_layout(
+                title="Success Probability Heatmap",
+                xaxis_title="Portfolio Allocation",
+                yaxis_title="Annual Withdrawal",
+            )
+            st.plotly_chart(_hm_fig, use_container_width=True)
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 5: Scenario Comparison
+    # -----------------------------------------------------------------------
+    with mc_compare_tab:
+        st.subheader("📊 Full Scenario Comparison")
+        st.markdown(
+            "Run baseline + all stress tests + all longevity scenarios in one shot "
+            "and compare results side-by-side."
+        )
+
+        _cmp_stress = st.multiselect(
+            "Stress Scenarios to Include",
+            list(STRESS_SCENARIOS.keys()),
+            default=list(STRESS_SCENARIOS.keys())[:3],
+            key="mc_cmp_stress",
+        )
+        _cmp_longevity = st.multiselect(
+            "Longevity Scenarios to Include",
+            list(LONGEVITY_SCENARIOS.keys()),
+            default=["Average (age 85)", "Long-Lived (age 95)", "Exceptional (age 105)"],
+            key="mc_cmp_longevity",
+        )
+
+        if st.button("▶️ Run Full Comparison", key="mc_compare_run", type="primary"):
+            with st.spinner("Running full scenario comparison…"):
+                try:
+                    _cmp_inputs = _build_mc_inputs()
+                    _cmp_lon_ages = {k: v for k, v in LONGEVITY_SCENARIOS.items() if k in _cmp_longevity}
+                    _cmp_result = run_full_scenario_comparison(
+                        _cmp_inputs,
+                        stress_scenarios=_cmp_stress,
+                        longevity_ages=_cmp_lon_ages,
+                    )
+                    st.session_state["_mc_cmp_result"] = _cmp_result
+                except Exception as _cmp_err:
+                    st.error(f"Comparison error: {_cmp_err}")
+
+        if "_mc_cmp_result" in st.session_state:
+            _cmp = st.session_state["_mc_cmp_result"]
+            _cmp_df = build_scenario_comparison_df(_cmp)
+
+            st.markdown("#### All Scenarios — Side-by-Side")
+            st.dataframe(_cmp_df, use_container_width=True, hide_index=True)
+
+            # Success probability bar chart
+            _cmp_fig = go.Figure()
+            _cmp_labels = _cmp_df["Scenario"].tolist()
+            _cmp_success_vals = []
+            for _row in _cmp_df["Success Probability"]:
+                try:
+                    _cmp_success_vals.append(float(_row.replace("%", "").strip()))
+                except (ValueError, AttributeError):
+                    _cmp_success_vals.append(0.0)
+
+            _cmp_bar_colors = [
+                "rgb(0,204,150)" if v >= 90 else ("rgb(255,165,0)" if v >= 75 else "rgb(239,85,59)")
+                for v in _cmp_success_vals
+            ]
+            _cmp_fig.add_trace(go.Bar(
+                x=_cmp_labels,
+                y=_cmp_success_vals,
+                marker_color=_cmp_bar_colors,
+                text=[f"{v:.1f}%" for v in _cmp_success_vals],
+                textposition="outside",
+            ))
+            _cmp_fig.add_hline(y=90, line_dash="dash", line_color="orange",
+                               annotation_text="90% Target")
+            _cmp_fig.update_layout(
+                title="Success Probability — All Scenarios",
+                xaxis_title="Scenario",
+                yaxis_title="Success Probability (%)",
+                yaxis_range=[0, 115],
+                xaxis_tickangle=-30,
+            )
+            st.plotly_chart(_cmp_fig, use_container_width=True)
+
+            # Full download
+            _cmp_csv = generate_monte_carlo_report_csv(
+                _cmp.baseline,
+                stress_results=_cmp.stress_tests,
+                longevity_results=_cmp.longevity_results,
+            )
+            st.download_button(
+                label="📥 Download Full Comparison Report (CSV)",
+                data=_cmp_csv,
+                file_name=f"mc_full_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="mc_cmp_download",
+            )
+
 with tab_flow:
     st.header("💸 Flow of Funds")
     st.markdown("Visualize how money moves between your accounts and to charitable giving.")
@@ -2953,6 +3607,1002 @@ with tab_flow:
             """)
         else:
             st.warning(f"No portfolio data found for {_ff_month}/{_ff_year}")
+
+with tab_advanced:
+    st.header("🎯 Advanced Strategies")
+    st.markdown(
+        "Multi-year tax planning, backdoor Roth, NUA, QCD, and 72(t) SEPP calculators."
+    )
+    st.markdown("---")
+
+    (
+        adv_tax_tab,
+        adv_backdoor_tab,
+        adv_nua_tab,
+        adv_qcd_tab,
+        adv_sepp_tab,
+        adv_harvest_tab,
+    ) = st.tabs([
+        "📅 Multi-Year Tax Planning",
+        "🔄 Backdoor & Mega Backdoor Roth",
+        "📈 NUA Analysis",
+        "🎁 QCD Optimizer",
+        "⏱️ 72(t) SEPP Calculator",
+        "🌾 Capital Loss Harvesting",
+    ])
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 1: Multi-Year Tax Planning
+    # -----------------------------------------------------------------------
+    with adv_tax_tab:
+        st.subheader("📅 5-Year Rolling Tax Optimization Window")
+        st.markdown(
+            "Project your taxes across a 5-year window to identify Roth conversion "
+            "opportunities, bracket headroom, QBI deductions, and capital loss harvesting."
+        )
+
+        _myt_col1, _myt_col2, _myt_col3 = st.columns(3)
+        with _myt_col1:
+            _myt_start_year = st.selectbox(
+                "Start Year", list(range(curr_year, curr_year + 6)),
+                key="myt_start_year"
+            )
+            _myt_filing = st.selectbox(
+                "Filing Status",
+                ["married_filing_jointly", "single"],
+                key="myt_filing",
+            )
+        with _myt_col2:
+            _myt_income = st.number_input(
+                "Annual Ordinary Income ($)", min_value=0, value=150_000,
+                step=5_000, key="myt_income",
+                help="Wages, IRA distributions, and other ordinary income."
+            )
+            _myt_cg_lt = st.number_input(
+                "Annual Long-Term Cap Gains ($)", min_value=0, value=0,
+                step=1_000, key="myt_cg_lt"
+            )
+        with _myt_col3:
+            _myt_conversion = st.number_input(
+                "Annual Roth Conversion ($)", min_value=0, value=0,
+                step=5_000, key="myt_conversion",
+                help="Planned Roth conversion amount per year."
+            )
+            _myt_qbi = st.number_input(
+                "Annual QBI Income ($)", min_value=0, value=0,
+                step=5_000, key="myt_qbi",
+                help="Qualified Business Income from pass-through entities."
+            )
+
+        _myt_col4, _myt_col5, _ = st.columns(3)
+        with _myt_col4:
+            _myt_loss_cf = st.number_input(
+                "Capital Loss Carryforward ($)", min_value=0, value=0,
+                step=1_000, key="myt_loss_cf"
+            )
+        with _myt_col5:
+            _myt_window = st.slider(
+                "Window (years)", min_value=3, max_value=10, value=5,
+                key="myt_window"
+            )
+
+        if st.button("📊 Run 5-Year Tax Projection", key="myt_run"):
+            try:
+                _myt_result = build_rolling_tax_window(
+                    start_year=int(_myt_start_year),
+                    income_by_year={
+                        int(_myt_start_year) + i: float(_myt_income)
+                        for i in range(_myt_window)
+                    },
+                    cg_lt_by_year={
+                        int(_myt_start_year) + i: float(_myt_cg_lt)
+                        for i in range(_myt_window)
+                    },
+                    conversion_by_year={
+                        int(_myt_start_year) + i: float(_myt_conversion)
+                        for i in range(_myt_window)
+                    },
+                    qbi_by_year={
+                        int(_myt_start_year) + i: float(_myt_qbi)
+                        for i in range(_myt_window)
+                    },
+                    loss_carryforward=float(_myt_loss_cf),
+                    filing_status=_myt_filing,
+                    window=_myt_window,
+                )
+
+                # Summary metrics
+                _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                _mc1.metric(
+                    f"Total Tax ({_myt_window}yr)",
+                    f"${_myt_result.total_tax_5yr:,.0f}"
+                )
+                _mc2.metric(
+                    "Avg Effective Rate",
+                    f"{_myt_result.avg_effective_rate:.1%}"
+                )
+                _mc3.metric(
+                    "Total Bracket Headroom",
+                    f"${_myt_result.total_bracket_headroom:,.0f}"
+                )
+                _mc4.metric(
+                    "Optimization Opportunities",
+                    str(len(_myt_result.optimization_opportunities))
+                )
+
+                # Year-by-year table
+                st.markdown("#### Year-by-Year Projection")
+                _myt_rows = []
+                for _p in _myt_result.years:
+                    _myt_rows.append({
+                        "Year": _p.year,
+                        "Ordinary Income": f"${_p.ordinary_income:,.0f}",
+                        "Roth Conversion": f"${_p.roth_conversion:,.0f}",
+                        "QBI Deduction": f"${_p.qbi_deduction:,.0f}",
+                        "AGI": f"${_p.agi:,.0f}",
+                        "Federal Tax": f"${_p.federal_tax:,.0f}",
+                        "Effective Rate": f"{_p.effective_rate:.1%}",
+                        "Marginal Rate": f"{_p.marginal_rate:.0%}",
+                        "Bracket Headroom": f"${_p.bracket_headroom:,.0f}",
+                    })
+                st.dataframe(pd.DataFrame(_myt_rows), use_container_width=True, hide_index=True)
+
+                # Tax chart
+                _myt_chart_df = pd.DataFrame({
+                    "Year": [p.year for p in _myt_result.years],
+                    "Federal Tax": [p.federal_tax for p in _myt_result.years],
+                    "Bracket Headroom": [p.bracket_headroom for p in _myt_result.years],
+                })
+                _myt_fig = go.Figure()
+                _myt_fig.add_bar(
+                    x=_myt_chart_df["Year"], y=_myt_chart_df["Federal Tax"],
+                    name="Federal Tax", marker_color="rgb(239, 85, 59)"
+                )
+                _myt_fig.add_bar(
+                    x=_myt_chart_df["Year"], y=_myt_chart_df["Bracket Headroom"],
+                    name="Bracket Headroom", marker_color="rgb(99, 110, 250)"
+                )
+                _myt_fig.update_layout(
+                    barmode="group", title="Federal Tax vs. Bracket Headroom by Year",
+                    xaxis_title="Year", yaxis_title="Amount ($)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02)
+                )
+                st.plotly_chart(_myt_fig, use_container_width=True)
+
+                # Bracket fill visualization
+                st.markdown("#### 🎯 Bracket Fill Analysis")
+                st.caption(
+                    "Shows how much of each tax bracket is filled each year. "
+                    "Green = headroom available for Roth conversions."
+                )
+                _bracket_fig = go.Figure()
+                for _pi, _p in enumerate(_myt_result.years):
+                    _filled = _p.agi - (_p.bracket_headroom if _p.bracket_headroom > 0 else 0)
+                    _headroom = _p.bracket_headroom
+                    _bracket_fig.add_bar(
+                        x=[str(_p.year)],
+                        y=[max(0.0, _filled)],
+                        name="Bracket Used" if _pi == 0 else None,
+                        marker_color="rgb(239, 85, 59)",
+                        showlegend=_pi == 0,
+                    )
+                    _bracket_fig.add_bar(
+                        x=[str(_p.year)],
+                        y=[max(0.0, _headroom)],
+                        name="Bracket Headroom" if _pi == 0 else None,
+                        marker_color="rgb(0, 204, 150)",
+                        showlegend=_pi == 0,
+                    )
+                _bracket_fig.update_layout(
+                    barmode="stack",
+                    title="Tax Bracket Fill by Year",
+                    xaxis_title="Year",
+                    yaxis_title="Taxable Income ($)",
+                    yaxis_tickformat="$,.0f",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                )
+                st.plotly_chart(_bracket_fig, use_container_width=True)
+
+                # Optimization opportunities
+                if _myt_result.optimization_opportunities:
+                    st.markdown("#### 💡 Optimization Opportunities")
+                    for _opp in _myt_result.optimization_opportunities:
+                        st.info(_opp)
+
+                # Recommended conversions
+                if _myt_result.recommended_conversions:
+                    st.markdown("#### 📈 Recommended Roth Conversions")
+                    _conv_rows = [
+                        {"Year": yr, "Recommended Conversion": f"${amt:,.0f}"}
+                        for yr, amt in _myt_result.recommended_conversions.items()
+                    ]
+                    st.dataframe(pd.DataFrame(_conv_rows), use_container_width=True, hide_index=True)
+
+            except Exception as _myt_err:
+                st.error(f"Error running tax projection: {_myt_err}")
+
+        # QBI Deduction Calculator
+        st.markdown("---")
+        st.subheader("🏢 QBI Deduction Calculator (IRC §199A)")
+        with st.expander("Calculate your Qualified Business Income deduction", expanded=False):
+            _qbi_col1, _qbi_col2 = st.columns(2)
+            with _qbi_col1:
+                _qbi_income = st.number_input(
+                    "QBI Income ($)", min_value=0, value=100_000, step=5_000, key="qbi_income"
+                )
+                _qbi_total = st.number_input(
+                    "Total Taxable Income ($)", min_value=0, value=200_000, step=5_000, key="qbi_total"
+                )
+                _qbi_filing = st.selectbox(
+                    "Filing Status", ["married_filing_jointly", "single"], key="qbi_filing"
+                )
+            with _qbi_col2:
+                _qbi_w2 = st.number_input(
+                    "W-2 Wages Paid by Business ($)", min_value=0, value=0, step=5_000, key="qbi_w2"
+                )
+                _qbi_ubia = st.number_input(
+                    "UBIA of Qualified Property ($)", min_value=0, value=0, step=10_000, key="qbi_ubia"
+                )
+                _qbi_sstb = st.checkbox(
+                    "Specified Service Trade or Business (SSTB)?", key="qbi_sstb",
+                    help="Law, accounting, consulting, financial services, etc."
+                )
+
+            if st.button("Calculate QBI Deduction", key="qbi_calc"):
+                _qbi_result = calculate_qbi_deduction_full(
+                    qbi_income=float(_qbi_income),
+                    total_taxable_income=float(_qbi_total),
+                    w2_wages=float(_qbi_w2),
+                    ubia_qualified_property=float(_qbi_ubia),
+                    is_sstb=bool(_qbi_sstb),
+                    filing_status=_qbi_filing,
+                )
+                _qbi_c1, _qbi_c2, _qbi_c3 = st.columns(3)
+                _qbi_c1.metric("QBI Deduction", f"${_qbi_result['deduction']:,.0f}")
+                _qbi_c2.metric("Base Deduction (20%)", f"${_qbi_result['base_deduction']:,.0f}")
+                _qbi_c3.metric("Phase-Out %", f"{_qbi_result['phase_out_pct']:.1%}")
+                for _note in _qbi_result["notes"]:
+                    st.caption(_note)
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 2: Backdoor & Mega Backdoor Roth
+    # -----------------------------------------------------------------------
+    with adv_backdoor_tab:
+        st.subheader("🔄 Backdoor Roth IRA")
+        st.markdown(
+            "For high-income earners who exceed the Roth IRA income limits. "
+            "Make a non-deductible Traditional IRA contribution, then convert to Roth."
+        )
+
+        _bd_col1, _bd_col2, _bd_col3 = st.columns(3)
+        with _bd_col1:
+            _bd_year = st.selectbox(
+                "Tax Year", list(range(curr_year, curr_year + 3)), key="bd_year"
+            )
+            _bd_age = st.number_input(
+                "Your Age", min_value=18, max_value=80, value=45, key="bd_age"
+            )
+        with _bd_col2:
+            _bd_magi = st.number_input(
+                "MAGI ($)", min_value=0, value=250_000, step=5_000, key="bd_magi",
+                help="Modified Adjusted Gross Income"
+            )
+            _bd_trad_bal = st.number_input(
+                "Pre-Tax IRA Balance ($)", min_value=0, value=0, step=10_000, key="bd_trad_bal",
+                help="Existing Traditional IRA pre-tax balance (triggers pro-rata rule if > 0)"
+            )
+        with _bd_col3:
+            _bd_basis = st.number_input(
+                "Existing After-Tax IRA Basis ($)", min_value=0, value=0, step=1_000, key="bd_basis"
+            )
+            _bd_filing = st.selectbox(
+                "Filing Status", ["married_filing_jointly", "single"], key="bd_filing"
+            )
+
+        if st.button("Analyze Backdoor Roth", key="bd_run"):
+            _bd_result = calculate_backdoor_roth(
+                year=int(_bd_year),
+                age=int(_bd_age),
+                magi=float(_bd_magi),
+                traditional_ira_balance=float(_bd_trad_bal),
+                after_tax_ira_basis=float(_bd_basis),
+                filing_status=_bd_filing,
+            )
+            if not _bd_result.eligible and _bd_result.ineligible_reason:
+                st.info(_bd_result.ineligible_reason)
+            else:
+                _bd_c1, _bd_c2, _bd_c3 = st.columns(3)
+                _bd_c1.metric("Contribution Amount", f"${_bd_result.contribution_amount:,.0f}")
+                _bd_c2.metric("Pro-Rata Tax", f"${_bd_result.pro_rata_tax:,.0f}")
+                _bd_c3.metric("20-Year Net Benefit", f"${_bd_result.net_benefit:,.0f}")
+
+                if _bd_result.warnings:
+                    for _w in _bd_result.warnings:
+                        st.warning(_w)
+
+                st.markdown("#### Step-by-Step Instructions")
+                for _step in _bd_result.steps:
+                    st.markdown(f"- {_step}")
+
+        # BETR Analysis
+        st.markdown("---")
+        st.subheader("📐 BETR — Break-Even Tax Rate Analysis")
+        st.markdown(
+            "The **Break-Even Tax Rate (BETR)** shows how far your future tax rate would have to "
+            "fall to make a Roth conversion undesirable. Based on Vanguard Research (July 2025). "
+            "If BETR > current marginal rate, conversion is beneficial even if future rates decline."
+        )
+
+        _betr_col1, _betr_col2, _betr_col3 = st.columns(3)
+        with _betr_col1:
+            _betr_conv_amt = st.number_input(
+                "Conversion Amount ($)", min_value=1_000, value=50_000,
+                step=5_000, key="betr_conv_amt",
+                help="Amount to convert from Traditional IRA to Roth IRA."
+            )
+            _betr_trad_bal = st.number_input(
+                "Traditional IRA Balance ($)", min_value=1_000, value=500_000,
+                step=10_000, key="betr_trad_bal"
+            )
+            _betr_basis = st.number_input(
+                "Nontaxable Basis in IRA ($)", min_value=0, value=0,
+                step=1_000, key="betr_basis",
+                help="After-tax (non-deductible) contributions already in the Traditional IRA."
+            )
+        with _betr_col2:
+            _betr_curr_rate = st.slider(
+                "Current Marginal Rate", min_value=0.10, max_value=0.37,
+                value=0.24, step=0.01, format="%.0%%", key="betr_curr_rate"
+            )
+            _betr_future_rate = st.slider(
+                "Expected Future Rate", min_value=0.10, max_value=0.37,
+                value=0.22, step=0.01, format="%.0%%", key="betr_future_rate"
+            )
+            _betr_return = st.slider(
+                "Expected Annual Return", min_value=0.02, max_value=0.12,
+                value=0.07, step=0.005, format="%.1f%%", key="betr_return"
+            )
+        with _betr_col3:
+            _betr_years = st.number_input(
+                "Years to Withdrawal", min_value=1, max_value=40, value=20,
+                key="betr_years"
+            )
+            _betr_pay_source = st.radio(
+                "Pay Conversion Tax From",
+                ["Taxable Account", "IRA Assets"],
+                key="betr_pay_source",
+                help="Paying from taxable account is generally more efficient."
+            )
+            _betr_taxable_bal = st.number_input(
+                "Taxable Account Balance ($)", min_value=0, value=200_000,
+                step=10_000, key="betr_taxable_bal"
+            )
+
+        if st.button("📐 Calculate BETR", key="betr_run", type="primary"):
+            try:
+                _betr_inputs = BETRInputs(
+                    current_marginal_rate=float(_betr_curr_rate),
+                    expected_future_rate=float(_betr_future_rate),
+                    conversion_amount=float(_betr_conv_amt),
+                    traditional_ira_balance=float(_betr_trad_bal),
+                    nontaxable_basis=float(_betr_basis),
+                    pay_from_taxable=(_betr_pay_source == "Taxable Account"),
+                    taxable_account_balance=float(_betr_taxable_bal),
+                    years_to_withdrawal=int(_betr_years),
+                    annual_return=float(_betr_return),
+                )
+                _betr_result = calculate_betr(_betr_inputs)
+
+                # Recommendation banner
+                if _betr_result.conversion_recommended:
+                    st.success(
+                        f"✅ **Conversion Recommended** — BETR ({_betr_result.betr:.1%}) > "
+                        f"Expected Future Rate ({_betr_future_rate:.0%}). "
+                        "Converting now is advantageous."
+                    )
+                else:
+                    st.warning(
+                        f"⚠️ **Conversion May Not Be Optimal** — BETR ({_betr_result.betr:.1%}) ≤ "
+                        f"Expected Future Rate ({_betr_future_rate:.0%}). "
+                        "Staying in Traditional IRA may be better."
+                    )
+
+                # Key metrics
+                _bc1, _bc2, _bc3, _bc4 = st.columns(4)
+                _bc1.metric(
+                    "Break-Even Tax Rate (BETR)",
+                    f"{_betr_result.betr:.1%}",
+                    delta=f"{(_betr_result.betr - _betr_future_rate):.1%} vs future rate",
+                    delta_color="normal" if _betr_result.conversion_recommended else "inverse",
+                )
+                _bc2.metric("Conversion Tax", f"${_betr_result.conversion_tax:,.0f}")
+                _bc3.metric("Roth Future Value", f"${_betr_result.roth_future_value:,.0f}")
+                _bc4.metric(
+                    "Net Benefit vs Traditional",
+                    f"${_betr_result.net_benefit:,.0f}",
+                    delta_color="normal" if _betr_result.net_benefit > 0 else "inverse",
+                )
+
+                # Future value comparison chart
+                _betr_fig = go.Figure()
+                _betr_fig.add_bar(
+                    x=["Traditional IRA\n(no conversion)", "Roth IRA\n(after conversion)"],
+                    y=[_betr_result.traditional_future_value, _betr_result.roth_future_value],
+                    marker_color=[
+                        "rgb(239, 85, 59)" if _betr_result.roth_future_value > _betr_result.traditional_future_value
+                        else "rgb(99, 110, 250)",
+                        "rgb(0, 204, 150)" if _betr_result.roth_future_value > _betr_result.traditional_future_value
+                        else "rgb(239, 85, 59)",
+                    ],
+                    text=[
+                        f"${_betr_result.traditional_future_value:,.0f}",
+                        f"${_betr_result.roth_future_value:,.0f}",
+                    ],
+                    textposition="outside",
+                )
+                _betr_fig.update_layout(
+                    title=f"After-Tax Future Value Comparison ({_betr_years}-Year Horizon)",
+                    yaxis_title="After-Tax Future Value ($)",
+                    yaxis_tickformat="$,.0f",
+                )
+                st.plotly_chart(_betr_fig, use_container_width=True)
+
+                # Analysis notes
+                if _betr_result.analysis_notes:
+                    st.markdown("#### Analysis Notes")
+                    for _note in _betr_result.analysis_notes:
+                        st.caption(_note)
+
+            except Exception as _betr_err:
+                st.error(f"BETR calculation error: {_betr_err}")
+
+        st.markdown("---")
+        st.subheader("🚀 Mega Backdoor Roth (401k After-Tax)")
+        st.markdown(
+            "Contribute after-tax dollars to your 401(k) beyond the employee elective "
+            "deferral limit, then convert to Roth. Requires plan support."
+        )
+
+        _mb_col1, _mb_col2, _mb_col3 = st.columns(3)
+        with _mb_col1:
+            _mb_year = st.selectbox(
+                "Tax Year", list(range(curr_year, curr_year + 3)), key="mb_year"
+            )
+            _mb_age = st.number_input(
+                "Your Age", min_value=18, max_value=80, value=45, key="mb_age"
+            )
+        with _mb_col2:
+            _mb_elective = st.number_input(
+                "Employee Elective Deferral ($)", min_value=0, value=23_500,
+                step=500, key="mb_elective",
+                help="Your pre-tax or Roth 401(k) contributions"
+            )
+            _mb_match = st.number_input(
+                "Employer Match ($)", min_value=0, value=5_000,
+                step=500, key="mb_match"
+            )
+        with _mb_col3:
+            _mb_after_tax = st.checkbox(
+                "Plan allows after-tax contributions?", value=True, key="mb_after_tax"
+            )
+            _mb_in_plan = st.checkbox(
+                "Plan allows in-plan Roth conversion?", value=True, key="mb_in_plan"
+            )
+
+        if st.button("Analyze Mega Backdoor Roth", key="mb_run"):
+            _mb_result = calculate_mega_backdoor_roth(
+                year=int(_mb_year),
+                age=int(_mb_age),
+                employee_elective_deferral=float(_mb_elective),
+                employer_match=float(_mb_match),
+                plan_allows_after_tax=bool(_mb_after_tax),
+                plan_allows_in_plan_conversion=bool(_mb_in_plan),
+            )
+            if not _mb_result.eligible:
+                st.warning(_mb_result.ineligible_reason)
+            else:
+                _mb_c1, _mb_c2, _mb_c3 = st.columns(3)
+                _mb_c1.metric("After-Tax Contribution", f"${_mb_result.after_tax_contribution:,.0f}")
+                _mb_c2.metric(
+                    "In-Plan Conversion" if _mb_result.in_plan_conversion > 0 else "Rollover to Roth IRA",
+                    f"${max(_mb_result.in_plan_conversion, _mb_result.rollover_to_roth_ira):,.0f}"
+                )
+                _mb_c3.metric("20-Year Net Benefit", f"${_mb_result.net_benefit:,.0f}")
+
+                st.markdown("#### Step-by-Step Instructions")
+                for _step in _mb_result.steps:
+                    st.markdown(f"- {_step}")
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 3: NUA Analysis
+    # -----------------------------------------------------------------------
+    with adv_nua_tab:
+        st.subheader("📈 Net Unrealized Appreciation (NUA) Analysis")
+        st.markdown(
+            "If you hold company stock in a 401(k), the NUA strategy lets you pay "
+            "ordinary income tax only on the cost basis, with the appreciation taxed "
+            "at the lower long-term capital gains rate when you sell."
+        )
+
+        _nua_col1, _nua_col2, _nua_col3 = st.columns(3)
+        with _nua_col1:
+            _nua_ticker = st.text_input("Company Stock Ticker", value="AAPL", key="nua_ticker")
+            _nua_shares = st.number_input(
+                "Shares in 401(k)", min_value=0.0, value=1_000.0, step=100.0, key="nua_shares"
+            )
+        with _nua_col2:
+            _nua_cost = st.number_input(
+                "Cost Basis per Share ($)", min_value=0.01, value=20.0, step=1.0, key="nua_cost"
+            )
+            _nua_price = st.number_input(
+                "Current Price per Share ($)", min_value=0.01, value=150.0, step=1.0, key="nua_price"
+            )
+        with _nua_col3:
+            _nua_ord_rate = st.slider(
+                "Ordinary Income Tax Rate", min_value=0.10, max_value=0.37,
+                value=0.24, step=0.01, format="%.0%%", key="nua_ord_rate"
+            )
+            _nua_ltcg_rate = st.slider(
+                "LTCG Tax Rate", min_value=0.0, max_value=0.20,
+                value=0.15, step=0.05, format="%.0%%", key="nua_ltcg_rate"
+            )
+
+        _nua_col4, _nua_col5, _ = st.columns(3)
+        with _nua_col4:
+            _nua_future_rate = st.slider(
+                "Future IRA Withdrawal Rate", min_value=0.10, max_value=0.37,
+                value=0.24, step=0.01, format="%.0%%", key="nua_future_rate"
+            )
+        with _nua_col5:
+            _nua_years = st.slider(
+                "Years Until Sale (IRA comparison)", min_value=1, max_value=30,
+                value=10, key="nua_years"
+            )
+
+        if st.button("Analyze NUA Strategy", key="nua_run"):
+            _nua_result = calculate_nua_analysis(
+                ticker=_nua_ticker,
+                shares=float(_nua_shares),
+                cost_basis_per_share=float(_nua_cost),
+                current_price_per_share=float(_nua_price),
+                ordinary_income_tax_rate=float(_nua_ord_rate),
+                ltcg_tax_rate=float(_nua_ltcg_rate),
+                future_tax_rate=float(_nua_future_rate),
+                years_to_sale=int(_nua_years),
+            )
+
+            _nua_c1, _nua_c2, _nua_c3, _nua_c4 = st.columns(4)
+            _nua_c1.metric("Current Value", f"${_nua_result.current_value:,.0f}")
+            _nua_c2.metric("NUA Amount", f"${_nua_result.nua_amount:,.0f}",
+                           delta=f"{_nua_result.nua_pct:.0%} gain")
+            _nua_c3.metric("NUA Strategy Tax", f"${_nua_result.total_nua_tax:,.0f}")
+            _nua_c4.metric(
+                "Tax Savings vs IRA Rollover",
+                f"${_nua_result.tax_savings:,.0f}",
+                delta="✅ Recommended" if _nua_result.strategy_recommended else "⚠️ Not Recommended",
+                delta_color="normal" if _nua_result.strategy_recommended else "inverse",
+            )
+
+            # Tax comparison chart
+            _nua_fig = go.Figure(go.Bar(
+                x=["NUA Strategy", "IRA Rollover (est.)"],
+                y=[_nua_result.total_nua_tax, _nua_result.tax_if_distributed_as_cash],
+                marker_color=["rgb(99, 110, 250)", "rgb(239, 85, 59)"],
+                text=[f"${_nua_result.total_nua_tax:,.0f}", f"${_nua_result.tax_if_distributed_as_cash:,.0f}"],
+                textposition="outside",
+            ))
+            _nua_fig.update_layout(
+                title=f"NUA Strategy vs. IRA Rollover Tax Comparison — {_nua_ticker}",
+                yaxis_title="Estimated Tax ($)",
+            )
+            st.plotly_chart(_nua_fig, use_container_width=True)
+
+            st.markdown("#### Analysis Notes")
+            for _note in _nua_result.notes:
+                st.caption(_note)
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 4: QCD Optimizer
+    # -----------------------------------------------------------------------
+    with adv_qcd_tab:
+        st.subheader("🎁 Qualified Charitable Distribution (QCD) Optimizer")
+        st.markdown(
+            "Age 70½+: Donate directly from your IRA to charity. The distribution "
+            "counts toward your RMD but is excluded from AGI — better than a cash donation."
+        )
+
+        _qcd_col1, _qcd_col2, _qcd_col3 = st.columns(3)
+        with _qcd_col1:
+            _qcd_year = st.selectbox(
+                "Tax Year", list(range(curr_year, curr_year + 3)), key="qcd_year"
+            )
+            _qcd_age = st.number_input(
+                "Your Age", min_value=60, max_value=95, value=73, key="qcd_age"
+            )
+            _qcd_rmd = st.number_input(
+                "RMD Amount ($)", min_value=0, value=25_000, step=1_000, key="qcd_rmd"
+            )
+        with _qcd_col2:
+            _qcd_ira_bal = st.number_input(
+                "IRA Balance ($)", min_value=0, value=500_000, step=10_000, key="qcd_ira_bal"
+            )
+            _qcd_giving = st.number_input(
+                "Planned Charitable Giving ($)", min_value=0, value=10_000,
+                step=1_000, key="qcd_giving"
+            )
+            _qcd_agi = st.number_input(
+                "AGI Before RMD ($)", min_value=0, value=80_000, step=5_000, key="qcd_agi"
+            )
+        with _qcd_col3:
+            _qcd_rate = st.slider(
+                "Marginal Tax Rate", min_value=0.10, max_value=0.37,
+                value=0.22, step=0.01, format="%.0%%", key="qcd_rate"
+            )
+            _qcd_irmaa = st.number_input(
+                "IRMAA MAGI Threshold ($)", min_value=0, value=206_000,
+                step=1_000, key="qcd_irmaa"
+            )
+            _qcd_ss = st.number_input(
+                "Annual SS Benefits ($)", min_value=0, value=0,
+                step=1_000, key="qcd_ss"
+            )
+
+        if st.button("Optimize QCD", key="qcd_run"):
+            _qcd_result = calculate_qcd_optimization(
+                year=int(_qcd_year),
+                age=int(_qcd_age),
+                rmd_amount=float(_qcd_rmd),
+                ira_balance=float(_qcd_ira_bal),
+                planned_charitable_giving=float(_qcd_giving),
+                agi_before_rmd=float(_qcd_agi),
+                marginal_tax_rate=float(_qcd_rate),
+                irmaa_magi_threshold=float(_qcd_irmaa),
+                ss_benefits=float(_qcd_ss),
+            )
+
+            if not _qcd_result.eligible:
+                st.warning(_qcd_result.notes[0] if _qcd_result.notes else "Not eligible for QCD.")
+            else:
+                _qcd_c1, _qcd_c2, _qcd_c3, _qcd_c4 = st.columns(4)
+                _qcd_c1.metric("QCD Amount", f"${_qcd_result.qcd_amount:,.0f}")
+                _qcd_c2.metric("AGI Reduction", f"${_qcd_result.agi_reduction:,.0f}")
+                _qcd_c3.metric("Direct Tax Savings", f"${_qcd_result.tax_savings:,.0f}")
+                _qcd_c4.metric(
+                    "Total QCD Advantage",
+                    f"${_qcd_result.qcd_advantage:,.0f}",
+                    help="Tax savings + IRMAA savings + SS torpedo reduction vs. cash donation"
+                )
+
+                if _qcd_result.irmaa_impact > 0:
+                    st.success(f"✅ IRMAA savings: ${_qcd_result.irmaa_impact:,.0f}")
+                if _qcd_result.ss_torpedo_reduction > 0:
+                    st.success(f"✅ SS torpedo reduction: ${_qcd_result.ss_torpedo_reduction:,.0f}")
+
+                st.markdown("#### Analysis Notes")
+                for _note in _qcd_result.notes:
+                    st.caption(_note)
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 5: 72(t) SEPP Calculator
+    # -----------------------------------------------------------------------
+    with adv_sepp_tab:
+        st.subheader("⏱️ 72(t) SEPP Calculator")
+        st.markdown(
+            "Substantially Equal Periodic Payments allow penalty-free IRA withdrawals "
+            "before age 59½ under IRC §72(t). Payments must continue for the longer of "
+            "5 years or until age 59½."
+        )
+
+        _sepp_col1, _sepp_col2, _sepp_col3 = st.columns(3)
+        with _sepp_col1:
+            _sepp_balance = st.number_input(
+                "IRA Account Balance ($)", min_value=1_000, value=500_000,
+                step=10_000, key="sepp_balance"
+            )
+            _sepp_age = st.number_input(
+                "Your Age", min_value=18, max_value=59, value=50, key="sepp_age"
+            )
+        with _sepp_col2:
+            _sepp_method = st.selectbox(
+                "SEPP Method", SEPP_METHODS, key="sepp_method",
+                help=(
+                    "**RMD**: Lowest payment, variable each year. "
+                    "**Fixed Amortization**: Highest fixed payment. "
+                    "**Fixed Annuitization**: Mid-range fixed payment."
+                )
+            )
+            _sepp_afr = st.number_input(
+                "Applicable Federal Rate (AFR %)", min_value=0.1, max_value=10.0,
+                value=5.5, step=0.1, key="sepp_afr",
+                help="120% of mid-term AFR. Check IRS.gov for current rate. Max 5% per IRS Notice 2022-6."
+            ) / 100.0
+        with _sepp_col3:
+            _sepp_tax_rate = st.slider(
+                "Marginal Tax Rate", min_value=0.10, max_value=0.37,
+                value=0.22, step=0.01, format="%.0%%", key="sepp_tax_rate"
+            )
+
+        if st.button("Calculate SEPP", key="sepp_run"):
+            _sepp_result = calculate_sepp(
+                account_balance=float(_sepp_balance),
+                age=int(_sepp_age),
+                method=_sepp_method,
+                afr=float(_sepp_afr),
+                marginal_tax_rate=float(_sepp_tax_rate),
+            )
+
+            if _sepp_result.warnings and _sepp_result.annual_payment == 0.0:
+                for _w in _sepp_result.warnings:
+                    st.warning(_w)
+            else:
+                _sepp_c1, _sepp_c2, _sepp_c3, _sepp_c4 = st.columns(4)
+                _sepp_c1.metric("Annual Payment", f"${_sepp_result.annual_payment:,.0f}")
+                _sepp_c2.metric("Monthly Payment", f"${_sepp_result.monthly_payment:,.0f}")
+                _sepp_c3.metric("Required Duration", f"{_sepp_result.years_required} years")
+                _sepp_c4.metric(
+                    "Penalty Avoided",
+                    f"${_sepp_result.early_withdrawal_penalty_avoided:,.0f}"
+                )
+
+                _sepp_c5, _sepp_c6, _ = st.columns(3)
+                _sepp_c5.metric("Total Distributions", f"${_sepp_result.total_distributions:,.0f}")
+                _sepp_c6.metric("Est. Annual Tax", f"${_sepp_result.estimated_annual_tax:,.0f}")
+
+                # Payment schedule chart
+                _sepp_years_list = list(range(curr_year, curr_year + _sepp_result.years_required))
+                _sepp_fig = go.Figure()
+                _sepp_fig.add_bar(
+                    x=_sepp_years_list,
+                    y=[_sepp_result.annual_payment] * _sepp_result.years_required,
+                    name="Annual Payment",
+                    marker_color="rgb(99, 110, 250)",
+                )
+                _sepp_fig.add_bar(
+                    x=_sepp_years_list,
+                    y=[_sepp_result.estimated_annual_tax] * _sepp_result.years_required,
+                    name="Est. Annual Tax",
+                    marker_color="rgb(239, 85, 59)",
+                )
+                _sepp_fig.update_layout(
+                    barmode="overlay",
+                    title=f"SEPP Payment Schedule — {_sepp_method}",
+                    xaxis_title="Year",
+                    yaxis_title="Amount ($)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                )
+                st.plotly_chart(_sepp_fig, use_container_width=True)
+
+                st.markdown("#### Calculation Notes")
+                for _note in _sepp_result.notes:
+                    st.caption(_note)
+
+                if _sepp_result.warnings:
+                    st.markdown("#### ⚠️ Important Warnings")
+                    for _w in _sepp_result.warnings:
+                        st.warning(_w)
+
+        # Method comparison
+        st.markdown("---")
+        st.markdown("#### Compare All Three SEPP Methods")
+        if st.button("Compare Methods", key="sepp_compare"):
+            _compare_rows = []
+            for _m in SEPP_METHODS:
+                try:
+                    _cr = calculate_sepp(
+                        account_balance=float(_sepp_balance),
+                        age=int(_sepp_age),
+                        method=_m,
+                        afr=float(_sepp_afr),
+                        marginal_tax_rate=float(_sepp_tax_rate),
+                    )
+                    _compare_rows.append({
+                        "Method": _m,
+                        "Annual Payment": f"${_cr.annual_payment:,.0f}",
+                        "Monthly Payment": f"${_cr.monthly_payment:,.0f}",
+                        "Years Required": _cr.years_required,
+                        "Total Distributions": f"${_cr.total_distributions:,.0f}",
+                        "Est. Annual Tax": f"${_cr.estimated_annual_tax:,.0f}",
+                        "Penalty Avoided": f"${_cr.early_withdrawal_penalty_avoided:,.0f}",
+                    })
+                except Exception:
+                    pass
+            if _compare_rows:
+                st.dataframe(pd.DataFrame(_compare_rows), use_container_width=True, hide_index=True)
+
+    # -----------------------------------------------------------------------
+    # SUB-TAB 6: Capital Loss Harvesting
+    # -----------------------------------------------------------------------
+    with adv_harvest_tab:
+        st.subheader("🌾 Multi-Year Capital Loss Harvesting Plan")
+        st.markdown(
+            "Identify positions with unrealized losses and plan harvesting across multiple years "
+            "to maximize tax savings. Capital losses offset gains first, then up to $3,000 of "
+            "ordinary income per year (IRC §1211(b)). Unused losses carry forward indefinitely."
+        )
+
+        st.markdown("#### Portfolio Positions")
+        st.caption(
+            "Enter positions with unrealized losses. Leave blank rows unused. "
+            "Holding period ≥ 365 days = long-term loss."
+        )
+
+        # Dynamic position entry
+        _harv_n = st.number_input(
+            "Number of positions to analyze", min_value=1, max_value=20, value=3,
+            key="harv_n_positions"
+        )
+
+        _harv_positions = []
+        _harv_pos_cols = st.columns(5)
+        _harv_pos_cols[0].markdown("**Ticker**")
+        _harv_pos_cols[1].markdown("**Shares**")
+        _harv_pos_cols[2].markdown("**Cost Basis/Share ($)**")
+        _harv_pos_cols[3].markdown("**Current Price ($)**")
+        _harv_pos_cols[4].markdown("**Holding Days**")
+
+        for _hi in range(int(_harv_n)):
+            _hc = st.columns(5)
+            _hticker = _hc[0].text_input(
+                f"Ticker {_hi+1}", value=["AAPL", "MSFT", "AMZN"][_hi] if _hi < 3 else "",
+                key=f"harv_ticker_{_hi}", label_visibility="collapsed"
+            )
+            _hshares = _hc[1].number_input(
+                f"Shares {_hi+1}", min_value=0.0, value=[100.0, 50.0, 200.0][_hi] if _hi < 3 else 0.0,
+                step=10.0, key=f"harv_shares_{_hi}", label_visibility="collapsed"
+            )
+            _hcost = _hc[2].number_input(
+                f"Cost {_hi+1}", min_value=0.0, value=[180.0, 420.0, 200.0][_hi] if _hi < 3 else 0.0,
+                step=1.0, key=f"harv_cost_{_hi}", label_visibility="collapsed"
+            )
+            _hprice = _hc[3].number_input(
+                f"Price {_hi+1}", min_value=0.0, value=[150.0, 380.0, 175.0][_hi] if _hi < 3 else 0.0,
+                step=1.0, key=f"harv_price_{_hi}", label_visibility="collapsed"
+            )
+            _hdays = _hc[4].number_input(
+                f"Days {_hi+1}", min_value=0, value=[400, 200, 500][_hi] if _hi < 3 else 365,
+                step=30, key=f"harv_days_{_hi}", label_visibility="collapsed"
+            )
+            if _hticker and _hshares > 0 and _hcost > 0 and _hprice > 0:
+                _harv_positions.append({
+                    "ticker": _hticker,
+                    "shares": float(_hshares),
+                    "cost_basis": float(_hcost),
+                    "current_price": float(_hprice),
+                    "holding_period_days": int(_hdays),
+                })
+
+        st.markdown("---")
+        _harv_col1, _harv_col2, _harv_col3 = st.columns(3)
+        with _harv_col1:
+            _harv_start_year = st.selectbox(
+                "Start Year", list(range(curr_year, curr_year + 6)),
+                key="harv_start_year"
+            )
+            _harv_window = st.slider(
+                "Planning Window (years)", min_value=2, max_value=10, value=5,
+                key="harv_window"
+            )
+        with _harv_col2:
+            _harv_income = st.number_input(
+                "Annual Ordinary Income ($)", min_value=0, value=150_000,
+                step=5_000, key="harv_income"
+            )
+            _harv_filing = st.selectbox(
+                "Filing Status", ["married_filing_jointly", "single"],
+                key="harv_filing"
+            )
+
+        if st.button("🌾 Build Harvesting Plan", key="harv_run", type="primary"):
+            if not _harv_positions:
+                st.warning("Please enter at least one position with valid data.")
+            else:
+                try:
+                    _harv_result = build_multi_year_loss_harvesting_plan(
+                        start_year=int(_harv_start_year),
+                        portfolio_positions=_harv_positions,
+                        income_by_year={
+                            int(_harv_start_year) + i: float(_harv_income)
+                            for i in range(int(_harv_window))
+                        },
+                        filing_status=_harv_filing,
+                        window=int(_harv_window),
+                    )
+
+                    # Summary metrics
+                    _hm1, _hm2, _hm3 = st.columns(3)
+                    _hm1.metric(
+                        "Total Tax Savings",
+                        f"${_harv_result.total_tax_savings:,.0f}"
+                    )
+                    _total_losses = sum(
+                        _harv_result.harvest_amounts.get(yr, 0)
+                        for yr in _harv_result.years
+                    )
+                    _hm2.metric("Total Losses to Harvest", f"${_total_losses:,.0f}")
+                    _hm3.metric(
+                        "Final Year Carryforward",
+                        f"${_harv_result.carryforward_by_year.get(_harv_result.years[-1], 0):,.0f}"
+                        if _harv_result.years else "$0"
+                    )
+
+                    # Year-by-year table
+                    st.markdown("#### Year-by-Year Harvesting Schedule")
+                    _harv_rows = []
+                    for _yr in _harv_result.years:
+                        _harv_rows.append({
+                            "Year": _yr,
+                            "Harvest Amount": f"${_harv_result.harvest_amounts.get(_yr, 0):,.0f}",
+                            "Tax Savings": f"${_harv_result.tax_savings_by_year.get(_yr, 0):,.0f}",
+                            "Loss Carryforward": f"${_harv_result.carryforward_by_year.get(_yr, 0):,.0f}",
+                        })
+                    st.dataframe(pd.DataFrame(_harv_rows), use_container_width=True, hide_index=True)
+
+                    # Harvesting chart
+                    _harv_fig = go.Figure()
+                    _harv_fig.add_bar(
+                        x=_harv_result.years,
+                        y=[_harv_result.harvest_amounts.get(yr, 0) for yr in _harv_result.years],
+                        name="Harvest Amount",
+                        marker_color="rgb(99, 110, 250)",
+                    )
+                    _harv_fig.add_bar(
+                        x=_harv_result.years,
+                        y=[_harv_result.tax_savings_by_year.get(yr, 0) for yr in _harv_result.years],
+                        name="Tax Savings",
+                        marker_color="rgb(0, 204, 150)",
+                    )
+                    _harv_fig.add_scatter(
+                        x=_harv_result.years,
+                        y=[_harv_result.carryforward_by_year.get(yr, 0) for yr in _harv_result.years],
+                        name="Loss Carryforward",
+                        mode="lines+markers",
+                        line=dict(color="rgb(239, 85, 59)", width=2, dash="dash"),
+                        yaxis="y2",
+                    )
+                    _harv_fig.update_layout(
+                        barmode="group",
+                        title="Multi-Year Capital Loss Harvesting Plan",
+                        xaxis_title="Year",
+                        yaxis_title="Amount ($)",
+                        yaxis_tickformat="$,.0f",
+                        yaxis2=dict(
+                            title="Carryforward ($)",
+                            overlaying="y",
+                            side="right",
+                            tickformat="$,.0f",
+                        ),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    )
+                    st.plotly_chart(_harv_fig, use_container_width=True)
+
+                    # Position summary
+                    st.markdown("#### Position Analysis")
+                    _pos_rows = []
+                    for _pos in _harv_positions:
+                        _cost = _pos["cost_basis"]
+                        _price = _pos["current_price"]
+                        _shares = _pos["shares"]
+                        _unrealized = (_price - _cost) * _shares
+                        _is_lt = _pos["holding_period_days"] >= 365
+                        _pos_rows.append({
+                            "Ticker": _pos["ticker"],
+                            "Shares": f"{_shares:,.0f}",
+                            "Cost Basis/Share": f"${_cost:,.2f}",
+                            "Current Price": f"${_price:,.2f}",
+                            "Unrealized P&L": f"${_unrealized:,.0f}",
+                            "Holding": "Long-Term" if _is_lt else "Short-Term",
+                            "Harvestable": "✅ Yes" if _unrealized < 0 else "❌ No (gain)",
+                        })
+                    st.dataframe(pd.DataFrame(_pos_rows), use_container_width=True, hide_index=True)
+
+                    # Notes and warnings
+                    if _harv_result.notes:
+                        st.markdown("#### ⚠️ Important Notes")
+                        for _note in _harv_result.notes:
+                            st.warning(_note)
+
+                except Exception as _harv_err:
+                    st.error(f"Error building harvesting plan: {_harv_err}")
 
 with tab5:
     st.header("⚙️ Settings")
