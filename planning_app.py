@@ -451,6 +451,24 @@ def _nw_header_row(styles: dict[str, str]) -> str:
     )
 
 
+def _acct_cells(value: float, name: str, td_r: str, td_l: str) -> str:
+    """Return the two account-detail ``<td>`` elements shared by every data row.
+
+    Extracted to eliminate the duplicated cell pair that appears in both the
+    first (rowspan) row and all subsequent rows of ``_nw_type_rows``.
+
+    Args:
+        value: Account market value (raw float).
+        name:  Account display name.
+        td_r:  Prebuilt ``style="…"`` attribute string for right-aligned cells.
+        td_l:  Prebuilt ``style="…"`` attribute string for left-aligned cells.
+    """
+    return (
+        f'<td {td_r}>{_fmt_currency(value)}</td>'
+        f'<td {td_l}>{name}</td>'
+    )
+
+
 def _nw_type_rows(
     acct_type: str,
     accounts: pd.DataFrame,
@@ -480,28 +498,26 @@ def _nw_type_rows(
     td_span  = f'style="{_td_base}border-left:4px solid {accent};text-align:left;font-weight:700;vertical-align:middle;"'
     td_total = f'style="{_td_base}text-align:right;font-weight:600;vertical-align:middle;"'
 
-    # Cache the formatted total — loop-invariant value, computed once (Proposal B)
+    # Cache the formatted total — loop-invariant value, computed once
     fmt_total = _fmt_currency(type_total)
 
-    # First row: carries rowspan cells for the type label and type total (Proposal A).
+    # First row: carries rowspan cells for the type label and type total.
     # The caller (_build_net_worth_html) guards against empty groups, so iloc[0] is safe.
     first = accounts.iloc[0]
     rows: list[str] = [
         f'<tr>'
         f'<td rowspan="{n}" {td_span}>{label}</td>'
         f'<td rowspan="{n}" {td_total}>{fmt_total}</td>'
-        f'<td {td_r}>{_fmt_currency(float(first["market_value"]))}</td>'
-        f'<td {td_l}>{first["account_name"]}</td>'
-        f'</tr>'
+        + _acct_cells(float(first["market_value"]), str(first["account_name"]), td_r, td_l)
+        + '</tr>'
     ]
 
     # Remaining rows: account value and name only — no branch needed
     for row in accounts.iloc[1:].itertuples(index=False):
         rows.append(
-            f'<tr>'
-            f'<td {td_r}>{_fmt_currency(float(getattr(row, "market_value")))}</td>'
-            f'<td {td_l}>{getattr(row, "account_name")}</td>'
-            f'</tr>'
+            '<tr>'
+            + _acct_cells(float(row.market_value), row.account_name, td_r, td_l)
+            + '</tr>'
         )
     return rows
 
@@ -720,7 +736,7 @@ def render_net_worth_statement(
     re_rows = _get_real_estate_rows()
     combined_df = pd.concat([detailed_df, re_rows], ignore_index=True) if not re_rows.empty else detailed_df
 
-    acct_grp: pd.DataFrame = (
+    acct_grp: pd.DataFrame = pd.DataFrame(
         combined_df
         .groupby(["account_type", "account_name"], as_index=False)["market_value"]
         .sum()
@@ -806,7 +822,7 @@ with tab1:
        # Use bar chart (not histogram) so each month is its own bar with the
        # exact month-start date as the label — histogram bins continuous dates
        # and produces misaligned midpoint labels (e.g. "2026-03-08").
-       _nw_labels = networth.index.strftime("%b %Y")
+       _nw_labels = pd.DatetimeIndex(networth.index).strftime("%b %Y")
        fig2 = px.bar(
            networth,
            x=_nw_labels,
@@ -2607,6 +2623,7 @@ with tab_tax:
                 daf1,
                 maxdaf,
                 contribution_type=daf_contribution_type,
+                stddectdf=stddectdf,
             )
         except Exception as e:
             st.error(f"Error calculating Donor Advisor Fund: {e}")

@@ -151,22 +151,24 @@ def get_month_account_values(month, year) -> tuple[pd.DataFrame, int, int]:
 
    if detailed_df.empty:
        return (
-           pd.DataFrame(columns=['month', 'year', 'account_type', 'account_name', 'market_value']),
+           pd.DataFrame(columns=pd.Index(['month', 'year', 'account_type', 'account_name', 'market_value'])),
            effective_month,
            effective_year,
        )
 
    # Aggregate by account_type and account_name
-   account_values = detailed_df.groupby(['account_type', 'account_name'], as_index=False).agg({
-       'market_value': 'sum'
-   })
+   account_values: pd.DataFrame = pd.DataFrame(
+       detailed_df.groupby(['account_type', 'account_name'], as_index=False).agg({
+           'market_value': 'sum'
+       })
+   )
 
    # Add month and year columns for consistency with old format
    account_values['month'] = effective_month
    account_values['year'] = effective_year
 
    # Reorder columns to match expected format
-   account_values = account_values[['month', 'year', 'account_type', 'account_name', 'market_value']]
+   account_values = pd.DataFrame(account_values[['month', 'year', 'account_type', 'account_name', 'market_value']])
 
    return account_values, effective_month, effective_year
 
@@ -357,7 +359,7 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
         return pd.DataFrame(), pd.DataFrame()
     
     # Create a copy to avoid modifying original
-    detailed_df = portfolio_data.copy()
+    detailed_df = pd.DataFrame(portfolio_data.copy())
     
     # Validate required columns
     required_columns = ['symbol', 'purchase_price', 'qty', 'account_type']
@@ -416,10 +418,10 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
         'cost_basis': [summary_df['cost_basis'].sum()],
         'unrealized_gl': [summary_df['unrealized_gl'].sum()]
     })
-    summary_df = pd.concat([summary_df, total_row], ignore_index=True)
+    summary_df = pd.concat([pd.DataFrame(summary_df), total_row], ignore_index=True)
     
     logger.info(f"Net worth calculation complete for {month}/{year}: Total = ${summary_df.iloc[-1]['market_value']:,.2f}")
     
-    return detailed_df, summary_df
+    return pd.DataFrame(detailed_df), summary_df
 
 

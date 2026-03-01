@@ -2460,13 +2460,13 @@ def _get_latest_retirement_year() -> int:
     return _get_retirement_years()[1]
 
 
-def _calculate_daf_for_year(age_primary: int, year: int, std_deduction: float) -> tuple:
+def _calculate_daf_for_year(age_primary: int, std_deduction: float) -> Tuple[float, float]:
     """Calculate DAF contribution and tax deduction excess for a given year/age.
 
     Uses the same bundling formula as the Configuration page:
       bundle_interval = floor(std_ded / annual_giving) + 1  (capped at 5, min 2)
       bundle_amount   = annual_giving * bundle_interval
-      bundle_years    = years where (year - daf_contribution_start_year) % bundle_interval == 0
+      bundle_years    = years where (age_primary - daf_start_age) % bundle_interval == 0
 
     Returns:
         (daf_contribution, daf_tax_deduction_excess)
@@ -2479,36 +2479,26 @@ def _calculate_daf_for_year(age_primary: int, year: int, std_deduction: float) -
         config_mgr = get_config_manager()
         has_daf = config_mgr.get("charitable_giving", "has_daf", False)
         annual_giving = float(config_mgr.get("charitable_giving", "annual_charitable_giving", 0))
-        giving_start_age = int(config_mgr.get("charitable_giving", "charitable_giving_start_age", 65))
-        giving_end_age = int(config_mgr.get("charitable_giving", "charitable_giving_end_age", 95))
         daf_start_age = int(config_mgr.get("charitable_giving", "daf_contribution_start_age", 60))
         daf_end_age = int(config_mgr.get("charitable_giving", "daf_contribution_end_age", 75))
         daf_initial = float(config_mgr.get("charitable_giving", "daf_initial_contribution", 0))
     except Exception:
         return 0.0, 0.0
 
-    # No DAF or no giving configured
+    # No DAF or no giving configured — guard before any division
     if not has_daf or annual_giving <= 0:
         return 0.0, 0.0
 
-    # Outside the DAF contribution age window
-    if age_primary < daf_start_age or age_primary > daf_end_age:
-        return 0.0, 0.0
-
     # Compute bundle interval: floor(std_ded / giving) + 1, capped [2, 5]
-    _std_ded_ref = 30_000  # 2025 MFJ reference (same as config page)
-    bundle_interval = int(_std_ded_ref // annual_giving) + 1
-    bundle_interval = max(2, min(bundle_interval, 5))
-    bundle_amount = annual_giving * bundle_interval
-
-    # Determine if this is a bundle year.
-    # Year 0 of the DAF window (age == daf_start_age) is always a bundle year.
-    # Subsequent bundle years occur every bundle_interval years.
+    bundle_interval = max(2, min(int(std_deduction // annual_giving) + 1, 5))
     years_into_window = age_primary - daf_start_age
-    is_bundle_year = (years_into_window % bundle_interval) == 0
 
-    if not is_bundle_year:
+    # Outside the DAF contribution age window, or not a bundle year — single guard
+    if not (daf_start_age <= age_primary <= daf_end_age
+            and years_into_window % bundle_interval == 0):
         return 0.0, 0.0
+
+    bundle_amount = annual_giving * bundle_interval
 
     # First year of the window: add initial contribution
     daf_contribution = bundle_amount
@@ -2518,8 +2508,8 @@ def _calculate_daf_for_year(age_primary: int, year: int, std_deduction: float) -
     # Tax deduction excess: amount above the standard deduction (itemized benefit)
     daf_tax_excess = max(0.0, daf_contribution - std_deduction)
 
-    logger.info(
-        f"DAF bundle year (age {age_primary}, year {year}): "
+    logger.debug(
+        f"DAF bundle year (age {age_primary}): "
         f"contribution=${daf_contribution:,.0f}, "
         f"tax excess above std_ded=${daf_tax_excess:,.0f} "
         f"(interval={bundle_interval} yrs, bundle=${bundle_amount:,.0f})"
@@ -2630,7 +2620,7 @@ class Stage1Accumulation(LifeStage):
         # -----------------------------------------------------------------------
         # DAF contribution and tax deduction for this year
         # -----------------------------------------------------------------------
-        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, year, std_deduction)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, std_deduction)
 
         # In a DAF bundle year, the contribution exceeds the standard deduction,
         # so we itemize instead of taking the standard deduction.  The incremental
@@ -3004,7 +2994,7 @@ class Stage2PrepForRetirement(LifeStage):
         # -----------------------------------------------------------------------
         # DAF contribution and tax deduction for this year (Stage 2)
         # -----------------------------------------------------------------------
-        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, year, std_deduction)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, std_deduction)
         effective_deduction = std_deduction + daf_tax_excess
 
         taxable_income = agi - effective_deduction
