@@ -57,8 +57,18 @@ DEFAULT_CONFIG = {
     },
     "tax_strategy": {
         "max_roth_conversion_tax_rate": 12,
-        "daf_disbursement_rate": 25,
-        "planned_distribution_2027": 75000,
+    },
+    "charitable_giving": {
+        "annual_charitable_giving": 0,
+        "charitable_giving_start_age": 65,
+        "charitable_giving_end_age": 95,
+        "charitable_giving_inflation_rate": 2.0,
+        "has_daf": False,
+        "daf_provider": "",
+        "daf_initial_contribution": 0,
+        "daf_annual_contribution": 0,
+        "daf_contribution_start_age": 60,
+        "daf_contribution_end_age": 75,
     },
     "metadata": {
         "last_updated": None,

@@ -761,9 +761,12 @@ def calculate_state_tax(state_agi: float, state: Optional[str] = None, year: int
         'NJ': [(0, 20000, 0.014), (20000, 35000, 0.0175), (35000, 40000, 0.035),
                (40000, 75000, 0.05525), (75000, 500000, 0.0637), (500000, 1000000, 0.0897),
                (1000000, float('inf'), 0.1075)],
-        'MA': [(0, float('inf'), 0.05)],  # Flat 5%
-        'CO': [(0, float('inf'), 0.044)],  # Flat 4.4%
+        'MA': [(0, float('inf'), 0.05)],    # Flat 5%
+        'CO': [(0, float('inf'), 0.044)],   # Flat 4.4%
         'NC': [(0, float('inf'), 0.0475)],  # Flat 4.75%
+        'PA': [(0, float('inf'), 0.0307)],  # Flat 3.07%
+        'IL': [(0, float('inf'), 0.0495)],  # Flat 4.95%
+        'MS': [(0, 10000, 0.0), (10000, float('inf'), 0.05)],  # 0% up to $10k, 5% above
     }
     
     # Standard deductions by state (simplified)
@@ -2457,6 +2460,73 @@ def _get_latest_retirement_year() -> int:
     return _get_retirement_years()[1]
 
 
+def _calculate_daf_for_year(age_primary: int, year: int, std_deduction: float) -> tuple:
+    """Calculate DAF contribution and tax deduction excess for a given year/age.
+
+    Uses the same bundling formula as the Configuration page:
+      bundle_interval = floor(std_ded / annual_giving) + 1  (capped at 5, min 2)
+      bundle_amount   = annual_giving * bundle_interval
+      bundle_years    = years where (year - daf_contribution_start_year) % bundle_interval == 0
+
+    Returns:
+        (daf_contribution, daf_tax_deduction_excess)
+        daf_contribution          — amount contributed to DAF this year (0 in non-bundle years)
+        daf_tax_deduction_excess  — amount by which the DAF contribution exceeds the standard
+                                    deduction (i.e. the incremental itemized deduction benefit).
+                                    This is subtracted from taxable income in bundle years.
+    """
+    try:
+        config_mgr = get_config_manager()
+        has_daf = config_mgr.get("charitable_giving", "has_daf", False)
+        annual_giving = float(config_mgr.get("charitable_giving", "annual_charitable_giving", 0))
+        giving_start_age = int(config_mgr.get("charitable_giving", "charitable_giving_start_age", 65))
+        giving_end_age = int(config_mgr.get("charitable_giving", "charitable_giving_end_age", 95))
+        daf_start_age = int(config_mgr.get("charitable_giving", "daf_contribution_start_age", 60))
+        daf_end_age = int(config_mgr.get("charitable_giving", "daf_contribution_end_age", 75))
+        daf_initial = float(config_mgr.get("charitable_giving", "daf_initial_contribution", 0))
+    except Exception:
+        return 0.0, 0.0
+
+    # No DAF or no giving configured
+    if not has_daf or annual_giving <= 0:
+        return 0.0, 0.0
+
+    # Outside the DAF contribution age window
+    if age_primary < daf_start_age or age_primary > daf_end_age:
+        return 0.0, 0.0
+
+    # Compute bundle interval: floor(std_ded / giving) + 1, capped [2, 5]
+    _std_ded_ref = 30_000  # 2025 MFJ reference (same as config page)
+    bundle_interval = int(_std_ded_ref // annual_giving) + 1
+    bundle_interval = max(2, min(bundle_interval, 5))
+    bundle_amount = annual_giving * bundle_interval
+
+    # Determine if this is a bundle year.
+    # Year 0 of the DAF window (age == daf_start_age) is always a bundle year.
+    # Subsequent bundle years occur every bundle_interval years.
+    years_into_window = age_primary - daf_start_age
+    is_bundle_year = (years_into_window % bundle_interval) == 0
+
+    if not is_bundle_year:
+        return 0.0, 0.0
+
+    # First year of the window: add initial contribution
+    daf_contribution = bundle_amount
+    if years_into_window == 0 and daf_initial > 0:
+        daf_contribution += daf_initial
+
+    # Tax deduction excess: amount above the standard deduction (itemized benefit)
+    daf_tax_excess = max(0.0, daf_contribution - std_deduction)
+
+    logger.info(
+        f"DAF bundle year (age {age_primary}, year {year}): "
+        f"contribution=${daf_contribution:,.0f}, "
+        f"tax excess above std_ded=${daf_tax_excess:,.0f} "
+        f"(interval={bundle_interval} yrs, bundle=${bundle_amount:,.0f})"
+    )
+    return daf_contribution, daf_tax_excess
+
+
 class Stage1Accumulation(LifeStage):
     """
     Stage 1: Accumulation Phase
@@ -2557,11 +2627,22 @@ class Stage1Accumulation(LifeStage):
         # -----------------------------------------------------------------------
         agi = wages - contribution_401k
 
-        # Determine current tax bracket
-        taxable_income = agi - std_deduction
+        # -----------------------------------------------------------------------
+        # DAF contribution and tax deduction for this year
+        # -----------------------------------------------------------------------
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, year, std_deduction)
+
+        # In a DAF bundle year, the contribution exceeds the standard deduction,
+        # so we itemize instead of taking the standard deduction.  The incremental
+        # tax benefit is the amount above the standard deduction.
+        # taxable_income = agi - max(std_deduction, daf_contribution)
+        effective_deduction = std_deduction + daf_tax_excess  # = daf_contribution when bundling
+        taxable_income = agi - effective_deduction
         federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
 
-        logger.debug(f"AGI: ${agi:,.2f}, Tax bracket: {max_rate:.1%}, Tax: ${federal_tax:,.2f}")
+        logger.debug(f"AGI: ${agi:,.2f}, DAF contrib: ${daf_contribution:,.0f}, "
+                     f"effective deduction: ${effective_deduction:,.0f}, "
+                     f"Tax bracket: {max_rate:.1%}, Tax: ${federal_tax:,.2f}")
         logger.debug(
             f"Stage 1 contributions — Traditional 401k: ${contribution_401k:,.0f} "
             f"({trad_pct:.0%}), Roth: ${contribution_roth:,.0f} ({roth_pct:.0%}), "
@@ -2667,7 +2748,7 @@ class Stage1Accumulation(LifeStage):
         # Calculate tax on conversion if any
         if roth_conversion > 0:
             total_income = agi + roth_conversion
-            taxable_income_with_conversion = total_income - std_deduction
+            taxable_income_with_conversion = total_income - effective_deduction
             federal_tax, _, _ = calculate_taxable_income(taxable_income_with_conversion, tax_brackets)
 
         # -----------------------------------------------------------------------
@@ -2704,7 +2785,7 @@ class Stage1Accumulation(LifeStage):
             taxable=balances.taxable + contribution_brok + surplus_to_brokerage,
             traditional=balances.traditional + contribution_401k,
             roth=balances.roth + contribution_roth,
-            daf=balances.daf
+            daf=balances.daf + daf_contribution
         )
 
         logger.info(
@@ -2774,7 +2855,7 @@ class Stage1Accumulation(LifeStage):
             roth_withdrawal=0,
             roth_conversion=roth_conversion,
             ltcg_harvested=0,
-            daf_contribution=0,
+            daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
             magi=magi,
@@ -2919,10 +3000,19 @@ class Stage2PrepForRetirement(LifeStage):
         # Roth 401k contributions are after-tax and do NOT reduce AGI.
         # Traditional 401k contributions are pre-tax and DO reduce AGI.
         agi = wages if prefer_roth_401k else wages - contribution_401k
-        taxable_income = agi - std_deduction
+
+        # -----------------------------------------------------------------------
+        # DAF contribution and tax deduction for this year (Stage 2)
+        # -----------------------------------------------------------------------
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, year, std_deduction)
+        effective_deduction = std_deduction + daf_tax_excess
+
+        taxable_income = agi - effective_deduction
         federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
 
-        logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
+        logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, DAF contrib=${daf_contribution:,.0f}, "
+                     f"effective deduction=${effective_deduction:,.0f}, "
+                     f"bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
 
         dl = DecisionLog()
 
@@ -3057,7 +3147,7 @@ class Stage2PrepForRetirement(LifeStage):
         # Recalculate tax including any conversion
         if roth_conversion > 0:
             total_income = agi + roth_conversion
-            taxable_with_conv = total_income - std_deduction
+            taxable_with_conv = total_income - effective_deduction
             federal_tax, _, _ = calculate_taxable_income(taxable_with_conv, tax_brackets)
 
         # -----------------------------------------------------------------------
@@ -3075,7 +3165,7 @@ class Stage2PrepForRetirement(LifeStage):
             traditional=balances.traditional + (0 if prefer_roth_401k else contribution_401k),
             roth=balances.roth + (contribution_401k if prefer_roth_401k else 0)
                  + contribution_roth + backdoor_roth_amount,
-            daf=balances.daf
+            daf=balances.daf + daf_contribution
         )
 
         logger.info(f"Year {year} Stage 2 Prep: after-tax wages ${after_tax_wages:,.2f}, "
@@ -3156,7 +3246,7 @@ class Stage2PrepForRetirement(LifeStage):
             roth_withdrawal=0,
             roth_conversion=roth_conversion,
             ltcg_harvested=0,
-            daf_contribution=0,
+            daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
             magi=magi,

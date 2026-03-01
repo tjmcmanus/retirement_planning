@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Constants
 CASH_SYMBOL = 'CASH'
 CASH_PRICE = 1.0
+# Symbols that represent cash/money-market positions and should never be sent to Yahoo Finance
+CASH_SYMBOLS = [CASH_SYMBOL, 'MF:CASH']
 MIN_MONTH = 1
 MAX_MONTH = 12
 MIN_YEAR = 1900
@@ -117,41 +119,56 @@ def get_net_worth(ret_date):
 
 
 
-def get_month_account_values(month, year):
+def get_month_account_values(month, year) -> tuple[pd.DataFrame, int, int]:
    """
    Get account values for a specific month and year using portfolio truth data.
-   
+   Falls back to the most recent available month/year when no data exists for
+   the requested period.
+
    Args:
        month (int): Month number (1-12)
        year (int): Year (e.g., 2025, 2026)
-   
+
    Returns:
-       pd.DataFrame: Account summary with columns:
-           account_type, account_name, market_value
-   
-   Note: This function now uses get_networth_by_month() which calculates values
-         from portfolio_data_truth.csv with current market prices.
+       tuple: (account_values_df, effective_month, effective_year)
+           - account_values_df: DataFrame with columns:
+               month, year, account_type, account_name, market_value
+           - effective_month: the month whose data is actually returned
+           - effective_year:  the year  whose data is actually returned
    """
-   # Get detailed portfolio data
+   # Get detailed portfolio data for the requested month
    detailed_df, summary_df = get_networth_by_month(month, year)
-   
+
+   effective_month, effective_year = month, year
+
    if detailed_df.empty:
        logger.warning(f"No portfolio data found for {month}/{year}")
-       return pd.DataFrame(columns=['month', 'year', 'account_type', 'account_name', 'market_value'])
-   
+       # Fall back to the most recent available month
+       effective_month, effective_year = get_latest_portfolio_month_year()
+       if (effective_month, effective_year) != (month, year):
+           logger.info(f"Falling back to portfolio data for {effective_month}/{effective_year}")
+           detailed_df, summary_df = get_networth_by_month(effective_month, effective_year)
+
+   if detailed_df.empty:
+       return (
+           pd.DataFrame(columns=['month', 'year', 'account_type', 'account_name', 'market_value']),
+           effective_month,
+           effective_year,
+       )
+
    # Aggregate by account_type and account_name
    account_values = detailed_df.groupby(['account_type', 'account_name'], as_index=False).agg({
        'market_value': 'sum'
    })
-   
+
    # Add month and year columns for consistency with old format
-   account_values['month'] = month
-   account_values['year'] = year
-   
+   account_values['month'] = effective_month
+   account_values['year'] = effective_year
+
    # Reorder columns to match expected format
    account_values = account_values[['month', 'year', 'account_type', 'account_name', 'market_value']]
-   
-   return account_values
+
+   return account_values, effective_month, effective_year
 
 def load_ssi_data():
    ssi_data =pd.read_csv('ssincome.csv')
@@ -182,6 +199,24 @@ def load_portfolio_truth():
    """
    portfolio_truth = pd.read_csv('portfolio_data_truth.csv')
    return portfolio_truth
+
+def get_latest_portfolio_month_year() -> tuple[int, int]:
+    """
+    Return the most recent (month, year) available in portfolio_data_truth.csv.
+
+    Returns:
+        tuple[int, int]: (month, year) of the latest entry, e.g. (2, 2026)
+    """
+    portfolio_truth = load_portfolio_truth()
+    if portfolio_truth.empty:
+        now = datetime.now()
+        return now.month, now.year
+    # Build a sortable period key and find the max
+    latest = portfolio_truth.assign(
+        _period=portfolio_truth['year'] * 100 + portfolio_truth['month']
+    ).loc[lambda df: df['_period'].idxmax()]
+    return int(latest['month']), int(latest['year'])
+
 
 def get_portfolio_truth_by_month(month, year):
    """
@@ -232,16 +267,28 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, Optional[float]]:
     if not isinstance(symbols, list):
         raise ValueError(f"symbols must be a list, got {type(symbols)}")
     
-    # Batch fetch all symbols at once (MAJOR PERFORMANCE IMPROVEMENT)
+    # Filter out cash/money-market pseudo-symbols that are not valid Yahoo Finance tickers.
+    # These are handled separately (price = 1.0) and must never be sent to the API.
+    cash_symbols_in_list = [s for s in symbols if s in CASH_SYMBOLS]
+    tradeable_symbols = [s for s in symbols if s not in CASH_SYMBOLS]
+    
+    if cash_symbols_in_list:
+        logger.debug(f"Skipping cash symbols (not sent to Yahoo Finance): {cash_symbols_in_list}")
+    
+    # Pre-populate cash symbols with CASH_PRICE so callers always get a value back
+    price_map: dict[str, float | None] = {s: CASH_PRICE for s in cash_symbols_in_list}
+    
+    if not tradeable_symbols:
+        return price_map
+    
+    # Batch fetch all tradeable symbols at once (MAJOR PERFORMANCE IMPROVEMENT)
     try:
-        tickers = yf.Tickers(' '.join(symbols))
+        tickers = yf.Tickers(' '.join(tradeable_symbols))
     except Exception as e:
         logger.error(f"Failed to initialize yfinance Tickers: {e}")
         return {symbol: None for symbol in symbols}
     
-    price_map = {}
-    
-    for symbol in symbols:
+    for symbol in tradeable_symbols:
         try:
             hist = tickers.tickers[symbol].history(period='4d')
             if not hist.empty and 'Close' in hist.columns:
@@ -322,7 +369,7 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     detailed_df['current_price'] = detailed_df['purchase_price']
     
     # Get unique non-CASH symbols (handle both 'CASH' and 'MF:CASH')
-    non_cash_mask = ~detailed_df['symbol'].isin([CASH_SYMBOL, 'MF:CASH'])
+    non_cash_mask = ~detailed_df['symbol'].isin(CASH_SYMBOLS)
     unique_symbols = detailed_df.loc[non_cash_mask, 'symbol'].unique().tolist()
     
     # Fetch all prices in one batch (MAJOR PERFORMANCE IMPROVEMENT)
@@ -344,7 +391,7 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
             logger.warning(f"Error fetching current prices, using purchase prices as fallback: {e}")
     
     # Set CASH to 1.0 (handle both 'CASH' and 'MF:CASH')
-    detailed_df.loc[detailed_df['symbol'].isin([CASH_SYMBOL, 'MF:CASH']), 'current_price'] = CASH_PRICE
+    detailed_df.loc[detailed_df['symbol'].isin(CASH_SYMBOLS), 'current_price'] = CASH_PRICE
     
     # Calculate market_value = current_price * qty (vectorized operation)
     detailed_df['market_value'] = detailed_df['current_price'] * detailed_df['qty']

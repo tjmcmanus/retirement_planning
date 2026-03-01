@@ -2,13 +2,36 @@ import streamlit as st
 from streamlit_card import card
 import sys
 import os
+import importlib.util as _importlib_util
 
-# Add pages directory to path to import sync function
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'pages'))
+# ---------------------------------------------------------------------------
+# Import sync_config_to_session_state from the configuration page.
+# The pages/ directory uses numeric prefixes for Streamlit ordering
+# (e.g. "2_configuration.py"), which are not valid Python identifiers.
+# We use importlib to load the module by file path so the digit prefix
+# doesn't cause a SyntaxError.
+# ---------------------------------------------------------------------------
+def _load_sync_fn():
+    """Load sync_config_to_session_state from the configuration page module."""
+    _pages_dir = os.path.join(os.path.dirname(__file__), '..', 'pages')
+    # Try prefixed name first (e.g. 2_configuration.py), then bare name
+    for _candidate in ('2_configuration.py', 'configuration.py'):
+        _path = os.path.join(_pages_dir, _candidate)
+        if os.path.exists(_path):
+            try:
+                _spec = _importlib_util.spec_from_file_location('_configuration_page', _path)
+                if _spec and _spec.loader:
+                    _mod = _importlib_util.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
+                    return getattr(_mod, 'sync_config_to_session_state', None)
+            except Exception:
+                pass
+    return None
 
-try:
-    from configuration import sync_config_to_session_state
-except ImportError:
+_sync_fn = _load_sync_fn()
+if _sync_fn is not None:
+    sync_config_to_session_state = _sync_fn
+else:
     # Fallback if import fails - define locally
     from config import get_config_manager
 
@@ -27,8 +50,6 @@ except ImportError:
             "EXPENSE": ("financial_assumptions", "expected_annual_expenses"),
             "EXPENSE_MULTIPLIER": ("financial_assumptions", "years_of_expenses_in_cash"),
             "RATE": ("financial_assumptions", "expected_rate_of_return"),
-            "DAF_RATE": ("tax_strategy", "daf_disbursement_rate"),
-            "PLANNED_DIST_2027": ("tax_strategy", "planned_distribution_2027"),
         }
 
         for session_key, (section, config_key) in config_to_session_mappings.items():
@@ -85,20 +106,6 @@ SIDEBAR_NUMBER_CONFIGS = [
         "Expected average annual portfolio growth rate (%).",
         "%",
     ),
-    (
-        "DAF Disbursement Rate",
-        "DAF_RATE",
-        0.0, 100.0, 5.0, "%.0f",
-        "Percentage of Donor Advised Fund balance to disburse each year.",
-        "%",
-    ),
-    (
-        "2027 Planned Distribution",
-        "PLANNED_DIST_2027",
-        0.0, 1_000_000.0, 5_000.0, "%.0f",
-        "Planned one-time distribution amount for tax year 2027.",
-        "$",
-    ),
 ]
 
 # Validation rules: (key, condition_fn, warning_message)
@@ -133,8 +140,6 @@ def save_sidebar_value_to_config(key: str, value: float):
         "EXPENSE": ("financial_assumptions", "expected_annual_expenses"),
         "EXPENSE_MULTIPLIER": ("financial_assumptions", "years_of_expenses_in_cash"),
         "RATE": ("financial_assumptions", "expected_rate_of_return"),
-        "DAF_RATE": ("tax_strategy", "daf_disbursement_rate"),
-        "PLANNED_DIST_2027": ("tax_strategy", "planned_distribution_2027"),
     }
 
     if key in config_mappings:
@@ -188,7 +193,7 @@ def sidebar():
         st.button("🔄 Refresh All Data", on_click=clear_all_cache, use_container_width=True)
 
         st.markdown("---")
-        st.markdown("⚙️ **[Open Configuration Page](configuration)**")
+        st.markdown("⚙️ **[Open Configuration Page](2_configuration)**")
         st.caption("Edit personal info, healthcare, Social Security & tax strategy")
         st.markdown("---")
 

@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 import os
 from datetime import datetime
-from load_data import get_portfolio_truth_by_month
+from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
 
 def color_negative_positive(value):
     """
@@ -129,36 +129,70 @@ def get_dividend_frequency(symbol):
     return count
     
   
+def get_effective_portfolio_month_year(month=None, year=None):
+    """
+    Return the effective (month, year) for portfolio data.
+    If the requested month/year has no data, returns the most recent available.
+
+    Args:
+        month (int, optional): Requested month. Defaults to current month.
+        year (int, optional): Requested year. Defaults to current year.
+
+    Returns:
+        tuple[int, int]: (effective_month, effective_year)
+    """
+    if month is None or year is None:
+        now = datetime.now()
+        month = month or now.month
+        year = year or now.year
+
+    portdf = get_portfolio_truth_by_month(month, year)
+    if portdf.empty:
+        return get_latest_portfolio_month_year()
+    return month, year
+
+
 @st.cache_data()
 def getPortfolioData(month=None, year=None):
     """
     Get portfolio data for a specific month and year.
     If month/year not provided, defaults to current month/year.
-    
+    Falls back to the most recent available month/year when no data exists for
+    the requested period.
+
     Args:
         month (int, optional): Month number (1-12). Defaults to current month.
         year (int, optional): Year (e.g., 2025, 2026). Defaults to current year.
-    
+
     Returns:
-        pd.DataFrame: Portfolio data with columns: account_name, account_type, symbol, name, sector, qty, purchase_price
+        pd.DataFrame: Portfolio data with columns: account_name, account_type,
+                      symbol, name, sector, qty, purchase_price, purchase_date
     """
     # Use current month/year if not provided
     if month is None or year is None:
         now = datetime.now()
         month = month or now.month
         year = year or now.year
-    
+
     # Get portfolio data from the truth dataset
     portdf = get_portfolio_truth_by_month(month, year)
-    
+
+    # Fall back to the most recent available month when current month has no data
+    if portdf.empty:
+        effective_month, effective_year = get_latest_portfolio_month_year()
+        if (effective_month, effective_year) != (month, year):
+            portdf = get_portfolio_truth_by_month(effective_month, effective_year)
+
+    if portdf.empty:
+        return pd.DataFrame(columns=['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date'])
+
     # Select the required columns, now including account_name for unique identification
     selected_columns = ['account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date']
     df_selected = portdf[selected_columns]
-    
+
     # Remove duplicates based on account_name and symbol combination
     df_selected = df_selected.drop_duplicates(subset=['account_name', 'symbol'], keep='first')
-    
-    #print(df_selected)
+
     return df_selected
 
 def get_entry_in_portfolio(symbol, month=None, year=None):
@@ -201,6 +235,15 @@ def format_quantity(qty):
     else:
         return f"{qty:.2f}"
 
+# Canonical column list for the portfolio display DataFrame.
+# Used both when building rows and when returning an empty result so that
+# downstream code can always rely on these columns being present.
+PORTFOLIO_DISPLAY_COLUMNS = [
+    'Account', 'Tax Type', 'Ticker', 'Name', 'Sector',
+    'Quantity', 'Price', 'Current value', 'Cost Basis', 'Net Return',
+    'Dividend date', 'Dividend Amount', 'annual dividend amount', 'dividend yield',
+]
+
 @st.cache_data()
 def build_portfolio_display(month=None, year=None):
     """
@@ -209,6 +252,13 @@ def build_portfolio_display(month=None, year=None):
     Includes a totals row at the bottom.
     """
     portfolio_data = getPortfolioData(month=month, year=year)
+
+    # If there is no portfolio data for the requested month/year, return an
+    # empty DataFrame that still carries the expected column schema so that
+    # callers can safely reference columns like 'Account' without a KeyError.
+    if portfolio_data.empty:
+        return pd.DataFrame(columns=PORTFOLIO_DISPLAY_COLUMNS)
+
 
     # Pre-fetch per-symbol data once to avoid redundant external calls for
     # symbols that appear across multiple accounts.
@@ -274,16 +324,20 @@ def build_portfolio_display(month=None, year=None):
             'Name':                   '',
             'Sector':                 '',
             'Quantity':               '',
-            'Price':                  '',
+            'Price':                  None,
             'Current value':          total_current_value,
             'Cost Basis':             total_cost_basis,
             'Net Return':             total_net_return,
             'Dividend date':          '',
-            'Dividend Amount':        '',
+            'Dividend Amount':        None,
             'annual dividend amount': total_annual_dividend,
             'dividend yield':         total_dividend_yield,
         }])
 
+        # Replace empty strings with NaN in the totals row so that pandas can
+        # correctly infer result dtypes during concat (avoids FutureWarning about
+        # empty/all-NA entries changing dtype inference in a future version).
+        totals_row = totals_row.replace('', pd.NA)
         portdf = pd.concat([portdf, totals_row], ignore_index=True)
 
     return portdf

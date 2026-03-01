@@ -9,7 +9,10 @@ import json
 import pandas as pd
 import os
 import shutil
+import zipfile
+import io
 from config import get_config_manager, reload_config
+from portfolio import build_portfolio_display
 from portfolio_data_entry import (
     validate_portfolio_dataframe,
     validate_ticker_symbol,
@@ -42,8 +45,6 @@ def sync_config_to_session_state():
         "EXPENSE": ("financial_assumptions", "expected_annual_expenses"),
         "EXPENSE_MULTIPLIER": ("financial_assumptions", "years_of_expenses_in_cash"),
         "RATE": ("financial_assumptions", "expected_rate_of_return"),
-        "DAF_RATE": ("tax_strategy", "daf_disbursement_rate"),
-        "PLANNED_DIST_2027": ("tax_strategy", "planned_distribution_2027"),
     }
     
     for session_key, (section, config_key) in config_to_session_mappings.items():
@@ -62,8 +63,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📊 Social Security",
     "📈 Tax Strategy",
     "📊 Portfolio Data",
-    "🔧 Advanced",
-    "🏠 Real Estate"
+    "🏠 Real Estate",
+    "🔧 Advanced"
 ])
 
 # Sync configuration to session state on page load
@@ -215,7 +216,7 @@ with tab1:
             ),
         },
         num_rows="dynamic",
-        use_container_width=True,
+        width='stretch',
         key="children_editor",
     )
 
@@ -620,47 +621,28 @@ with tab5:
     st.header("Tax Strategy")
     st.markdown("Configure Roth conversion and tax planning parameters.")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Roth Conversions")
-        st.info("ℹ️ Roth conversions are now automatically optimized using the BETR (Better Efficient Tax Rate) algorithm based on your maximum tax rate preference.")
-        
-        max_roth_conversion_tax_rate = st.number_input(
-            "Maximum Tax Rate for Conversions (%)",
-            min_value=0,
-            max_value=37,
-            value=int(config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)),
-            help="Maximum marginal tax rate you're willing to pay for Roth conversions",
-            key="max_roth_conversion_tax_rate"
-        )
-    
-    with col2:
-        st.subheader("Other Tax Planning")
-        daf_disbursement_rate = st.number_input(
-            "Donor Advised Fund Disbursement Rate (%)",
-            min_value=0,
-            max_value=100,
-            value=config_mgr.get("tax_strategy", "daf_disbursement_rate", 25),
-            help="Percentage of DAF to disburse annually",
-            key="daf_disbursement_rate"
-        )
-        
-        planned_distribution_2027 = st.number_input(
-            "Planned Distribution for 2027 ($)",
-            min_value=0,
-            max_value=500000,
-            value=config_mgr.get("tax_strategy", "planned_distribution_2027", 75000),
-            step=5000,
-            help="Specific planned distribution amount for 2027",
-            key="planned_distribution_2027"
-        )
+    st.subheader("Roth Conversions")
+    st.info("ℹ️ Roth conversions are now automatically optimized using the BETR (Better Efficient Tax Rate) algorithm based on your maximum tax rate preference.")
+
+    max_roth_conversion_tax_rate = st.number_input(
+        "Maximum Tax Rate for Conversions (%)",
+        min_value=0,
+        max_value=37,
+        value=int(config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)),
+        help="Maximum marginal tax rate you're willing to pay for Roth conversions",
+        key="max_roth_conversion_tax_rate"
+    )
+
     
     # Charitable Giving Section
     st.markdown("---")
     st.subheader("🎁 Charitable Giving")
+
+    # Placeholder: Charitable Giving Summary will be rendered here (after inputs are collected)
+    _cg_summary_placeholder = st.empty()
+
     st.markdown("Configure your charitable giving strategy and Donor Advised Fund (DAF) contributions.")
-    
+
     col3, col4 = st.columns(2)
     
     with col3:
@@ -683,6 +665,15 @@ with tab5:
             help="Age when you plan to start regular charitable giving",
             key="charitable_giving_start_age"
         )
+
+        charitable_giving_end_age = st.number_input(
+            "End Age for Charitable Giving",
+            min_value=50,
+            max_value=110,
+            value=config_mgr.get("charitable_giving", "charitable_giving_end_age", 95),
+            help="Age when you plan to stop charitable giving (used to calculate Projected Lifetime Giving)",
+            key="charitable_giving_end_age"
+        )
         
         charitable_giving_inflation_rate = st.number_input(
             "Charitable Giving Inflation Rate (%)",
@@ -696,67 +687,366 @@ with tab5:
     
     with col4:
         st.markdown("**Donor Advised Fund (DAF)**")
-        daf_initial_contribution = st.number_input(
-            "Initial DAF Contribution ($)",
-            min_value=0,
-            max_value=10000000,
-            value=config_mgr.get("charitable_giving", "daf_initial_contribution", 0),
-            step=5000,
-            help="One-time initial contribution to establish your DAF",
-            key="daf_initial_contribution"
+
+        # ── DAF setup status checkbox ──────────────────────────────────────
+        has_daf = st.checkbox(
+            "I already have a Donor Advised Fund set up",
+            value=config_mgr.get("charitable_giving", "has_daf", False),
+            key="has_daf",
+            help="Check this if you have already opened a DAF account (e.g. Fidelity Charitable, "
+                 "Schwab Charitable, Vanguard Charitable).",
         )
+
+        # Initialize DAF variables with config defaults (overridden by widgets when has_daf is True)
+        daf_initial_contribution = config_mgr.get("charitable_giving", "daf_initial_contribution", 0)
+        daf_annual_contribution = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
+        daf_contribution_start_age = config_mgr.get("charitable_giving", "daf_contribution_start_age", 60)
+        daf_contribution_end_age = config_mgr.get("charitable_giving", "daf_contribution_end_age", 75)
+        daf_provider = config_mgr.get("charitable_giving", "daf_provider", "")
+
+        if not has_daf:
+            with st.expander("💡 What is a Donor Advised Fund and how do I set one up?", expanded=False):
+                st.markdown("""
+**What is a Donor Advised Fund (DAF)?**
+
+A DAF is a charitable giving account sponsored by a public charity (the "sponsoring organization").
+You make an irrevocable contribution of cash or appreciated securities, receive an **immediate tax
+deduction**, and then recommend grants to your favorite charities over time — on your own schedule.
+
+DAFs are not just a retirement vehicle — they can be used at **any stage of your financial life**:
+accumulation years, early retirement, or as part of your estate plan.
+
+**Key benefits:**
+- 📋 **Immediate deduction** in the year you contribute, even if grants are distributed later.
+- 📈 **Donate appreciated securities** (stocks, mutual funds) directly — you avoid capital gains
+  tax on the embedded gain AND deduct the full fair-market value.
+- 🗓️ **Bundling strategy:** Contribute 2–5 years of giving in one year to exceed the standard
+  deduction and itemize; take the standard deduction in the other years.
+- 💰 **Tax-free growth:** Assets in the DAF grow tax-free until distributed to charities.
+- 🏦 **QCD alternative in retirement:** Once you reach age 73 and must take RMDs, consider
+  Qualified Charitable Distributions (QCDs) directly from your IRA instead — up to $105,000/yr
+  tax-free, satisfying your RMD without increasing your AGI.
+
+**How to open a DAF (takes ~15 minutes online):**
+
+| Provider | Minimum | Notes |
+|---|---|---|
+| [Fidelity Charitable](https://www.fidelitycharitable.org) | $5,000 | No annual fees; broad investment options |
+| [Schwab Charitable](https://www.schwabcharitable.org) | $5,000 | Integrates with Schwab brokerage |
+| [Vanguard Charitable](https://www.vanguardcharitable.org) | $25,000 | Low-cost index fund options |
+| [National Philanthropic Trust](https://www.nptrust.org) | $10,000 | Independent, advisor-friendly |
+
+**Steps:**
+1. Choose a sponsoring organization (above).
+2. Open the account online — similar to opening a brokerage account.
+3. Make your initial contribution (cash or appreciated securities).
+4. Invest the assets in the DAF's available funds.
+5. Recommend grants to IRS-qualified charities at any time.
+
+> ⚠️ *Contributions to a DAF are irrevocable — the assets must eventually go to charity.*
+> *Consult a tax advisor to confirm the strategy fits your situation.*
+                """)
+        else:
+            st.success("✅ DAF account configured.")
+
+            # ── Provider selection ─────────────────────────────────────────
+            _daf_providers = [
+                "Fidelity Charitable",
+                "Schwab Charitable",
+                "Vanguard Charitable",
+                "National Philanthropic Trust",
+                "American Endowment Foundation",
+                "Goldman Sachs Philanthropy Fund",
+                "Other",
+            ]
+            _saved_provider = config_mgr.get("charitable_giving", "daf_provider", "")
+            # Determine the selectbox index: match saved value or default to first item
+            if _saved_provider in _daf_providers:
+                _provider_index = _daf_providers.index(_saved_provider)
+            elif _saved_provider and _saved_provider not in _daf_providers:
+                # Previously saved a custom "Other" name — show "Other" selected
+                _provider_index = _daf_providers.index("Other")
+            else:
+                _provider_index = 0
+
+            _provider_choice = st.selectbox(
+                "DAF Provider",
+                options=_daf_providers,
+                index=_provider_index,
+                help="Select the sponsoring organization where your DAF is held. "
+                     "Used for estate planning documentation.",
+                key="daf_provider_choice",
+            )
+
+            if _provider_choice == "Other":
+                _custom_provider = st.text_input(
+                    "Provider name",
+                    value=_saved_provider if _saved_provider not in _daf_providers else "",
+                    placeholder="e.g. Community Foundation of Greater Atlanta",
+                    key="daf_provider_custom",
+                )
+                daf_provider = _custom_provider.strip() if _custom_provider.strip() else "Other"
+            else:
+                daf_provider = _provider_choice
+
+            st.info(
+                "🔗 **DAF Bundling Advisor:** For a full analysis — including identifying "
+                "appreciated securities to donate, computing exact tax savings, and modeling "
+                "multi-year bundling scenarios — visit **Portfolio → Tax Harvesting → "
+                "DAF Bundling Advisor**."
+            )
+
+            st.markdown("---")
+
+            daf_initial_contribution = st.number_input(
+                "Initial DAF Contribution ($)",
+                min_value=0,
+                max_value=10000000,
+                value=config_mgr.get("charitable_giving", "daf_initial_contribution", 0),
+                step=5000,
+                help="One-time initial contribution to establish your DAF",
+                key="daf_initial_contribution"
+            )
+
+            daf_contribution_start_age = st.number_input(
+                "DAF Contribution Start Age",
+                min_value=18,
+                max_value=100,
+                value=config_mgr.get("charitable_giving", "daf_contribution_start_age", 60),
+                help="Age when you plan to start making DAF contributions",
+                key="daf_contribution_start_age"
+            )
+
+            daf_contribution_end_age = st.number_input(
+                "DAF Contribution End Age",
+                min_value=18,
+                max_value=100,
+                value=config_mgr.get("charitable_giving", "daf_contribution_end_age", 75),
+                help="Age when you plan to stop making DAF contributions",
+                key="daf_contribution_end_age"
+            )
+
+            # ── Optimal bundling suggestion ────────────────────────────────
+            _rmd_age = 73
+            _giving_years = max(1, daf_contribution_end_age - daf_contribution_start_age)
+            _std_ded = 30_000  # 2025 MFJ standard deduction reference
+
+            if annual_charitable_giving > 0:
+                # Compute optimal bundle interval to EXCEED (not just meet) the standard deduction.
+                # Need: interval * annual_giving > std_ded  →  interval > std_ded / annual_giving
+                # So: interval = floor(std_ded / annual_giving) + 1
+                _opt_interval = (_std_ded // annual_charitable_giving) + 1
+                _opt_interval = max(2, min(int(_opt_interval), 5))
+                _opt_bundle_amt = annual_charitable_giving * _opt_interval
+                # Number of bundle events over the contribution window
+                _num_bundles = max(1, _giving_years // _opt_interval)
+                # Suggested annual contribution = total giving spread over bundle interval
+                daf_annual_contribution = int(_opt_bundle_amt)
+
+                st.markdown("#### 💡 Suggested DAF Contribution Strategy")
+                _sug_col1, _sug_col2 = st.columns(2)
+                with _sug_col1:
+                    st.metric(
+                        "Suggested Bundle Interval",
+                        f"Every {_opt_interval} years",
+                        help=f"Contribute {_opt_interval} years of giving at once to exceed the "
+                             f"${_std_ded:,} standard deduction and itemize.",
+                    )
+                    st.metric(
+                        "Bundle Contribution Amount",
+                        f"${_opt_bundle_amt:,.0f}",
+                        help=f"{_opt_interval} × ${annual_charitable_giving:,.0f}/yr",
+                    )
+                with _sug_col2:
+                    st.metric(
+                        "Estimated Bundle Events",
+                        f"~{_num_bundles}",
+                        help=f"Over your {_giving_years}-year contribution window "
+                             f"(age {daf_contribution_start_age}–{daf_contribution_end_age}).",
+                    )
+                    # Total Lifetime DAF Contributions = giving from start age to age 73
+                    # (after 73, QCDs from Traditional IRA take over — see QCD Potential above)
+                    _sug_daf_end = min(73, charitable_giving_end_age)
+                    _sug_daf_years = max(0, _sug_daf_end - charitable_giving_start_age)
+                    _sug_daf_total = annual_charitable_giving * _sug_daf_years
+                    st.metric(
+                        "Total Lifetime DAF Contributions",
+                        f"${_sug_daf_total:,.0f}",
+                        help=(
+                            f"Giving from age {charitable_giving_start_age} to {_sug_daf_end} "
+                            f"({_sug_daf_years} yrs × ${annual_charitable_giving:,.0f}/yr). "
+                            f"Funded via {_num_bundles} bundled DAF contribution(s) of "
+                            f"${_opt_bundle_amt:,.0f} each (every {_opt_interval} years) from "
+                            f"Brokerage/cash. After age 73, QCDs from your Traditional IRA "
+                            f"satisfy giving tax-free. "
+                            f"Matches 'Total DAF Contributions' in the Charitable Giving Summary above."
+                        ),
+                    )
+
+                # QCD tip when RMD age falls within or after the contribution window
+                if daf_contribution_end_age >= _rmd_age:
+                    st.info(
+                        f"**💡 QCD Tip:** Once you reach age **{_rmd_age}** and must take Required "
+                        f"Minimum Distributions (RMDs), consider switching from DAF contributions "
+                        f"to **Qualified Charitable Distributions (QCDs)** directly from your IRA. "
+                        f"QCDs satisfy your RMD (up to **\\$105,000/yr** in 2025) and are excluded "
+                        f"from your taxable income entirely — more tax-efficient than a DAF "
+                        f"contribution in most cases. You can use both strategies: DAF for "
+                        f"bundling appreciated securities, QCD for satisfying RMDs tax-free."
+                    )
+            else:
+                daf_annual_contribution = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
         
-        daf_annual_contribution = st.number_input(
-            "Annual DAF Contribution ($)",
-            min_value=0,
-            max_value=1000000,
-            value=config_mgr.get("charitable_giving", "daf_annual_contribution", 0),
-            step=1000,
-            help="Annual contribution to your DAF (in addition to initial contribution)",
-            key="daf_annual_contribution"
-        )
-        
-        daf_contribution_start_age = st.number_input(
-            "DAF Contribution Start Age",
-            min_value=50,
-            max_value=100,
-            value=config_mgr.get("charitable_giving", "daf_contribution_start_age", 60),
-            help="Age when you plan to start making annual DAF contributions",
-            key="daf_contribution_start_age"
-        )
-        
-        daf_contribution_end_age = st.number_input(
-            "DAF Contribution End Age",
-            min_value=50,
-            max_value=100,
-            value=config_mgr.get("charitable_giving", "daf_contribution_end_age", 75),
-            help="Age when you plan to stop making annual DAF contributions",
-            key="daf_contribution_end_age"
-        )
     
-    # Display calculated charitable giving metrics
-    if annual_charitable_giving > 0 or daf_initial_contribution > 0 or daf_annual_contribution > 0:
-        st.markdown("---")
-        st.subheader("Charitable Giving Summary")
-        
-        col_char1, col_char2, col_char3 = st.columns(3)
-        
-        with col_char1:
-            st.metric("Annual Charitable Goal", f"${annual_charitable_giving:,.0f}")
-        
-        with col_char2:
-            total_daf_contributions = daf_initial_contribution + (daf_annual_contribution * max(0, daf_contribution_end_age - daf_contribution_start_age))
-            st.metric("Total DAF Contributions", f"${total_daf_contributions:,.0f}",
-                     help=f"Initial contribution plus annual contributions from age {daf_contribution_start_age} to {daf_contribution_end_age}")
-        
-        with col_char3:
-            # Calculate lifetime charitable giving (30 years from start age)
-            years_of_giving = 30
-            lifetime_giving = annual_charitable_giving * years_of_giving
-            st.metric("Projected Lifetime Giving", f"${lifetime_giving:,.0f}",
-                     help=f"Based on {years_of_giving} years of giving (not including inflation)")
-        
-        st.info("💡 **Tax Benefits:** Charitable contributions and DAF contributions may provide significant tax deductions. Consult with a tax advisor to optimize your giving strategy.")
+    # ── Charitable Giving Summary (rendered into placeholder above the config inputs) ──
+    if annual_charitable_giving > 0 or (has_daf and daf_initial_contribution > 0) or (has_daf and daf_annual_contribution > 0):
+        # ── Split giving into DAF window (pre-73) and QCD window (73+) ───
+        # DAF contributions: funded from Brokerage/cash via bundled contributions.
+        #   Window: charitable_giving_start_age → min(73, charitable_giving_end_age)
+        # QCD potential: funded from Traditional IRA, tax-free (age 73+, up to $105k/yr).
+        #   Window: max(73, charitable_giving_start_age) → charitable_giving_end_age
+        # Projected Lifetime Giving = DAF portion + QCD portion (they don't overlap).
+        _qcd_threshold = 73
+        _daf_end_age = min(_qcd_threshold, charitable_giving_end_age)
+        _daf_years = max(0, _daf_end_age - charitable_giving_start_age)
+        _qcd_start_age = max(_qcd_threshold, charitable_giving_start_age)
+        _qcd_years = max(0, charitable_giving_end_age - _qcd_start_age)
+
+        total_daf_contributions = annual_charitable_giving * _daf_years
+        _qcd_amount = annual_charitable_giving * _qcd_years
+        lifetime_giving = total_daf_contributions + _qcd_amount  # == annual × total_years
+
+        if has_daf and annual_charitable_giving > 0:
+            _cg_bundle_help = (
+                f"Giving from age {charitable_giving_start_age} to {_daf_end_age} "
+                f"(before QCDs begin at 73): "
+                f"${annual_charitable_giving:,.0f}/yr × {_daf_years} yrs = "
+                f"${total_daf_contributions:,.0f}. "
+                f"Funded via bundled DAF contributions from Brokerage/cash "
+                f"(see Suggested DAF Contribution Strategy below)."
+            )
+        elif has_daf:
+            _cg_bundle_help = (
+                f"Annual contributions of ${daf_annual_contribution:,.0f} "
+                f"from age {daf_contribution_start_age} to {daf_contribution_end_age}."
+            )
+        else:
+            _cg_bundle_help = "No DAF configured. Check 'I already have a Donor Advised Fund set up' to add DAF contributions."
+
+        # Render the summary into the placeholder defined above the config inputs
+        with _cg_summary_placeholder.container():
+            st.subheader("Charitable Giving Summary")
+            col_char1, col_char2, col_char3, col_char4 = st.columns(4)
+
+            with col_char1:
+                st.metric(
+                    "Annual Charitable Goal",
+                    f"${annual_charitable_giving:,.0f}",
+                    help="Your target annual charitable giving amount",
+                )
+
+            with col_char2:
+                st.metric(
+                    "Total DAF Contributions",
+                    f"${total_daf_contributions:,.0f}",
+                    help=_cg_bundle_help,
+                )
+
+            with col_char3:
+                st.metric(
+                    "QCD Potential",
+                    f"${_qcd_amount:,.0f}",
+                    help=(
+                        f"Giving from age {_qcd_start_age} to {charitable_giving_end_age} "
+                        f"({_qcd_years} yr{'s' if _qcd_years != 1 else ''}) fulfilled via "
+                        f"**Qualified Charitable Distributions (QCDs)** directly from your "
+                        f"Traditional IRA. QCDs satisfy RMDs (up to $105,000/yr) and are "
+                        f"excluded from taxable income — more tax-efficient than a DAF "
+                        f"contribution. Funded from Traditional IRA (not Brokerage/cash)."
+                        if _qcd_years > 0 else
+                        "Set your End Age for Charitable Giving above 73 to see QCD-eligible years."
+                    ),
+                )
+
+            with col_char4:
+                _cg_giving_years = max(0, charitable_giving_end_age - charitable_giving_start_age)
+                st.metric(
+                    "Projected Lifetime Giving",
+                    f"${lifetime_giving:,.0f}",
+                    help=(
+                        f"Total giving from age {charitable_giving_start_age} to "
+                        f"{charitable_giving_end_age} ({_cg_giving_years} yrs): "
+                        f"**DAF** ${total_daf_contributions:,.0f} (age {charitable_giving_start_age}–{_daf_end_age}) "
+                        f"+ **QCD** ${_qcd_amount:,.0f} (age {_qcd_start_age}–{charitable_giving_end_age}). "
+                        f"Not adjusted for inflation."
+                    ),
+                )
+            st.markdown("---")
+
+        # ── DAF Bundling Suggestion ────────────────────────────────────────
+        # 2025 standard deduction: MFJ $30,000 / Single $15,000
+        # Use a conservative MFJ figure as the default reference.
+        _std_ded_mfj_2025 = 30_000
+
+        if annual_charitable_giving > 0 and annual_charitable_giving < _std_ded_mfj_2025:
+            # Determine how many years to bundle to EXCEED (not just meet) the standard deduction.
+            # We need: bundle_years * annual_giving > std_ded
+            # i.e. bundle_years > std_ded / annual_giving
+            # So bundle_years = floor(std_ded / annual_giving) + 1
+            _bundle_years = (_std_ded_mfj_2025 // annual_charitable_giving) + 1
+            _bundle_years = max(2, min(int(_bundle_years), 5))
+            _bundled_amount = annual_charitable_giving * _bundle_years
+
+            st.markdown("---")
+            st.markdown("#### 💡 DAF Bundling Opportunity Detected")
+            st.warning(
+                f"Your annual charitable giving of **\\${annual_charitable_giving:,.0f}** is below the "
+                f"2025 standard deduction (**\\${_std_ded_mfj_2025:,.0f}** MFJ). "
+                f"This means you likely receive **no tax benefit** from your charitable giving each year "
+                f"because you take the standard deduction instead of itemizing."
+            )
+
+            _bundle_col1, _bundle_col2, _bundle_col3 = st.columns(3)
+            with _bundle_col1:
+                st.metric(
+                    "Suggested Bundle",
+                    f"{_bundle_years} years",
+                    help=f"Front-load {_bundle_years} years of giving into one DAF contribution.",
+                )
+            with _bundle_col2:
+                st.metric(
+                    "Bundled Contribution",
+                    f"${_bundled_amount:,.0f}",
+                    help=f"{_bundle_years} × ${annual_charitable_giving:,.0f}/yr contributed to DAF in one year.",
+                )
+            with _bundle_col3:
+                _excess = max(0, _bundled_amount - _std_ded_mfj_2025)
+                st.metric(
+                    "Itemized Deduction Excess",
+                    f"${_excess:,.0f}",
+                    help="Amount above the standard deduction — this generates real tax savings.",
+                )
+
+            st.info(
+                f"**How bundling works:** Instead of giving \\${annual_charitable_giving:,.0f}/year "
+                f"(and never exceeding the standard deduction), contribute "
+                f"**\\${_bundled_amount:,.0f}** to a Donor Advised Fund every {_bundle_years} years. "
+                f"In the bundle year you **itemize** and deduct the full amount. "
+                f"In the other {_bundle_years - 1} year(s) you take the standard deduction. "
+                f"The DAF distributes grants to your charities on your normal schedule — "
+                f"your charities receive the same amount, but you get a larger tax deduction. "
+                f"\n\n**Best practice:** Donate **appreciated securities** (low-cost-basis stock) "
+                f"to the DAF instead of cash — you avoid capital gains tax on the gain AND "
+                f"deduct the full fair-market value. See the 🌾 Tax Harvesting tab for candidates."
+            )
+
+            if not has_daf:
+                st.error(
+                    "⚠️ You don't have a DAF set up yet. Open the **'I already have a Donor Advised Fund'** "
+                    "checkbox above to see setup instructions. Opening a DAF takes about 15 minutes online."
+                )
+        else:
+            st.info("💡 **Tax Benefits:** Charitable contributions and DAF contributions may provide significant tax deductions. Consult with a tax advisor to optimize your giving strategy.")
 
 # Portfolio Data Tab
 with tab6:
@@ -965,7 +1255,7 @@ with tab6:
                     st.success(f"✅ All {len(validation_results)} ticker symbols validated successfully!")
                 else:
                     st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
-                st.dataframe(results_df, use_container_width=True, hide_index=True)
+                st.dataframe(results_df, width='stretch', hide_index=True)
                 st.rerun()
 
     with col6:
@@ -1061,7 +1351,7 @@ with tab6:
         # Show the invalid rows with their error messages
         error_cols = [c for c in ['month', 'year', 'account_name', 'symbol', 'validation_error']
                       if c in invalid_df.columns]
-        st.dataframe(invalid_df[error_cols], hide_index=True, use_container_width=True)
+        st.dataframe(invalid_df[error_cols], hide_index=True, width='stretch')
 
         st.markdown("---")
         col_a, col_b = st.columns(2)
@@ -1079,7 +1369,7 @@ with tab6:
                 _do_save(valid_df)
 
     def _do_save(df_to_save: pd.DataFrame) -> None:
-        """Perform the actual CSV save with backup."""
+        """Perform the actual CSV save with backup, then refresh the portfolio display cache."""
         try:
             if os.path.exists('portfolio_data_truth.csv'):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1088,6 +1378,21 @@ with tab6:
                 st.info(f"✅ Backed up existing data to {backup_name}")
             df_to_save.to_csv('portfolio_data_truth.csv', index=False)
             st.success(f"✅ Successfully saved {len(df_to_save)} rows to portfolio_data_truth.csv")
+
+            # ── Refresh portfolio display cache ───────────────────────────
+            # Clear the cached result so the next call fetches fresh data
+            # from the newly saved CSV, then pre-warm the cache immediately.
+            build_portfolio_display.clear()
+            try:
+                # Determine the most recent month/year from the saved data
+                _save_month = int(df_to_save['month'].max()) if 'month' in df_to_save.columns else None
+                _save_year  = int(df_to_save['year'].max())  if 'year'  in df_to_save.columns else None
+                with st.spinner("📈 Refreshing portfolio display — fetching live prices…"):
+                    build_portfolio_display(month=_save_month, year=_save_year)
+                st.success("✅ Portfolio display refreshed with new data.")
+            except Exception as _cache_err:
+                st.warning(f"⚠️ Portfolio saved, but cache refresh failed: {_cache_err}")
+
             st.balloons()
         except Exception as e:
             st.error(f"Error saving portfolio data: {e}")
@@ -1155,7 +1460,7 @@ with tab6:
         st.dataframe(sample_data, width='stretch')
 
 # Advanced Tab
-with tab7:
+with tab8:
     st.header("Advanced Settings")
     
     col1, col2 = st.columns(2)
@@ -1214,14 +1519,15 @@ with tab7:
             
             config_mgr.update_section("tax_strategy", {
                 "max_roth_conversion_tax_rate": max_roth_conversion_tax_rate,
-                "daf_disbursement_rate": daf_disbursement_rate,
-                "planned_distribution_2027": planned_distribution_2027,
             })
             
             config_mgr.update_section("charitable_giving", {
                 "annual_charitable_giving": annual_charitable_giving,
                 "charitable_giving_start_age": charitable_giving_start_age,
+                "charitable_giving_end_age": charitable_giving_end_age,
                 "charitable_giving_inflation_rate": charitable_giving_inflation_rate,
+                "has_daf": has_daf,
+                "daf_provider": daf_provider,
                 "daf_initial_contribution": daf_initial_contribution,
                 "daf_annual_contribution": daf_annual_contribution,
                 "daf_contribution_start_age": daf_contribution_start_age,
@@ -1279,33 +1585,126 @@ with tab7:
     with col2:
         st.subheader("Export/Import")
         
-        # Export configuration
+        # Export configuration — bundles config JSON + portfolio CSV + estate planning JSON into one ZIP
         if st.button("📤 Export Configuration", width='stretch'):
-            config_json = config_mgr.export_config()
-            st.download_button(
-                label="Download Configuration JSON",
-                data=config_json,
-                file_name=f"retirement_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                width='stretch'
-            )
+            try:
+                # Resolve person names for the header comment
+                _p1_name = config_mgr.get("personal_info", "person1_name", "Person 1")
+                _p2_name = config_mgr.get("personal_info", "person2_name", "Person 2")
+                _header_comment = (
+                    f"// Primary person: {_p1_name}\n"
+                    f"// Spouse: {_p2_name}\n"
+                )
+
+                # Build annotated config JSON (comment prepended, valid JSON block follows)
+                _config_dict = json.loads(config_mgr.export_config())
+                _config_json_bytes = (
+                    _header_comment + json.dumps(_config_dict, indent=2)
+                ).encode("utf-8")
+
+                # Read portfolio CSV
+                _portfolio_bytes = b""
+                if os.path.exists("portfolio_data_truth.csv"):
+                    with open("portfolio_data_truth.csv", "rb") as _pf:
+                        _portfolio_bytes = _pf.read()
+
+                # Read estate planning JSON
+                _estate_bytes = b""
+                if os.path.exists("estate_planning_data.json"):
+                    with open("estate_planning_data.json", "rb") as _ef:
+                        _estate_bytes = _ef.read()
+
+                # Pack everything into an in-memory ZIP
+                _zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(_zip_buffer, "w", zipfile.ZIP_DEFLATED) as _zf:
+                    _zf.writestr("retirement_config.json", _config_json_bytes)
+                    if _portfolio_bytes:
+                        _zf.writestr("portfolio_data_truth.csv", _portfolio_bytes)
+                    if _estate_bytes:
+                        _zf.writestr("estate_planning_data.json", _estate_bytes)
+                _zip_buffer.seek(0)
+
+                _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                st.download_button(
+                    label="⬇️ Download Configuration Bundle (.zip)",
+                    data=_zip_buffer.getvalue(),
+                    file_name=f"retirement_config_{_ts}.zip",
+                    mime="application/zip",
+                    width='stretch'
+                )
+            except Exception as _ex:
+                st.error(f"❌ Error building export bundle: {_ex}")
         
-        # Import configuration
+        # Import configuration — accepts new ZIP bundle or legacy JSON file
         st.markdown("**Import Configuration**")
-        uploaded_file = st.file_uploader("Choose a configuration file", type=['json'])
+        uploaded_file = st.file_uploader(
+            "Choose a configuration file (.zip bundle or legacy .json)",
+            type=["zip", "json"],
+        )
         if uploaded_file is not None:
             try:
-                config_json = uploaded_file.read().decode('utf-8')
-                if config_mgr.import_config(config_json):
+                _fname = uploaded_file.name.lower()
+                if _fname.endswith(".zip"):
+                    # ── New bundled ZIP format ──────────────────────────────
+                    _zip_data = io.BytesIO(uploaded_file.read())
+                    with zipfile.ZipFile(_zip_data, "r") as _zf:
+                        _names = _zf.namelist()
+
+                        # Import retirement_config.json (strip leading comment lines)
+                        if "retirement_config.json" in _names:
+                            _raw = _zf.read("retirement_config.json").decode("utf-8")
+                            # Strip any leading // comment lines before parsing JSON
+                            _json_lines = [
+                                ln for ln in _raw.splitlines()
+                                if not ln.strip().startswith("//")
+                            ]
+                            _config_str = "\n".join(_json_lines)
+                            if not config_mgr.import_config(_config_str):
+                                st.error("❌ Error parsing retirement_config.json from bundle.")
+                                st.stop()
+                        else:
+                            st.error("❌ ZIP bundle does not contain retirement_config.json.")
+                            st.stop()
+
+                        # Restore portfolio CSV
+                        if "portfolio_data_truth.csv" in _names:
+                            _csv_bytes = _zf.read("portfolio_data_truth.csv")
+                            with open("portfolio_data_truth.csv", "wb") as _out:
+                                _out.write(_csv_bytes)
+                            st.success("✅ portfolio_data_truth.csv restored.")
+
+                        # Restore estate planning JSON
+                        if "estate_planning_data.json" in _names:
+                            _ep_bytes = _zf.read("estate_planning_data.json")
+                            with open("estate_planning_data.json", "wb") as _out:
+                                _out.write(_ep_bytes)
+                            st.success("✅ estate_planning_data.json restored.")
+
                     if config_mgr.save_config():
-                        st.success("Configuration imported successfully! Please refresh the page.")
+                        st.success("✅ Configuration bundle imported successfully! Please refresh the page.")
                         st.rerun()
                     else:
-                        st.error("Error saving imported configuration.")
+                        st.error("❌ Error saving imported configuration.")
+
                 else:
-                    st.error("Error importing configuration. Please check the file format.")
+                    # ── Legacy plain-JSON format ────────────────────────────
+                    _raw = uploaded_file.read().decode("utf-8")
+                    # Strip any leading // comment lines before parsing JSON
+                    _json_lines = [
+                        ln for ln in _raw.splitlines()
+                        if not ln.strip().startswith("//")
+                    ]
+                    config_json = "\n".join(_json_lines)
+                    if config_mgr.import_config(config_json):
+                        if config_mgr.save_config():
+                            st.success("✅ Configuration imported successfully! Please refresh the page.")
+                            st.rerun()
+                        else:
+                            st.error("❌ Error saving imported configuration.")
+                    else:
+                        st.error("❌ Error importing configuration. Please check the file format.")
             except Exception as e:
-                st.error(f"Error reading file: {e}")
+                st.error(f"❌ Error reading file: {e}")
     
     # Display current configuration
     st.subheader("Current Configuration")
@@ -1319,7 +1718,7 @@ with tab7:
     st.caption(f"Version: {metadata.get('version', 'Unknown')}")
 
 # Real Estate Tab
-with tab8:
+with tab7:
     st.header("🏠 Real Estate")
     st.markdown("Track your real estate properties. Purchase prices are included in your net worth statement.")
 
