@@ -176,7 +176,14 @@ _stale_label = (
 # ---------------------------------------------------------------------------
 
 # Consistent color palette used by all charts
-COLOR_PALETTE = px.colors.qualitative.Pastel
+COLOR_PALETTE = px.colors.qualitative.Pastel  # discrete: pie charts, legend-based bar traces
+# Continuous scale for treemaps and color-by-value bar charts — built from the
+# same Pastel hues so both chart types share a cohesive visual identity.
+COLOR_SCALE = [
+    [0.0, "rgb(246, 207, 113)"],   # Pastel yellow  (low)
+    [0.5, "rgb(180, 151, 231)"],   # Pastel purple  (mid)
+    [1.0, "rgb(139, 224, 164)"],   # Pastel green   (high)
+]
 
 def format_currency(val) -> str:
     """Format a numeric value as currency.
@@ -828,7 +835,7 @@ with tab1:
            x=_nw_labels,
            y='total',
            color='total',
-           color_continuous_scale=COLOR_PALETTE,
+           color_continuous_scale=COLOR_SCALE,
        )
 
        # Calculate y-axis range with 10% padding
@@ -931,16 +938,16 @@ with tab1:
       )
       
       # Create and display the figure
-      fig = go.Figure(data=[trace3, trace4, trace2, trace1], layout=layout)
-      st.plotly_chart(fig, width='stretch', key='selection')
+      fig1 = go.Figure(data=[trace3, trace4, trace2, trace1], layout=layout)
+      st.plotly_chart(fig1, width='stretch', key='selection')
    
    with row2_col3:
        st.markdown('<h4 style="text-align: center;">Asset mix</h4>', unsafe_allow_html=True)
        # 2. Select the specific row to plot
-       row_to_plot = networth.iloc[-1,1:5] # Select the first row
+       row_to_plot = networth.iloc[-1,0:4] # Select the first row
 
        # 3. Create the pie chart using plotly.express
-       fig = px.pie(
+       fig1 = px.pie(
           #names=row_to_plot.index,    # Labels for the slices (column names)
            names=["Cash","Broker","Traditional","Roth"],    # Labels for the slices (column names)
            values=row_to_plot.values,  # Values for the slices
@@ -948,14 +955,14 @@ with tab1:
            title=' '
         )
        # Customize the chart (optional)
-       fig.update_traces(textinfo='label+percent+value',  # Display percentage and label
+       fig1.update_traces(textinfo='label+percent+value',  # Display percentage and label
                   pull=[0, 0, 0, 0],      # "Explode" a slice (e.g., category C)
                   marker_colors=['rgb(246, 207, 113)', 'rgb(254, 136, 177)','rgb(139, 224, 164)', 'rgb(180, 151, 231)'],
                   title_font=dict(color="black"),
                   hoverinfo='label+percent+value',
                   insidetextfont=dict(color='black')) # Custom colors
        title_text=''
-       fig.update_layout(
+       fig1.update_layout(
            autosize=True,
            plot_bgcolor='white',
            paper_bgcolor='white',
@@ -963,7 +970,7 @@ with tab1:
            legend=dict(title='Account Type', orientation="h",yanchor='bottom',y=1.1, groupclick = 'togglegroup',font=dict(color="black")),
            margin=dict(l=1,r=1,b=1,t=1)
        )
-       st.plotly_chart(fig, width='stretch')
+       st.plotly_chart(fig1, width='stretch')
    
    add_vertical_space(1)
    # --- Net Worth Statement widget (formal balance-sheet view) ---
@@ -1066,7 +1073,7 @@ with tab1:
        #print(mtd_spend)
       # monthly_balance = account_data.iloc[-1,1:15] # Select the first row
        fig_mtd_spend_by_cateogry = px.treemap(mtd_spend, path=['account_type','account_name'],
-                     values='market_value',color='market_value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']) if mtd_spend['market_value'].sum() != 0 else 0, title="")
+                     values='market_value',color='market_value', color_continuous_scale=COLOR_SCALE,color_continuous_midpoint=np.average(mtd_spend['market_value'], weights=mtd_spend['market_value']) if mtd_spend['market_value'].sum() != 0 else 0, title="")
        fig_mtd_spend_by_cateogry.data[0].textinfo = "label+text+value+percent root"
 
        #fig_mtd_spend_by_cateogry.update_layout(margin=dict(l=0,r=0,t=0,b=0))
@@ -1093,8 +1100,14 @@ with tab1:
             if portdf_no_totals.empty:
                 st.info("No portfolio data available for the current month. Please add portfolio data via the Portfolio Data Entry page.")
             else:
-                portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector'],
-                values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=np.average(portdf_no_totals['Current value'], weights=portdf_no_totals['Current value']) if portdf_no_totals['Current value'].sum() != 0 else 0, title="")
+                # Filter out rows with empty/NaN Sector — px.treemap requires all
+                # rows to be leaf nodes; rows with a parent Tax Type but no Sector
+                # value are treated as non-leaf intermediates and raise a ValueError.
+                portdf_treemap = portdf_no_totals[
+                    portdf_no_totals['Sector'].notna() & (portdf_no_totals['Sector'] != '')
+                ].copy()
+                portfolio_by_sector = px.treemap(portdf_treemap, path=['Tax Type','Sector'],
+                values='Current value',color='Current value', color_continuous_scale=COLOR_SCALE,color_continuous_midpoint=np.average(portdf_treemap['Current value'], weights=portdf_treemap['Current value']) if portdf_treemap['Current value'].sum() != 0 else 0, title="")
                 #values='Current value',color='Current value', title="")
                 portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
                 portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
@@ -1122,6 +1135,13 @@ with tab3:
     
     # Exclude the totals row (last row where Account == 'Portfolio Totals')
     portdf_no_totals = portdf[portdf['Account'] != 'Portfolio Totals'].copy()
+    # Fill NaN/None in treemap hierarchy columns so Plotly doesn't raise
+    # "None entries cannot have not-None children"
+    for _col in ['Tax Type', 'Sector', 'Ticker']:
+        if _col in portdf_no_totals.columns:
+            portdf_no_totals[_col] = portdf_no_totals[_col].fillna('Unknown')
+    # Drop rows with no value so they don't create empty leaf nodes
+    portdf_no_totals = portdf_no_totals[portdf_no_totals['Current value'].notna() & (portdf_no_totals['Current value'] != 0)]
     
     # Define styles for center alignment of headers and specific columns
     from pandas.io.formats.style import CSSStyles
@@ -1143,7 +1163,7 @@ with tab3:
         _cv = portdf_no_totals['Current value']
         _midpoint = np.average(_cv, weights=_cv) if _cv.sum() != 0 else 0
         portfolio_by_sector = px.treemap(portdf_no_totals, path=['Tax Type','Sector', 'Ticker'],
-            values='Current value',color='Current value', color_continuous_scale=COLOR_PALETTE,color_continuous_midpoint=_midpoint, title="")
+            values='Current value',color='Current value', color_continuous_scale=COLOR_SCALE,color_continuous_midpoint=_midpoint, title="")
                     #values='Current value',color='Current value', title="")
         portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
         portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
