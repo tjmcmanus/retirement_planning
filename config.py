@@ -70,6 +70,15 @@ DEFAULT_CONFIG = {
         "daf_contribution_start_age": 60,
         "daf_contribution_end_age": 75,
     },
+    "rebalancing_preferences": {
+        "cash_symbol": "MF:CASH",
+        "bonds_traditional": "VBTLX (Vanguard Total Bond Market Admiral)",
+        "bonds_roth": "BND (Vanguard Total Bond Market ETF)",
+        "bonds_brokerage": "VGIT (Vanguard Intermediate-Term Treasury ETF)",
+        "stocks_traditional": "VFIAX (Vanguard 500 Index Admiral)",
+        "stocks_roth": "VTI (Vanguard Total Market ETF)",
+        "stocks_brokerage": "VTI (Vanguard Total Market ETF)",
+    },
     "metadata": {
         "last_updated": None,
         "version": "1.0"

@@ -1228,6 +1228,8 @@ def _location_guidance(asset_class: str, account_type: str) -> str:
 
 def _suggest_symbol(asset_class: str, account_type: str) -> str:
     """Return a representative ticker to buy for a given asset class and account type.
+    
+    Reads preferences from configuration file if available, otherwise uses defaults.
 
     Account-type conventions:
     - Traditional IRA  → Mutual funds (lower-cost, no bid/ask spread, ideal for
@@ -1237,28 +1239,54 @@ def _suggest_symbol(asset_class: str, account_type: str) -> str:
     - Brokerage        → ETFs or individual stocks (intra-day trading, tax-loss
                          harvesting, LTCG rates)
     """
-    if asset_class == "Cash":
-        return "MF:CASH"
+    # Try to load preferences from config, fall back to defaults
+    try:
+        from config import get_config_manager
+        config_mgr = get_config_manager()
+        
+        if asset_class == "Cash":
+            return config_mgr.get("rebalancing_preferences", "cash_symbol", "MF:CASH")
 
-    if asset_class == "Bonds":
+        if asset_class == "Bonds":
+            if account_type == TRADITIONAL:
+                return config_mgr.get("rebalancing_preferences", "bonds_traditional",
+                                     "VBTLX (Vanguard Total Bond Market Admiral)")
+            if account_type == ROTH:
+                return config_mgr.get("rebalancing_preferences", "bonds_roth",
+                                     "BND (Vanguard Total Bond Market ETF)")
+            # Brokerage
+            return config_mgr.get("rebalancing_preferences", "bonds_brokerage",
+                                 "VGIT (Vanguard Intermediate-Term Treasury ETF)")
+
+        # Stocks
         if account_type == TRADITIONAL:
-            # Mutual fund — ideal for tax-deferred bond income
-            return "VBTLX (Vanguard Total Bond Market Admiral)"
+            return config_mgr.get("rebalancing_preferences", "stocks_traditional",
+                                 "VFIAX (Vanguard 500 Index Admiral)")
         if account_type == ROTH:
-            # ETF — acceptable if bonds are held in Roth (though not ideal location)
-            return "BND (Vanguard Total Bond Market ETF)"
-        # Brokerage — ETF; prefer Treasuries/munis for tax efficiency
-        return "VGIT (Vanguard Intermediate-Term Treasury ETF)"
+            return config_mgr.get("rebalancing_preferences", "stocks_roth",
+                                 "VTI (Vanguard Total Market ETF)")
+        # Brokerage
+        return config_mgr.get("rebalancing_preferences", "stocks_brokerage",
+                             "VTI (Vanguard Total Market ETF)")
+    
+    except Exception:
+        # Fall back to hardcoded defaults if config is unavailable
+        if asset_class == "Cash":
+            return "MF:CASH"
 
-    # Stocks
-    if account_type == TRADITIONAL:
-        # Mutual fund — tax-deferred growth, no intra-day trading needed
-        return "VFIAX (Vanguard 500 Index Admiral)"
-    if account_type == ROTH:
-        # ETF — tax-free growth, flexibility
+        if asset_class == "Bonds":
+            if account_type == TRADITIONAL:
+                return "VBTLX (Vanguard Total Bond Market Admiral)"
+            if account_type == ROTH:
+                return "BND (Vanguard Total Bond Market ETF)"
+            return "VGIT (Vanguard Intermediate-Term Treasury ETF)"
+
+        # Stocks
+        if account_type == TRADITIONAL:
+            return "VFIAX (Vanguard 500 Index Admiral)"
+        if account_type == ROTH:
+            return "VTI (Vanguard Total Market ETF)"
         return "VTI (Vanguard Total Market ETF)"
-    # Brokerage — ETF for LTCG rates and tax-loss harvesting
-    return "VTI (Vanguard Total Market ETF)"
 
 
 # ---------------------------------------------------------------------------
