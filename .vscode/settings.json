@@ -3,5 +3,6 @@
   "python.analysis.extraPaths": [
     "${workspaceFolder}"
   ],
-  "basedpyright.interpreter.pythonPath": "${workspaceFolder}/.venv/bin/python"
+  "basedpyright.interpreter.pythonPath": "${workspaceFolder}/.venv/bin/python",
+  "ansible.mcpServer.enabled": true
 }

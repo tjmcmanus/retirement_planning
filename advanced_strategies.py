@@ -275,7 +275,7 @@ def project_single_year_tax(
         tax_brackets: pd.DataFrame = pd.DataFrame(get_income_tax_brackets(year))
         cg_brackets: pd.DataFrame = pd.DataFrame(get_cap_gains_brackets(year))
 
-        # standard.csv has columns: year, deduction  (no filing_status column)
+        # standard.csv has columns: year, filing_status, deduction
         # get_std_deduction_by_year returns a plain float
         try:
             std_deduction = get_std_deduction_by_year(year)
@@ -322,12 +322,11 @@ def project_single_year_tax(
         taxable_ordinary = max(0.0, total_ordinary - std_deduction)
 
         # Federal income tax on ordinary income using progressive brackets
-        # calculate_taxable_income returns (total_tax, max_rate, upper_max)
-        federal_tax, marginal_rate, upper_bracket = calculate_taxable_income(
-            taxable_ordinary, tax_brackets
-        )
-        proj.marginal_rate = float(marginal_rate)
-        proj.bracket_headroom = max(0.0, float(upper_bracket) - taxable_ordinary)
+        # calculate_taxable_income returns TaxCalculation named tuple
+        result = calculate_taxable_income(taxable_ordinary, tax_brackets)
+        federal_tax = result.total_tax
+        proj.marginal_rate = float(result.max_rate)
+        proj.bracket_headroom = max(0.0, float(result.upper_max) - taxable_ordinary)
 
         # Capital gains tax: ordinary income fills lower brackets first
         cg_tax = 0.0

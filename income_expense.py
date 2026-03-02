@@ -127,7 +127,9 @@ def _get_tax_data(year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
         RuntimeError: If data retrieval fails or returns empty DataFrames
     """
     # Get standard deduction data
-    stddectdf = get_std_deduction(year)
+    config_mgr = get_config_manager()
+    filing_status = config_mgr.get_filing_status()
+    stddectdf = get_std_deduction(year, filing_status)
     if stddectdf is None or stddectdf.empty:
         logger.error(f"Failed to retrieve standard deduction data for year {year}")
         raise RuntimeError(f"Failed to retrieve standard deduction data for year {year}")
@@ -179,10 +181,10 @@ def calculate_taxes(income: float, daf: float, year: int) -> float:
         logger.debug(f"AGI calculated: {agi:,.2f} (income={income:,.2f} - std_dect={std_dect:,.2f} - daf={daf:,.2f})")
         
         # Calculate taxes based on AGI
-        taxes, maxrate, uppermax = calculate_taxable_income(agi, taxratedf)
-        logger.debug(f"Taxes calculated: {taxes:,.2f}, maxrate={maxrate}, uppermax={uppermax:,.2f}")
+        result = calculate_taxable_income(agi, taxratedf)
+        logger.debug(f"Taxes calculated: {result.total_tax:,.2f}, maxrate={result.max_rate}, uppermax={result.upper_max:,.2f}")
         
-        return taxes
+        return result.total_tax
         
     except Exception as e:
         logger.error(f"Error in calculate_taxes ({type(e).__name__}): {e}. "

@@ -857,10 +857,11 @@ def calculate_amt(income: float, conversions: float, deductions: float,
     # Step 1: Calculate regular tax (simplified - use existing function)
     try:
         _tax_brackets = get_income_tax_brackets(year)
-        regular_tax, _, _ = calculate_taxable_income(
+        result = calculate_taxable_income(
             income + conversions - deductions,
             pd.DataFrame(_tax_brackets)
         )
+        regular_tax = result.total_tax
     except (ValueError, TypeError, KeyError) as e:
         # Fallback to simple calculation
         logging.warning(f"calculate_taxable_income failed, using fallback: {e}")
@@ -2583,8 +2584,10 @@ class Stage1Accumulation(LifeStage):
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
         
         # Get tax brackets for the year
+        config_mgr = get_config_manager()
+        filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
-        std_deduction_df = get_std_deduction(year)
+        std_deduction_df = get_std_deduction(year, filing_status)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
         # -----------------------------------------------------------------------
@@ -2628,7 +2631,8 @@ class Stage1Accumulation(LifeStage):
         # taxable_income = agi - max(std_deduction, daf_contribution)
         effective_deduction = std_deduction + daf_tax_excess  # = daf_contribution when bundling
         taxable_income = agi - effective_deduction
-        federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
+        result = calculate_taxable_income(taxable_income, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
         logger.debug(f"AGI: ${agi:,.2f}, DAF contrib: ${daf_contribution:,.0f}, "
                      f"effective deduction: ${effective_deduction:,.0f}, "
@@ -2739,7 +2743,8 @@ class Stage1Accumulation(LifeStage):
         if roth_conversion > 0:
             total_income = agi + roth_conversion
             taxable_income_with_conversion = total_income - effective_deduction
-            federal_tax, _, _ = calculate_taxable_income(taxable_income_with_conversion, tax_brackets)
+            result = calculate_taxable_income(taxable_income_with_conversion, tax_brackets)
+            federal_tax = result.total_tax
 
         # -----------------------------------------------------------------------
         # Compute payroll taxes (FICA, Medicare, State, FUTA/SUTA) on gross wages
@@ -2960,8 +2965,10 @@ class Stage2PrepForRetirement(LifeStage):
             contribution_roth = 0.0
 
         # Get tax data
+        config_mgr = get_config_manager()
+        filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
-        std_deduction_df = get_std_deduction(year)
+        std_deduction_df = get_std_deduction(year, filing_status)
         std_deduction = std_deduction_df.iloc[0]['deduction']
 
         # -----------------------------------------------------------------------
@@ -2974,7 +2981,8 @@ class Stage2PrepForRetirement(LifeStage):
         expected_retirement_rate = max_conversion_rate  # proxy for retirement bracket
         _preliminary_agi = wages - contribution_401k
         _preliminary_taxable = _preliminary_agi - std_deduction
-        _, _preliminary_rate, _ = calculate_taxable_income(_preliminary_taxable, tax_brackets)
+        result = calculate_taxable_income(_preliminary_taxable, tax_brackets)
+        _preliminary_rate = result.max_rate
         prefer_roth_401k = _preliminary_rate > expected_retirement_rate
 
         # -----------------------------------------------------------------------
@@ -2998,7 +3006,8 @@ class Stage2PrepForRetirement(LifeStage):
         effective_deduction = std_deduction + daf_tax_excess
 
         taxable_income = agi - effective_deduction
-        federal_tax, max_rate, upper_max = calculate_taxable_income(taxable_income, tax_brackets)
+        result = calculate_taxable_income(taxable_income, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
         logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, DAF contrib=${daf_contribution:,.0f}, "
                      f"effective deduction=${effective_deduction:,.0f}, "
@@ -3138,7 +3147,8 @@ class Stage2PrepForRetirement(LifeStage):
         if roth_conversion > 0:
             total_income = agi + roth_conversion
             taxable_with_conv = total_income - effective_deduction
-            federal_tax, _, _ = calculate_taxable_income(taxable_with_conv, tax_brackets)
+            result = calculate_taxable_income(taxable_with_conv, tax_brackets)
+            federal_tax = result.total_tax
 
         # -----------------------------------------------------------------------
         # Compute payroll taxes (FICA, Medicare, State, FUTA/SUTA) on gross wages
@@ -3303,9 +3313,11 @@ class Stage3EarlyRetirement(LifeStage):
         age_spouse = kwargs.get('age_spouse', 0)
         
         # Get tax data
+        config_mgr = get_config_manager()
+        filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
         cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
-        std_deduction_df = get_std_deduction(year)
+        std_deduction_df = get_std_deduction(year, filing_status)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
         # NEW STRATEGY: Maintain cash buffer using configured target values
@@ -3444,7 +3456,8 @@ class Stage3EarlyRetirement(LifeStage):
         agi = total_income - std_deduction
 
         # Income tax on conversions
-        federal_tax, max_rate, upper_max = calculate_taxable_income(agi, tax_brackets)
+        result = calculate_taxable_income(agi, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
         # Capital gains tax
         cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
@@ -3574,9 +3587,11 @@ class Stage4Medicare(LifeStage):
         age_spouse = kwargs.get('age_spouse', 0)
         
         # Get tax and IRMAA data
+        config_mgr = get_config_manager()
+        filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
         cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
-        std_deduction_df = get_std_deduction(year)
+        std_deduction_df = get_std_deduction(year, filing_status)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
@@ -3717,7 +3732,8 @@ class Stage4Medicare(LifeStage):
         total_income = ltcg_harvested + roth_conversion
         agi = total_income - std_deduction
         
-        federal_tax, max_rate, upper_max = calculate_taxable_income(agi, tax_brackets)
+        result = calculate_taxable_income(agi, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
         cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
         total_tax = federal_tax + cg_tax
         
@@ -3904,9 +3920,11 @@ class Stage5SocialSecurity(LifeStage):
         age_spouse = kwargs.get('age_spouse', 0)
         
         # Get tax data
+        config_mgr = get_config_manager()
+        filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
         cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
-        std_deduction_df = get_std_deduction(year)
+        std_deduction_df = get_std_deduction(year, filing_status)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
@@ -4045,7 +4063,8 @@ class Stage5SocialSecurity(LifeStage):
         total_income = taxable_ss + ltcg_harvested + roth_conversion
         agi = total_income - std_deduction
         
-        federal_tax, max_rate, upper_max = calculate_taxable_income(agi, tax_brackets)
+        result = calculate_taxable_income(agi, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
         cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
         total_tax = federal_tax + cg_tax
         
@@ -4253,9 +4272,11 @@ class Stage6RMD(LifeStage):
         age_spouse = kwargs.get('age_spouse', 0)
         
         # Get tax data
+        config_mgr = get_config_manager()
+        filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
         cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
-        std_deduction_df = get_std_deduction(year)
+        std_deduction_df = get_std_deduction(year, filing_status)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
@@ -4342,7 +4363,8 @@ class Stage6RMD(LifeStage):
         
         # Calculate taxes
         agi = total_income - std_deduction
-        federal_tax, max_rate, upper_max = calculate_taxable_income(agi, tax_brackets)
+        result = calculate_taxable_income(agi, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
         cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
         total_tax = federal_tax + cg_tax
         
