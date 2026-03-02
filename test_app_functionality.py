@@ -119,7 +119,6 @@ def test_required_files() -> Tuple[bool, str]:
         "pages/4_portfolio.py",
         "pages/5_strategy.py",
         "pages/6_monte_carlo.py",
-        "pages/7_flow_of_funds.py",
         "pages/8_advanced_strategies.py",
     ]
     
@@ -164,7 +163,6 @@ def test_python_syntax() -> Tuple[bool, str]:
         "pages/4_portfolio.py",
         "pages/5_strategy.py",
         "pages/6_monte_carlo.py",
-        "pages/7_flow_of_funds.py",
         "pages/8_advanced_strategies.py",
     ]
     
@@ -239,7 +237,6 @@ def test_page_structure() -> Tuple[bool, str]:
         "pages/4_portfolio.py",
         "pages/5_strategy.py",
         "pages/6_monte_carlo.py",
-        "pages/7_flow_of_funds.py",
         "pages/8_advanced_strategies.py",
     ]
     
@@ -295,7 +292,7 @@ def test_navbar_routes() -> Tuple[bool, str]:
         
         required_routes = [
             "Dashboard", "Portfolio", "Strategy",
-            "Monte Carlo", "Flow of Funds", "Advanced"
+            "Monte Carlo", "Advanced"
         ]
         
         missing = [r for r in required_routes if r not in content]

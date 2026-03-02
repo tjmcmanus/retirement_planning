@@ -87,7 +87,6 @@ The test suite validates 11 critical aspects of the application:
   - Portfolio
   - Strategy
   - Monte Carlo
-  - Flow of Funds
   - Advanced Strategies
 
 ## Test Output

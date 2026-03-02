@@ -16,7 +16,6 @@ The application is a **Streamlit-based personal financial planning tool** with 7
 | 📈 Strategy | Accumulation & withdrawal planning, RRI gauge | ✅ Solid |
 | 🎯 Advanced Strategies | Tax planner, multi-year tax, backdoor Roth, NUA, QCD, SEPP, harvesting | ✅ Deep |
 | 🎲 Monte Carlo | Simulation, stress tests, longevity, heatmap, scenario comparison | ✅ Excellent |
-| 💸 Flow of Funds | Graphviz account flow diagram, account details | ⚠️ Thin |
 | ⚙️ Settings | Quick parameters, link to Configuration page | ✅ Adequate |
 
 **Separate pages (Streamlit multi-page):**
@@ -421,8 +420,6 @@ The ideal Dashboard layout for users 18–100, $50K–$100M:
 - No "what if I add $X/year in savings" scenario
 - No inflation sensitivity analysis (what if inflation is 5% vs 3%)
 
-### 💸 Flow of Funds
-**Strengths:** Graphviz diagram is a nice visual  
 **Gaps:**
 - **Very thin** — the diagram is static/generic, not driven by actual account balances
 - No dollar amounts on the flow arrows
@@ -512,7 +509,6 @@ All charts use color as the only differentiator (no patterns, no labels on bars)
 - [ ] **First-run onboarding wizard** (detect empty data, show setup steps)
 - [ ] **Sample data mode** (explore app without entering real data)
 - [ ] **"Complete Your Setup" CTA** on Dashboard when config is incomplete
-- [ ] **Improve Flow of Funds tab** (add dollar amounts to arrows, add income/tax flows)
 - [ ] **Make Monte Carlo auto-populate** from current net worth
 - [ ] **Add state tax configuration** to Tax Planner (remove hardcoded 3%)
 
@@ -584,8 +580,8 @@ Addressing Sprint 1 and Sprint 2 items above would transform the Dashboard from 
 
 **Yes.** The current app has 7 tabs in [`planning_app.py`](planning_app.py) plus 2 Streamlit pages (`pages/`). Several tabs are heavy enough — and used infrequently enough — that they belong as separate pages rather than tabs that load on every visit.
 
-**The core problem with tabs in Streamlit:**  
-All tab content in a single `planning_app.py` is parsed and partially executed on every page load, even for tabs the user never opens. The Monte Carlo sidebar inputs, Advanced Strategies forms, and Flow of Funds graphviz chart all consume memory and execution time on every Dashboard visit. Moving heavy, infrequently-used features to separate pages means they only load when navigated to.
+**The core problem with tabs in Streamlit:**
+All tab content in a single `planning_app.py` is parsed and partially executed on every page load, even for tabs the user never opens. The Monte Carlo sidebar inputs and Advanced Strategies forms consume memory and execution time on every Dashboard visit. Moving heavy, infrequently-used features to separate pages means they only load when navigated to.
 
 **Recommended split:**
 
@@ -595,8 +591,7 @@ All tab content in a single `planning_app.py` is parsed and partially executed o
 | 💼 Portfolio | `tab3` in `planning_app.py` | **Keep as tab** | Used frequently alongside Dashboard |
 | 📈 Strategy | `tab_accum` in `planning_app.py` | **Keep as tab** | Core planning — used regularly |
 | 🎯 Advanced Strategies | `tab_advanced` in `planning_app.py` | **Move to page** | 7 sub-tabs, heavy, used occasionally |
-| 🎲 Monte Carlo | `tab_mc` in `planning_app.py` | **Move to page** | Computationally heavy, used occasionally |
-| 💸 Flow of Funds | `tab_flow` in `planning_app.py` | **Move to page** | Thin content, used rarely |
+| 🎲 Monte Carlo | `tab_mc` in `planning_app.py` | **✅ Moved to page** | Computationally heavy, used occasionally |
 | ⚙️ Settings | `tab5` in `planning_app.py` | **Move to page** | Already links to Configuration page |
 | ⚖️ Estate Planning | `pages/1_estate_planning.py` | **Keep as page** ✅ | Already correct |
 | ⚙️ Configuration | `pages/2_configuration.py` | **Keep as page** ✅ | Already correct |
@@ -627,7 +622,6 @@ NAV_PAGES = [
     ("pages/4_strategy.py",            "📈 Strategy"),
     ("pages/5_advanced_strategies.py", "🎯 Advanced"),
     ("pages/6_monte_carlo.py",         "🎲 Monte Carlo"),
-    ("pages/7_flow_of_funds.py",       "💸 Flow of Funds"),
     ("pages/1_estate_planning.py",     "⚖️ Estate Planning"),
     ("pages/2_configuration.py",       "⚙️ Settings"),
 ]
@@ -691,7 +685,6 @@ NAV_ROUTES = {
     "📈 Strategy":        "pages/4_strategy.py",
     "🎯 Advanced":        "pages/5_advanced_strategies.py",
     "🎲 Monte Carlo":     "pages/6_monte_carlo.py",
-    "💸 Flow of Funds":   "pages/7_flow_of_funds.py",
     "⚖️ Estate Planning": "pages/1_estate_planning.py",
     "⚙️ Settings":        "pages/2_configuration.py",
 }
@@ -794,7 +787,6 @@ pages/
   4_strategy.py                  ← 📈 Strategy (extracted from tab_accum)
   5_advanced_strategies.py       ← 🎯 Advanced Strategies (extracted from tab_advanced)
   6_monte_carlo.py               ← 🎲 Monte Carlo (extracted from tab_mc)
-  7_flow_of_funds.py             ← 💸 Flow of Funds (extracted from tab_flow)
 components/
   navbar.py                      ← Shared faux-tab navigation bar (NEW)
   sidebar.py                     ← Existing sidebar (keep, call from every page)
@@ -868,7 +860,7 @@ Each page calls `get_shared_networth()` instead of rebuilding it. The first page
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ [📊 Dashboard] [💼 Portfolio] [📈 Strategy] [🎯 Advanced] [🎲 Monte Carlo]  │
-│ [💸 Flow of Funds] [⚖️ Estate Planning] [⚙️ Settings]                       │
+│ [⚖️ Estate Planning] [⚙️ Settings]                                          │
 │ ─────────────────────────────────────────────────────────────────────────── │
 │                                                                              │
 │  📊 Dashboard content here...                                                │

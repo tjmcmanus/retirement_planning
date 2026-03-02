@@ -9,7 +9,6 @@ All functionality has been moved to dedicated pages under pages/:
   - pages/4_portfolio.py - Portfolio management
   - pages/5_strategy.py - Strategy planning
   - pages/6_monte_carlo.py - Monte Carlo simulations
-  - pages/7_flow_of_funds.py - Flow of funds analysis
   - pages/8_advanced_strategies.py - Advanced tax strategies
 
 The application uses a hybrid architecture with streamlit-option-menu

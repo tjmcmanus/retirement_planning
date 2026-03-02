@@ -581,9 +581,17 @@ def init_page(title: str = "Financial Planner", icon: str = "😊") -> tuple[pd.
     eff_port_year : int
     """
     import threading as _threading
+    from config import ConfigManager
 
     st.set_page_config(page_title=title, page_icon=icon, layout="wide")
     st.markdown(HIDE_ST_STYLE, unsafe_allow_html=True)
+
+    # Load configuration and determine filing status
+    config_mgr = ConfigManager()
+    filing_status = config_mgr.get_filing_status()
+    
+    # Store filing status in session state for easy access
+    st.session_state["filing_status"] = filing_status
 
     currentDate = datetime.date.today()
     curr_year   = currentDate.year
@@ -634,6 +642,16 @@ def init_page(title: str = "Financial Planner", icon: str = "😊") -> tuple[pd.
         eff_port_month,
         eff_port_year,
     )
+
+
+def get_filing_status() -> str:
+    """
+    Get the current filing status from session state.
+    
+    Returns:
+        'married_filing_jointly' or 'single' based on configuration
+    """
+    return st.session_state.get("filing_status", "married_filing_jointly")
 
 
 def auto_rerun_if_rebuilding() -> None:

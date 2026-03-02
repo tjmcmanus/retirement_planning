@@ -22,8 +22,7 @@ March 2, 2026
 2. **`pages/4_portfolio.py`** (529 lines) - Portfolio management and analysis
 3. **`pages/5_strategy.py`** (309 lines) - Strategy planning and execution
 4. **`pages/6_monte_carlo.py`** (631 lines) - Monte Carlo simulations
-5. **`pages/7_flow_of_funds.py`** (165 lines) - Flow of funds analysis
-6. **`pages/8_advanced_strategies.py`** (646 lines) - Advanced tax strategies
+5. **`pages/8_advanced_strategies.py`** (646 lines) - Advanced tax strategies
 
 ### Existing Pages (Unchanged)
 - **`pages/1_estate_planning.py`** - Estate planning tools
@@ -65,7 +64,6 @@ NAV_ROUTES = {
     "📊 Portfolio": "pages/4_portfolio.py",
     "📋 Strategy": "pages/5_strategy.py",
     "🎲 Monte Carlo": "pages/6_monte_carlo.py",
-    "💸 Flow of Funds": "pages/7_flow_of_funds.py",
     "🧠 Advanced": "pages/8_advanced_strategies.py",
 }
 ```
@@ -102,8 +100,6 @@ NAV_ROUTES = {
 - Scenario analysis
 - Risk metrics
 
-### Flow of Funds (`pages/7_flow_of_funds.py`)
-- Income and expense tracking
 - Cash flow projections
 - Budget analysis
 - Spending patterns
@@ -157,7 +153,6 @@ Corrected field references:
 | `pages/4_portfolio.py` | 529 | Portfolio |
 | `pages/5_strategy.py` | 309 | Strategy |
 | `pages/6_monte_carlo.py` | 631 | Monte Carlo |
-| `pages/7_flow_of_funds.py` | 165 | Flow of Funds |
 | `pages/8_advanced_strategies.py` | 646 | Advanced Strategies |
 | **Total** | **3,883** | **All new/modified files** |
 
@@ -173,7 +168,6 @@ All files verified to parse cleanly with Python AST parser:
 ✅ pages/4_portfolio.py (529 lines)
 ✅ pages/5_strategy.py (309 lines)
 ✅ pages/6_monte_carlo.py (631 lines)
-✅ pages/7_flow_of_funds.py (165 lines)
 ✅ pages/8_advanced_strategies.py (646 lines)
 ```
 

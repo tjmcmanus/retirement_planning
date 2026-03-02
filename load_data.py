@@ -28,25 +28,25 @@ MAX_YEAR = 2100
 
 #@st.cache(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
-def get_income_tax_brackets(year):
+def get_income_tax_brackets(year, filing_status='married_filing_jointly'):
    dfyear = pd.read_csv('income_rates.csv')
-   df = dfyear[dfyear['year'] == year]
+   df = dfyear[(dfyear['year'] == year) & (dfyear['filing_status'] == filing_status)]
    #print(df.head())
    return df
 
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
-def get_cap_gains_brackets(year):
+def get_cap_gains_brackets(year, filing_status='married_filing_jointly'):
    cgdfyear= pd.read_csv('cap_gains.csv')
-   cgdf = cgdfyear[cgdfyear['year'] == year]
+   cgdf = cgdfyear[(cgdfyear['year'] == year) & (cgdfyear['filing_status'] == filing_status)]
    #print(cgdf.head())
    return cgdf
  
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
-def get_std_deduction(year):
+def get_std_deduction(year, filing_status='married_filing_jointly'):
     stddectdfyear =pd.read_csv('standard.csv')
-    stddectdf = stddectdfyear[stddectdfyear['year'] == year]
+    stddectdf = stddectdfyear[(stddectdfyear['year'] == year) & (stddectdfyear['filing_status'] == filing_status)]
     return stddectdf
     
     
@@ -65,6 +65,28 @@ def get_atm_costs(year):
    atmdf = atmdfyear[atmdfyear['year'] == year]
    #print(atmdf.head())
    return atmdf
+#@st.cache_data(allow_output_mutation=True, show_spinner=True)
+@st.cache_data()
+def get_ira_limits(year):
+   """
+   Get IRA contribution limits and Roth phase-out thresholds for a given year.
+   
+   Returns DataFrame with columns:
+   - ira_contribution_base: Base IRA contribution limit
+   - ira_catchup_50plus: Catch-up contribution for age 50+
+   - roth_phaseout_start_mfj: Roth phase-out start (married filing jointly)
+   - roth_phaseout_end_mfj: Roth phase-out end (married filing jointly)
+   - roth_phaseout_start_single: Roth phase-out start (single)
+   - roth_phaseout_end_single: Roth phase-out end (single)
+   - k401_employee_limit: 401(k) employee contribution limit
+   - k401_total_limit: 401(k) total contribution limit (IRC 415(c))
+   - k401_catchup_50: 401(k) catch-up for age 50-59
+   - k401_catchup_60_63: 401(k) catch-up for age 60-63
+   """
+   ira_limits_year = pd.read_csv('ira_limits.csv')
+   ira_limits_df = ira_limits_year[ira_limits_year['year'] == year]
+   return ira_limits_df
+
 
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()

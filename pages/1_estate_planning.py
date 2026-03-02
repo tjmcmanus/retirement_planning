@@ -21,7 +21,7 @@ FEDERAL_ESTATE_TAX_THRESHOLD_NOTE = "$13M (2024, scheduled to drop ~$7M in 2026 
 
 st.set_page_config(page_title="Estate Planning", page_icon="⚖️", layout="wide")
 
-navbar("⚖️ Estate Planning")
+navbar("Estate Planning")
 
 # ---------------------------------------------------------------------------
 # Configuration & persistence helpers
