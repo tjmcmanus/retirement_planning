@@ -525,8 +525,7 @@ class TestAnalyzeDafBundling:
 class TestCalculateDafForYear:
     """Tests for _calculate_daf_for_year in strategy.py."""
 
-    def _call(self, age_primary: int, year: int = 2030,
-              std_deduction: float = 29_200,
+    def _call(self, age_primary: int, std_deduction: float = 29_200,
               has_daf: bool = True, annual_giving: float = 10_000,
               giving_start_age: int = 65, giving_end_age: int = 95,
               daf_start_age: int = 60, daf_end_age: int = 75,
@@ -548,7 +547,7 @@ class TestCalculateDafForYear:
                 lambda section, key, default=None:
                 config_data.get(section, {}).get(key, default)
             )
-            return _calculate_daf_for_year(age_primary, year, std_deduction)
+            return _calculate_daf_for_year(age_primary, std_deduction)
 
     def test_bundle_year_returns_nonzero_contribution(self):
         """First year of DAF window (age == daf_start_age) → bundle year."""

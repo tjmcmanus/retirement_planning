@@ -528,7 +528,10 @@ with daf_tab:
             
             # Get required parameters for bundling analysis
             from load_data import get_std_deduction
-            _daf_std_ded_df = get_std_deduction(curr_year)
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+            filing_status = config_mgr.get_filing_status()
+            _daf_std_ded_df = get_std_deduction(curr_year, filing_status)
             # Extract married filing jointly standard deduction (typically the highest)
             try:
                 _daf_std_ded = float(_daf_std_ded_df.iloc[0]['married'])

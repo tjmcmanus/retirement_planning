@@ -8,7 +8,7 @@ import logging
 import warnings
 from datetime import date
 from datetime import datetime
-from typing import Literal
+from typing import Literal, NamedTuple
 from load_data import get_cap_gains_brackets, get_income_tax_brackets, get_net_worth, get_medicare_costs, get_atm_costs, get_std_deduction, load_rmd_data
 
 # Configure logging
@@ -23,6 +23,21 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+# Constants
+MIN_TAXABLE_AMOUNT = 0.0
+
+class TaxCalculation(NamedTuple):
+    """Result of progressive tax calculation.
+    
+    Attributes:
+        total_tax: Total tax owed (truncated to whole dollars via floor)
+        max_rate: Highest tax rate that applies to this income
+        upper_max: Upper limit of the highest bracket that applies
+    """
+    total_tax: float
+    max_rate: float
+    upper_max: float
+
 
 def calc_roth_conversions_tax(
     maxrate: float,
@@ -554,7 +569,7 @@ def calculate_cap_gains(income: float, cg_range: pd.DataFrame, cg_income: float)
     return total_tax
 
     
-def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> tuple[float, float, float]:
+def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> TaxCalculation:
     """
     Calculate income tax using progressive tax brackets.
     
@@ -566,15 +581,16 @@ def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> tu
         tax_brackets_df: DataFrame with tax brackets containing 'lower', 'upper', 'rate' columns
         
     Returns:
-        tuple: (total_tax, max_rate, upper_max)
+        TaxCalculation: Named tuple containing:
             - total_tax: Total tax owed (truncated to whole dollars via floor)
             - max_rate: Highest tax rate that applies to this income
             - upper_max: Upper limit of the highest bracket that applies
     """
-    if income <= 0:
-        if income < 0:
-            logger.warning(f"calculate_taxable_income: negative income={income} received; returning zero tax.")
-        return 0.0, 0.0, 0.0
+    if income < 0:
+        logger.warning(f"Negative income ${income:,.2f} received; returning zero tax")
+        return TaxCalculation(0.0, 0.0, 0.0)
+    if income == 0:
+        return TaxCalculation(0.0, 0.0, 0.0)
 
     logger.debug(f"calculate_taxable_income: income=${income:,.2f}")
 
@@ -582,24 +598,27 @@ def calculate_taxable_income(income: float, tax_brackets_df: pd.DataFrame) -> tu
     # bracket width. Brackets are non-overlapping and cumulative (each bracket's
     # lower == previous bracket's upper), so this gives the correct marginal amount
     # without double-counting lower-bracket income.
-    taxable_in_bracket = (income - tax_brackets_df['lower']).clip(0.0, tax_brackets_df['upper'] - tax_brackets_df['lower'])
-    bracket_tax        = np.floor(taxable_in_bracket * tax_brackets_df['rate'])
-    total_tax          = float(bracket_tax.sum())
+    taxable_in_bracket = (income - tax_brackets_df['lower']).clip(
+        MIN_TAXABLE_AMOUNT,
+        tax_brackets_df['upper'] - tax_brackets_df['lower']
+    )
+    bracket_tax = np.floor(taxable_in_bracket * tax_brackets_df['rate'])
+    total_tax = float(bracket_tax.sum())
 
     # Highest bracket that income reaches (taxable_in_bracket > 0)
     active = taxable_in_bracket > 0
     if active.any():
-        max_rate  = float(tax_brackets_df.loc[active, 'rate'].iloc[-1])
-        upper_max = float(tax_brackets_df.loc[active, 'upper'].iloc[-1])
+        max_rate = float(tax_brackets_df.loc[active, 'rate'].max())
+        upper_max = float(tax_brackets_df.loc[active, 'upper'].max())
     else:
-        max_rate  = 0.0
+        max_rate = 0.0
         upper_max = 0.0
 
     logger.debug(
         f"Total tax: ${total_tax:,.2f}, max_rate={max_rate:.2%}, "
         f"upper_max=${upper_max:,.2f}"
     )
-    return total_tax, max_rate, upper_max
+    return TaxCalculation(total_tax, max_rate, upper_max)
 
 def get_rmd_value(age):
     """

@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime
 import os
+import shutil
+from typing import Dict, List, Tuple, Any
 
 from components.navbar import navbar
 from components.shared import init_page
@@ -40,6 +42,134 @@ TAX_DATA_FILES = {
     "Social Security Income": "ssincome.csv",
     "ATM (Alternative Minimum Tax)": "atm.csv",
 }
+
+# Define expected schemas for validation
+TAX_DATA_SCHEMAS = {
+    "standard.csv": {
+        "required_columns": ["year", "filing_status", "deduction"],
+        "numeric_columns": ["year", "deduction"],
+        "filing_status_values": ["married_filing_jointly", "single"],
+    },
+    "income_rates.csv": {
+        "required_columns": ["year", "filing_status", "bracket", "rate"],
+        "numeric_columns": ["year", "bracket", "rate"],
+        "filing_status_values": ["married_filing_jointly", "single"],
+    },
+    "cap_gains.csv": {
+        "required_columns": ["year", "filing_status", "bracket", "rate"],
+        "numeric_columns": ["year", "bracket", "rate"],
+        "filing_status_values": ["married_filing_jointly", "single"],
+    },
+    "ira_limits.csv": {
+        "required_columns": ["year"],
+        "numeric_columns": ["year"],
+        "filing_status_values": None,
+    },
+    "irmaa.csv": {
+        "required_columns": ["year", "filing_status"],
+        "numeric_columns": ["year"],
+        "filing_status_values": ["married_filing_jointly", "single"],
+    },
+    "rmd.csv": {
+        "required_columns": ["age"],
+        "numeric_columns": ["age"],
+        "filing_status_values": None,
+    },
+    "ssincome.csv": {
+        "required_columns": ["year"],
+        "numeric_columns": ["year"],
+        "filing_status_values": None,
+    },
+    "atm.csv": {
+        "required_columns": ["year", "filing_status"],
+        "numeric_columns": ["year"],
+        "filing_status_values": ["married_filing_jointly", "single"],
+    },
+}
+
+def validate_uploaded_data(df: pd.DataFrame, filename: str) -> Tuple[bool, List[str]]:
+    """
+    Validate uploaded CSV data against expected schema.
+    
+    Returns:
+        Tuple of (is_valid, list_of_errors)
+    """
+    errors = []
+    
+    # Get schema for this file
+    schema = TAX_DATA_SCHEMAS.get(filename)
+    if not schema:
+        # No schema defined - allow upload but warn
+        return True, ["⚠️ No validation schema defined for this file"]
+    
+    # 1. Validate required columns exist
+    required_cols = schema.get("required_columns", [])
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        errors.append(f"❌ Missing required columns: {', '.join(missing_cols)}")
+    
+    # 2. Validate numeric columns have correct data types
+    numeric_cols = schema.get("numeric_columns", [])
+    for col in numeric_cols:
+        if col in df.columns:
+            try:
+                # Try to convert to numeric
+                pd.to_numeric(df[col], errors='raise')
+            except (ValueError, TypeError):
+                errors.append(f"❌ Column '{col}' contains non-numeric values")
+    
+    # 3. Validate filing_status values if applicable
+    if "filing_status" in df.columns:
+        allowed_values = schema.get("filing_status_values")
+        if allowed_values:
+            invalid_mask = ~df["filing_status"].isin(allowed_values)
+            invalid_statuses = df.loc[invalid_mask, "filing_status"].unique()
+            if len(invalid_statuses) > 0:
+                errors.append(
+                    f"❌ Invalid filing_status values: {', '.join(map(str, invalid_statuses))}. "
+                    f"Allowed: {', '.join(allowed_values)}"
+                )
+    
+    # 4. Validate year ranges are reasonable (2020-2100)
+    if "year" in df.columns:
+        try:
+            years_series = pd.to_numeric(df["year"], errors='coerce')
+            # Type guard: ensure we have a Series
+            if isinstance(years_series, pd.Series):
+                year_mask = (years_series < 2020) | (years_series > 2100)
+                filtered_years = years_series[year_mask]
+                if isinstance(filtered_years, pd.Series):
+                    invalid_years = filtered_years.dropna()
+                    if len(invalid_years) > 0:
+                        unique_invalid = invalid_years.astype(int).unique()
+                        errors.append(
+                            f"❌ Year values outside reasonable range (2020-2100): "
+                            f"{', '.join(map(str, unique_invalid))}"
+                        )
+        except Exception:
+            errors.append("❌ Unable to validate year column")
+    
+    is_valid = len(errors) == 0
+    return is_valid, errors
+
+def create_backup(filename: str) -> bool:
+    """
+    Create a backup of the file before overwriting.
+    
+    Returns:
+        True if backup was successful, False otherwise
+    """
+    try:
+        if os.path.exists(filename):
+            backup_dir = ".backups"
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_filename = f"{backup_dir}/{filename.replace('.csv', '')}_{timestamp}.csv"
+            shutil.copy2(filename, backup_filename)
+            return True
+        return False
+    except Exception:
+        return False
 
 # Create tabs for each data type
 tabs = st.tabs(list(TAX_DATA_FILES.keys()))
@@ -202,10 +332,32 @@ for tab, (data_name, filename) in zip(tabs, TAX_DATA_FILES.items()):
                         st.markdown("**Preview of uploaded data:**")
                         st.dataframe(new_df.head(10), use_container_width=True)
                         
-                        if st.button("✅ Confirm Upload", key=f"{filename}_confirm_upload", type="primary"):
-                            new_df.to_csv(filename, index=False)
-                            st.success(f"✅ {filename} has been replaced with uploaded data")
-                            st.rerun()
+                        # Validate uploaded data
+                        is_valid, validation_errors = validate_uploaded_data(new_df, filename)
+                        
+                        if not is_valid:
+                            st.error("**Validation Failed:**")
+                            for error in validation_errors:
+                                st.error(error)
+                            st.info("Please fix the errors in your CSV file and try uploading again.")
+                        else:
+                            # Show validation success
+                            if validation_errors:  # Warnings but still valid
+                                for warning in validation_errors:
+                                    st.warning(warning)
+                            else:
+                                st.success("✅ Validation passed - data looks good!")
+                            
+                            if st.button("✅ Confirm Upload", key=f"{filename}_confirm_upload", type="primary"):
+                                # Create backup before overwriting
+                                backup_created = create_backup(filename)
+                                if backup_created:
+                                    st.info(f"📦 Backup created in .backups/ directory")
+                                
+                                # Save the new data
+                                new_df.to_csv(filename, index=False)
+                                st.success(f"✅ {filename} has been replaced with uploaded data")
+                                st.rerun()
                     except Exception as e:
                         st.error(f"Error reading uploaded file: {e}")
         

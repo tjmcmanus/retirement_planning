@@ -46,7 +46,27 @@ def get_cap_gains_brackets(year, filing_status='married_filing_jointly'):
 @st.cache_data()
 def get_std_deduction(year, filing_status='married_filing_jointly'):
     stddectdfyear =pd.read_csv('standard.csv')
+    
+    # Schema validation: Check for required columns
+    required_columns = ['year', 'filing_status', 'deduction']
+    missing_columns = [col for col in required_columns if col not in stddectdfyear.columns]
+    
+    if missing_columns:
+        logger.error(f"standard.csv schema mismatch. Missing columns: {missing_columns}")
+        logger.error(f"Expected columns: {required_columns}")
+        logger.error(f"Found columns: {list(stddectdfyear.columns)}")
+        raise ValueError(
+            f"standard.csv schema error: Missing columns {missing_columns}. "
+            f"Expected format: year,filing_status,deduction. "
+            f"Please run migrate_standard_csv.py to update the file format."
+        )
+    
     stddectdf = stddectdfyear[(stddectdfyear['year'] == year) & (stddectdfyear['filing_status'] == filing_status)]
+    
+    if stddectdf.empty:
+        logger.error(f"No standard deduction data found for year {year}, filing_status {filing_status}")
+        raise ValueError(f"Missing standard deduction data for {year}/{filing_status}")
+    
     return stddectdf
     
     

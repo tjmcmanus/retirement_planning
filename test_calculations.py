@@ -10,7 +10,7 @@ Tax amounts are truncated to whole dollars via floor (IRS standard), not rounded
 import math
 import pandas as pd
 import pytest
-from calculations import calculate_taxable_income, calc_agi, calculate_atm, calc_roth_conversions_tax
+from calculations import calculate_taxable_income, calc_agi, calculate_atm, calc_roth_conversions_tax, TaxCalculation
 
 
 # Sample brackets mirroring the structure in income_rates.csv (2025 MFJ values)
@@ -28,9 +28,9 @@ BRACKETS_2025 = pd.DataFrame([
 def test_income_in_first_bracket():
     """Income entirely within the 10% bracket should be taxed at 10% only."""
     income = 10_000
-    tax, max_rate, _ = calculate_taxable_income(income, BRACKETS_2025)
-    assert tax == math.floor(10_000 * 0.10)
-    assert max_rate == 0.10
+    result = calculate_taxable_income(income, BRACKETS_2025)
+    assert result.total_tax == math.floor(10_000 * 0.10)
+    assert result.max_rate == 0.10
 
 
 def test_income_spanning_two_brackets():
@@ -39,17 +39,17 @@ def test_income_spanning_two_brackets():
     # 10% on first $23,850 = $2,385
     # 12% on next $26,150 ($50,000 - $23,850) = $3,138
     expected_tax = math.floor(23_850 * 0.10) + math.floor(26_150 * 0.12)
-    tax, max_rate, _ = calculate_taxable_income(income, BRACKETS_2025)
-    assert tax == expected_tax, f"Expected {expected_tax}, got {tax}"
-    assert max_rate == 0.12
+    result = calculate_taxable_income(income, BRACKETS_2025)
+    assert result.total_tax == expected_tax, f"Expected {expected_tax}, got {result.total_tax}"
+    assert result.max_rate == 0.12
 
 
 def test_income_at_bracket_boundary():
     """Income exactly at a bracket boundary should not spill into the next bracket."""
     income = 23_850  # top of 10% bracket
-    tax, max_rate, _ = calculate_taxable_income(income, BRACKETS_2025)
-    assert tax == math.floor(23_850 * 0.10)
-    assert max_rate == 0.10
+    result = calculate_taxable_income(income, BRACKETS_2025)
+    assert result.total_tax == math.floor(23_850 * 0.10)
+    assert result.max_rate == 0.10
 
 
 def test_income_spanning_all_brackets():
@@ -64,23 +64,23 @@ def test_income_spanning_all_brackets():
         + math.floor((751_600 - 501_050) * 0.35)     # 35% bracket
         + math.floor((800_000 - 751_600) * 0.37)     # 37% bracket
     )
-    tax, max_rate, _ = calculate_taxable_income(income, BRACKETS_2025)
-    assert tax == expected_tax, f"Expected {expected_tax}, got {tax}"
-    assert max_rate == 0.37
+    result = calculate_taxable_income(income, BRACKETS_2025)
+    assert result.total_tax == expected_tax, f"Expected {expected_tax}, got {result.total_tax}"
+    assert result.max_rate == 0.37
 
 
 def test_zero_income():
     """Zero income should produce zero tax."""
-    tax, max_rate, upper_max = calculate_taxable_income(0, BRACKETS_2025)
-    assert tax == 0.0
+    result = calculate_taxable_income(0, BRACKETS_2025)
+    assert result.total_tax == 0.0
 
 
 def test_negative_income():
     """Negative income (net loss scenario) should produce zero tax."""
-    tax, max_rate, upper_max = calculate_taxable_income(-1000, BRACKETS_2025)
-    assert tax == 0.0
-    assert max_rate == 0.0
-    assert upper_max == 0.0
+    result = calculate_taxable_income(-1000, BRACKETS_2025)
+    assert result.total_tax == 0.0
+    assert result.max_rate == 0.0
+    assert result.upper_max == 0.0
 
 
 def test_no_double_taxation_of_lower_bracket_income():
@@ -90,13 +90,13 @@ def test_no_double_taxation_of_lower_bracket_income():
     not also at 12% (which would happen if brackets were overlapping from $0).
     """
     income = 50_000
-    tax, _, _ = calculate_taxable_income(income, BRACKETS_2025)
+    result = calculate_taxable_income(income, BRACKETS_2025)
     # If double-taxation occurred, the 12% bracket would add 12% on $23,850 extra
     double_tax_amount = math.floor(23_850 * 0.12)
     correct_tax = math.floor(23_850 * 0.10) + math.floor(26_150 * 0.12)
     # Tax must equal correct progressive amount, not the inflated double-taxed amount
-    assert tax == correct_tax
-    assert tax != correct_tax + double_tax_amount
+    assert result.total_tax == correct_tax
+    assert result.total_tax != correct_tax + double_tax_amount
 
 
 # ---------------------------------------------------------------------------

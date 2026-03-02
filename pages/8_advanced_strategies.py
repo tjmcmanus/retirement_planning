@@ -81,10 +81,13 @@ with adv_tax_planner_tab:
 
     if summarize_button:
         try:
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+            filing_status = config_mgr.get_filing_status()
             taxratedf = cast(pd.DataFrame, get_income_tax_brackets(year))
             cgdf      = cast(pd.DataFrame, get_cap_gains_brackets(year))
             irmaadf   = get_medicare_costs(year)
-            stddectdf = get_std_deduction(year)
+            stddectdf = get_std_deduction(year, filing_status)
             atmdf     = get_atm_costs(year)
         except Exception as e:
             st.error(f"Error loading tax data: {e}"); st.stop()
@@ -107,7 +110,8 @@ with adv_tax_planner_tab:
             irmaa_fees = 0
 
         try:
-            taxable_income, maxrate, uppermax = calculate_taxable_income(agi, taxratedf)
+            result = calculate_taxable_income(agi, taxratedf)
+            taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
         except Exception as e:
             st.error(f"Taxable income error: {e}"); st.stop()
 
@@ -140,7 +144,8 @@ with adv_tax_planner_tab:
         try:
             if conversions >= 0:
                 agi = calc_agi(deferred_dist + wages + cg_income_st + conversions, interest, stddectdf, calc_daf)
-                taxable_income, maxrate, uppermax = calculate_taxable_income(agi, taxratedf)
+                result = calculate_taxable_income(agi, taxratedf)
+                taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
         except Exception:
             pass
 
