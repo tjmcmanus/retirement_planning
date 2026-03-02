@@ -59,7 +59,7 @@ st.title("⚙️ Retirement Planning Configuration")
 st.markdown("Configure your personal information, financial assumptions, and planning parameters.")
 
 # Create tabs for different configuration sections
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "👤 Personal Info",
     "💰 Financial Assumptions",
     "🏥 Healthcare",
@@ -67,6 +67,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📈 Tax Strategy",
     "📊 Portfolio Data",
     "🏠 Real Estate",
+    "⚖️ Rebalancing",
     "🔧 Advanced"
 ])
 
@@ -1461,9 +1462,156 @@ with tab6:
             'purchase_price': [150.0, 1.0]
         })
         st.dataframe(sample_data, width='stretch')
+# Rebalancing Preferences Tab
+with tab8:
+    st.header("⚖️ Portfolio Rebalancing Preferences")
+    st.markdown("""
+    Configure your preferred ETFs and mutual funds for portfolio rebalancing recommendations.
+    These symbols will be suggested when the rebalancing algorithm identifies buy opportunities.
+    """)
+    
+    st.subheader("💵 Cash")
+    cash_symbol = st.text_input(
+        "Cash Symbol",
+        value=config_mgr.get("rebalancing_preferences", "cash_symbol", "MF:CASH"),
+        help="Symbol for cash/money market positions",
+        key="rebal_cash_symbol"
+    )
+    
+    st.markdown("---")
+    st.subheader("📊 Bonds")
+    st.markdown("**Traditional IRA** (Tax-deferred bond income)")
+    bonds_traditional = st.text_input(
+        "Bonds - Traditional IRA",
+        value=config_mgr.get("rebalancing_preferences", "bonds_traditional", "VBTLX (Vanguard Total Bond Market Admiral)"),
+        help="Mutual fund recommended for bonds in Traditional IRA",
+        key="rebal_bonds_trad"
+    )
+    
+    st.markdown("**Roth IRA** (Tax-free growth)")
+    bonds_roth = st.text_input(
+        "Bonds - Roth IRA",
+        value=config_mgr.get("rebalancing_preferences", "bonds_roth", "BND (Vanguard Total Bond Market ETF)"),
+        help="ETF recommended for bonds in Roth IRA",
+        key="rebal_bonds_roth"
+    )
+    
+    st.markdown("**Brokerage** (Taxable account)")
+    bonds_brokerage = st.text_input(
+        "Bonds - Brokerage",
+        value=config_mgr.get("rebalancing_preferences", "bonds_brokerage", "VGIT (Vanguard Intermediate-Term Treasury ETF)"),
+        help="ETF recommended for bonds in Brokerage (prefer Treasuries/munis for tax efficiency)",
+        key="rebal_bonds_brok"
+    )
+    
+    st.markdown("---")
+    st.subheader("📈 Stocks")
+    st.markdown("**Traditional IRA** (Tax-deferred growth)")
+    stocks_traditional = st.text_input(
+        "Stocks - Traditional IRA",
+        value=config_mgr.get("rebalancing_preferences", "stocks_traditional", "VFIAX (Vanguard 500 Index Admiral)"),
+        help="Mutual fund recommended for stocks in Traditional IRA",
+        key="rebal_stocks_trad"
+    )
+    
+    st.markdown("**Roth IRA** (Tax-free growth)")
+    stocks_roth = st.text_input(
+        "Stocks - Roth IRA",
+        value=config_mgr.get("rebalancing_preferences", "stocks_roth", "VTI (Vanguard Total Market ETF)"),
+        help="ETF recommended for stocks in Roth IRA",
+        key="rebal_stocks_roth"
+    )
+    
+    st.markdown("**Brokerage** (Taxable account)")
+    stocks_brokerage = st.text_input(
+        "Stocks - Brokerage",
+        value=config_mgr.get("rebalancing_preferences", "stocks_brokerage", "VTI (Vanguard Total Market ETF)"),
+        help="ETF recommended for stocks in Brokerage (for LTCG rates and tax-loss harvesting)",
+        key="rebal_stocks_brok"
+    )
+    
+    st.markdown("---")
+    
+    # Helper function to extract ticker symbol from input (handles "SYMBOL (Description)" format)
+    def extract_ticker(symbol_input: str | None) -> str:
+        """Extract ticker symbol from input like 'VTI (Vanguard Total Market ETF)'"""
+        if not symbol_input:
+            return ""
+        # If there's a parenthesis, take everything before it
+        if "(" in symbol_input:
+            return symbol_input.split("(")[0].strip()
+        return symbol_input.strip()
+    
+    # Validate and Save buttons side by side
+    rebal_col1, rebal_col2 = st.columns(2)
+    
+    with rebal_col1:
+        if st.button("🔍 Validate Tickers", use_container_width=True, key="validate_rebal_tickers"):
+            validation_results = []
+            symbols_to_validate = {
+                "Cash": extract_ticker(cash_symbol),
+                "Bonds - Traditional": extract_ticker(bonds_traditional),
+                "Bonds - Roth": extract_ticker(bonds_roth),
+                "Bonds - Brokerage": extract_ticker(bonds_brokerage),
+                "Stocks - Traditional": extract_ticker(stocks_traditional),
+                "Stocks - Roth": extract_ticker(stocks_roth),
+                "Stocks - Brokerage": extract_ticker(stocks_brokerage),
+            }
+            
+            all_valid = True
+            with st.spinner("Validating ticker symbols..."):
+                for label, ticker in symbols_to_validate.items():
+                    if not ticker or ticker.upper() == "MF:CASH":
+                        # Skip validation for cash and empty fields
+                        validation_results.append((label, ticker, True, "Cash symbol", ""))
+                        continue
+                    
+                    is_valid, name, sector, error_msg = validate_ticker_symbol(ticker)
+                    validation_results.append((label, ticker, is_valid, name, error_msg))
+                    if not is_valid:
+                        all_valid = False
+            
+            # Display results
+            if all_valid:
+                st.success("✅ All ticker symbols are valid!")
+                for label, ticker, is_valid, name, error_msg in validation_results:
+                    if ticker and ticker.upper() != "MF:CASH":
+                        st.markdown(f"  - **{label}**: `{ticker}` - {name} ✓")
+            else:
+                st.error("❌ Some ticker symbols are invalid:")
+                for label, ticker, is_valid, name, error_msg in validation_results:
+                    if not is_valid:
+                        st.markdown(f"  - **{label}**: `{ticker}` ❌ {error_msg}")
+                    elif ticker and ticker.upper() != "MF:CASH":
+                        st.markdown(f"  - **{label}**: `{ticker}` - {name} ✓")
+    
+    with rebal_col2:
+        if st.button("💾 Save Preferences", type="primary", use_container_width=True, key="save_rebal_prefs"):
+            config_mgr.set("rebalancing_preferences", "cash_symbol", cash_symbol)
+            config_mgr.set("rebalancing_preferences", "bonds_traditional", bonds_traditional)
+            config_mgr.set("rebalancing_preferences", "bonds_roth", bonds_roth)
+            config_mgr.set("rebalancing_preferences", "bonds_brokerage", bonds_brokerage)
+            config_mgr.set("rebalancing_preferences", "stocks_traditional", stocks_traditional)
+            config_mgr.set("rebalancing_preferences", "stocks_roth", stocks_roth)
+            config_mgr.set("rebalancing_preferences", "stocks_brokerage", stocks_brokerage)
+            
+            if config_mgr.save_config():
+                st.success("✅ Rebalancing preferences saved successfully!")
+                changes_made = True
+            else:
+                st.error("❌ Failed to save rebalancing preferences")
+    
+    st.info("""
+    💡 **Tips:**
+    - Use mutual funds (e.g., VBTLX, VFIAX) in Traditional IRAs for lower costs
+    - Use ETFs (e.g., VTI, BND) in Roth IRAs and Brokerage for flexibility
+    - For bonds in Brokerage, prefer Treasury ETFs (VGIT) or municipal bonds for tax efficiency
+    - Include the full name in parentheses for clarity (e.g., "VTI (Vanguard Total Market ETF)")
+    """)
+
 
 # Advanced Tab
-with tab8:
+with tab9:
     st.header("Advanced Settings")
     
     col1, col2 = st.columns(2)
