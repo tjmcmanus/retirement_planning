@@ -4,7 +4,8 @@ import yfinance as yf
 from datetime import datetime
 import logging
 import os
-from typing import Optional
+import threading as _threading
+from typing import Callable, Optional
 
 # Configure logging
 log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
@@ -425,3 +426,178 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     return pd.DataFrame(detailed_df), summary_df
 
 
+
+# ---------------------------------------------------------------------------
+# Net Worth disk-cache constants
+# ---------------------------------------------------------------------------
+# The cache file stores the last successfully built historical net worth
+# DataFrame as a Parquet file so the Dashboard can render instantly on startup
+# without waiting for live yfinance price fetches across 12 months of data.
+# The cache is keyed by num_months and has a 5-minute TTL that matches the
+# @st.cache_data(ttl=300) on get_networth_by_month().
+NETWORTH_CACHE_FILE = "networth_cache.parquet"
+NETWORTH_CACHE_TTL_SECONDS = 300  # 5 minutes
+
+# Canonical column list for the net worth history DataFrame.
+NETWORTH_COLUMNS = ["cash", "taxable", "tax_deferred", "tax_free", "total"]
+
+
+def save_networth_cache(networth_df: pd.DataFrame, num_months: int) -> None:
+    """Persist *networth_df* (the historical net worth DataFrame) to disk.
+
+    The Parquet file embeds the ``num_months`` key and a UTC timestamp so that
+    :func:`load_networth_cache` can validate freshness on the next startup.
+
+    Args:
+        networth_df:  DataFrame with DatetimeIndex and columns
+                      cash, taxable, tax_deferred, tax_free, total.
+        num_months:   Number of months of history stored (used as cache key).
+    """
+    try:
+        out = networth_df.copy().reset_index()  # move DatetimeIndex → 'date' column
+        out["_cache_num_months"] = int(num_months)
+        out["_cache_ts"] = datetime.utcnow().isoformat()
+        out.to_parquet(NETWORTH_CACHE_FILE, index=False)
+    except Exception as exc:
+        print(f"[networth cache] save failed: {exc}")
+
+
+def load_networth_cache(num_months: int) -> pd.DataFrame:
+    """Load the cached net worth history DataFrame from disk.
+
+    Returns the cached DataFrame (DatetimeIndex restored, ``_cache_*`` columns
+    stripped) when the cache exists, matches *num_months*, and is no older than
+    :data:`NETWORTH_CACHE_TTL_SECONDS`.
+
+    Returns an empty DataFrame (with the canonical :data:`NETWORTH_COLUMNS`
+    schema) when the cache is absent, stale, or belongs to a different period.
+
+    Args:
+        num_months:  Requested number of months of history.
+
+    Returns:
+        pd.DataFrame: Cached net worth history, or empty DataFrame.
+    """
+    try:
+        if not os.path.exists(NETWORTH_CACHE_FILE):
+            return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+        cached = pd.read_parquet(NETWORTH_CACHE_FILE)
+
+        # Validate num_months key
+        cached_nm = int(cached["_cache_num_months"].iloc[0]) if "_cache_num_months" in cached.columns else -1
+        if cached_nm != num_months:
+            return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+        # Validate TTL
+        cached_ts_str = cached["_cache_ts"].iloc[0] if "_cache_ts" in cached.columns else None
+        if cached_ts_str:
+            cached_ts = datetime.fromisoformat(str(cached_ts_str))
+            age_seconds = (datetime.utcnow() - cached_ts).total_seconds()
+            if age_seconds > NETWORTH_CACHE_TTL_SECONDS:
+                return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+        # Strip metadata columns and restore DatetimeIndex
+        data_cols = [c for c in cached.columns if not c.startswith("_cache_")]
+        result = pd.DataFrame(cached[data_cols])
+        if "date" in result.columns:
+            result["date"] = pd.to_datetime(result["date"])
+            result = result.set_index("date")
+            result.index.name = "date"
+        return result
+
+    except Exception as exc:
+        print(f"[networth cache] load failed: {exc}")
+        return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+
+def _rebuild_networth_and_cache(
+    num_months: int,
+    done_event: "_threading.Event",
+    build_fn: Callable[..., pd.DataFrame],
+) -> None:
+    """Background worker: call *build_fn* to rebuild net worth history, then persist to disk.
+
+    Designed to be run in a :class:`threading.Thread`.  Sets *done_event* when
+    finished (whether successful or not) so callers can detect completion.
+
+    Args:
+        num_months:   Number of months of history to build.
+        done_event:   :class:`threading.Event` to set on completion.
+        build_fn:     Callable that accepts ``num_months`` and returns the net
+                      worth DataFrame (i.e. ``build_historical_networth``).
+                      Passed as a parameter to avoid a circular import.
+    """
+    try:
+        nw_df: pd.DataFrame = build_fn(num_months=num_months)
+        if not nw_df.empty:
+            save_networth_cache(nw_df, num_months)
+    except Exception as exc:
+        print(f"[networth cache] background rebuild failed: {exc}")
+    finally:
+        done_event.set()
+
+
+def render_networth(
+    num_months: int,
+    done_event: "_threading.Event",
+    build_fn: Callable[..., pd.DataFrame],
+) -> pd.DataFrame:
+    """Return the best available net worth history DataFrame.
+
+    **Startup / fast-path behaviour**
+    On first call (or after the cache has expired) this function immediately
+    returns the last-known-good data from the on-disk Parquet cache so the
+    Dashboard renders without delay.  Simultaneously it launches (or re-uses)
+    a background thread that calls *build_fn* with live yfinance prices and
+    writes the result back to disk.
+
+    **Cache-hit behaviour**
+    When the cache is fresh (< :data:`NETWORTH_CACHE_TTL_SECONDS` old) and
+    matches *num_months*, the cached DataFrame is returned directly and *no*
+    background thread is started.
+
+    **Background rebuild**
+    The background thread sets *done_event* when it finishes.  Callers that
+    want to trigger a Streamlit rerun once live data is ready should check
+    ``done_event.is_set()`` and call ``st.rerun()`` accordingly.
+
+    Args:
+        num_months:   Number of months of history to fetch.
+        done_event:   A :class:`threading.Event` stored in ``st.session_state``
+                      so it survives Streamlit reruns.
+        build_fn:     Callable that accepts ``num_months`` and returns the net
+                      worth DataFrame (i.e. ``build_historical_networth``).
+
+    Returns:
+        pd.DataFrame: Net worth history (may be from cache or live build).
+    """
+    cached = load_networth_cache(num_months)
+
+    if not cached.empty:
+        # Cache is fresh — kick off a background refresh only if the previous
+        # rebuild has already finished (event is set) so we don't pile up threads.
+        if done_event.is_set():
+            done_event.clear()
+            _t = _threading.Thread(
+                target=_rebuild_networth_and_cache,
+                args=(num_months, done_event, build_fn),
+                daemon=True,
+            )
+            _t.start()
+        return cached
+
+    # Cache is empty / stale — start background rebuild if not already running.
+    if not done_event.is_set():
+        # Thread already running — return empty frame; caller shows spinner
+        return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+    # Launch a fresh background rebuild
+    done_event.clear()
+    _t = _threading.Thread(
+        target=_rebuild_networth_and_cache,
+        args=(num_months, done_event, build_fn),
+        daemon=True,
+    )
+    _t.start()
+    return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))

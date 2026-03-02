@@ -188,17 +188,7 @@ def sidebar():
 
     with st.sidebar:
         # ------------------------------------------------------------------ #
-        # Header actions                                                       #
-        # ------------------------------------------------------------------ #
-        st.button("🔄 Refresh All Data", on_click=clear_all_cache, use_container_width=True)
-
-        st.markdown("---")
-        st.markdown("⚙️ **[Open Configuration Page](2_configuration)**")
-        st.caption("Edit personal info, healthcare, Social Security & tax strategy")
-        st.markdown("---")
-
-        # ------------------------------------------------------------------ #
-        # Retirement Dates (read-only, from config)                           #
+        # Retirement Dates (read-only, from config) - MOVED TO TOP           #
         # ------------------------------------------------------------------ #
         p1_label, p2_label = _get_retirement_date_display()
         lines_html = f"<div>{p1_label}</div>"
@@ -215,6 +205,28 @@ def sidebar():
             unsafe_allow_html=True,
         )
 
-        st.caption("Adjust strategy parameters in the **⚙️ Settings** tab.")
+        st.markdown("---")
+
+        # ------------------------------------------------------------------ #
+        # Quick Navigation Links                                               #
+        # ------------------------------------------------------------------ #
+        st.markdown("**📍 Navigate**")
+        st.page_link("pages/3_dashboard.py",           label="🏠 Dashboard",           use_container_width=True)
+        st.page_link("pages/4_portfolio.py",           label="📊 Portfolio",           use_container_width=True)
+        st.page_link("pages/5_strategy.py",            label="📋 Strategy",            use_container_width=True)
+        st.page_link("pages/6_monte_carlo.py",         label="🎲 Monte Carlo",         use_container_width=True)
+        st.page_link("pages/7_flow_of_funds.py",       label="💸 Flow of Funds",       use_container_width=True)
+        st.page_link("pages/8_advanced_strategies.py", label="🧠 Advanced Strategies", use_container_width=True)
+        st.page_link("pages/1_estate_planning.py",     label="🏛️ Estate Planning",     use_container_width=True)
+        st.page_link("pages/2_configuration.py",       label="⚙️ Configuration",       use_container_width=True)
+
+        st.markdown("---")
+
+        # ------------------------------------------------------------------ #
+        # Header actions                                                       #
+        # ------------------------------------------------------------------ #
+        st.button("🔄 Refresh All Data", on_click=clear_all_cache, use_container_width=True)
+
+        st.caption("Adjust strategy parameters in the **⚙️ Configuration** page.")
 
 # Made with Bob
