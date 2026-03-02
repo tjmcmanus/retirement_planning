@@ -424,10 +424,26 @@ with rebalance_tab:
     with _rb_col4:
         _rb_drift      = st.number_input("Drift Threshold %", min_value=1, max_value=20, value=5, step=1, key="rb_drift")
 
+    # Show current total and validation status
     _rb_total = _rb_cash_tgt + _rb_bonds_tgt + _rb_stocks_tgt
-    if _rb_total != 100:
-        st.error(f"⚠️ Target weights must sum to 100% — currently {_rb_total}%.")
+    _rb_is_valid = _rb_total == 100
+    
+    # Display total with color coding
+    if _rb_is_valid:
+        st.success(f"✅ Target allocation totals: **{_rb_total}%** (Ready to calculate)")
     else:
+        st.warning(f"⚠️ Target allocation totals: **{_rb_total}%** (Must equal 100% to calculate rebalancing)")
+    
+    # Only show the calculate button when targets are valid
+    _rb_calculate = st.button(
+        "🔄 Calculate Rebalancing Plan",
+        disabled=not _rb_is_valid,
+        type="primary" if _rb_is_valid else "secondary",
+        use_container_width=True,
+        key="rb_calculate_btn"
+    )
+    
+    if _rb_calculate and _rb_is_valid:
         st.markdown("---")
         try:
             with st.spinner("Computing rebalancing plan…"):

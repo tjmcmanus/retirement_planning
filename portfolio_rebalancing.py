@@ -439,15 +439,19 @@ def _sell_ta_action(
 
 def _actions_tax_advantaged_sell(
     over_weight: list[AssetClassSummary],
+    under_weight: list[AssetClassSummary],
     holdings: list[HoldingDetail],
     start_priority: int,
-) -> tuple[list[RebalanceAction], int]:
+) -> tuple[list[RebalanceAction], int, list[AssetClassSummary], set[tuple[str, str]]]:
     """
     Step 7a — Sell / reallocate inside Traditional or Roth accounts.
 
     No tax event occurs inside tax-advantaged accounts, so these trades are
     always recommended first.  Holdings are sorted largest-first to minimise
     the number of individual sell orders.
+    
+    This function now generates PAIRED sell/buy actions within the same account
+    to ensure proceeds are immediately reinvested.
 
     Holdings are pre-grouped into a dict keyed by asset_class (single O(n)
     pass) before the outer loop, so the full holdings list is never re-scanned
@@ -458,14 +462,18 @@ def _actions_tax_advantaged_sell(
 
     Args:
         over_weight:     Asset classes whose current weight exceeds the target.
+        under_weight:    Asset classes whose current weight is below the target.
         holdings:        Full enriched holdings list.
         start_priority:  Priority counter to continue from.
 
     Returns:
-        (actions, next_priority)
+        (actions, next_priority, remaining_under_weight, used_holdings)
     """
     actions: list[RebalanceAction] = []
     priority = start_priority
+    
+    # Track which holdings were used in sell actions (account_name, symbol)
+    used_holdings: set[tuple[str, str]] = set()
 
     # Single O(n) pass: group Traditional/Roth holdings by asset_class,
     # sorted largest-first to minimise the number of sell orders.
@@ -478,17 +486,76 @@ def _actions_tax_advantaged_sell(
         for ac, hs in _ta.items()
     }
 
+    # Track how much each under-weight class still needs
+    uw_needs: dict[str, float] = {uw.asset_class: abs(uw.delta_value) for uw in under_weight}
+    
     for ow in over_weight:
         sell_needed = abs(ow.delta_value)
         for h in sorted_ta.get(ow.asset_class, []):
             if sell_needed <= 0:
                 break
             sell_amt = min(h.current_value, sell_needed)
+            
+            # Generate sell action and track this holding as used
             actions.append(_sell_ta_action(ow, h, sell_amt, priority))
-            sell_needed -= sell_amt
+            used_holdings.add((h.account_name, h.symbol))
             priority += 1
+            
+            # Try to pair with a buy action in the SAME account for under-weight assets
+            remaining_proceeds = sell_amt
+            for uw in under_weight:
+                if uw_needs.get(uw.asset_class, 0) <= 0:
+                    continue
+                if remaining_proceeds <= 0:
+                    break
+                    
+                # Only buy in the same account where we sold
+                buy_amt = min(remaining_proceeds, uw_needs[uw.asset_class])
+                
+                # Create a pseudo-holding for the buy action
+                buy_action = RebalanceAction(
+                    priority      = priority,
+                    action        = "Buy",
+                    asset_class   = uw.asset_class,
+                    symbol        = _suggest_symbol(uw.asset_class, h.account_type),
+                    account_name  = h.account_name,
+                    account_type  = h.account_type,
+                    amount        = buy_amt,
+                    rationale     = (
+                        f"{uw.asset_class} is under-weight by {abs(uw.drift_pct):.1f}% "
+                        f"(current {uw.current_pct:.1f}% vs target {uw.target_pct:.1f}%). "
+                        f"Use ${buy_amt:,.0f} from {ow.asset_class} sale proceeds in "
+                        f"{h.account_type} ({h.account_name}) to buy {uw.asset_class} — no tax event."
+                    ),
+                    tax_impact    = TAX_IMPACT_NONE_TA,
+                    location_note = _location_guidance(uw.asset_class, h.account_type),
+                )
+                actions.append(buy_action)
+                priority += 1
+                
+                uw_needs[uw.asset_class] -= buy_amt
+                remaining_proceeds -= buy_amt
+            
+            sell_needed -= sell_amt
 
-    return actions, priority
+    # Update under_weight list with remaining needs
+    # Only include needs > $100 to avoid tiny residual amounts from floating point arithmetic
+    MIN_REMAINING_NEED = 100.0
+    remaining_uw = [
+        AssetClassSummary(
+            asset_class=uw.asset_class,
+            current_value=uw.current_value,
+            current_pct=uw.current_pct,
+            target_pct=uw.target_pct,
+            drift_pct=uw.drift_pct,
+            is_drifted=uw.is_drifted,
+            delta_value=-uw_needs.get(uw.asset_class, 0),  # Negative because it's still needed
+        )
+        for uw in under_weight
+        if uw_needs.get(uw.asset_class, 0) > MIN_REMAINING_NEED
+    ]
+
+    return actions, priority, remaining_uw, used_holdings
 
 
 def _buy_rationale_tax_advantaged(
@@ -557,6 +624,7 @@ def _buy_ta_action(
 def _actions_tax_advantaged_buy(
     under_weight: list[AssetClassSummary],
     holdings: list[HoldingDetail],
+    used_holdings: set[tuple[str, str]],
     start_priority: int,
 ) -> tuple[list[RebalanceAction], int]:
     """
@@ -568,6 +636,8 @@ def _actions_tax_advantaged_buy(
     the sorted cash list is consumed in priority order across all under-weight
     classes so that the largest cash positions are never re-visited once
     exhausted.
+    
+    Skips cash holdings that were already sold in step 7a (paired sell/buy actions).
 
     Cash holdings are filtered (positive balances only) and sorted once before
     the outer loop (single O(n) pass + one sort), so the full holdings list is
@@ -582,6 +652,7 @@ def _actions_tax_advantaged_buy(
     Args:
         under_weight:    Asset classes whose current weight is below the target.
         holdings:        Full enriched holdings list.
+        used_holdings:   Set of (account_name, symbol) tuples that were already sold.
         start_priority:  Priority counter to continue from.
 
     Returns:
@@ -593,12 +664,14 @@ def _actions_tax_advantaged_buy(
     # Single O(n) pass: collect positive-balance Traditional/Roth cash holdings,
     # largest-first.  Zero/negative positions are excluded so the inner loop
     # never needs to guard against a non-positive available_cash.
+    # ALSO skip holdings that were already sold in step 7a.
     trad_roth_cash: list[HoldingDetail] = sorted(
         (
             h for h in holdings
             if h.asset_class == "Cash"
             and h.account_type in (TRADITIONAL, ROTH)
             and h.current_value > 0
+            and (h.account_name, h.symbol) not in used_holdings
         ),
         key=operator.attrgetter("current_value"),
         reverse=True,
@@ -690,15 +763,19 @@ def _brokerage_sell_action(
 
 def _actions_brokerage_rebalance(
     over_weight: list[AssetClassSummary],
+    under_weight: list[AssetClassSummary],
     holdings: list[HoldingDetail],
     start_priority: int,
-) -> tuple[list[RebalanceAction], int]:
+) -> tuple[list[RebalanceAction], int, list[AssetClassSummary]]:
     """
-    Step 7c — Sell over-weight positions in Brokerage.
+    Step 7c — Sell over-weight positions in Brokerage and pair with buy actions.
 
     Holdings are sorted by unrealized gain/loss (losses first) to surface
     tax-loss harvesting opportunities.  Each action is flagged with the
     appropriate tax impact string.
+    
+    This function now generates PAIRED sell/buy actions within Brokerage to ensure
+    proceeds are immediately reinvested.
 
     Brokerage holdings are pre-grouped into a defaultdict keyed by asset_class
     (each bucket sorted losses-first in-place) before the outer loop, so the
@@ -708,14 +785,15 @@ def _actions_brokerage_rebalance(
 
     Args:
         over_weight:     Asset classes whose current weight exceeds the target.
+        under_weight:    Asset classes whose current weight is below the target.
         holdings:        Full enriched holdings list.
         start_priority:  Priority counter to continue from.
 
     Returns:
-        (actions, next_priority)
+        (actions, next_priority, remaining_under_weight)
     """
     if not over_weight:
-        return [], start_priority
+        return [], start_priority, under_weight
 
     actions: list[RebalanceAction] = []
     priority = start_priority
@@ -731,17 +809,96 @@ def _actions_brokerage_rebalance(
     for hs in brokerage_holdings.values():
         hs.sort(key=operator.attrgetter("unrealized_gl"))
 
+    # Track how much each under-weight class still needs
+    uw_needs: dict[str, float] = {uw.asset_class: abs(uw.delta_value) for uw in under_weight}
+
     for ow in over_weight:
         sell_needed = abs(ow.delta_value)
         for h in brokerage_holdings.get(ow.asset_class, []):
             if sell_needed <= 0:
                 break
             sell_amt = min(h.current_value, sell_needed)
+            
+            # Generate sell action
             actions.append(sell_action(ow, h, sell_amt, priority))
-            sell_needed -= sell_amt
             priority += 1
+            
+            # Try to pair with a buy action in Brokerage for under-weight assets
+            remaining_proceeds = sell_amt
+            for uw in under_weight:
+                if uw_needs.get(uw.asset_class, 0) <= 0:
+                    continue
+                if remaining_proceeds <= 0:
+                    break
+                    
+                buy_amt = min(remaining_proceeds, uw_needs[uw.asset_class])
+                
+                # Create buy action in Brokerage
+                buy_action = RebalanceAction(
+                    priority      = priority,
+                    action        = "Buy (Brokerage)",
+                    asset_class   = uw.asset_class,
+                    symbol        = _suggest_symbol(uw.asset_class, BROKERAGE),
+                    account_name  = h.account_name,
+                    account_type  = BROKERAGE,
+                    amount        = buy_amt,
+                    rationale     = (
+                        f"{uw.asset_class} is under-weight by {abs(uw.drift_pct):.1f}% "
+                        f"(current {uw.current_pct:.1f}% vs target {uw.target_pct:.1f}%). "
+                        f"Use ${buy_amt:,.0f} from {ow.asset_class} sale proceeds in "
+                        f"Brokerage ({h.account_name}) to buy {uw.asset_class}."
+                    ),
+                    tax_impact    = "Taxable event on sale; new purchase establishes basis",
+                    location_note = _location_guidance(uw.asset_class, BROKERAGE),
+                )
+                actions.append(buy_action)
+                priority += 1
+                
+                uw_needs[uw.asset_class] -= buy_amt
+                remaining_proceeds -= buy_amt
+            
+            # If there are remaining proceeds (no under-weight assets to buy),
+            # add action to hold as cash in brokerage
+            if remaining_proceeds > 100:  # Only if significant amount remains
+                cash_action = RebalanceAction(
+                    priority      = priority,
+                    action        = "Hold as Cash (Brokerage)",
+                    asset_class   = "Cash",
+                    symbol        = CASH_SYMBOL,
+                    account_name  = h.account_name,
+                    account_type  = BROKERAGE,
+                    amount        = remaining_proceeds,
+                    rationale     = (
+                        f"Hold ${remaining_proceeds:,.0f} from {ow.asset_class} sale proceeds as cash in "
+                        f"Brokerage ({h.account_name}). All under-weight asset classes have been satisfied "
+                        f"in tax-advantaged accounts. This maintains the brokerage cash cushion."
+                    ),
+                    tax_impact    = "None (cash position)",
+                    location_note = _location_guidance("Cash", BROKERAGE),
+                )
+                actions.append(cash_action)
+                priority += 1
+            
+            sell_needed -= sell_amt
 
-    return actions, priority
+    # Update under_weight list with remaining needs
+    # Only include needs > $100 to avoid tiny residual amounts from floating point arithmetic
+    MIN_REMAINING_NEED = 100.0
+    remaining_uw = [
+        AssetClassSummary(
+            asset_class=uw.asset_class,
+            current_value=uw.current_value,
+            current_pct=uw.current_pct,
+            target_pct=uw.target_pct,
+            drift_pct=uw.drift_pct,
+            is_drifted=uw.is_drifted,
+            delta_value=-uw_needs.get(uw.asset_class, 0),  # Negative because it's still needed
+        )
+        for uw in under_weight
+        if uw_needs.get(uw.asset_class, 0) > MIN_REMAINING_NEED
+    ]
+
+    return actions, priority, remaining_uw
 
 
 def _actions_redirect_contributions(
@@ -755,6 +912,9 @@ def _actions_redirect_contributions(
       Bonds  → Traditional (ordinary income taxed on withdrawal anyway)
       Stocks → Roth (tax-free growth on highest-return assets)
       Cash   → Brokerage (liquidity cushion)
+    
+    Shows realistic annual contribution amounts (e.g., $7,000 for IRA, $23,000 for 401k)
+    rather than the full rebalancing need, which may take multiple years to achieve.
 
     Args:
         under_weight:    Asset classes whose current weight is below the target.
@@ -766,8 +926,41 @@ def _actions_redirect_contributions(
     actions: list[RebalanceAction] = []
     priority = start_priority
 
+    # Realistic annual contribution limits (2026)
+    ANNUAL_LIMITS = {
+        ROTH: 7000,          # Roth IRA limit
+        TRADITIONAL: 7000,   # Traditional IRA limit
+        BROKERAGE: float('inf'),  # No limit for taxable accounts
+    }
+
     for uw in under_weight:
         contrib_acct = _CONTRIBUTION_ACCOUNT.get(uw.asset_class, TRADITIONAL)
+        needed = abs(uw.delta_value)
+        annual_limit = ANNUAL_LIMITS.get(contrib_acct, 7000)
+        
+        # Show realistic annual contribution amount
+        realistic_amount = min(needed, annual_limit)
+        
+        # Calculate how many years it would take at this rate
+        years_needed = needed / realistic_amount if realistic_amount > 0 else 0
+        
+        rationale_parts = [
+            f"{uw.asset_class} is under-weight by {abs(uw.drift_pct):.1f}%. "
+        ]
+        
+        if needed <= annual_limit:
+            rationale_parts.append(
+                f"Direct new contributions, dividends, and RMDs toward {uw.asset_class} "
+                f"in your {contrib_acct} account until the target of {uw.target_pct:.1f}% is restored."
+            )
+        else:
+            rationale_parts.append(
+                f"Direct annual contributions of ~${realistic_amount:,.0f} toward {uw.asset_class} "
+                f"in your {contrib_acct} account. "
+                f"At this rate, it will take approximately {years_needed:.1f} years to reach "
+                f"the target of {uw.target_pct:.1f}%."
+            )
+        
         actions.append(RebalanceAction(
             priority     = priority,
             action       = "Redirect Contributions",
@@ -775,13 +968,8 @@ def _actions_redirect_contributions(
             symbol       = _suggest_symbol(uw.asset_class, contrib_acct),
             account_name = f"{contrib_acct} account (preferred)",
             account_type = contrib_acct,
-            amount       = abs(uw.delta_value),
-            rationale    = (
-                f"{uw.asset_class} is under-weight by {abs(uw.drift_pct):.1f}%. "
-                f"Direct new contributions, dividends, and RMDs toward {uw.asset_class} "
-                f"in your {contrib_acct} account "
-                f"until the target of {uw.target_pct:.1f}% is restored."
-            ),
+            amount       = realistic_amount,  # Show realistic annual amount
+            rationale    = "".join(rationale_parts),
             tax_impact    = "None (new money)",
             location_note = _location_guidance(uw.asset_class, contrib_acct),
         ))
@@ -954,19 +1142,28 @@ def compute_rebalance_plan(
     priority = 1
 
     # 7a. Rebalance inside tax-advantaged accounts first (no tax event)
-    new_actions, priority = _actions_tax_advantaged_sell(over_weight, holdings, priority)
+    # This now generates paired sell/buy actions and returns remaining under-weight needs
+    new_actions, priority, remaining_under_weight, used_ta_holdings = _actions_tax_advantaged_sell(
+        over_weight, under_weight, holdings, priority
+    )
     actions.extend(new_actions)
 
-    # 7b. Buy inside tax-advantaged accounts using available cash
-    new_actions, priority = _actions_tax_advantaged_buy(under_weight, holdings, priority)
+    # 7b. Buy inside tax-advantaged accounts using available cash (for remaining needs)
+    # Skip cash holdings that were already sold in step 7a
+    new_actions, priority = _actions_tax_advantaged_buy(
+        remaining_under_weight, holdings, used_ta_holdings, priority
+    )
     actions.extend(new_actions)
 
     # 7c. Tax-loss harvest / sell in Brokerage to fund remaining rebalancing
-    new_actions, priority = _actions_brokerage_rebalance(over_weight, holdings, priority)
+    # This now generates paired sell/buy actions and returns remaining under-weight needs
+    new_actions, priority, final_under_weight = _actions_brokerage_rebalance(
+        over_weight, remaining_under_weight, holdings, priority
+    )
     actions.extend(new_actions)
 
-    # 7d. Redirect contributions / dividends to under-weight classes
-    new_actions, priority = _actions_redirect_contributions(under_weight, priority)
+    # 7d. Redirect contributions / dividends to under-weight classes (for any remaining needs)
+    new_actions, priority = _actions_redirect_contributions(final_under_weight, priority)
     actions.extend(new_actions)
 
     # 7e. Brokerage cash cushion top-up
