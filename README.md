@@ -741,6 +741,28 @@ retirement_planning/
   - Decision framework
   - Best practices
   - Troubleshooting guide
+
+### Advanced Roth Strategies
+- **[`BACKDOOR_ROTH_STRATEGY.md`](BACKDOOR_ROTH_STRATEGY.md)** *(NEW)* - Backdoor Roth IRA strategy guide
+  - Complete backdoor Roth IRA implementation guide
+  - Income limits and eligibility
+  - Step-by-step process (contribution → conversion)
+  - Pro-rata rule explanation and solutions
+  - Tax reporting (Form 8606)
+  - Common mistakes and how to avoid them
+  - Integration with mega backdoor strategy
+  - Spousal backdoor Roth strategies
+- **[`MEGA_BACKDOOR_ROTH_STRATEGY.md`](MEGA_BACKDOOR_ROTH_STRATEGY.md)** *(NEW)* - Mega backdoor Roth strategy guide
+  - Contributing up to $46,000 additional to Roth annually
+  - Required 401(k) plan features
+  - After-tax contributions and conversions
+  - In-plan Roth conversion vs. in-service distribution
+  - Contribution limit calculations
+  - Timing strategies and tax optimization
+  - Real-world examples and case studies
+  - Comparison with regular backdoor Roth
+
+### Portfolio Management
 - **[`PORTFOLIO_REBALANCING_GUIDE.md`](PORTFOLIO_REBALANCING_GUIDE.md)** *(NEW)* - Portfolio rebalancing guide
   - Rebalancing concepts and the 5% drift rule
   - Asset classification (Cash / Bonds / Stocks)
