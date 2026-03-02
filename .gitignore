@@ -15,3 +15,9 @@ estate_planning_data.json
 
 # Runtime-generated timestamped backup files (only portfolio_data_truth.csv should be tracked)
 portfolio_data_truth_????????_??????.csv
+
+# Runtime-generated portfolio display cache (rebuilt automatically on startup)
+portfolio_display_cache.parquet
+
+# Runtime-generated net worth history cache (rebuilt automatically on startup)
+networth_cache.parquet

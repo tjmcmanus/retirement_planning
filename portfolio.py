@@ -6,8 +6,19 @@ import yfinance as yf
 import pandas as pd
 import streamlit as st
 import os
+import threading as _threading
 from datetime import datetime
 from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
+
+# ---------------------------------------------------------------------------
+# Portfolio disk-cache constants
+# ---------------------------------------------------------------------------
+# The cache file stores the last successfully built portfolio display DataFrame
+# as a Parquet file so the app can render instantly on startup without waiting
+# for live yfinance price fetches.  The cache is keyed by month/year so stale
+# data from a different period is never shown as current.
+PORTFOLIO_CACHE_FILE = "portfolio_display_cache.parquet"
+PORTFOLIO_CACHE_TTL_SECONDS = 300  # 5 minutes — matches @st.cache_data(ttl=300)
 
 def color_negative_positive(value):
     """
@@ -339,6 +350,176 @@ def get_portfolio_dividend_total():
     divy_total = portdf[['annual dividend amount']].sum()
     #print(divy_total)
     return  divy_total
+
+
+# ---------------------------------------------------------------------------
+# Disk-cache helpers
+# ---------------------------------------------------------------------------
+
+def save_portfolio_cache(portdf: pd.DataFrame, month: int, year: int) -> None:
+    """Persist *portdf* (the full display DataFrame including totals row) to disk.
+
+    The file is a Parquet document that also stores the month/year key and the
+    UTC timestamp of the save so that :func:`load_portfolio_cache` can validate
+    freshness on the next startup.
+
+    Args:
+        portdf:  The DataFrame returned by :func:`build_portfolio_display`.
+        month:   Portfolio month (1-12).
+        year:    Portfolio year (e.g. 2025).
+    """
+    try:
+        # Attach metadata as extra columns that survive the round-trip.
+        # We use a single-row metadata frame and concat so the main data is
+        # untouched; callers strip these columns on load.
+        meta = pd.DataFrame({
+            "_cache_month": [int(month)],
+            "_cache_year":  [int(year)],
+            "_cache_ts":    [datetime.utcnow().isoformat()],
+        })
+        # Pad meta to match portdf row count (fill with NaN) so concat works.
+        meta_padded = meta.reindex(portdf.index)
+        meta_padded.iloc[0] = meta.iloc[0]
+
+        out = portdf.copy()
+        out["_cache_month"] = meta_padded["_cache_month"]
+        out["_cache_year"]  = meta_padded["_cache_year"]
+        out["_cache_ts"]    = meta_padded["_cache_ts"]
+
+        out.to_parquet(PORTFOLIO_CACHE_FILE, index=False)
+    except Exception as exc:
+        # Cache write failures are non-fatal — the app continues without cache.
+        print(f"[portfolio cache] save failed: {exc}")
+
+
+def load_portfolio_cache(month: int, year: int) -> pd.DataFrame:
+    """Load the cached portfolio display DataFrame from disk.
+
+    Returns the cached DataFrame (without the internal ``_cache_*`` columns)
+    when the cache exists, matches the requested *month*/*year*, and is no
+    older than :data:`PORTFOLIO_CACHE_TTL_SECONDS`.
+
+    Returns an empty DataFrame (with the canonical :data:`PORTFOLIO_DISPLAY_COLUMNS`
+    schema) when the cache is absent, stale, or belongs to a different period.
+
+    Args:
+        month:  Requested portfolio month (1-12).
+        year:   Requested portfolio year (e.g. 2025).
+
+    Returns:
+        pd.DataFrame: Cached portfolio display data, or empty DataFrame.
+    """
+    try:
+        if not os.path.exists(PORTFOLIO_CACHE_FILE):
+            return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
+        cached = pd.read_parquet(PORTFOLIO_CACHE_FILE)
+
+        # Validate month/year key
+        cached_month = int(cached["_cache_month"].iloc[0]) if "_cache_month" in cached.columns else -1
+        cached_year  = int(cached["_cache_year"].iloc[0])  if "_cache_year"  in cached.columns else -1
+        if cached_month != month or cached_year != year:
+            return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
+        # Validate TTL
+        cached_ts_str = cached["_cache_ts"].iloc[0] if "_cache_ts" in cached.columns else None
+        if cached_ts_str:
+            cached_ts = datetime.fromisoformat(str(cached_ts_str))
+            age_seconds = (datetime.utcnow() - cached_ts).total_seconds()
+            if age_seconds > PORTFOLIO_CACHE_TTL_SECONDS:
+                return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
+        # Strip internal metadata columns before returning
+        display_cols = [c for c in cached.columns if not c.startswith("_cache_")]
+        return pd.DataFrame(cached[display_cols]).reset_index(drop=True)
+
+    except Exception as exc:
+        print(f"[portfolio cache] load failed: {exc}")
+        return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
+
+def _rebuild_and_cache(month: int, year: int, done_event: "_threading.Event") -> None:
+    """Background worker: call :func:`build_portfolio_display`, then persist to disk.
+
+    Designed to be run in a :class:`threading.Thread`.  Sets *done_event* when
+    finished (whether successful or not) so callers can detect completion.
+
+    Args:
+        month:       Portfolio month (1-12).
+        year:        Portfolio year (e.g. 2025).
+        done_event:  :class:`threading.Event` to set on completion.
+    """
+    try:
+        portdf = build_portfolio_display(month=month, year=year)
+        if not portdf.empty:
+            save_portfolio_cache(portdf, month, year)
+    except Exception as exc:
+        print(f"[portfolio cache] background rebuild failed: {exc}")
+    finally:
+        done_event.set()
+
+
+def render_portfolio(month: int, year: int, done_event: "_threading.Event") -> pd.DataFrame:
+    """Return the best available portfolio display DataFrame for *month*/*year*.
+
+    **Startup / fast-path behaviour**
+    On first call (or after the cache has expired / been invalidated) this
+    function immediately returns the last-known-good data from the on-disk
+    Parquet cache so the UI renders without delay.  Simultaneously it launches
+    (or re-uses) a background thread that calls :func:`build_portfolio_display`
+    with live yfinance prices and writes the result back to disk.
+
+    **Cache-hit behaviour**
+    When the cache is fresh (< :data:`PORTFOLIO_CACHE_TTL_SECONDS` old) and
+    matches the requested period, the cached DataFrame is returned directly and
+    *no* background thread is started.
+
+    **Background rebuild**
+    The background thread sets *done_event* when it finishes.  Callers that
+    want to trigger a Streamlit rerun once live data is ready should check
+    ``done_event.is_set()`` and call ``st.rerun()`` accordingly.
+
+    Args:
+        month:       Portfolio month (1-12).
+        year:        Portfolio year (e.g. 2025).
+        done_event:  A :class:`threading.Event` stored in ``st.session_state``
+                     so it survives Streamlit reruns.  Pass the same object on
+                     every call within a session.
+
+    Returns:
+        pd.DataFrame: Portfolio display data (may be from cache or live build).
+    """
+    cached = load_portfolio_cache(month, year)
+
+    if not cached.empty:
+        # Cache is fresh — kick off a background refresh only if the event has
+        # already been set (meaning a previous rebuild finished) so we don't
+        # pile up threads on every rerun.
+        if done_event.is_set():
+            done_event.clear()
+            _t = _threading.Thread(
+                target=_rebuild_and_cache,
+                args=(month, year, done_event),
+                daemon=True,
+            )
+            _t.start()
+        return cached
+
+    # Cache is empty / stale / wrong period — start background rebuild if not
+    # already running (event not yet set means a thread is in flight).
+    if not done_event.is_set():
+        # Thread already running — return empty frame; caller shows spinner
+        return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
+    # Launch a fresh background rebuild
+    done_event.clear()
+    _t = _threading.Thread(
+        target=_rebuild_and_cache,
+        args=(month, year, done_event),
+        daemon=True,
+    )
+    _t.start()
+    return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
 def backup_file(current_file_name, backup_filename):   
     try:

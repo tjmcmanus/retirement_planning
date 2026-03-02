@@ -12,6 +12,7 @@ import shutil
 import zipfile
 import io
 from config import get_config_manager, reload_config
+from components.navbar import navbar
 from portfolio import build_portfolio_display
 from portfolio_data_entry import (
     validate_portfolio_dataframe,
@@ -27,6 +28,8 @@ from portfolio_data_entry import (
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
+
+navbar("⚙️ Settings")
 
 # Initialize configuration manager
 config_mgr = get_config_manager()
@@ -1432,7 +1435,7 @@ with tab6:
                 _do_save(valid_df_save)
     
     # Display sample data format
-    with st.expander("📋 View Sample Data Format"):
+    with st.expander("📋 View Sample Data Format", expanded=False):
         st.markdown("""
         **Required Columns:**
         - `month`: Month (1-12)
@@ -1649,10 +1652,22 @@ with tab8:
                     _zip_data = io.BytesIO(uploaded_file.read())
                     with zipfile.ZipFile(_zip_data, "r") as _zf:
                         _names = _zf.namelist()
+                        
+                        # Debug: Show what files are in the ZIP
+                        st.info(f"📦 Files found in ZIP: {', '.join(_names)}")
+                        
+                        # Normalize file names (strip paths, lowercase for comparison)
+                        # Handle both forward slashes (Mac/Linux) and backslashes (Windows)
+                        _name_map = {}
+                        for name in _names:
+                            # Get basename by splitting on both / and \
+                            basename = name.replace('\\', '/').split('/')[-1]
+                            _name_map[basename.lower()] = name
 
                         # Import retirement_config.json (strip leading comment lines)
-                        if "retirement_config.json" in _names:
-                            _raw = _zf.read("retirement_config.json").decode("utf-8")
+                        if "retirement_config.json" in _name_map:
+                            _actual_name = _name_map["retirement_config.json"]
+                            _raw = _zf.read(_actual_name).decode("utf-8")
                             # Strip any leading // comment lines before parsing JSON
                             _json_lines = [
                                 ln for ln in _raw.splitlines()
@@ -1667,15 +1682,17 @@ with tab8:
                             st.stop()
 
                         # Restore portfolio CSV
-                        if "portfolio_data_truth.csv" in _names:
-                            _csv_bytes = _zf.read("portfolio_data_truth.csv")
+                        if "portfolio_data_truth.csv" in _name_map:
+                            _actual_csv = _name_map["portfolio_data_truth.csv"]
+                            _csv_bytes = _zf.read(_actual_csv)
                             with open("portfolio_data_truth.csv", "wb") as _out:
                                 _out.write(_csv_bytes)
                             st.success("✅ portfolio_data_truth.csv restored.")
 
                         # Restore estate planning JSON
-                        if "estate_planning_data.json" in _names:
-                            _ep_bytes = _zf.read("estate_planning_data.json")
+                        if "estate_planning_data.json" in _name_map:
+                            _actual_ep = _name_map["estate_planning_data.json"]
+                            _ep_bytes = _zf.read(_actual_ep)
                             with open("estate_planning_data.json", "wb") as _out:
                                 _out.write(_ep_bytes)
                             st.success("✅ estate_planning_data.json restored.")
@@ -1708,7 +1725,7 @@ with tab8:
     
     # Display current configuration
     st.subheader("Current Configuration")
-    with st.expander("View Raw Configuration"):
+    with st.expander("View Raw Configuration", expanded=False):
         st.json(config_mgr.config)
     
     # Display metadata
@@ -1725,6 +1742,10 @@ with tab7:
     # Initialize session state for real estate
     if 'real_estate_list' not in st.session_state:
         st.session_state['real_estate_list'] = config_mgr.get("real_estate", "properties", [])
+    
+    # Initialize edit mode state
+    if 'real_estate_edit_mode' not in st.session_state:
+        st.session_state['real_estate_edit_mode'] = False
 
     re_df = pd.DataFrame(st.session_state['real_estate_list'])
     if re_df.empty:
@@ -1735,11 +1756,18 @@ with tab7:
         if _col not in re_df.columns:
             re_df[_col] = '' if _col != 'purchase_price' else 0.0
 
-    re_col1, re_col2, re_col3 = st.columns([2, 1, 1])
+    re_col1, re_col2, re_col3, re_col4 = st.columns([2, 1, 1, 1])
     with re_col1:
         st.markdown("**Your Properties:**")
     with re_col2:
-        if st.button("➕ Add Property", width='stretch', key="add_property_btn"):
+        # Toggle edit mode button
+        edit_label = "🔒 Lock" if st.session_state['real_estate_edit_mode'] else "✏️ Edit"
+        if st.button(edit_label, width='stretch', key="toggle_edit_btn"):
+            st.session_state['real_estate_edit_mode'] = not st.session_state['real_estate_edit_mode']
+            st.rerun()
+    with re_col3:
+        if st.button("➕ Add Property", width='stretch', key="add_property_btn",
+                     disabled=not st.session_state['real_estate_edit_mode']):
             new_prop = pd.DataFrame({
                 'property_name': ['New Property'],
                 'address': [''],
@@ -1748,8 +1776,9 @@ with tab7:
             re_df = pd.concat([re_df, new_prop], ignore_index=True)
             st.session_state['real_estate_list'] = re_df.to_dict('records')
             st.rerun()
-    with re_col3:
-        if st.button("💾 Save Properties", width='stretch', key="save_properties_btn"):
+    with re_col4:
+        if st.button("💾 Save Properties", width='stretch', key="save_properties_btn",
+                     disabled=not st.session_state['real_estate_edit_mode']):
             # Sync latest edits from editor into session state before validating
             _current_re = st.session_state.get('real_estate_list', [])
             _validation_errors = []
@@ -1793,20 +1822,32 @@ with tab7:
         ),
     }
 
-    edited_re_df = st.data_editor(
-        re_df,
-        column_config=re_column_config,
-        num_rows="dynamic",
-        width='stretch',
-        hide_index=True,
-        key="real_estate_editor"
-    )
+    # Show data editor or static dataframe based on edit mode
+    if st.session_state['real_estate_edit_mode']:
+        edited_re_df = st.data_editor(
+            re_df,
+            column_config=re_column_config,
+            num_rows="dynamic",
+            width='stretch',
+            hide_index=True,
+            key="real_estate_editor"
+        )
+    else:
+        # Display as read-only dataframe
+        edited_re_df = re_df.copy()
+        st.dataframe(
+            re_df,
+            column_config=re_column_config,
+            width='stretch',
+            hide_index=True,
+            use_container_width=True
+        )
 
     # Keep session state in sync with edits (supports row deletion via num_rows="dynamic")
     st.session_state['real_estate_list'] = edited_re_df.to_dict('records')
 
-    # Per-row delete buttons
-    if not edited_re_df.empty:
+    # Per-row delete buttons (only show in edit mode)
+    if not edited_re_df.empty and st.session_state['real_estate_edit_mode']:
         st.markdown("**Delete a property:**")
         _del_cols = st.columns(min(len(edited_re_df), 4))
         for _enum_idx, (_, _row) in enumerate(edited_re_df.iterrows()):

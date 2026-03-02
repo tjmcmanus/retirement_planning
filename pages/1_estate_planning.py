@@ -11,6 +11,7 @@ import json
 import os
 from datetime import datetime, date
 from config import get_config_manager
+from components.navbar import navbar
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 FEDERAL_ESTATE_TAX_THRESHOLD_NOTE = "$13M (2024, scheduled to drop ~$7M in 2026 per TCJA sunset)"
 
 st.set_page_config(page_title="Estate Planning", page_icon="⚖️", layout="wide")
+
+navbar("⚖️ Estate Planning")
 
 # ---------------------------------------------------------------------------
 # Configuration & persistence helpers
@@ -383,7 +386,7 @@ with tab_legal:
                 else:
                     st.markdown("⬜ Pending")
             if sub_steps:
-                with st.expander(f"📋 Steps to complete: {label}"):
+                with st.expander(f"📋 Steps to complete: {label}", expanded=False):
                     steps = item.setdefault("steps", {})
                     for i, step in enumerate(sub_steps):
                         step_key = f"step_{i}"
@@ -533,7 +536,7 @@ with tab_financial:
     for acct in all_accounts:
         safe_key = acct.replace(" ", "_").lower()
         acct_data = bene.setdefault(safe_key, {"primary": "", "contingent": "", "reviewed": False})
-        with st.expander(f"📋 {acct}"):
+        with st.expander(f"📋 {acct}", expanded=False):
             c1, c2, c3 = st.columns([2, 2, 1])
             with c1:
                 acct_data["primary"] = st.text_input(
@@ -639,7 +642,7 @@ with tab_personal:
             "lender_notified": False,
             "notes": "",
         })
-        with st.expander(f"🏠 {prop_name}"):
+        with st.expander(f"🏠 {prop_name}", expanded=False):
             c1, c2 = st.columns(2)
             with c1:
                 prop_data["deed_retitled"] = st.checkbox(
@@ -774,7 +777,7 @@ with tab_docs:
         cat_data = doc_locs.setdefault(category.replace(" ", "_").lower(), {})
         for item_key, label in items:
             item = cat_data.setdefault(item_key, {"location": "", "notes": "", "has_copy": False})
-            with st.expander(f"📄 {label}"):
+            with st.expander(f"📄 {label}", expanded=False):
                 col1, col2, col3 = st.columns([3, 3, 1])
                 with col1:
                     item["location"] = st.text_input(
@@ -826,7 +829,7 @@ with tab_schedule:
     annual = sched.setdefault("annual_reviews", [])
 
     # Add a new review entry
-    with st.expander("➕ Add Annual Review Entry"):
+    with st.expander("➕ Add Annual Review Entry", expanded=False):
         col_r1, col_r2, col_r3 = st.columns(3)
         with col_r1:
             new_review_year = st.number_input(

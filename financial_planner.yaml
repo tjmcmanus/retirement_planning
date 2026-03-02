@@ -44,7 +44,7 @@
       - State income tax with retirement-income exemptions (50 states + DC)
       - Donor Advised Fund (DAF) contribution optimisation (30% AGI limit)
       - Estate planning checklist and document tracker
-      - Retirement Readiness Indicator (RRI) composite score (0-100%)
+      - Financial Plan Readiness Indicator (RRI) composite score (0-100%)
       - Flow-of-funds Graphviz diagram
       - Historical net worth trend (12-month rolling)
       - Configuration page with persistent JSON storage
@@ -124,7 +124,7 @@
     description: >
       Primary overview tab showing net worth history, asset mix, tax efficiency
       score, account breakdown treemaps, portfolio performance vs benchmark,
-      and the Retirement Readiness Indicator (RRI).
+      and the Financial Plan Readiness Indicator (RRI).
     sections:
       net_worth_charts:
         histogram:
@@ -1568,7 +1568,7 @@
       - Tax harvesting module
       - Dynamic SSI calculator (replacing static lookup)
       - Estate planning page
-      - Retirement Readiness Indicator (RRI)
+      - Financial Plan Readiness Indicator (RRI)
       - Flow-of-funds Graphviz diagram
       - 8-tab configuration page
       - State tax with 50-state implementation
@@ -1643,7 +1643,7 @@
         - Portfolio rebalancing with drift detection
         - Tax-loss and tax-gain harvesting
         - Estate planning page with checklist and document tracker
-        - Retirement Readiness Indicator (RRI) composite score
+        - Financial Plan Readiness Indicator (RRI) composite score
         - Flow-of-funds Graphviz diagram
         - 8-tab configuration page
         - 50-state income tax implementation

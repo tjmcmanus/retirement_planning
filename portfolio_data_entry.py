@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import glob
+import threading as _threading
 
 # Configure logging
 log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
@@ -253,20 +254,76 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
                 if new_count > 0:
                     message_parts.append(f"added {new_count} new")
                 
-                return True, f"Successfully {' and '.join(message_parts)} entries in {PORTFOLIO_TRUTH_FILE}"
-                
+                msg = f"Successfully {' and '.join(message_parts)} entries in {PORTFOLIO_TRUTH_FILE}"
+                _trigger_portfolio_cache_rebuild(new_data)
+                return True, msg
+
             except FileNotFoundError:
                 # File doesn't exist, create new one
                 new_data.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
+                _trigger_portfolio_cache_rebuild(new_data)
                 return True, f"Created new {PORTFOLIO_TRUTH_FILE} with {len(new_data)} entries"
         else:
             # Overwrite mode
             new_data.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
+            _trigger_portfolio_cache_rebuild(new_data)
             return True, f"Overwrote {PORTFOLIO_TRUTH_FILE} with {len(new_data)} entries"
-            
+
     except Exception as e:
         logger.error(f"Error saving portfolio data: {e}")
         return False, f"Error saving data: {str(e)}"
+
+
+def _trigger_portfolio_cache_rebuild(saved_data: pd.DataFrame) -> None:
+    """Kick off a background thread to rebuild and persist the portfolio display cache.
+
+    Called immediately after a successful :func:`save_portfolio_data` so that
+    the next app load can serve the freshly-built portfolio from disk without
+    waiting for live yfinance calls.
+
+    The rebuild runs in a daemon thread so it never blocks the caller.  Any
+    errors are logged but not re-raised.
+
+    Args:
+        saved_data: The DataFrame that was just persisted to
+                    ``portfolio_data_truth.csv``.  Used to determine the
+                    month/year key for the cache entry.
+    """
+    try:
+        # Determine the month/year from the saved data (use the most recent entry)
+        month = int(saved_data["month"].iloc[-1])
+        year  = int(saved_data["year"].iloc[-1])
+
+        def _rebuild() -> None:
+            try:
+                # Import here to avoid circular imports at module load time
+                from portfolio import build_portfolio_display, save_portfolio_cache
+                portdf = build_portfolio_display(month=month, year=year)
+                if not portdf.empty:
+                    save_portfolio_cache(portdf, month, year)
+                    logger.info(
+                        f"[portfolio cache] rebuilt and saved for {month}/{year}"
+                    )
+            except Exception as exc:
+                logger.warning(f"[portfolio cache] background rebuild failed: {exc}")
+
+        _t = _threading.Thread(target=_rebuild, daemon=True)
+        _t.start()
+    except Exception as exc:
+        logger.warning(f"[portfolio cache] could not start rebuild thread: {exc}")
+
+    # Also invalidate the networth cache so the Dashboard picks up fresh data
+    # on the next load.  We delete the file rather than rebuilding here because
+    # the networth build requires build_historical_networth() which lives in
+    # planning_app.py (would be a circular import).  Deleting forces a fresh
+    # rebuild on the next app startup.
+    try:
+        from load_data import NETWORTH_CACHE_FILE
+        if os.path.exists(NETWORTH_CACHE_FILE):
+            os.remove(NETWORTH_CACHE_FILE)
+            logger.info("[networth cache] invalidated after portfolio data save")
+    except Exception as exc:
+        logger.warning(f"[networth cache] could not invalidate cache: {exc}")
 
 
 def create_empty_entry_template(month: Optional[int] = None, year: Optional[int] = None) -> pd.DataFrame:
