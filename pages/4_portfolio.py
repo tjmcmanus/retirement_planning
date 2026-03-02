@@ -65,7 +65,7 @@ from tax_harvesting import (
     _eff_port_year,
 ) = init_page("💼 Portfolio — Financial Planner", "💼")
 
-navbar("💼 Portfolio")
+navbar("Portfolio")
 
 st.header("💼 Portfolio")
 

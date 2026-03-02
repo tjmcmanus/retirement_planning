@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import cast
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from streamlit_extras.add_vertical_space import add_vertical_space
 
@@ -27,13 +28,293 @@ from components.shared import (
     render_balance_table,
     render_income_chart,
 )
-from load_data import get_networth_by_month
+from load_data import get_networth_by_month, get_portfolio_truth_by_month
 from strategy import build_accumulation_strategy_display, build_withdrawal_strategy_display
 
 _STAGE_COLUMN_HELP = (
     "The life stage determines which financial priorities and rules apply this year. "
     "Hover over the stage name in the legend below the table for a plain-English summary."
 )
+
+def render_accumulation_flow_diagram(portfolio: pd.DataFrame, annual_expenses: float) -> None:
+    """Render Sankey diagram showing income flowing into accounts during accumulation."""
+    # Calculate account balances by type
+    account_balances = {}
+    if not portfolio.empty:
+        for acct_type in ["Cash", "Brokerage", "Traditional", "Roth"]:
+            acct_data = portfolio[portfolio["account_type"] == acct_type]
+            if len(acct_data) > 0:
+                balance = (acct_data["qty"] * acct_data["purchase_price"]).sum()
+                account_balances[acct_type] = float(balance)
+            else:
+                account_balances[acct_type] = 0.0
+    
+    # Income allocation strategy (tax-efficient)
+    traditional_401k_contrib = 23_000  # Max 401(k) contribution
+    roth_direct_contrib = 7_000  # Direct Roth IRA contribution
+    roth_backdoor_contrib = 7_000  # Backdoor Roth contribution (from after-tax)
+    employer_match = 11_500  # 50% match on first 6%
+    brokerage_invest = 23_000  # After-tax investments
+    cash_savings = 10_000  # Emergency fund building
+    
+    # Sankey diagram nodes
+    sources = [
+        "Wages/Salary",
+        "Wages/Salary",
+        "After-Tax Income",
+        "After-Tax Income",
+        "After-Tax Income",
+        "Employer Match"
+    ]
+    
+    targets = [
+        "Traditional 401(k)/IRA",
+        "Roth IRA/401(k)",
+        "Roth IRA/401(k)",
+        "Brokerage Account",
+        "Cash/Savings",
+        "Traditional 401(k)"
+    ]
+    
+    values = [
+        traditional_401k_contrib,
+        roth_direct_contrib,
+        roth_backdoor_contrib,
+        brokerage_invest,
+        cash_savings,
+        employer_match
+    ]
+    
+    # Create color mapping
+    source_colors = {
+        "Wages/Salary": "rgba(31, 119, 180, 0.8)",
+        "After-Tax Income": "rgba(44, 160, 44, 0.8)",
+        "Employer Match": "rgba(255, 127, 14, 0.8)"
+    }
+    
+    target_colors = {
+        "Traditional 401(k)/IRA": "rgba(214, 39, 40, 0.6)",
+        "Roth IRA/401(k)": "rgba(148, 103, 189, 0.6)",
+        "Brokerage Account": "rgba(255, 187, 120, 0.6)",
+        "Cash/Savings": "rgba(152, 223, 138, 0.6)",
+        "Traditional 401(k)": "rgba(214, 39, 40, 0.6)"
+    }
+    
+    # Build node list
+    all_nodes = list(dict.fromkeys(sources + targets))
+    node_colors = []
+    for node in all_nodes:
+        if node in source_colors:
+            node_colors.append(source_colors[node])
+        else:
+            node_colors.append(target_colors[node])
+    
+    # Map sources and targets to indices
+    source_indices = [all_nodes.index(s) for s in sources]
+    target_indices = [all_nodes.index(t) for t in targets]
+    
+    # Create link colors that match the source nodes (with transparency)
+    link_colors = []
+    for src in sources:
+        if src in source_colors:
+            color = source_colors[src].replace("0.8)", "0.3)")
+            link_colors.append(color)
+        else:
+            link_colors.append("rgba(200, 200, 200, 0.3)")
+    
+    # Create Sankey diagram
+    fig_accum = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=20,
+            thickness=25,
+            line=dict(color="black", width=1),
+            label=all_nodes,
+            color=node_colors,
+            hovertemplate='%{label}<br>Total: $%{value:,.0f}<extra></extra>'
+        ),
+        link=dict(
+            source=source_indices,
+            target=target_indices,
+            value=values,
+            color=link_colors,
+            hovertemplate='%{source.label} → %{target.label}<br>Amount: $%{value:,.0f}<extra></extra>'
+        ),
+        textfont=dict(size=16, family="Arial Black, Arial, sans-serif", color="black")
+    )])
+    
+    fig_accum.update_layout(
+        title=dict(
+            text="💰 Money Flow: Income → Accounts",
+            font=dict(size=18, family="Arial, sans-serif", color="#333")
+        ),
+        font=dict(size=16, family="Arial, sans-serif", color="#000"),
+        height=450,
+        margin=dict(l=20, r=20, t=60, b=20)
+    )
+    
+    st.plotly_chart(fig_accum, use_container_width=True)
+
+def render_withdrawal_flow_diagram(portfolio: pd.DataFrame, annual_expenses: float) -> None:
+    """Render Sankey diagram showing accounts flowing to expenses during withdrawal."""
+    # Calculate account balances by type
+    account_balances = {}
+    if not portfolio.empty:
+        for acct_type in ["Cash", "Brokerage", "Traditional", "Roth"]:
+            acct_data = portfolio[portfolio["account_type"] == acct_type]
+            if len(acct_data) > 0:
+                balance = (acct_data["qty"] * acct_data["purchase_price"]).sum()
+                account_balances[acct_type] = float(balance)
+            else:
+                account_balances[acct_type] = 0.0
+    
+    # Estimate withdrawal flows based on account balances
+    annual_living = annual_expenses * 0.85  # 85% for living expenses
+    annual_healthcare = annual_expenses * 0.10  # 10% for healthcare
+    
+    # Withdrawal strategy (tax-efficient sequencing)
+    trad_to_expenses = min(account_balances.get("Traditional", 0) * 0.04, annual_living * 0.4)
+    brok_to_expenses = min(account_balances.get("Brokerage", 0) * 0.03, annual_living * 0.4)
+    cash_to_expenses = min(account_balances.get("Cash", 0) * 0.1, annual_living * 0.2)
+    
+    # Roth conversions (tax optimization)
+    trad_to_roth = min(account_balances.get("Traditional", 0) * 0.02, 50_000)
+    
+    # RMDs (after age 73)
+    trad_to_brokerage = min(account_balances.get("Traditional", 0) * 0.04, 30_000)
+    
+    # Roth withdrawals (tax-free)
+    roth_to_expenses = min(account_balances.get("Roth", 0) * 0.03, annual_living * 0.15)
+    
+    # Large purchases from Roth (tax-free)
+    roth_to_purchases = min(account_balances.get("Roth", 0) * 0.02, 20_000)
+    
+    # Charitable giving
+    brok_to_charity = min(account_balances.get("Brokerage", 0) * 0.01, 10_000)
+    
+    # Build Sankey data
+    sources_w = []
+    targets_w = []
+    values_w = []
+    
+    if trad_to_expenses > 1000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("Living Expenses")
+        values_w.append(trad_to_expenses)
+    
+    if brok_to_expenses > 1000:
+        sources_w.append("Brokerage Account")
+        targets_w.append("Living Expenses")
+        values_w.append(brok_to_expenses)
+    
+    if cash_to_expenses > 1000:
+        sources_w.append("Cash/Savings")
+        targets_w.append("Living Expenses")
+        values_w.append(cash_to_expenses)
+    
+    if trad_to_roth > 1000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("Roth Conversion")
+        values_w.append(trad_to_roth)
+    
+    if trad_to_brokerage > 1000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("RMD → Brokerage")
+        values_w.append(trad_to_brokerage)
+    
+    if roth_to_expenses > 1000:
+        sources_w.append("Roth IRA/401(k)")
+        targets_w.append("Living Expenses")
+        values_w.append(roth_to_expenses)
+    
+    if roth_to_purchases > 1000:
+        sources_w.append("Roth IRA/401(k)")
+        targets_w.append("Large Purchases")
+        values_w.append(roth_to_purchases)
+    
+    if brok_to_charity > 1000:
+        sources_w.append("Brokerage Account")
+        targets_w.append("Charitable Giving")
+        values_w.append(brok_to_charity)
+    
+    # Add healthcare if significant
+    if annual_healthcare > 5000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("Healthcare")
+        values_w.append(annual_healthcare)
+    
+    if sources_w:
+        # Create color mapping for withdrawal
+        source_colors_w = {
+            "Traditional IRA/401(k)": "rgba(214, 39, 40, 0.8)",
+            "Roth IRA/401(k)": "rgba(148, 103, 189, 0.8)",
+            "Brokerage Account": "rgba(255, 187, 120, 0.8)",
+            "Cash/Savings": "rgba(152, 223, 138, 0.8)"
+        }
+        
+        target_colors_w = {
+            "Living Expenses": "rgba(31, 119, 180, 0.6)",
+            "Healthcare": "rgba(255, 127, 14, 0.6)",
+            "Large Purchases": "rgba(44, 160, 44, 0.6)",
+            "Roth Conversion": "rgba(148, 103, 189, 0.6)",
+            "RMD → Brokerage": "rgba(255, 187, 120, 0.6)",
+            "Charitable Giving": "rgba(127, 127, 127, 0.6)"
+        }
+        
+        # Build node list
+        all_nodes_w = list(dict.fromkeys(sources_w + targets_w))
+        node_colors_w = []
+        for node in all_nodes_w:
+            if node in source_colors_w:
+                node_colors_w.append(source_colors_w[node])
+            else:
+                node_colors_w.append(target_colors_w[node])
+        
+        # Map to indices
+        source_indices_w = [all_nodes_w.index(s) for s in sources_w]
+        target_indices_w = [all_nodes_w.index(t) for t in targets_w]
+        
+        # Create link colors that match the source nodes (with transparency)
+        link_colors_w = []
+        for src in sources_w:
+            if src in source_colors_w:
+                color = source_colors_w[src].replace("0.8)", "0.3)")
+                link_colors_w.append(color)
+            else:
+                link_colors_w.append("rgba(200, 200, 200, 0.3)")
+        
+        # Create Sankey diagram
+        fig_withdraw = go.Figure(data=[go.Sankey(
+            node=dict(
+                pad=20,
+                thickness=25,
+                line=dict(color="black", width=1),
+                label=all_nodes_w,
+                color=node_colors_w,
+                hovertemplate='%{label}<br>Total: $%{value:,.0f}<extra></extra>'
+            ),
+            link=dict(
+                source=source_indices_w,
+                target=target_indices_w,
+                value=values_w,
+                color=link_colors_w,
+                hovertemplate='%{source.label} → %{target.label}<br>Amount: $%{value:,.0f}<extra></extra>'
+            ),
+            textfont=dict(size=16, family="Arial Black, Arial, sans-serif", color="black")
+        )])
+        
+        fig_withdraw.update_layout(
+            title=dict(
+                text="💸 Money Flow: Accounts → Expenses & Conversions",
+                font=dict(size=18, family="Arial, sans-serif", color="#333")
+            ),
+            font=dict(size=16, family="Arial, sans-serif", color="#000"),
+            height=450,
+            margin=dict(l=20, r=20, t=60, b=20)
+        )
+        
+        st.plotly_chart(fig_withdraw, use_container_width=True)
+    else:
+        st.info("💡 No significant withdrawal flows to display. Add portfolio data to see withdrawal strategy.")
 
 # ---------------------------------------------------------------------------
 # Page setup
@@ -49,7 +330,7 @@ _STAGE_COLUMN_HELP = (
     _eff_port_year,
 ) = init_page("📈 Strategy — Financial Planner", "📈")
 
-navbar("📈 Strategy")
+navbar("Strategy")
 
 st.header("📈 Strategy")
 st.markdown("Plan and review your accumulation and withdrawal strategy across all life stages.")
@@ -114,6 +395,13 @@ if phase == "📈 Accumulation (Pre-Retirement)":
 
         with strategy_sub_tab:
             st.subheader("Annual Accumulation Plan")
+            
+            # Add accumulation flow visualization
+            portfolio = get_portfolio_truth_by_month(curr_month, curr_year)
+            render_accumulation_flow_diagram(cast(pd.DataFrame, portfolio), accum_annual_expenses)
+            st.markdown("---")
+            
+            # Then show the dataframe
             display_df_a = accum_strategy_df.copy()
             display_cols_a = [
                 'Year', 'Age', 'Stage',
@@ -226,6 +514,13 @@ else:
 
         with strategy_sub_tab:
             st.subheader("Year-by-Year Withdrawal Strategy")
+            
+            # Add withdrawal flow visualization
+            portfolio_w = get_portfolio_truth_by_month(curr_month, curr_year)
+            render_withdrawal_flow_diagram(cast(pd.DataFrame, portfolio_w), annual_expenses_s)
+            st.markdown("---")
+            
+            # Then show the dataframe
             display_df_w = strategy_df_w.copy()
 
             try:

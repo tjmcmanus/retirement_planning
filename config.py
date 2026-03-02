@@ -246,6 +246,18 @@ class ConfigManager:
             return age
         except ValueError:
             return 0
+    def get_filing_status(self) -> str:
+        """
+        Determine filing status based on personal information.
+        
+        Returns:
+            'married_filing_jointly' if person2_name is provided, 'single' otherwise
+        """
+        person2_name = self.get("personal_info", "person2_name", "")
+        if person2_name and person2_name.strip():
+            return "married_filing_jointly"
+        return "single"
+    
     
     def get_person_age(self, person_num: int, as_of_date: Optional[datetime] = None) -> int:
         """

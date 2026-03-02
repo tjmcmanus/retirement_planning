@@ -48,7 +48,7 @@ from monte_carlo import (
     _eff_port_year,
 ) = init_page("🎲 Monte Carlo — Financial Planner", "🎲")
 
-navbar("🎲 Monte Carlo")
+navbar("Monte Carlo")
 
 st.header("🎲 Monte Carlo Simulation")
 st.markdown(

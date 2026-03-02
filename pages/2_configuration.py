@@ -29,7 +29,7 @@ from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedul
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
 
-navbar("⚙️ Settings")
+navbar("Settings")
 
 # Initialize configuration manager
 config_mgr = get_config_manager()

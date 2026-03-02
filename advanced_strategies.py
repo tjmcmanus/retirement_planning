@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from load_data import get_income_tax_brackets, get_cap_gains_brackets, get_std_deduction
+from load_data import get_income_tax_brackets, get_cap_gains_brackets, get_std_deduction, get_ira_limits
 from calculations import calculate_taxable_income, getUpperIncomeRate, get_std_deduction_by_year
 
 # ---------------------------------------------------------------------------
@@ -600,8 +600,31 @@ def calculate_backdoor_roth(
     Returns:
         BackdoorRothResult with eligibility, tax impact, and steps
     """
-    catch_up = IRA_CATCH_UP_CONTRIBUTION if age >= 50 else 0
-    annual_limit = IRA_CONTRIBUTION_LIMIT_BASE + catch_up
+    # Get IRA limits from lookup table
+    try:
+        limits_df = get_ira_limits(year)
+        if limits_df.empty:
+            # Fallback to constants if year not found
+            logger.warning(f"IRA limits not found for year {year}, using default constants")
+            ira_base = IRA_CONTRIBUTION_LIMIT_BASE
+            ira_catchup = IRA_CATCH_UP_CONTRIBUTION
+            roth_phase_out_start = 236_000 if filing_status == "married_filing_jointly" else 150_000
+        else:
+            ira_base = int(limits_df.iloc[0]['ira_contribution_base'])
+            ira_catchup = int(limits_df.iloc[0]['ira_catchup_50plus'])
+            if filing_status == "married_filing_jointly":
+                roth_phase_out_start = int(limits_df.iloc[0]['roth_phaseout_start_mfj'])
+            else:
+                roth_phase_out_start = int(limits_df.iloc[0]['roth_phaseout_start_single'])
+    except Exception as e:
+        logger.error(f"Error loading IRA limits for year {year}: {e}")
+        # Fallback to constants
+        ira_base = IRA_CONTRIBUTION_LIMIT_BASE
+        ira_catchup = IRA_CATCH_UP_CONTRIBUTION
+        roth_phase_out_start = 236_000 if filing_status == "married_filing_jointly" else 150_000
+    
+    catch_up = ira_catchup if age >= 50 else 0
+    annual_limit = ira_base + catch_up
     contrib = min(
         contribution_amount if contribution_amount is not None else float(annual_limit),
         float(annual_limit),
@@ -617,10 +640,6 @@ def calculate_backdoor_roth(
     )
 
     # Check if direct Roth contribution is available (no backdoor needed)
-    if filing_status == "married_filing_jointly":
-        roth_phase_out_start = 236_000
-    else:
-        roth_phase_out_start = 150_000
 
     if magi <= roth_phase_out_start:
         result.eligible = False
@@ -728,9 +747,27 @@ def calculate_mega_backdoor_roth(
         )
         return result
 
+    # Get 401(k) limits from lookup table
+    try:
+        limits_df = get_ira_limits(year)
+        if limits_df.empty:
+            logger.warning(f"401(k) limits not found for year {year}, using default constants")
+            k401_total = K401_TOTAL_LIMIT
+            k401_catchup_50 = K401_CATCH_UP_50
+            k401_catchup_60_63 = K401_CATCH_UP_60_63
+        else:
+            k401_total = int(limits_df.iloc[0]['k401_total_limit'])
+            k401_catchup_50 = int(limits_df.iloc[0]['k401_catchup_50'])
+            k401_catchup_60_63 = int(limits_df.iloc[0]['k401_catchup_60_63'])
+    except Exception as e:
+        logger.error(f"Error loading 401(k) limits for year {year}: {e}")
+        k401_total = K401_TOTAL_LIMIT
+        k401_catchup_50 = K401_CATCH_UP_50
+        k401_catchup_60_63 = K401_CATCH_UP_60_63
+    
     # Age-based catch-up: SECURE 2.0 special catch-up for ages 60-63
-    catch_up = K401_CATCH_UP_60_63 if 60 <= age <= 63 else (K401_CATCH_UP_50 if age >= 50 else 0)
-    total_limit = K401_TOTAL_LIMIT + catch_up
+    catch_up = k401_catchup_60_63 if 60 <= age <= 63 else (k401_catchup_50 if age >= 50 else 0)
+    total_limit = k401_total + catch_up
 
     after_tax_room = max(0.0, total_limit - employee_elective_deferral - employer_match)
     result.after_tax_contribution = after_tax_room

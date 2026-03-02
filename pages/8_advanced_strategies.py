@@ -22,9 +22,9 @@ from components.navbar import navbar
 from components.shared import auto_rerun_if_rebuilding, init_page
 from load_data import get_atm_costs, get_cap_gains_brackets, get_income_tax_brackets, get_medicare_costs, get_std_deduction
 
-(networth, _pdf, _pcr, _sl, curr_month, curr_year, _epm, _epy) = init_page("🎯 Advanced Strategies", "🎯")
-navbar("🎯 Advanced Strategies")
-st.header("🎯 Advanced Strategies")
+(networth, _pdf, _pcr, _sl, curr_month, curr_year, _epm, _epy) = init_page("🎯 Advanced Strategy Tools", "🎯")
+navbar("Advanced Strategy Tools")
+st.header("🎯 Advanced Strategy Tools")
 st.markdown("Multi-year tax planning, backdoor Roth, NUA, QCD, and 72(t) SEPP calculators.")
 st.markdown("---")
 
@@ -48,7 +48,7 @@ with adv_tax_planner_tab:
     except Exception:
         cash_value = trad_value = roth_value = taxable_value = 0.0
 
-    with st.expander("Create estimated taxes for next year", expanded=False):
+    with st.expander("Create estimated taxes for next year", expanded=True):
         c5, c6, c7, c8, c14 = st.columns(5)
         wages               = c5.number_input("Wages", key="tp_wages", on_change=_cs)
         deferred_dist       = c6.number_input("Trad IRA Distribution", key="tp_trad_dist", on_change=_cs)
@@ -68,9 +68,9 @@ with adv_tax_planner_tab:
 
         cd1, cd2, _c3, _c4, _c5 = st.columns(5)
         with cd1:
-            daf_contribution_type = st.selectbox("DAF Contribution Type", ["cash", "securities"],
+            daf_contribution_type = st.selectbox("DAF Contribution Type", ["securities", "cash"],
                 key="tp_daf_type", on_change=_cs,
-                help="Cash: 60% AGI limit. Securities: 30% AGI limit, avoids cap gains.")
+                help="Securities: 30% AGI limit, avoids cap gains. Cash: 60% AGI limit.")
         with cd2:
             st.info(f"ℹ️ **{'60%' if daf_contribution_type == 'cash' else '30%'}** of AGI limit.", icon=None)
 
@@ -120,7 +120,7 @@ with adv_tax_planner_tab:
             st.warning("Current tax rate exceeds target conversion rate")
 
         try:
-            atm_lower, atm_deduction = getlower_atm_amount_n_deduction(year, atmdf)
+            atm_lower, atm_deduction = getlower_atm_amount_n_deduction(None, atmdf)
             get_std_deduction_by_year(year)
             if uppermax >= (atm_lower + atm_deduction):
                 uppermax = atm_lower + atm_deduction
@@ -288,7 +288,7 @@ with adv_tax_tab:
 
     st.markdown("---")
     st.subheader("🏢 QBI Deduction Calculator (IRC §199A)")
-    with st.expander("Calculate your Qualified Business Income deduction", expanded=False):
+    with st.expander("Calculate your Qualified Business Income deduction", expanded=True):
         _qbi_c1, _qbi_c2 = st.columns(2)
         with _qbi_c1:
             _qbi_income = st.number_input("QBI Income ($)", min_value=0, value=100_000, step=5_000, key="qbi_income")
@@ -302,6 +302,10 @@ with adv_tax_tab:
             _qbi_r = calculate_qbi_deduction_full(qbi_income=float(_qbi_income), total_taxable_income=float(_qbi_total),
                                                    w2_wages=float(_qbi_w2), ubia_qualified_property=float(_qbi_ubia),
                                                    is_sstb=bool(_qbi_sstb), filing_status=_qbi_filing)
+            st.session_state["qbi_result"] = _qbi_r
+        
+        if "qbi_result" in st.session_state:
+            _qbi_r = st.session_state["qbi_result"]
             _qc1, _qc2, _qc3 = st.columns(3)
             _qc1.metric("QBI Deduction", f"${_qbi_r['deduction']:,.0f}")
             _qc2.metric("Base Deduction (20%)", f"${_qbi_r['base_deduction']:,.0f}")
@@ -312,60 +316,79 @@ with adv_tax_tab:
 # ── BACKDOOR & MEGA BACKDOOR ROTH ────────────────────────────────────────────
 with adv_backdoor_tab:
     st.subheader("🔄 Backdoor Roth IRA")
-    _bd_c1, _bd_c2, _bd_c3 = st.columns(3)
-    with _bd_c1:
-        _bd_year     = st.selectbox("Tax Year", list(range(curr_year, curr_year + 3)), key="bd_year")
-        _bd_age      = st.number_input("Your Age", min_value=18, max_value=80, value=45, key="bd_age")
-    with _bd_c2:
-        _bd_magi     = st.number_input("MAGI ($)", min_value=0, value=250_000, step=5_000, key="bd_magi")
-        _bd_trad_bal = st.number_input("Pre-Tax IRA Balance ($)", min_value=0, value=0, step=10_000, key="bd_trad_bal")
-    with _bd_c3:
-        _bd_basis    = st.number_input("After-Tax IRA Basis ($)", min_value=0, value=0, step=1_000, key="bd_basis")
-        _bd_filing   = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="bd_filing")
+    
+    with st.expander("Backdoor Roth IRA Calculator", expanded=True):
+        _bd_c1, _bd_c2, _bd_c3 = st.columns(3)
+        with _bd_c1:
+            _bd_year     = st.selectbox("Tax Year", list(range(curr_year, curr_year + 3)), key="bd_year")
+            _bd_age      = st.number_input("Your Age", min_value=18, max_value=80, value=45, key="bd_age")
+        with _bd_c2:
+            _bd_magi     = st.number_input("MAGI ($)", min_value=0, value=250_000, step=5_000, key="bd_magi")
+            _bd_trad_bal = st.number_input("Pre-Tax IRA Balance ($)", min_value=0, value=0, step=10_000, key="bd_trad_bal")
+        with _bd_c3:
+            _bd_basis    = st.number_input("After-Tax IRA Basis ($)", min_value=0, value=0, step=1_000, key="bd_basis")
+            _bd_filing   = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="bd_filing")
 
-    if st.button("Analyze Backdoor Roth", key="bd_run"):
-        _bd_r = calculate_backdoor_roth(year=int(_bd_year), age=int(_bd_age), magi=float(_bd_magi),
-                                        traditional_ira_balance=float(_bd_trad_bal),
-                                        after_tax_ira_basis=float(_bd_basis), filing_status=_bd_filing)
-        if not _bd_r.eligible and _bd_r.ineligible_reason:
-            st.info(_bd_r.ineligible_reason)
-        else:
-            _bc1, _bc2, _bc3 = st.columns(3)
-            _bc1.metric("Contribution Amount", f"${_bd_r.contribution_amount:,.0f}")
-            _bc2.metric("Pro-Rata Tax", f"${_bd_r.pro_rata_tax:,.0f}")
-            _bc3.metric("20-Year Net Benefit", f"${_bd_r.net_benefit:,.0f}")
-            for _w in (_bd_r.warnings or []):
-                st.warning(_w)
-            st.markdown("#### Step-by-Step Instructions")
-            for _step in _bd_r.steps:
-                st.markdown(f"- {_step}")
+        if st.button("Analyze Backdoor Roth", key="bd_run"):
+            _bd_r = calculate_backdoor_roth(year=int(_bd_year), age=int(_bd_age), magi=float(_bd_magi),
+                                            traditional_ira_balance=float(_bd_trad_bal),
+                                            after_tax_ira_basis=float(_bd_basis), filing_status=_bd_filing)
+            st.session_state["bd_result"] = _bd_r
+        
+        if "bd_result" in st.session_state:
+            _bd_r = st.session_state["bd_result"]
+            if not _bd_r.eligible and _bd_r.ineligible_reason:
+                st.info(_bd_r.ineligible_reason)
+            else:
+                _bc1, _bc2, _bc3 = st.columns(3)
+                _bc1.metric("Contribution Amount", f"${_bd_r.contribution_amount:,.0f}")
+                _bc2.metric("Pro-Rata Tax", f"${_bd_r.pro_rata_tax:,.0f}")
+                _bc3.metric("20-Year Net Benefit", f"${_bd_r.net_benefit:,.0f}")
+                for _w in (_bd_r.warnings or []):
+                    st.warning(_w)
+                st.markdown("#### Step-by-Step Instructions")
+                for _step in _bd_r.steps:
+                    st.markdown(f"- {_step}")
 
     st.markdown("---")
     st.subheader("📐 BETR — Break-Even Tax Rate Analysis")
-    _betr_c1, _betr_c2, _betr_c3 = st.columns(3)
-    with _betr_c1:
-        _betr_conv_amt  = st.number_input("Conversion Amount ($)", min_value=1_000, value=50_000, step=5_000, key="betr_conv_amt")
-        _betr_trad_bal  = st.number_input("Traditional IRA Balance ($)", min_value=1_000, value=500_000, step=10_000, key="betr_trad_bal")
-        _betr_basis     = st.number_input("Nontaxable Basis ($)", min_value=0, value=0, step=1_000, key="betr_basis")
-    with _betr_c2:
-        _betr_curr_rate  = st.slider("Current Marginal Rate (%)", 10, 37, 24, 1, format="%d%%", key="betr_curr_rate") / 100
-        _betr_fut_rate   = st.slider("Expected Future Rate (%)", 10, 37, 22, 1, format="%d%%", key="betr_future_rate") / 100
-        _betr_return     = st.slider("Expected Annual Return (%)", 2, 12, 7, 1, format="%d%%", key="betr_return") / 100
-    with _betr_c3:
-        _betr_years      = st.number_input("Years to Withdrawal", min_value=1, max_value=40, value=20, key="betr_years")
-        _betr_pay_source = st.radio("Pay Conversion Tax From", ["Taxable Account", "IRA Assets"], key="betr_pay_source")
-        _betr_taxable    = st.number_input("Taxable Account Balance ($)", min_value=0, value=200_000, step=10_000, key="betr_taxable_bal")
+    
+    with st.expander("BETR Calculator", expanded=True):
+        _betr_c1, _betr_c2, _betr_c3 = st.columns(3)
+        with _betr_c1:
+            _betr_conv_amt  = st.number_input("Conversion Amount ($)", min_value=1_000, value=50_000, step=5_000, key="betr_conv_amt")
+            _betr_trad_bal  = st.number_input("Traditional IRA Balance ($)", min_value=1_000, value=500_000, step=10_000, key="betr_trad_bal")
+            _betr_basis     = st.number_input("Nontaxable Basis ($)", min_value=0, value=0, step=1_000, key="betr_basis")
+        with _betr_c2:
+            _betr_curr_rate  = st.slider("Current Marginal Rate (%)", 10, 37, 24, 1, format="%d%%", key="betr_curr_rate") / 100
+            _betr_fut_rate   = st.slider("Expected Future Rate (%)", 10, 37, 22, 1, format="%d%%", key="betr_future_rate") / 100
+            _betr_return     = st.slider("Expected Annual Return (%)", 2, 12, 7, 1, format="%d%%", key="betr_return") / 100
+        with _betr_c3:
+            _betr_years      = st.number_input("Years to Withdrawal", min_value=1, max_value=40, value=20, key="betr_years")
+            _betr_pay_source = st.radio("Pay Conversion Tax From", ["Taxable Account", "IRA Assets"], key="betr_pay_source")
+            _betr_taxable    = st.number_input("Taxable Account Balance ($)", min_value=0, value=200_000, step=10_000, key="betr_taxable_bal")
 
-    if st.button("📐 Calculate BETR", key="betr_run", type="primary"):
-        try:
-            _betr_inputs = BETRInputs(
-                current_marginal_rate=float(_betr_curr_rate), expected_future_rate=float(_betr_fut_rate),
-                conversion_amount=float(_betr_conv_amt), traditional_ira_balance=float(_betr_trad_bal),
-                nontaxable_basis=float(_betr_basis), pay_from_taxable=(_betr_pay_source == "Taxable Account"),
-                taxable_account_balance=float(_betr_taxable), years_to_withdrawal=int(_betr_years),
-                annual_return=float(_betr_return),
-            )
-            _betr_r = calculate_betr(_betr_inputs)
+        if st.button("📐 Calculate BETR", key="betr_run", type="primary"):
+            try:
+                _betr_inputs = BETRInputs(
+                    current_marginal_rate=float(_betr_curr_rate), expected_future_rate=float(_betr_fut_rate),
+                    conversion_amount=float(_betr_conv_amt), traditional_ira_balance=float(_betr_trad_bal),
+                    nontaxable_basis=float(_betr_basis), pay_from_taxable=(_betr_pay_source == "Taxable Account"),
+                    taxable_account_balance=float(_betr_taxable), years_to_withdrawal=int(_betr_years),
+                    annual_return=float(_betr_return),
+                )
+                _betr_r = calculate_betr(_betr_inputs)
+                st.session_state["betr_result"] = _betr_r
+                st.session_state["betr_fut_rate"] = _betr_fut_rate
+                st.session_state["betr_years"] = _betr_years
+            except Exception as _betr_err:
+                st.error(f"BETR error: {_betr_err}")
+        
+        if "betr_result" in st.session_state:
+            _betr_r = st.session_state["betr_result"]
+            _betr_fut_rate = st.session_state.get("betr_fut_rate", 0.22)
+            _betr_years = st.session_state.get("betr_years", 20)
+            
             if _betr_r.conversion_recommended:
                 st.success(f"✅ **Conversion Recommended** — BETR ({_betr_r.betr:.1%}) > Future Rate ({_betr_fut_rate:.0%}).")
             else:
@@ -392,34 +415,40 @@ with adv_backdoor_tab:
             if _betr_r.analysis_notes:
                 for _note in _betr_r.analysis_notes:
                     st.caption(_note)
-        except Exception as _betr_err:
-            st.error(f"BETR error: {_betr_err}")
 
     st.markdown("---")
     st.subheader("🚀 Mega Backdoor Roth (401k After-Tax)")
-    _mbr_c1, _mbr_c2, _mbr_c3 = st.columns(3)
-    with _mbr_c1:
-        _mbr_year     = st.selectbox("Tax Year", list(range(curr_year, curr_year + 3)), key="mbr_year")
-        _mbr_age      = st.number_input("Your Age", min_value=18, max_value=80, value=45, key="mbr_age")
-        _mbr_income   = st.number_input("Annual Income ($)", min_value=0, value=200_000, step=10_000, key="mbr_income")
-    with _mbr_c2:
-        _mbr_employee = st.number_input("Employee 401(k) Contribution ($)", min_value=0, value=23_500, step=500, key="mbr_employee")
-        _mbr_employer = st.number_input("Employer Match ($)", min_value=0, value=5_000, step=500, key="mbr_employer")
-        _mbr_after_tax = st.number_input("After-Tax Contribution ($)", min_value=0, value=20_000, step=1_000, key="mbr_after_tax")
-    with _mbr_c3:
-        _mbr_plan_allows = st.checkbox("Plan allows after-tax contributions?", value=True, key="mbr_plan_allows")
-        _mbr_in_service  = st.checkbox("Plan allows in-service withdrawals?", value=True, key="mbr_in_service")
-        _mbr_filing      = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="mbr_filing")
+    
+    with st.expander("Mega Backdoor Roth Calculator", expanded=True):
+        _mbr_c1, _mbr_c2, _mbr_c3 = st.columns(3)
+        with _mbr_c1:
+            _mbr_year     = st.selectbox("Tax Year", list(range(curr_year, curr_year + 3)), key="mbr_year")
+            _mbr_age      = st.number_input("Your Age", min_value=18, max_value=80, value=45, key="mbr_age")
+            _mbr_income   = st.number_input("Annual Income ($)", min_value=0, value=200_000, step=10_000, key="mbr_income")
+        with _mbr_c2:
+            _mbr_employee = st.number_input("Employee 401(k) Contribution ($)", min_value=0, value=23_500, step=500, key="mbr_employee")
+            _mbr_employer = st.number_input("Employer Match ($)", min_value=0, value=5_000, step=500, key="mbr_employer")
+            _mbr_after_tax = st.number_input("After-Tax Contribution ($)", min_value=0, value=20_000, step=1_000, key="mbr_after_tax")
+        with _mbr_c3:
+            _mbr_plan_allows = st.checkbox("Plan allows after-tax contributions?", value=True, key="mbr_plan_allows")
+            _mbr_in_service  = st.checkbox("Plan allows in-service withdrawals?", value=True, key="mbr_in_service")
+            _mbr_filing      = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="mbr_filing")
 
-    if st.button("Analyze Mega Backdoor Roth", key="mbr_run"):
-        try:
-            _mbr_r = calculate_mega_backdoor_roth(
-                year=int(_mbr_year), age=int(_mbr_age),
-                employee_elective_deferral=float(_mbr_employee),
-                employer_match=float(_mbr_employer),
-                plan_allows_after_tax=bool(_mbr_plan_allows),
-                plan_allows_in_plan_conversion=bool(_mbr_in_service),
-            )
+        if st.button("Analyze Mega Backdoor Roth", key="mbr_run"):
+            try:
+                _mbr_r = calculate_mega_backdoor_roth(
+                    year=int(_mbr_year), age=int(_mbr_age),
+                    employee_elective_deferral=float(_mbr_employee),
+                    employer_match=float(_mbr_employer),
+                    plan_allows_after_tax=bool(_mbr_plan_allows),
+                    plan_allows_in_plan_conversion=bool(_mbr_in_service),
+                )
+                st.session_state["mbr_result"] = _mbr_r
+            except Exception as _mbr_err:
+                st.error(f"Mega Backdoor Roth error: {_mbr_err}")
+        
+        if "mbr_result" in st.session_state:
+            _mbr_r = st.session_state["mbr_result"]
             if not _mbr_r.eligible and _mbr_r.ineligible_reason:
                 st.info(_mbr_r.ineligible_reason)
             else:
@@ -431,43 +460,49 @@ with adv_backdoor_tab:
                 st.markdown("#### Step-by-Step Instructions")
                 for _step in _mbr_r.steps:
                     st.markdown(f"- {_step}")
-        except Exception as _mbr_err:
-            st.error(f"Mega Backdoor Roth error: {_mbr_err}")
 
 # ── NUA ANALYSIS ─────────────────────────────────────────────────────────────
 with adv_nua_tab:
     st.subheader("📈 Net Unrealized Appreciation (NUA) Analysis")
-    _nua_c1, _nua_c2, _nua_c3 = st.columns(3)
-    with _nua_c1:
-        _nua_cost_basis   = st.number_input("Cost Basis of Employer Stock ($)", min_value=0, value=50_000, step=5_000, key="nua_cost_basis")
-        _nua_current_val  = st.number_input("Current Market Value ($)", min_value=0, value=200_000, step=10_000, key="nua_current_val")
-        _nua_other_assets = st.number_input("Other 401(k) Assets ($)", min_value=0, value=300_000, step=10_000, key="nua_other_assets")
-    with _nua_c2:
-        _nua_age           = st.number_input("Your Age", min_value=55, max_value=80, value=62, key="nua_age")
-        _nua_ordinary_rate = st.slider("Ordinary Income Rate (%)", 10, 37, 24, 1, format="%d%%", key="nua_ordinary_rate") / 100
-        _nua_ltcg_rate     = st.slider("LTCG Rate (%)", 0, 20, 15, 1, format="%d%%", key="nua_ltcg_rate") / 100
-    with _nua_c3:
-        _nua_state_rate  = st.slider("State Tax Rate (%)", 0, 15, 5, 1, format="%d%%", key="nua_state_rate") / 100
-        _nua_years       = st.number_input("Years to Hold After Distribution", min_value=0, max_value=30, value=5, key="nua_years")
-        _nua_growth_rate = st.slider("Expected Annual Growth (%)", 0, 15, 7, 1, format="%d%%", key="nua_growth_rate") / 100
+    
+    with st.expander("NUA Calculator", expanded=True):
+        _nua_c1, _nua_c2, _nua_c3 = st.columns(3)
+        with _nua_c1:
+            _nua_cost_basis   = st.number_input("Cost Basis of Employer Stock ($)", min_value=0, value=50_000, step=5_000, key="nua_cost_basis")
+            _nua_current_val  = st.number_input("Current Market Value ($)", min_value=0, value=200_000, step=10_000, key="nua_current_val")
+            _nua_other_assets = st.number_input("Other 401(k) Assets ($)", min_value=0, value=300_000, step=10_000, key="nua_other_assets")
+        with _nua_c2:
+            _nua_age           = st.number_input("Your Age", min_value=55, max_value=80, value=62, key="nua_age")
+            _nua_ordinary_rate = st.slider("Ordinary Income Rate (%)", 10, 37, 24, 1, format="%d%%", key="nua_ordinary_rate") / 100
+            _nua_ltcg_rate     = st.slider("LTCG Rate (%)", 0, 20, 15, 1, format="%d%%", key="nua_ltcg_rate") / 100
+        with _nua_c3:
+            _nua_state_rate  = st.slider("State Tax Rate (%)", 0, 15, 5, 1, format="%d%%", key="nua_state_rate") / 100
+            _nua_years       = st.number_input("Years to Hold After Distribution", min_value=0, max_value=30, value=5, key="nua_years")
+            _nua_growth_rate = st.slider("Expected Annual Growth (%)", 0, 15, 7, 1, format="%d%%", key="nua_growth_rate") / 100
 
-    if st.button("Analyze NUA Strategy", key="nua_run"):
-        try:
-            # calculate_nua_analysis(ticker, shares, cost_basis_per_share, current_price_per_share,
-            #                        ordinary_income_tax_rate, ltcg_tax_rate, future_tax_rate, years_to_sale)
-            _nua_shares = float(_nua_current_val) / max(1.0, float(_nua_current_val) / max(1, int(_nua_current_val / 100)))
-            _nua_cost_per = float(_nua_cost_basis) / max(1.0, _nua_shares)
-            _nua_price_per = float(_nua_current_val) / max(1.0, _nua_shares)
-            _nua_r = calculate_nua_analysis(
-                ticker="EMPLOYER",
-                shares=_nua_shares,
-                cost_basis_per_share=_nua_cost_per,
-                current_price_per_share=_nua_price_per,
-                ordinary_income_tax_rate=float(_nua_ordinary_rate),
-                ltcg_tax_rate=float(_nua_ltcg_rate),
-                future_tax_rate=float(_nua_ordinary_rate),
-                years_to_sale=int(_nua_years),
-            )
+        if st.button("Analyze NUA Strategy", key="nua_run"):
+            try:
+                # calculate_nua_analysis(ticker, shares, cost_basis_per_share, current_price_per_share,
+                #                        ordinary_income_tax_rate, ltcg_tax_rate, future_tax_rate, years_to_sale)
+                _nua_shares = float(_nua_current_val) / max(1.0, float(_nua_current_val) / max(1, int(_nua_current_val / 100)))
+                _nua_cost_per = float(_nua_cost_basis) / max(1.0, _nua_shares)
+                _nua_price_per = float(_nua_current_val) / max(1.0, _nua_shares)
+                _nua_r = calculate_nua_analysis(
+                    ticker="EMPLOYER",
+                    shares=_nua_shares,
+                    cost_basis_per_share=_nua_cost_per,
+                    current_price_per_share=_nua_price_per,
+                    ordinary_income_tax_rate=float(_nua_ordinary_rate),
+                    ltcg_tax_rate=float(_nua_ltcg_rate),
+                    future_tax_rate=float(_nua_ordinary_rate),
+                    years_to_sale=int(_nua_years),
+                )
+                st.session_state["nua_result"] = _nua_r
+            except Exception as _nua_err:
+                st.error(f"NUA analysis error: {_nua_err}")
+        
+        if "nua_result" in st.session_state:
+            _nua_r = st.session_state["nua_result"]
             _na1, _na2, _na3 = st.columns(3)
             _na1.metric("NUA Amount", f"${_nua_r.nua_amount:,.0f}")
             _na2.metric("NUA Tax Savings", f"${_nua_r.tax_savings:,.0f}")
@@ -489,39 +524,45 @@ with adv_nua_tab:
                 st.markdown("#### Analysis Notes")
                 for _note in _nua_r.notes:
                     st.caption(_note)
-        except Exception as _nua_err:
-            st.error(f"NUA analysis error: {_nua_err}")
 
 # ── QCD OPTIMIZER ─────────────────────────────────────────────────────────────
 with adv_qcd_tab:
     st.subheader("🎁 Qualified Charitable Distribution (QCD) Optimizer")
     st.markdown("QCDs allow IRA owners age 70½+ to donate up to $105,000/year directly from an IRA, satisfying RMDs tax-free.")
-    _qcd_c1, _qcd_c2, _qcd_c3 = st.columns(3)
-    with _qcd_c1:
-        _qcd_age         = st.number_input("Your Age", min_value=70, max_value=100, value=73, key="qcd_age")
-        _qcd_ira_balance = st.number_input("IRA Balance ($)", min_value=0, value=500_000, step=10_000, key="qcd_ira_balance")
-        _qcd_rmd         = st.number_input("Annual RMD ($)", min_value=0, value=20_000, step=1_000, key="qcd_rmd")
-    with _qcd_c2:
-        _qcd_agi         = st.number_input("AGI Before QCD ($)", min_value=0, value=100_000, step=5_000, key="qcd_agi")
-        _qcd_charitable  = st.number_input("Annual Charitable Giving Goal ($)", min_value=0, value=10_000, step=1_000, key="qcd_charitable")
-        _qcd_filing      = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="qcd_filing")
-    with _qcd_c3:
-        _qcd_ordinary_rate = st.slider("Marginal Tax Rate (%)", 10, 37, 22, 1, format="%d%%", key="qcd_ordinary_rate") / 100
-        _qcd_state_rate    = st.slider("State Tax Rate (%)", 0, 15, 5, 1, format="%d%%", key="qcd_state_rate") / 100
-        _qcd_year          = st.selectbox("Tax Year", list(range(curr_year, curr_year + 3)), key="qcd_year")
+    
+    with st.expander("QCD Calculator", expanded=True):
+        _qcd_c1, _qcd_c2, _qcd_c3 = st.columns(3)
+        with _qcd_c1:
+            _qcd_age         = st.number_input("Your Age", min_value=70, max_value=100, value=73, key="qcd_age")
+            _qcd_ira_balance = st.number_input("IRA Balance ($)", min_value=0, value=500_000, step=10_000, key="qcd_ira_balance")
+            _qcd_rmd         = st.number_input("Annual RMD ($)", min_value=0, value=20_000, step=1_000, key="qcd_rmd")
+        with _qcd_c2:
+            _qcd_agi         = st.number_input("AGI Before QCD ($)", min_value=0, value=100_000, step=5_000, key="qcd_agi")
+            _qcd_charitable  = st.number_input("Annual Charitable Giving Goal ($)", min_value=0, value=10_000, step=1_000, key="qcd_charitable")
+            _qcd_filing      = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="qcd_filing")
+        with _qcd_c3:
+            _qcd_ordinary_rate = st.slider("Marginal Tax Rate (%)", 10, 37, 22, 1, format="%d%%", key="qcd_ordinary_rate") / 100
+            _qcd_state_rate    = st.slider("State Tax Rate (%)", 0, 15, 5, 1, format="%d%%", key="qcd_state_rate") / 100
+            _qcd_year          = st.selectbox("Tax Year", list(range(curr_year, curr_year + 3)), key="qcd_year")
 
-    if st.button("Optimize QCD Strategy", key="qcd_run"):
-        try:
-            # calculate_qcd_optimization(year, age, rmd_amount, ira_balance,
-            #   planned_charitable_giving, agi_before_rmd, marginal_tax_rate, filing_status, ...)
-            _qcd_r = calculate_qcd_optimization(
-                year=int(_qcd_year), age=int(_qcd_age),
-                rmd_amount=float(_qcd_rmd), ira_balance=float(_qcd_ira_balance),
-                planned_charitable_giving=float(_qcd_charitable),
-                agi_before_rmd=float(_qcd_agi),
-                marginal_tax_rate=float(_qcd_ordinary_rate),
-                filing_status=_qcd_filing,
-            )
+        if st.button("Optimize QCD Strategy", key="qcd_run"):
+            try:
+                # calculate_qcd_optimization(year, age, rmd_amount, ira_balance,
+                #   planned_charitable_giving, agi_before_rmd, marginal_tax_rate, filing_status, ...)
+                _qcd_r = calculate_qcd_optimization(
+                    year=int(_qcd_year), age=int(_qcd_age),
+                    rmd_amount=float(_qcd_rmd), ira_balance=float(_qcd_ira_balance),
+                    planned_charitable_giving=float(_qcd_charitable),
+                    agi_before_rmd=float(_qcd_agi),
+                    marginal_tax_rate=float(_qcd_ordinary_rate),
+                    filing_status=_qcd_filing,
+                )
+                st.session_state["qcd_result"] = _qcd_r
+            except Exception as _qcd_err:
+                st.error(f"QCD optimization error: {_qcd_err}")
+        
+        if "qcd_result" in st.session_state:
+            _qcd_r = st.session_state["qcd_result"]
             _qa1, _qa2, _qa3, _qa4 = st.columns(4)
             _qa1.metric("QCD Amount", f"${_qcd_r.qcd_amount:,.0f}")
             _qa2.metric("Tax Savings", f"${_qcd_r.tax_savings:,.0f}")
@@ -531,34 +572,40 @@ with adv_qcd_tab:
                 st.markdown("#### Analysis Notes")
                 for _note in _qcd_r.notes:
                     st.caption(_note)
-        except Exception as _qcd_err:
-            st.error(f"QCD optimization error: {_qcd_err}")
 
 # ── 72(t) SEPP CALCULATOR ─────────────────────────────────────────────────────
 with adv_sepp_tab:
     st.subheader("⏱️ 72(t) SEPP Calculator")
     st.markdown("Substantially Equal Periodic Payments allow penalty-free IRA withdrawals before age 59½.")
-    _sepp_c1, _sepp_c2, _sepp_c3 = st.columns(3)
-    with _sepp_c1:
-        _sepp_balance    = st.number_input("IRA Balance ($)", min_value=1_000, value=500_000, step=10_000, key="sepp_balance")
-        _sepp_age        = st.number_input("Current Age", min_value=18, max_value=58, value=50, key="sepp_age")
-        _sepp_life_exp   = st.number_input("Life Expectancy (years)", min_value=20, max_value=50, value=35, key="sepp_life_exp")
-    with _sepp_c2:
-        _sepp_rate       = st.slider("Interest Rate (%)", min_value=0.5, max_value=10.0, value=5.0, step=0.1, format="%.1f%%", key="sepp_rate") / 100
-        _sepp_method     = st.selectbox("SEPP Method", SEPP_METHODS, key="sepp_method")
-        _sepp_filing     = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="sepp_filing")
-    with _sepp_c3:
-        _sepp_ordinary_rate = st.slider("Marginal Tax Rate (%)", 10, 37, 22, 1, format="%d%%", key="sepp_ordinary_rate") / 100
-        _sepp_state_rate    = st.slider("State Tax Rate (%)", 0, 15, 5, 1, format="%d%%", key="sepp_state_rate") / 100
+    
+    with st.expander("SEPP Calculator", expanded=True):
+        _sepp_c1, _sepp_c2, _sepp_c3 = st.columns(3)
+        with _sepp_c1:
+            _sepp_balance    = st.number_input("IRA Balance ($)", min_value=1_000, value=500_000, step=10_000, key="sepp_balance")
+            _sepp_age        = st.number_input("Current Age", min_value=18, max_value=58, value=50, key="sepp_age")
+            _sepp_life_exp   = st.number_input("Life Expectancy (years)", min_value=20, max_value=50, value=35, key="sepp_life_exp")
+        with _sepp_c2:
+            _sepp_rate       = st.slider("Interest Rate (%)", min_value=0.5, max_value=10.0, value=5.0, step=0.1, format="%.1f%%", key="sepp_rate") / 100
+            _sepp_method     = st.selectbox("SEPP Method", SEPP_METHODS, key="sepp_method")
+            _sepp_filing     = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="sepp_filing")
+        with _sepp_c3:
+            _sepp_ordinary_rate = st.slider("Marginal Tax Rate (%)", 10, 37, 22, 1, format="%d%%", key="sepp_ordinary_rate") / 100
+            _sepp_state_rate    = st.slider("State Tax Rate (%)", 0, 15, 5, 1, format="%d%%", key="sepp_state_rate") / 100
 
-    if st.button("Calculate SEPP", key="sepp_run"):
-        try:
-            # calculate_sepp(account_balance, age, method, afr, marginal_tax_rate)
-            _sepp_r = calculate_sepp(
-                account_balance=float(_sepp_balance), age=int(_sepp_age),
-                method=_sepp_method, afr=float(_sepp_rate),
-                marginal_tax_rate=float(_sepp_ordinary_rate),
-            )
+        if st.button("Calculate SEPP", key="sepp_run"):
+            try:
+                # calculate_sepp(account_balance, age, method, afr, marginal_tax_rate)
+                _sepp_r = calculate_sepp(
+                    account_balance=float(_sepp_balance), age=int(_sepp_age),
+                    method=_sepp_method, afr=float(_sepp_rate),
+                    marginal_tax_rate=float(_sepp_ordinary_rate),
+                )
+                st.session_state["sepp_result"] = _sepp_r
+            except Exception as _sepp_err:
+                st.error(f"SEPP calculation error: {_sepp_err}")
+        
+        if "sepp_result" in st.session_state:
+            _sepp_r = st.session_state["sepp_result"]
             _sa1, _sa2, _sa3, _sa4 = st.columns(4)
             _sa1.metric("Annual SEPP Payment", f"${_sepp_r.annual_payment:,.0f}")
             _sa2.metric("Monthly Payment", f"${_sepp_r.monthly_payment:,.0f}")
@@ -571,8 +618,6 @@ with adv_sepp_tab:
                 st.markdown("#### Important Notes")
                 for _note in _sepp_r.notes:
                     st.caption(_note)
-        except Exception as _sepp_err:
-            st.error(f"SEPP calculation error: {_sepp_err}")
 
 # ── CAPITAL LOSS HARVESTING ───────────────────────────────────────────────────
 with adv_harvest_tab:
@@ -609,35 +654,44 @@ with adv_harvest_tab:
                 filing_status=_hlv_filing,
                 window=_hlv_window,
             )
-            _ha1, _ha2, _ha3 = st.columns(3)
-            _ha1.metric(f"Total Tax Savings ({_hlv_window}yr)", f"${_hlv_r.total_tax_savings:,.0f}")
-            _ha2.metric("Years Planned", str(len(_hlv_r.years)))
-            _ha3.metric("Positions with Losses", str(len(_hlv_positions)))
-
-            st.markdown("#### Year-by-Year Harvesting Plan")
-            st.dataframe(pd.DataFrame([{
-                "Year": yr,
-                "Losses Harvested": f"${_hlv_r.harvest_amounts.get(yr, 0):,.0f}",
-                "Tax Savings": f"${_hlv_r.tax_savings_by_year.get(yr, 0):,.0f}",
-                "Carryforward": f"${_hlv_r.carryforward_by_year.get(yr, 0):,.0f}",
-            } for yr in _hlv_r.years]), use_container_width=True, hide_index=True)
-
-            _hlv_fig = go.Figure()
-            _hlv_fig.add_bar(
-                x=_hlv_r.years,
-                y=[_hlv_r.tax_savings_by_year.get(yr, 0) for yr in _hlv_r.years],
-                name="Tax Savings", marker_color="rgb(0,204,150)",
-            )
-            _hlv_fig.update_layout(title="Annual Tax Savings from Loss Harvesting",
-                                   xaxis_title="Year", yaxis_title="Tax Savings ($)", yaxis_tickformat="$,.0f")
-            st.plotly_chart(_hlv_fig, use_container_width=True)
-
-            if _hlv_r.notes:
-                st.markdown("#### 📋 Notes")
-                for _note in _hlv_r.notes:
-                    st.caption(_note)
+            st.session_state["hlv_result"] = _hlv_r
+            st.session_state["hlv_positions"] = _hlv_positions
+            st.session_state["hlv_window"] = _hlv_window
         except Exception as _hlv_err:
             st.error(f"Loss harvesting error: {_hlv_err}")
+    
+    if "hlv_result" in st.session_state:
+        _hlv_r = st.session_state["hlv_result"]
+        _hlv_positions = st.session_state.get("hlv_positions", [])
+        _hlv_window = st.session_state.get("hlv_window", 5)
+        
+        _ha1, _ha2, _ha3 = st.columns(3)
+        _ha1.metric(f"Total Tax Savings ({_hlv_window}yr)", f"${_hlv_r.total_tax_savings:,.0f}")
+        _ha2.metric("Years Planned", str(len(_hlv_r.years)))
+        _ha3.metric("Positions with Losses", str(len(_hlv_positions)))
+
+        st.markdown("#### Year-by-Year Harvesting Plan")
+        st.dataframe(pd.DataFrame([{
+            "Year": yr,
+            "Losses Harvested": f"${_hlv_r.harvest_amounts.get(yr, 0):,.0f}",
+            "Tax Savings": f"${_hlv_r.tax_savings_by_year.get(yr, 0):,.0f}",
+            "Carryforward": f"${_hlv_r.carryforward_by_year.get(yr, 0):,.0f}",
+        } for yr in _hlv_r.years]), use_container_width=True, hide_index=True)
+
+        _hlv_fig = go.Figure()
+        _hlv_fig.add_bar(
+            x=_hlv_r.years,
+            y=[_hlv_r.tax_savings_by_year.get(yr, 0) for yr in _hlv_r.years],
+            name="Tax Savings", marker_color="rgb(0,204,150)",
+        )
+        _hlv_fig.update_layout(title="Annual Tax Savings from Loss Harvesting",
+                               xaxis_title="Year", yaxis_title="Tax Savings ($)", yaxis_tickformat="$,.0f")
+        st.plotly_chart(_hlv_fig, use_container_width=True)
+
+        if _hlv_r.notes:
+            st.markdown("#### 📋 Notes")
+            for _note in _hlv_r.notes:
+                st.caption(_note)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 auto_rerun_if_rebuilding()

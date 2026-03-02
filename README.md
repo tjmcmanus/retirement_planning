@@ -468,8 +468,7 @@ retirement_planning/
 │   └── sidebar.py                     # Sidebar configuration
 ├── pages/
 │   ├── configuration.py               # Configuration page
-│   ├── calculators.py                 # Additional calculator pages
-│   └── flow_of_funds.py               # Cash flow analysis
+│   └── calculators.py                 # Additional calculator pages
 ├── .streamlit/
 │   └── config.toml                    # Streamlit configuration
 ├── requirements.txt                   # Python dependencies
@@ -1169,13 +1168,24 @@ For issues or questions:
   - Legacy giving impact analysis
 
 #### 6. Portfolio Management Enhancements
-**Priority: Medium - Improve investment tracking**
+**Status: ✅ PARTIALLY IMPLEMENTED (February 2026)**
+
+**✅ Implemented:**
+- **Portfolio Rebalancing** - `portfolio_rebalancing.py`
+  - Automatic drift detection with configurable thresholds
+  - Tax-efficient rebalancing action plans
+  - Asset class classification (Cash/Bonds/Stocks)
+  - Account-location optimization recommendations
+  - Brokerage cash cushion management
+- **Tax Harvesting** - `tax_harvesting.py`
+  - Tax-loss harvesting opportunity identification
+  - Wash sale rule compliance checking
+  - Integration with rebalancing strategies
+
+**🔄 Still Pending:**
 - **Advanced Portfolio Features**
-  - Real-time portfolio editing (currently roadmap feature)
-  - Automatic rebalancing recommendations
-  - Dynamic tax-loss/gain harvesting with intelligent security selection
-  - Optimized security selection for withdrawals (which specific holdings to liquidate)
-  - Asset location optimization (tax-efficient placement)
+  - Real-time portfolio editing interface
+  - Dynamic security selection for withdrawals (which specific holdings to liquidate)
   - Factor-based portfolio analysis
 - **Performance Analytics**
   - Time-weighted vs. money-weighted returns
@@ -1199,8 +1209,7 @@ For issues or questions:
   - Real-time data refresh controls
   - Mobile-responsive design
 - **Advanced Charts**
-  - Waterfall charts for cash flow analysis
-  - Sankey diagrams for money flow visualization
+  - Waterfall charts for detailed cash flow analysis
   - 3D surface plots for multi-variable optimization
   - Animated timeline visualizations
 - **Report Generation**

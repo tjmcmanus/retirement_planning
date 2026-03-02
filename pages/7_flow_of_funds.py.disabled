@@ -1,0 +1,511 @@
+"""
+pages/7_flow_of_funds.py
+========================
+💸 Flow of Funds — Visualize money movement during Accumulation and Withdrawal phases.
+
+This page helps users understand how funds flow through their financial accounts
+during different life stages, aligned with the Strategy page planning phases.
+"""
+from __future__ import annotations
+
+from typing import cast
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from components.navbar import navbar
+from components.shared import auto_rerun_if_rebuilding, init_page
+from load_data import get_portfolio_truth_by_month
+from config import get_config_manager
+
+# ---------------------------------------------------------------------------
+# Page setup
+# ---------------------------------------------------------------------------
+(
+    networth,
+    _portfolio_df,
+    _portfolio_cache_ready,
+    _stale_label,
+    curr_month,
+    curr_year,
+    _eff_port_month,
+    _eff_port_year,
+) = init_page("💸 Flow of Funds — Financial Planner", "💸")
+
+navbar("Flow of Funds")
+
+st.header("💸 Flow of Funds")
+st.markdown(
+    "Visualize how money flows through your accounts during **Accumulation** "
+    "(building wealth) and **Withdrawal** (retirement distribution) phases."
+)
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Phase toggle (matches Strategy page UX)
+# ---------------------------------------------------------------------------
+phase = st.radio(
+    "Planning Phase",
+    options=["📈 Accumulation (Pre-Retirement)", "💸 Withdrawal (Distribution)"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+st.markdown("---")
+
+# Get configuration
+try:
+    cfg = get_config_manager()
+    person1_name = cfg.get("personal_info", "person1_name", "Person 1")
+    person2_name = cfg.get("personal_info", "person2_name", "")
+    annual_expenses = cfg.get("financial_assumptions", "expected_annual_expenses", 120_000)
+except Exception:
+    person1_name = "Person 1"
+    person2_name = ""
+    annual_expenses = 120_000
+
+# Get current portfolio data
+portfolio = get_portfolio_truth_by_month(curr_month, curr_year)
+
+# Calculate account balances by type
+account_balances = {}
+if not portfolio.empty:
+    for acct_type in ["Cash", "Brokerage", "Traditional", "Roth"]:
+        acct_data = portfolio[portfolio["account_type"] == acct_type]
+        if len(acct_data) > 0:
+            balance = (acct_data["qty"] * acct_data["purchase_price"]).sum()
+            account_balances[acct_type] = float(balance)
+        else:
+            account_balances[acct_type] = 0.0
+
+# ---------------------------------------------------------------------------
+# ACCUMULATION PHASE - Income flows INTO accounts
+# ---------------------------------------------------------------------------
+if phase == "📈 Accumulation (Pre-Retirement)":
+    st.subheader("📈 Accumulation Phase: Building Wealth")
+    st.markdown(
+        "During accumulation, income from wages and savings flows into various "
+        "account types based on tax efficiency and retirement planning goals."
+    )
+    
+    # Create Sankey diagram for accumulation
+    # Sources: Income types
+    # Targets: Account types
+    
+    # Estimate income flows (these would ideally come from user input or strategy data)
+    # For now, we'll use reasonable defaults based on account balances
+    total_income = 200_000  # Annual income estimate
+    
+    # Income allocation strategy (tax-efficient)
+    traditional_401k_contrib = 23_000  # Max 401(k) contribution
+    roth_direct_contrib = 7_000  # Direct Roth IRA contribution
+    roth_backdoor_contrib = 7_000  # Backdoor Roth contribution (from after-tax)
+    employer_match = 11_500  # 50% match on first 6%
+    brokerage_invest = 23_000  # After-tax investments (reduced due to backdoor Roth)
+    cash_savings = 10_000  # Emergency fund building
+    
+    # Sankey diagram nodes
+    sources = [
+        "Wages/Salary",
+        "Wages/Salary",
+        "After-Tax Income",
+        "After-Tax Income",
+        "After-Tax Income",
+        "Employer Match"
+    ]
+    
+    targets = [
+        "Traditional 401(k)/IRA",
+        "Roth IRA/401(k)",
+        "Roth IRA/401(k)",
+        "Brokerage Account",
+        "Cash/Savings",
+        "Traditional 401(k)"
+    ]
+    
+    values = [
+        traditional_401k_contrib,
+        roth_direct_contrib,
+        roth_backdoor_contrib,
+        brokerage_invest,
+        cash_savings,
+        employer_match
+    ]
+    
+    # Create color mapping
+    source_colors = {
+        "Wages/Salary": "rgba(31, 119, 180, 0.8)",
+        "After-Tax Income": "rgba(44, 160, 44, 0.8)",
+        "Employer Match": "rgba(255, 127, 14, 0.8)"
+    }
+    
+    target_colors = {
+        "Traditional 401(k)/IRA": "rgba(214, 39, 40, 0.6)",
+        "Roth IRA/401(k)": "rgba(148, 103, 189, 0.6)",
+        "Brokerage Account": "rgba(255, 187, 120, 0.6)",
+        "Cash/Savings": "rgba(152, 223, 138, 0.6)",
+        "Traditional 401(k)": "rgba(214, 39, 40, 0.6)"
+    }
+    
+    # Build node list (unique sources and targets)
+    all_nodes = list(dict.fromkeys(sources + targets))
+    node_colors = []
+    for node in all_nodes:
+        if node in source_colors:
+            node_colors.append(source_colors[node])
+        else:
+            node_colors.append(target_colors[node])
+    
+    # Map sources and targets to indices
+    source_indices = [all_nodes.index(s) for s in sources]
+    target_indices = [all_nodes.index(t) for t in targets]
+    
+    # Create link colors that match the source nodes (with transparency)
+    link_colors = []
+    for src in sources:
+        if src in source_colors:
+            # Convert rgba to have more transparency for links
+            color = source_colors[src].replace("0.8)", "0.3)")
+            link_colors.append(color)
+        else:
+            link_colors.append("rgba(200, 200, 200, 0.3)")
+    
+    # Create Sankey diagram
+    fig_accum = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=20,
+            thickness=25,
+            line=dict(color="black", width=1),
+            label=all_nodes,
+            color=node_colors,
+            hovertemplate='%{label}<br>Total: $%{value:,.0f}<extra></extra>'
+        ),
+        link=dict(
+            source=source_indices,
+            target=target_indices,
+            value=values,
+            color=link_colors,
+            hovertemplate='%{source.label} → %{target.label}<br>Amount: $%{value:,.0f}<extra></extra>'
+        ),
+        textfont=dict(size=16, family="Arial Black, Arial, sans-serif", color="black")
+    )])
+    
+    fig_accum.update_layout(
+        title=dict(
+            text="Money Flow: Income → Accounts",
+            font=dict(size=18, family="Arial, sans-serif", color="#333")
+        ),
+        font=dict(size=16, family="Arial, sans-serif", color="#000"),
+        height=550,
+        margin=dict(l=20, r=20, t=60, b=20)
+    )
+    
+    st.plotly_chart(fig_accum, use_container_width=True)
+    
+    # Summary metrics
+    st.subheader("Accumulation Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Annual Contributions", f"${sum(values):,.0f}")
+    with col2:
+        st.metric("Tax-Deferred", f"${traditional_401k_contrib + employer_match:,.0f}")
+    with col3:
+        st.metric("Tax-Free (Roth)", f"${roth_direct_contrib + roth_backdoor_contrib:,.0f}")
+    with col4:
+        st.metric("Taxable", f"${brokerage_invest + cash_savings:,.0f}")
+    
+    # Strategy notes
+    with st.expander("📚 Accumulation Strategy Guide", expanded=False):
+        st.markdown("""
+        ### Tax-Efficient Accumulation Strategy
+        
+        **1. Maximize Tax-Deferred Contributions**
+        - Contribute to Traditional 401(k)/IRA up to limits ($23,000 in 2024)
+        - Capture full employer match (free money!)
+        - Reduces current taxable income
+        
+        **2. Build Roth Accounts**
+        - Contribute to Roth IRA/401(k) ($7,000 limit in 2024)
+        - Tax-free growth and withdrawals in retirement
+        - No RMDs (Required Minimum Distributions)
+        
+        **3. Invest in Taxable Brokerage**
+        - After maxing retirement accounts
+        - Tax-efficient index funds (low turnover)
+        - Long-term capital gains treatment
+        
+        **4. Maintain Emergency Fund**
+        - 6-12 months expenses in Cash/Savings
+        - High-yield savings accounts
+        - Immediate liquidity for emergencies
+        
+        **5. Consider Mega Backdoor Roth**
+        - If 401(k) allows after-tax contributions
+        - Convert to Roth for additional tax-free growth
+        - See Advanced Strategy Tools page
+        """)
+
+# ---------------------------------------------------------------------------
+# WITHDRAWAL PHASE - Accounts flow OUT to expenses
+# ---------------------------------------------------------------------------
+else:  # Withdrawal phase
+    st.subheader("💸 Withdrawal Phase: Distribution Strategy")
+    st.markdown(
+        "During retirement, funds are withdrawn from accounts in a tax-efficient "
+        "sequence to minimize taxes and maximize portfolio longevity."
+    )
+    
+    # Create Sankey diagram for withdrawal
+    # Sources: Account types
+    # Targets: Expense categories and conversions
+    
+    # Estimate withdrawal flows based on account balances
+    monthly_expenses = annual_expenses / 12
+    annual_living = annual_expenses * 0.85  # 85% for living expenses
+    annual_healthcare = annual_expenses * 0.10  # 10% for healthcare
+    annual_discretionary = annual_expenses * 0.05  # 5% for discretionary
+    
+    # Withdrawal strategy (tax-efficient sequencing)
+    trad_to_expenses = min(account_balances.get("Traditional", 0) * 0.04, annual_living * 0.4)
+    brok_to_expenses = min(account_balances.get("Brokerage", 0) * 0.03, annual_living * 0.4)
+    cash_to_expenses = min(account_balances.get("Cash", 0) * 0.1, annual_living * 0.2)
+    
+    # Roth conversions (tax optimization)
+    trad_to_roth = min(account_balances.get("Traditional", 0) * 0.02, 50_000)
+    
+    # RMDs (after age 73)
+    trad_to_brokerage = min(account_balances.get("Traditional", 0) * 0.04, 30_000)
+    
+    # Roth withdrawals (tax-free)
+    roth_to_expenses = min(account_balances.get("Roth", 0) * 0.03, annual_living * 0.15)
+    
+    # Large purchases from Roth (tax-free)
+    roth_to_purchases = min(account_balances.get("Roth", 0) * 0.02, 20_000)
+    
+    # Charitable giving
+    brok_to_charity = min(account_balances.get("Brokerage", 0) * 0.01, 10_000)
+    
+    # Build Sankey data
+    sources_w = []
+    targets_w = []
+    values_w = []
+    
+    if trad_to_expenses > 1000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("Living Expenses")
+        values_w.append(trad_to_expenses)
+    
+    if brok_to_expenses > 1000:
+        sources_w.append("Brokerage Account")
+        targets_w.append("Living Expenses")
+        values_w.append(brok_to_expenses)
+    
+    if cash_to_expenses > 1000:
+        sources_w.append("Cash/Savings")
+        targets_w.append("Living Expenses")
+        values_w.append(cash_to_expenses)
+    
+    if trad_to_roth > 1000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("Roth Conversion")
+        values_w.append(trad_to_roth)
+    
+    if trad_to_brokerage > 1000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("RMD → Brokerage")
+        values_w.append(trad_to_brokerage)
+    
+    if roth_to_expenses > 1000:
+        sources_w.append("Roth IRA/401(k)")
+        targets_w.append("Living Expenses")
+        values_w.append(roth_to_expenses)
+    
+    if roth_to_purchases > 1000:
+        sources_w.append("Roth IRA/401(k)")
+        targets_w.append("Large Purchases")
+        values_w.append(roth_to_purchases)
+    
+    if brok_to_charity > 1000:
+        sources_w.append("Brokerage Account")
+        targets_w.append("Charitable Giving")
+        values_w.append(brok_to_charity)
+    
+    # Add healthcare if significant
+    if annual_healthcare > 5000:
+        sources_w.append("Traditional IRA/401(k)")
+        targets_w.append("Healthcare")
+        values_w.append(annual_healthcare)
+    
+    if sources_w:
+        # Create color mapping for withdrawal
+        source_colors_w = {
+            "Traditional IRA/401(k)": "rgba(214, 39, 40, 0.8)",
+            "Roth IRA/401(k)": "rgba(148, 103, 189, 0.8)",
+            "Brokerage Account": "rgba(255, 187, 120, 0.8)",
+            "Cash/Savings": "rgba(152, 223, 138, 0.8)"
+        }
+        
+        target_colors_w = {
+            "Living Expenses": "rgba(31, 119, 180, 0.6)",
+            "Healthcare": "rgba(255, 127, 14, 0.6)",
+            "Large Purchases": "rgba(44, 160, 44, 0.6)",
+            "Roth Conversion": "rgba(148, 103, 189, 0.6)",
+            "RMD → Brokerage": "rgba(255, 187, 120, 0.6)",
+            "Charitable Giving": "rgba(127, 127, 127, 0.6)"
+        }
+        
+        # Build node list
+        all_nodes_w = list(dict.fromkeys(sources_w + targets_w))
+        node_colors_w = []
+        for node in all_nodes_w:
+            if node in source_colors_w:
+                node_colors_w.append(source_colors_w[node])
+            else:
+                node_colors_w.append(target_colors_w[node])
+        
+        # Map to indices
+        source_indices_w = [all_nodes_w.index(s) for s in sources_w]
+        target_indices_w = [all_nodes_w.index(t) for t in targets_w]
+        
+        # Create link colors that match the source nodes (with transparency)
+        link_colors_w = []
+        for src in sources_w:
+            if src in source_colors_w:
+                # Convert rgba to have more transparency for links
+                color = source_colors_w[src].replace("0.8)", "0.3)")
+                link_colors_w.append(color)
+            else:
+                link_colors_w.append("rgba(200, 200, 200, 0.3)")
+        
+        # Create Sankey diagram
+        fig_withdraw = go.Figure(data=[go.Sankey(
+            node=dict(
+                pad=20,
+                thickness=25,
+                line=dict(color="black", width=1),
+                label=all_nodes_w,
+                color=node_colors_w,
+                hovertemplate='%{label}<br>Total: $%{value:,.0f}<extra></extra>'
+            ),
+            link=dict(
+                source=source_indices_w,
+                target=target_indices_w,
+                value=values_w,
+                color=link_colors_w,
+                hovertemplate='%{source.label} → %{target.label}<br>Amount: $%{value:,.0f}<extra></extra>'
+            ),
+            textfont=dict(size=16, family="Arial Black, Arial, sans-serif", color="black")
+        )])
+        
+        fig_withdraw.update_layout(
+            title=dict(
+                text="Money Flow: Accounts → Expenses & Conversions",
+                font=dict(size=18, family="Arial, sans-serif", color="#333")
+            ),
+            font=dict(size=16, family="Arial, sans-serif", color="#000"),
+            height=550,
+            margin=dict(l=20, r=20, t=60, b=20)
+        )
+        
+        st.plotly_chart(fig_withdraw, use_container_width=True)
+    else:
+        st.info("No significant withdrawal flows to display. Add portfolio data to see withdrawal strategy.")
+    
+    # Summary metrics
+    st.subheader("Withdrawal Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Annual Withdrawals", f"${sum(values_w) if values_w else 0:,.0f}")
+    with col2:
+        st.metric("Living Expenses", f"${annual_living:,.0f}")
+    with col3:
+        st.metric("Roth Conversions", f"${trad_to_roth:,.0f}")
+    with col4:
+        st.metric("Charitable Giving", f"${brok_to_charity:,.0f}")
+    
+    # Strategy notes
+    with st.expander("📚 Withdrawal Strategy Guide", expanded=False):
+        st.markdown("""
+        ### Tax-Efficient Withdrawal Strategy
+        
+        **1. Withdrawal Sequencing**
+        - **Cash/Savings**: First for immediate needs
+        - **Brokerage**: When market is up (long-term capital gains)
+        - **Traditional IRA**: When market is down or in low-income years
+        - **Roth IRA**: Last resort or large purchases (tax-free)
+        
+        **2. Roth Conversions**
+        - Convert Traditional → Roth during low-income years
+        - Fill up lower tax brackets (10%, 12%, 22%)
+        - Reduces future RMDs and tax burden
+        - Use BETR (Break-Even Tax Rate) analysis
+        
+        **3. Required Minimum Distributions (RMDs)**
+        - Must start at age 73 (born 1951-1959) or 75 (born 1960+)
+        - Calculated as: Account Balance ÷ Life Expectancy Factor
+        - Can reinvest in Brokerage if not needed
+        - Consider QCDs (Qualified Charitable Distributions)
+        
+        **4. IRMAA Management**
+        - Medicare premiums based on income 2 years prior
+        - Stay below IRMAA thresholds when possible
+        - Plan Roth conversions around IRMAA brackets
+        
+        **5. Charitable Giving**
+        - Donate appreciated securities from Brokerage
+        - Avoid capital gains tax
+        - Get charitable deduction
+        - Consider Donor Advised Fund (DAF)
+        
+        **6. Market-Based Decisions**
+        - **Market Down**: Withdraw from Traditional (lower tax on gains)
+        - **Market Up**: Withdraw from Brokerage (harvest gains efficiently)
+        - Rebalance opportunistically
+        """)
+
+# ---------------------------------------------------------------------------
+# Current Account Balances
+# ---------------------------------------------------------------------------
+st.markdown("---")
+st.subheader("📊 Current Account Balances")
+
+if account_balances:
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Cash", f"${account_balances.get('Cash', 0):,.0f}")
+    with col2:
+        st.metric("Brokerage", f"${account_balances.get('Brokerage', 0):,.0f}")
+    with col3:
+        st.metric("Traditional", f"${account_balances.get('Traditional', 0):,.0f}")
+    with col4:
+        st.metric("Roth", f"${account_balances.get('Roth', 0):,.0f}")
+    
+    # Total portfolio
+    total = sum(account_balances.values())
+    st.metric("**Total Portfolio**", f"**${total:,.0f}**")
+else:
+    st.info("No portfolio data available. Add accounts in the Portfolio page to see balances.")
+
+# ---------------------------------------------------------------------------
+# Account Details (existing functionality)
+# ---------------------------------------------------------------------------
+with st.expander("📋 Detailed Account Holdings", expanded=False):
+    if not portfolio.empty:
+        portfolio_display = portfolio.copy()
+        portfolio_display["symbol"] = cast(pd.Series, portfolio_display["symbol"]).str.replace(
+            "^MF:", "", regex=True
+        )
+        
+        for acct_type in cast(pd.Series, portfolio_display["account_type"]).unique():
+            st.markdown(f"### {acct_type} Accounts")
+            type_data = portfolio_display[portfolio_display["account_type"] == acct_type]
+            display_cols = [c for c in ["account_name", "symbol", "name", "qty", "purchase_price"]
+                          if c in type_data.columns]  # type: ignore
+            st.dataframe(type_data[display_cols], hide_index=True, use_container_width=True)
+    else:
+        st.info("No portfolio data available for the selected month/year.")
+
+# ---------------------------------------------------------------------------
+auto_rerun_if_rebuilding()
+
+# Made with Bob

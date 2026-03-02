@@ -18,14 +18,14 @@ import streamlit as st
 # Navigation route map: display label → page file path (relative to root)
 # ---------------------------------------------------------------------------
 NAV_ROUTES: dict[str, str] = {
-    "📊 Dashboard":           "pages/3_dashboard.py",
-    "💼 Portfolio":           "pages/4_portfolio.py",
-    "📈 Strategy":            "pages/5_strategy.py",
-    "🎲 Monte Carlo":         "pages/6_monte_carlo.py",
-    "💸 Flow of Funds":       "pages/7_flow_of_funds.py",
-    "🎯 Advanced Strategies": "pages/8_advanced_strategies.py",
-    "⚖️ Estate Planning":     "pages/1_estate_planning.py",
-    "⚙️ Settings":            "pages/2_configuration.py",
+    "Dashboard":                "pages/3_dashboard.py",
+    "Portfolio":                "pages/4_portfolio.py",
+    "Strategy":                 "pages/5_strategy.py",
+    "Advanced Strategy Tools":  "pages/8_advanced_strategies.py",
+    "Monte Carlo":              "pages/6_monte_carlo.py",
+    "Estate Planning":          "pages/1_estate_planning.py",
+    "Settings":                 "pages/2_configuration.py",
+    "Tax Data Admin":           "pages/9_admin_tax_data.py",
 }
 
 NAV_LABELS = list(NAV_ROUTES.keys())
@@ -35,11 +35,11 @@ NAV_ICONS = [
     "bar-chart-fill",       # Dashboard
     "briefcase-fill",       # Portfolio
     "graph-up-arrow",       # Strategy
+    "bullseye",             # Advanced Strategy Tools
     "dice-5-fill",          # Monte Carlo
-    "cash-stack",           # Flow of Funds
-    "bullseye",             # Advanced Strategies
-    "file-earmark-text",    # Estate Planning
+    "balance-scale",        # Estate Planning
     "gear-fill",            # Settings
+    "tools",                # Tax Data Admin
 ]
 
 # Primary brand colour (matches .streamlit/config.toml primaryColor)
@@ -47,7 +47,7 @@ _PRIMARY = "#F63366"
 _PRIMARY_TEXT = "white"
 
 
-def navbar(current_page: str = "📊 Dashboard") -> None:
+def navbar(current_page: str = "Dashboard") -> None:
     """
     Render the horizontal faux-tab navigation bar.
 
@@ -99,7 +99,7 @@ def navbar(current_page: str = "📊 Dashboard") -> None:
                     "font-weight": "600",
                 },
             },
-            key="main_navbar",
+            key=f"main_navbar_{current_page}",
         )
 
         if selected != current_page:
