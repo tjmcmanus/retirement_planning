@@ -198,8 +198,47 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed configuration instructions
 ### Installation
 
 #### Prerequisites
+
+**Required Software:**
 - Python 3.8 or higher
 - pip package manager
+
+**Installation Instructions:**
+
+**macOS (Apple):**
+1. **Install Homebrew** (if not already installed):
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
+2. **Install Python**:
+   ```bash
+   brew install python@3.11
+   ```
+   This will automatically include pip.
+
+3. **Verify installation**:
+   ```bash
+   python3 --version
+   pip3 --version
+   ```
+
+**Windows:**
+1. **Download Python**:
+   - Visit [python.org/downloads](https://www.python.org/downloads/)
+   - Download Python 3.11 or higher for Windows
+   - Run the installer
+
+2. **During installation**:
+   - ✅ Check "Add Python to PATH"
+   - ✅ Check "Install pip"
+   - Click "Install Now"
+
+3. **Verify installation** (open Command Prompt or PowerShell):
+   ```cmd
+   python --version
+   pip --version
+   ```
 
 #### Setup
 
