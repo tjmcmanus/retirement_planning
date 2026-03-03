@@ -2939,7 +2939,12 @@ class Stage2PrepForRetirement(LifeStage):
 
         age_primary = kwargs.get('age_primary', 0)
         age_spouse = kwargs.get('age_spouse', 0)
+        ss_benefits = kwargs.get('ss_benefits', 0)
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
+        
+        # Log if SS benefits are present during Stage 2 (age-gap marriage scenario)
+        if ss_benefits > 0:
+            logger.info(f"Stage 2 Prep: SS Benefits=${ss_benefits:,.2f} (one spouse collecting while other still working)")
 
         # -----------------------------------------------------------------------
         # Compute contribution amounts from config rates (same pattern as Stage 1).
@@ -3171,8 +3176,32 @@ class Stage2PrepForRetirement(LifeStage):
         logger.info(f"Year {year} Stage 2 Prep: after-tax wages ${after_tax_wages:,.2f}, "
                     f"prefer_roth_401k={prefer_roth_401k}, backdoor_roth=${backdoor_roth_amount:,.0f}")
 
-        # ACA premium — not applicable (employer-sponsored healthcare)
-        aca_premium = 0.0
+        # Calculate healthcare costs (Medicare for 65+, ACA for under 65)
+        # This handles age-gap marriages where one spouse is on Medicare while other still working
+        prior_magi = kwargs.get('prior_magi', 0)
+        try:
+            config_mgr = get_config_manager()
+            filing_status = config_mgr.get_filing_status()
+            healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=prior_magi,
+                year=year,
+                filing_status=filing_status,
+                has_medigap=True
+            )
+            medical_costs = healthcare_breakdown.medicare
+            aca_premium = healthcare_breakdown.pre_medicare
+            
+            if medical_costs > 0:
+                logger.info(f"Stage 2 Prep: Medicare costs=${medical_costs:,.2f} "
+                          f"(one or both spouses age 65+)")
+            if aca_premium > 0:
+                logger.info(f"Stage 2 Prep: ACA/pre-Medicare premium=${aca_premium:,.2f}")
+        except Exception as e:
+            logger.warning(f"Could not calculate healthcare costs for Stage 2: {e}")
+            medical_costs = 0.0
+            aca_premium = 0.0
 
         # Calculate ramped cash buffer target for Stage 2:
         # linearly scales from the wages-based accumulation target (Stage 1 level)
@@ -3206,7 +3235,7 @@ class Stage2PrepForRetirement(LifeStage):
             federal_tax=federal_tax,
             irmaa_penalty=0.0,
             aca_premium=aca_premium,
-            medical_costs=0.0,
+            medical_costs=medical_costs,
             cash_target_override=accum_cash_target,
         )
 
@@ -3239,7 +3268,7 @@ class Stage2PrepForRetirement(LifeStage):
             age_spouse=age_spouse,
             stage=self.name,
             wages=wages,
-            ss_benefits=0,
+            ss_benefits=ss_benefits,
             rmd_amount=0,
             traditional_withdrawal=0,
             taxable_withdrawal=0,
@@ -4939,7 +4968,7 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
                 daf=0
             )
         else:
-            cash_balance = float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum())
+            cash_balance = float(summary_df[summary_df['account_type'] == 'Savings']['market_value'].sum())
             taxable_balance = float(summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum())
             traditional_balance = float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum())
             roth_balance = float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum())
@@ -5074,9 +5103,11 @@ def build_accumulation_strategy_display(start_year: Optional[int] = None,
             p1_ret_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
             p2_birth_year = int(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01").split('-')[0])
             p2_ret_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
-            earliest_retirement = min(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
-            # Project up to (but not including) the retirement year
-            end_year = max(start_year, earliest_retirement - 1)
+            # Use LATEST retirement year so accumulation phase continues until last person retires
+            # This is critical for age-gap marriages where one spouse retires before the other
+            latest_retirement = max(p1_birth_year + p1_ret_age, p2_birth_year + p2_ret_age)
+            # Project up to (but not including) the retirement year of the last person
+            end_year = max(start_year, latest_retirement - 1)
         except Exception:
             end_year = start_year + 10
 
@@ -5094,7 +5125,7 @@ def build_accumulation_strategy_display(start_year: Optional[int] = None,
             )
         else:
             initial_balances = PortfolioBalances(
-                cash=float(summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum()),
+                cash=float(summary_df[summary_df['account_type'] == 'Savings']['market_value'].sum()),
                 taxable=float(summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum()),
                 traditional=float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum()),
                 roth=float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum()),

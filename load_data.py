@@ -146,7 +146,7 @@ def get_net_worth(ret_date):
        return 0, 0, 0, 0, 0, 0, 0
    
    # Extract values by account_type
-   cash = summary_df[summary_df['account_type'] == 'Cash']['market_value'].sum()
+   cash = summary_df[summary_df['account_type'] == 'Savings']['market_value'].sum()
    taxable = summary_df[summary_df['account_type'] == 'Brokerage']['market_value'].sum()
    tax_deferred = summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum()
    tax_free = summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum()
@@ -234,9 +234,15 @@ def get_annual_ssi_data(year):
    return year_df
 
 @st.cache_data()
-def load_portfolio_truth():
+def load_portfolio_truth(_file_mtime=None):
    """
    Load the complete portfolio data truth dataset.
+   
+   The _file_mtime parameter is used as a cache key to automatically
+   invalidate the cache when the file is modified.
+   
+   Args:
+       _file_mtime: File modification time (used for cache invalidation)
    
    Returns:
        pd.DataFrame: Complete dataset with columns:
@@ -245,6 +251,14 @@ def load_portfolio_truth():
    portfolio_truth = pd.read_csv('portfolio_data_truth.csv')
    return portfolio_truth
 
+def _get_portfolio_file_mtime():
+   """Get the modification time of the portfolio data file for cache invalidation."""
+   import os
+   try:
+       return os.path.getmtime('portfolio_data_truth.csv')
+   except OSError:
+       return None
+
 def get_latest_portfolio_month_year() -> tuple[int, int]:
     """
     Return the most recent (month, year) available in portfolio_data_truth.csv.
@@ -252,7 +266,7 @@ def get_latest_portfolio_month_year() -> tuple[int, int]:
     Returns:
         tuple[int, int]: (month, year) of the latest entry, e.g. (2, 2026)
     """
-    portfolio_truth = load_portfolio_truth()
+    portfolio_truth = load_portfolio_truth(_get_portfolio_file_mtime())
     if portfolio_truth.empty:
         now = datetime.now()
         return now.month, now.year
@@ -281,7 +295,7 @@ def get_portfolio_truth_by_month(month, year):
        # Get January 2026 data
        jan_2026_data = get_portfolio_truth_by_month(1, 2026)
    """
-   portfolio_truth = load_portfolio_truth()
+   portfolio_truth = load_portfolio_truth(_get_portfolio_file_mtime())
    filtered_data = portfolio_truth[(portfolio_truth['month'] == month) & (portfolio_truth['year'] == year)]
    return filtered_data
 

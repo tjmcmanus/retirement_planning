@@ -70,7 +70,7 @@ CASH_SECTOR_KEYWORDS = ["cash", "money market"]
 BROKERAGE   = "Brokerage"
 TRADITIONAL = "Traditional"
 ROTH        = "Roth"
-CASH_ACCT   = "Cash"   # plain savings / checking
+CASH_ACCT   = "Savings"   # plain savings / checking
 
 # Minimum Brokerage cash cushion (10 % of brokerage market value)
 BROKERAGE_CASH_MIN_PCT = 0.10
@@ -536,6 +536,28 @@ def _actions_tax_advantaged_sell(
                 uw_needs[uw.asset_class] -= buy_amt
                 remaining_proceeds -= buy_amt
             
+            # If there are remaining proceeds after satisfying all under-weight needs,
+            # generate an explicit "Hold as Cash" action to clarify the full disposition
+            if remaining_proceeds > 100:  # Only show if significant (> $100)
+                cash_action = RebalanceAction(
+                    priority      = priority,
+                    action        = "Hold as Cash",
+                    asset_class   = "Cash",
+                    symbol        = CASH_SYMBOL,
+                    account_name  = h.account_name,
+                    account_type  = h.account_type,
+                    amount        = remaining_proceeds,
+                    rationale     = (
+                        f"After rebalancing, ${remaining_proceeds:,.0f} from {ow.asset_class} sale "
+                        f"remains in {h.account_type} ({h.account_name}) as cash. "
+                        f"This provides liquidity and can be deployed when additional rebalancing opportunities arise."
+                    ),
+                    tax_impact    = TAX_IMPACT_NONE_TA,
+                    location_note = "Cash in tax-advantaged accounts provides flexibility for future rebalancing without tax consequences.",
+                )
+                actions.append(cash_action)
+                priority += 1
+            
             sell_needed -= sell_amt
 
     # Update under_weight list with remaining needs
@@ -984,6 +1006,7 @@ def _actions_brokerage_cash_topup(
     brok_cash: float,
     brok_cash_pct: float,
     start_priority: int,
+    holdings: Optional[list[HoldingDetail]] = None,
 ) -> tuple[list[RebalanceAction], int]:
     """
     Step 7e — Top up the Brokerage cash cushion if it falls below 10 %.
@@ -994,6 +1017,7 @@ def _actions_brokerage_cash_topup(
         brok_cash:       Current cash portion of the Brokerage account.
         brok_cash_pct:   brok_cash / brok_total (pre-computed ratio).
         start_priority:  Priority counter to continue from.
+        holdings:        Optional holdings list to identify specific brokerage accounts.
 
     Returns:
         (actions, next_priority)
@@ -1003,18 +1027,32 @@ def _actions_brokerage_cash_topup(
 
     if not brok_cash_ok:
         needed = BROKERAGE_CASH_MIN_PCT * brok_total - brok_cash
+        
+        # Try to identify the largest brokerage account to add cash to
+        account_name = "Brokerage account"
+        if holdings:
+            brok_accounts: dict[str, float] = {}
+            for h in holdings:
+                if h.account_type == BROKERAGE:
+                    brok_accounts[h.account_name] = brok_accounts.get(h.account_name, 0) + h.current_value
+            if brok_accounts:
+                # Use the largest brokerage account
+                account_name = max(brok_accounts.items(), key=lambda x: x[1])[0]
+        
         actions.append(RebalanceAction(
             priority     = priority,
             action       = "Buy MF:CASH",
             asset_class  = "Cash",
             symbol       = CASH_SYMBOL,
-            account_name = "Brokerage account",
+            account_name = account_name,
             account_type = BROKERAGE,
             amount       = needed,
             rationale    = (
                 f"Brokerage cash cushion is {brok_cash_pct:.1%} "
                 f"(target ≥ {BROKERAGE_CASH_MIN_PCT:.0%}). "
-                f"Add ${needed:,.0f} to MF:CASH in the Brokerage account to maintain liquidity."
+                f"Add ${needed:,.0f} to MF:CASH in {account_name} to maintain liquidity. "
+                f"This can come from new contributions, dividends, or by holding some of the "
+                f"stock sale proceeds as cash rather than reinvesting immediately."
             ),
             tax_impact    = "None (buying cash equivalent)",
             location_note = "Keep ≥ 10% of Brokerage account in MF:CASH for liquidity.",
@@ -1168,7 +1206,7 @@ def compute_rebalance_plan(
 
     # 7e. Brokerage cash cushion top-up
     new_actions, priority = _actions_brokerage_cash_topup(
-        brok_cash_ok, brok_total, brok_cash, brok_cash_pct, priority
+        brok_cash_ok, brok_total, brok_cash, brok_cash_pct, priority, holdings
     )
     actions.extend(new_actions)
 
