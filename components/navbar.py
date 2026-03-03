@@ -18,29 +18,17 @@ import streamlit as st
 # Navigation route map: display label → page file path (relative to root)
 # ---------------------------------------------------------------------------
 NAV_ROUTES: dict[str, str] = {
-    "Dashboard":                "pages/3_dashboard.py",
-    "Portfolio":                "pages/4_portfolio.py",
-    "Strategy":                 "pages/5_strategy.py",
-    "Advanced Strategy Tools":  "pages/8_advanced_strategies.py",
-    "Monte Carlo":              "pages/6_monte_carlo.py",
-    "Estate Planning":          "pages/1_estate_planning.py",
-    "Settings":                 "pages/2_configuration.py",
-    "Tax Data Admin":           "pages/9_admin_tax_data.py",
+    "🏠 Dashboard":                "pages/3_dashboard.py",
+    "📊 Portfolio":                "pages/4_portfolio.py",
+    "📋 Strategy":                 "pages/5_strategy.py",
+    "🧠 Advanced Strategy Tools":  "pages/8_advanced_strategies.py",
+    "🎲 Monte Carlo":              "pages/6_monte_carlo.py",
+    "🏛️ Estate Planning":          "pages/1_estate_planning.py",
+    "⚙️ Settings":                 "pages/2_configuration.py",
+    "🔧 Tax Data Admin":           "pages/9_admin_tax_data.py",
 }
 
 NAV_LABELS = list(NAV_ROUTES.keys())
-
-# Icons for streamlit-option-menu (bootstrap icons, one per label)
-NAV_ICONS = [
-    "bar-chart-fill",       # Dashboard
-    "briefcase-fill",       # Portfolio
-    "graph-up-arrow",       # Strategy
-    "bullseye",             # Advanced Strategy Tools
-    "dice-5-fill",          # Monte Carlo
-    "balance-scale",        # Estate Planning
-    "gear-fill",            # Settings
-    "tools",                # Tax Data Admin
-]
 
 # Primary brand colour (matches .streamlit/config.toml primaryColor)
 _PRIMARY = "#F63366"
@@ -72,7 +60,7 @@ def navbar(current_page: str = "Dashboard") -> None:
         selected = option_menu(
             menu_title=None,
             options=NAV_LABELS,
-            icons=NAV_ICONS,
+            icons=[],  # Empty list - emoji are in the labels
             default_index=default_index,
             orientation="horizontal",
             styles={
