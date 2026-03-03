@@ -112,41 +112,107 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
     
     st.subheader("📍 Key Financial Events Timeline")
     
+    # Get person names from config
+    try:
+        from config import get_config_manager
+        cfg = get_config_manager()
+        person1_name = cfg.get("personal_info", "person1_name", "Person 1")
+        person2_name = cfg.get("personal_info", "person2_name", "Person 2")
+        person1_ss_age = cfg.get("social_security", "person1_ssi_age", 70)
+        person2_ss_age = cfg.get("social_security", "person2_ssi_age", 70)
+        person1_retirement_age = cfg.get("personal_info", "person1_retirement_age", 67)
+        person2_retirement_age = cfg.get("personal_info", "person2_retirement_age", 62)
+    except Exception:
+        person1_name = "Person 1"
+        person2_name = "Person 2"
+        person1_ss_age = 70
+        person2_ss_age = 70
+        person1_retirement_age = 67
+        person2_retirement_age = 62
+    
     # Identify key events
     events = []
+    person1_ss_started = False
+    person2_ss_started = False
+    person1_medicare_added = False
+    person2_medicare_added = False
     
     for idx, row in strategy_df.iterrows():
         year = int(row['Year'])
-        age = row.get('Age', '')
+        age_str = row.get('Age', '')
         
-        # Retirement event
+        # Parse individual ages from "age1/age2" format
+        age_primary = 0
+        age_spouse = 0
+        if '/' in str(age_str):
+            ages = str(age_str).split('/')
+            try:
+                age_primary = int(ages[0].strip())
+                age_spouse = int(ages[1].strip()) if len(ages) > 1 else 0
+            except (ValueError, IndexError):
+                pass
+        
+        # Retirement events (individual)
         if 'Stage' in row and 'Retirement' in str(row['Stage']) and idx == 0:
-            events.append({
-                'year': year,
-                'event': '🎯 Retirement Begins',
-                'details': f"Age {age}",
-                'color': '#FF6B6B'
-            })
+            # Check if this is person1's retirement year
+            if age_primary == person1_retirement_age:
+                events.append({
+                    'year': year,
+                    'event': f'🎯 {person1_name} Retires',
+                    'details': f"Age {age_primary}",
+                    'color': '#FF6B6B'
+                })
+            # Check if this is person2's retirement year
+            if age_spouse == person2_retirement_age and age_spouse > 0:
+                events.append({
+                    'year': year,
+                    'event': f'🎯 {person2_name} Retires',
+                    'details': f"Age {age_spouse}",
+                    'color': '#FF8C8C'
+                })
         
-        # Medicare eligibility
-        if 'Age' in row and '65' in str(age):
+        # Medicare eligibility (individual)
+        if age_primary == 65 and not person1_medicare_added:
             events.append({
                 'year': year,
-                'event': '🏥 Medicare Eligible',
-                'details': f"Age {age}",
+                'event': f'🏥 {person1_name} Medicare',
+                'details': f"Age 65",
                 'color': '#4ECDC4'
             })
+            person1_medicare_added = True
         
-        # Social Security start
-        if 'SS Benefits' in row and row['SS Benefits'] > 0 and (idx == 0 or strategy_df.iloc[idx-1]['SS Benefits'] == 0):
+        if age_spouse == 65 and not person2_medicare_added and age_spouse > 0:
             events.append({
                 'year': year,
-                'event': '💰 Social Security Begins',
-                'details': f"${row['SS Benefits']:,.0f}/year",
-                'color': '#95E1D3'
+                'event': f'🏥 {person2_name} Medicare',
+                'details': f"Age 65",
+                'color': '#6EDDD5'
             })
+            person2_medicare_added = True
         
-        # RMD start
+        # Social Security start (individual)
+        if 'SS Benefits' in row and row['SS Benefits'] > 0:
+            # Check if person1 just started SS
+            if age_primary >= person1_ss_age and not person1_ss_started:
+                events.append({
+                    'year': year,
+                    'event': f'💰 {person1_name} SS Begins',
+                    'details': f"Age {age_primary}",
+                    'color': '#95E1D3'
+                })
+                person1_ss_started = True
+            
+            # Check if person2 just started SS
+            if age_spouse >= person2_ss_age and not person2_ss_started and age_spouse > 0:
+                events.append({
+                    'year': year,
+                    'event': f'💰 {person2_name} SS Begins',
+                    'details': f"Age {age_spouse}",
+                    'color': '#B5F1E3'
+                })
+                person2_ss_started = True
+        
+        # RMD start (combined event since it's household-level)
         if 'RMD' in row and row['RMD'] > 0 and (idx == 0 or strategy_df.iloc[idx-1]['RMD'] == 0):
             events.append({
                 'year': year,
@@ -155,7 +221,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
                 'color': '#F38181'
             })
         
-        # Large Roth conversions
+        # Large Roth conversions (household-level)
         roth_conversion_col = 'Trad→\nRoth'
         if roth_conversion_col in row and row[roth_conversion_col] > 50000:
             conversion_amount = row[roth_conversion_col]
@@ -173,14 +239,24 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
         max_year = max(years)
         year_range = max_year - min_year if max_year > min_year else 1
         
-        # Build event markers
+        # Build event markers with alternating vertical positions to avoid overlap
         event_markers = []
-        for event in events:
+        for idx, event in enumerate(events):
             position = ((event['year'] - min_year) / year_range) * 100
-            marker_html = f'<div style="position: absolute; left: {position}%; top: 50%; transform: translate(-50%, -50%);"><div style="width: 16px; height: 16px; border-radius: 50%; background: {event["color"]}; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div><div style="position: absolute; top: -60px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; font-size: 11px;"><div style="font-weight: 600; color: #333;">{event["event"]}</div><div style="color: #666;">{event["year"]}</div><div style="color: #888; font-size: 10px;">{event["details"]}</div></div></div>'
+            # Alternate between top and bottom positions to reduce overlap
+            vertical_offset = -70 if idx % 2 == 0 else 30
+            
+            marker_html = f'''<div style="position: absolute; left: {position}%; top: 50%; transform: translate(-50%, -50%);">
+                <div style="width: 16px; height: 16px; border-radius: 50%; background: {event["color"]}; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>
+                <div style="position: absolute; top: {vertical_offset}px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; font-size: 11px; min-width: 120px;">
+                    <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{event["event"]}</div>
+                    <div style="color: #666; margin-bottom: 1px;">{event["year"]}</div>
+                    <div style="color: #888; font-size: 10px;">{event["details"]}</div>
+                </div>
+            </div>'''
             event_markers.append(marker_html)
         
-        timeline_html = f'<div style="position: relative; height: 120px; margin: 20px 0;"><div style="position: absolute; top: 50%; width: 100%; height: 2px; background: #ddd;"></div>{"".join(event_markers)}</div>'
+        timeline_html = f'<div style="position: relative; height: 160px; margin: 20px 0;"><div style="position: absolute; top: 50%; width: 100%; height: 2px; background: #ddd;"></div>{"".join(event_markers)}</div>'
         st.markdown(timeline_html, unsafe_allow_html=True)
     else:
         st.info("No significant financial events identified in this planning period.")
@@ -218,62 +294,86 @@ def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int)
         # Q1 estimated taxes (April 15)
         if month_num == 4:
             if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q1_tax = row['Federal Tax'] / 4
-                actions.append("📋 Q1 Estimated Tax Payment")
-                amounts.append(f"${q1_tax:,.0f}")
+                q1_fed = row['Federal Tax'] / 4
+                q1_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
+                q1_total = q1_fed + q1_state
+                if q1_state > 0:
+                    actions.append("📋 Q1 Estimated Tax Payment")
+                    amounts.append(f"${q1_total:,.0f} (Fed ${q1_fed:,.0f} + State ${q1_state:,.0f})")
+                else:
+                    actions.append("📋 Q1 Estimated Tax Payment (Federal)")
+                    amounts.append(f"${q1_fed:,.0f}")
         
         # Q2 estimated taxes (June 15)
         if month_num == 6:
             if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q2_tax = row['Federal Tax'] / 4
-                actions.append("📋 Q2 Estimated Tax Payment")
-                amounts.append(f"${q2_tax:,.0f}")
+                q2_fed = row['Federal Tax'] / 4
+                q2_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
+                q2_total = q2_fed + q2_state
+                if q2_state > 0:
+                    actions.append("📋 Q2 Estimated Tax Payment")
+                    amounts.append(f"${q2_total:,.0f} (Fed ${q2_fed:,.0f} + State ${q2_state:,.0f})")
+                else:
+                    actions.append("📋 Q2 Estimated Tax Payment (Federal)")
+                    amounts.append(f"${q2_fed:,.0f}")
         
         # Q3 estimated taxes (September 15)
         if month_num == 9:
             if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q3_tax = row['Federal Tax'] / 4
-                actions.append("📋 Q3 Estimated Tax Payment")
-                amounts.append(f"${q3_tax:,.0f}")
+                q3_fed = row['Federal Tax'] / 4
+                q3_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
+                q3_total = q3_fed + q3_state
+                if q3_state > 0:
+                    actions.append("📋 Q3 Estimated Tax Payment")
+                    amounts.append(f"${q3_total:,.0f} (Fed ${q3_fed:,.0f} + State ${q3_state:,.0f})")
+                else:
+                    actions.append("📋 Q3 Estimated Tax Payment (Federal)")
+                    amounts.append(f"${q3_fed:,.0f}")
         
         # Roth conversions (spread throughout year, focus on low-income months)
         if 'Trad→\nRoth' in row and row['Trad→\nRoth'] > 0:
             # Spread conversions across Jan, Apr, Jul, Oct
             if month_num in [1, 4, 7, 10]:
                 quarterly_conversion = row['Trad→\nRoth'] / 4
-                actions.append("🔄 Roth Conversion")
+                actions.append("🔄 Roth Conversion (Trad→Roth)")
                 amounts.append(f"${quarterly_conversion:,.0f}")
         
         # RMDs (must be taken by December 31, suggest monthly or quarterly)
         if 'RMD' in row and row['RMD'] > 0:
             if month_num in [3, 6, 9, 12]:  # Quarterly RMD distributions
                 quarterly_rmd = row['RMD'] / 4
-                actions.append("📊 RMD Distribution")
+                actions.append("📊 RMD Distribution (Trad→Cash)")
                 amounts.append(f"${quarterly_rmd:,.0f}")
         
         # Traditional IRA withdrawals (monthly for living expenses)
         if 'Trad→\nCash' in row and row['Trad→\nCash'] > 0:
             monthly_withdrawal = row['Trad→\nCash'] / 12
             if monthly_withdrawal > 1000:  # Only show if significant
-                actions.append("💵 Traditional → Cash")
+                actions.append("💵 Traditional → Cash (for expenses)")
                 amounts.append(f"${monthly_withdrawal:,.0f}")
         
         # Portfolio rebalancing (quarterly)
         if month_num in [3, 6, 9, 12]:
             actions.append("⚖️ Portfolio Rebalance Review")
-            amounts.append("")
+            amounts.append("—")
         
         # Annual strategy review (January and July)
         if month_num in [1, 7]:
             actions.append("📈 Strategy Review & Adjustment")
-            amounts.append("")
+            amounts.append("—")
         
         # Q4 estimated taxes (January 15 of following year)
         if month_num == 1:
             if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q4_tax = row['Federal Tax'] / 4
-                actions.append("📋 Q4 Estimated Tax Payment (Prior Year)")
-                amounts.append(f"${q4_tax:,.0f}")
+                q4_fed = row['Federal Tax'] / 4
+                q4_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
+                q4_total = q4_fed + q4_state
+                if q4_state > 0:
+                    actions.append("📋 Q4 Estimated Tax Payment (Prior Year)")
+                    amounts.append(f"${q4_total:,.0f} (Fed ${q4_fed:,.0f} + State ${q4_state:,.0f})")
+                else:
+                    actions.append("📋 Q4 Estimated Tax Payment (Prior Year, Federal)")
+                    amounts.append(f"${q4_fed:,.0f}")
         
         # Healthcare premium payments (monthly)
         if 'Healthcare Cost' in row and row['Healthcare Cost'] > 0:
@@ -282,9 +382,17 @@ def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int)
                 actions.append("🏥 Healthcare Premiums")
                 amounts.append(f"${monthly_healthcare:,.0f}/month")
         
+        # Combine actions with their amounts for clearer display
+        combined_actions = []
+        for i, action in enumerate(actions):
+            if i < len(amounts) and amounts[i] and amounts[i] != '—':
+                combined_actions.append(f"{action}: **{amounts[i]}**")
+            else:
+                combined_actions.append(action)
+        
         monthly_plan.append({
             'Month': month_name,
-            'Actions': '\n\n'.join(actions) if actions else '—',
+            'Actions': '\n\n'.join(combined_actions) if combined_actions else '—',
             'Amounts': '\n\n'.join(amounts) if amounts else '—',
             'Action_Count': len(actions)
         })
@@ -319,33 +427,93 @@ def render_interactive_sankey(strategy_df: pd.DataFrame, portfolio: pd.DataFrame
         render_withdrawal_sankey_for_year(year_data, portfolio, annual_expenses)
 
 
-def render_accumulation_sankey_for_year(year_data: pd.Series, portfolio: pd.DataFrame, 
+def render_accumulation_sankey_for_year(year_data: pd.Series, portfolio: pd.DataFrame,
                                         annual_expenses: float) -> None:
     """Render accumulation Sankey for a specific year using actual data."""
     sources = []
     targets = []
     values = []
     
-    # Wages to various accounts
-    if 'Wages' in year_data and year_data['Wages'] > 0:
-        if 'Wages→\nTrad' in year_data and year_data['Wages→\nTrad'] > 1000:
+    # Calculate after-tax wages (wages minus retirement contributions and payroll taxes)
+    wages = float(year_data.get('Wages', 0) or 0)
+    wages_to_trad = float(year_data.get('Wages→\nTrad', 0) or 0)
+    wages_to_roth = float(year_data.get('Wages→\nRoth', 0) or 0)
+    payroll_tax = float(year_data.get('Wages→\nPayroll', 0) or 0)
+    ss_benefits = float(year_data.get('SS Benefits', 0) or 0)
+    federal_tax = float(year_data.get('Federal Tax', 0) or 0)
+    state_tax = float(year_data.get('State Tax', 0) or 0)
+    
+    # Wages to retirement accounts and cash
+    if wages > 1000:
+        if wages_to_trad > 1000:
             sources.append("Wages/Salary")
             targets.append("Traditional 401(k)/IRA")
-            values.append(float(year_data['Wages→\nTrad']))
+            values.append(wages_to_trad)
         
-        if 'Wages→\nRoth' in year_data and year_data['Wages→\nRoth'] > 1000:
+        if wages_to_roth > 1000:
             sources.append("Wages/Salary")
             targets.append("Roth IRA/401(k)")
-            values.append(float(year_data['Wages→\nRoth']))
+            values.append(wages_to_roth)
+        
+        # Payroll tax from wages
+        if payroll_tax > 1000:
+            sources.append("Wages/Salary")
+            targets.append("Payroll Taxes")
+            values.append(payroll_tax)
+        
+        # After-tax wages to cash/spending (for expenses)
+        after_tax_wages = wages - wages_to_trad - wages_to_roth - payroll_tax
+        if after_tax_wages > 1000:
+            sources.append("Wages/Salary")
+            targets.append("Cash/Spending")
+            values.append(after_tax_wages)
+        elif wages > 1000:
+            # If no retirement contributions and after-tax is small, still show wages → cash
+            # This handles cases where wages exist but aren't being saved
+            sources.append("Wages/Salary")
+            targets.append("Cash/Spending")
+            values.append(wages - payroll_tax)
     
-    # After-tax flows
+    # Social Security to cash (for age-gap marriages where one person collects SS while other still works)
+    if ss_benefits > 1000:
+        sources.append("Social Security")
+        targets.append("Cash/Spending")
+        values.append(ss_benefits)
+    
+    # Cash to expenses
+    expenses = float(year_data.get('Expenses', 0) or 0)
+    if expenses > 1000:
+        sources.append("Cash/Spending")
+        targets.append("Living Expenses")
+        values.append(expenses)
+    
+    # Cash to healthcare
+    healthcare = float(year_data.get('Healthcare Cost', 0) or 0)
+    if healthcare > 1000:
+        sources.append("Cash/Spending")
+        targets.append("Healthcare")
+        values.append(healthcare)
+    
+    # Cash to federal taxes
+    if federal_tax > 1000:
+        sources.append("Cash/Spending")
+        targets.append("Federal Income Tax")
+        values.append(federal_tax)
+    
+    # Cash to state taxes
+    if state_tax > 1000:
+        sources.append("Cash/Spending")
+        targets.append("State Income Tax")
+        values.append(state_tax)
+    
+    # After-tax flows to investments
     if 'Cash→\nBrok' in year_data and year_data['Cash→\nBrok'] > 1000:
-        sources.append("After-Tax Income")
+        sources.append("Cash/Spending")
         targets.append("Brokerage Account")
         values.append(float(year_data['Cash→\nBrok']))
     
     if 'Cash→\nRoth' in year_data and year_data['Cash→\nRoth'] > 1000:
-        sources.append("After-Tax Income")
+        sources.append("Cash/Spending")
         targets.append("Roth IRA/401(k)")
         values.append(float(year_data['Cash→\nRoth']))
     
@@ -356,8 +524,8 @@ def render_accumulation_sankey_for_year(year_data: pd.Series, portfolio: pd.Data
         values.append(float(year_data['Trad→\nRoth']))
     
     if sources:
-        _render_sankey_diagram(sources, targets, values, 
-                              f"💰 Money Flow for {int(year_data['Year'])}: Income → Accounts")
+        _render_sankey_diagram(sources, targets, values,
+                              f"💰 Money Flow for {int(year_data['Year'])}: Income → Accounts & Expenses")
     else:
         st.info("No significant money flows to visualize for this year.")
 
@@ -369,23 +537,71 @@ def render_withdrawal_sankey_for_year(year_data: pd.Series, portfolio: pd.DataFr
     targets = []
     values = []
     
-    # Traditional withdrawals
+    # Wages to cash and payroll tax (for age-gap marriages where one person still works during withdrawal phase)
+    wages = float(year_data.get('Wages', 0) or 0)
+    payroll_tax = float(year_data.get('Wages→\nPayroll', 0) or 0)
+    federal_tax = float(year_data.get('Federal Tax', 0) or 0)
+    state_tax = float(year_data.get('State Tax', 0) or 0)
+    
+    if wages > 1000:
+        # Payroll tax from wages
+        if payroll_tax > 1000:
+            sources.append("Wages/Salary")
+            targets.append("Payroll Taxes")
+            values.append(payroll_tax)
+        
+        after_tax_wages = wages - payroll_tax
+        sources.append("Wages/Salary")
+        targets.append("Cash/Spending")
+        values.append(after_tax_wages)
+    
+    # Traditional withdrawals to cash
     if 'Trad→\nCash' in year_data and year_data['Trad→\nCash'] > 1000:
         sources.append("Traditional IRA/401(k)")
-        targets.append("Living Expenses")
+        targets.append("Cash/Spending")
         values.append(float(year_data['Trad→\nCash']))
     
-    # Brokerage withdrawals
+    # Brokerage withdrawals to cash
     if 'Brok→\nCash' in year_data and year_data['Brok→\nCash'] > 1000:
         sources.append("Brokerage Account")
-        targets.append("Living Expenses")
+        targets.append("Cash/Spending")
         values.append(float(year_data['Brok→\nCash']))
     
-    # Roth withdrawals
+    # Roth withdrawals to cash
     if 'Roth→\nCash' in year_data and year_data['Roth→\nCash'] > 1000:
         sources.append("Roth IRA/401(k)")
-        targets.append("Living Expenses")
+        targets.append("Cash/Spending")
         values.append(float(year_data['Roth→\nCash']))
+    
+    # Social Security to cash
+    if 'SS Benefits' in year_data and year_data['SS Benefits'] > 1000:
+        sources.append("Social Security")
+        targets.append("Cash/Spending")
+        values.append(float(year_data['SS Benefits']))
+    
+    # Cash to expenses
+    if 'Expenses' in year_data and year_data['Expenses'] > 1000:
+        sources.append("Cash/Spending")
+        targets.append("Living Expenses")
+        values.append(float(year_data['Expenses']))
+    
+    # Cash to healthcare
+    if 'Healthcare Cost' in year_data and year_data['Healthcare Cost'] > 1000:
+        sources.append("Cash/Spending")
+        targets.append("Healthcare")
+        values.append(float(year_data['Healthcare Cost']))
+    
+    # Cash to federal taxes
+    if federal_tax > 1000:
+        sources.append("Cash/Spending")
+        targets.append("Federal Income Tax")
+        values.append(federal_tax)
+    
+    # Cash to state taxes
+    if state_tax > 1000:
+        sources.append("Cash/Spending")
+        targets.append("State Income Tax")
+        values.append(state_tax)
     
     # Roth conversions
     if 'Trad→\nRoth' in year_data and year_data['Trad→\nRoth'] > 1000:
@@ -396,20 +612,14 @@ def render_withdrawal_sankey_for_year(year_data: pd.Series, portfolio: pd.DataFr
     # RMDs to brokerage
     if 'Trad→\nBrok' in year_data and year_data['Trad→\nBrok'] > 1000:
         sources.append("Traditional IRA/401(k)")
-        targets.append("RMD → Brokerage")
+        targets.append("Brokerage Account")
         values.append(float(year_data['Trad→\nBrok']))
     
-    # Social Security
-    if 'SS Benefits' in year_data and year_data['SS Benefits'] > 1000:
-        sources.append("Social Security")
-        targets.append("Living Expenses")
-        values.append(float(year_data['SS Benefits']))
-    
-    # Healthcare
-    if 'Healthcare Cost' in year_data and year_data['Healthcare Cost'] > 5000:
-        sources.append("Traditional IRA/401(k)")
-        targets.append("Healthcare")
-        values.append(float(year_data['Healthcare Cost']))
+    # DAF contributions from brokerage
+    if 'DAF Contribution' in year_data and year_data['DAF Contribution'] > 1000:
+        sources.append("Brokerage Account")
+        targets.append("DAF (Charitable)")
+        values.append(float(year_data['DAF Contribution']))
     
     if sources:
         _render_sankey_diagram(sources, targets, values,
@@ -429,6 +639,7 @@ def _render_sankey_diagram(sources: list, targets: list, values: list, title: st
         "Roth IRA/401(k)": "rgba(148, 103, 189, 0.8)",
         "Brokerage Account": "rgba(255, 187, 120, 0.8)",
         "Cash/Savings": "rgba(152, 223, 138, 0.8)",
+        "Cash/Spending": "rgba(152, 223, 138, 0.8)",
         "Social Security": "rgba(23, 190, 207, 0.8)"
     }
     
@@ -437,11 +648,16 @@ def _render_sankey_diagram(sources: list, targets: list, values: list, title: st
         "Roth IRA/401(k)": "rgba(148, 103, 189, 0.6)",
         "Brokerage Account": "rgba(255, 187, 120, 0.6)",
         "Cash/Savings": "rgba(152, 223, 138, 0.6)",
+        "Cash/Spending": "rgba(152, 223, 138, 0.6)",
         "Living Expenses": "rgba(31, 119, 180, 0.6)",
         "Healthcare": "rgba(255, 127, 14, 0.6)",
         "Roth Conversion": "rgba(148, 103, 189, 0.6)",
         "RMD → Brokerage": "rgba(255, 187, 120, 0.6)",
-        "Traditional 401(k)": "rgba(214, 39, 40, 0.6)"
+        "Traditional 401(k)": "rgba(214, 39, 40, 0.6)",
+        "DAF (Charitable)": "rgba(140, 86, 75, 0.6)",
+        "Payroll Taxes": "rgba(227, 119, 194, 0.6)",
+        "Federal Income Tax": "rgba(188, 189, 34, 0.6)",
+        "State Income Tax": "rgba(23, 190, 207, 0.6)"
     }
     
     # Build node list
@@ -668,8 +884,6 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                     if row['Action_Count'] > 0:
                         with st.expander(f"📆 {row['Month']}", expanded=(idx < 2)):
                             st.markdown(row['Actions'])
-                            if row['Amounts'] != '—':
-                                st.markdown(f"**Amounts:**\n\n{row['Amounts']}")
             else:
                 st.info("No monthly actions for the selected year.")
 
@@ -768,7 +982,7 @@ else:
             try:
                 _, summary_df_w = get_networth_by_month(curr_month, curr_year)
                 actual_cash_start = float(
-                    summary_df_w[summary_df_w['account_type'] == 'Cash']['market_value'].sum()
+                    summary_df_w[summary_df_w['account_type'] == 'Savings']['market_value'].sum()
                 ) if not summary_df_w.empty else display_df_w.loc[display_df_w.index[0], 'Cash Balance']
             except Exception:
                 actual_cash_start = display_df_w.loc[display_df_w.index[0], 'Cash Balance']
@@ -849,8 +1063,6 @@ else:
                     if row['Action_Count'] > 0:
                         with st.expander(f"📆 {row['Month']}", expanded=(idx < 2)):
                             st.markdown(row['Actions'])
-                            if row['Amounts'] != '—':
-                                st.markdown(f"**Amounts:**\n\n{row['Amounts']}")
             else:
                 st.info("No monthly actions for the selected year.")
 
