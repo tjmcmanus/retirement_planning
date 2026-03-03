@@ -50,6 +50,47 @@ from monte_carlo import (
 
 navbar("Monte Carlo")
 
+# Load configuration for default values
+from config import get_config_manager
+_config_mgr = get_config_manager()
+
+# Calculate default portfolio value from networth
+try:
+    _default_portfolio = 0
+    if not _networth.empty:
+        _latest_row = _networth.iloc[-1]
+        _default_portfolio = int(
+            float(_latest_row.get("cash", 0)) +
+            float(_latest_row.get("taxable", 0)) +
+            float(_latest_row.get("tax_deferred", 0)) +
+            float(_latest_row.get("tax_free", 0))
+        )
+    # Fallback to a reasonable default if no data
+    if _default_portfolio < 10_000:
+        _default_portfolio = 1_500_000
+except Exception:
+    _default_portfolio = 1_500_000
+
+# Get configuration defaults
+_default_expenses = _config_mgr.get("financial_assumptions", "expected_annual_expenses", 50_000)
+_default_person1_age = _config_mgr.calculate_age(
+    _config_mgr.get("personal_info", "person1_birth_date", "1965-01-01")
+)
+_default_person1_retire_age = _config_mgr.get("personal_info", "person1_retirement_age", 62)
+_default_person2_age = _config_mgr.calculate_age(
+    _config_mgr.get("personal_info", "person2_birth_date", "1967-01-01")
+)
+_default_ss_age = _config_mgr.get("social_security", "person1_ssi_age", 70)
+_default_ss_amount = _config_mgr.get("social_security", "person1_ssi_amount", 0)
+_default_inflation = _config_mgr.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100
+
+# Use the younger person's retirement age if both are defined
+_default_start_age = min(_default_person1_retire_age,
+                         _config_mgr.get("personal_info", "person2_retirement_age", 62))
+
+# Calculate a reasonable end age (use the older person's age + 30 years, capped at 95)
+_default_end_age = min(95, max(_default_person1_age, _default_person2_age) + 30)
+
 st.header("🎲 Monte Carlo Simulation")
 st.markdown(
     "Run 10,000+ retirement simulations to estimate the probability your portfolio "
@@ -64,40 +105,51 @@ with st.expander("⚙️ Simulation Settings", expanded=False):
     _s1, _s2, _s3, _s4 = st.columns(4)
     with _s1:
         _mc_portfolio = st.number_input(
-            "Starting Portfolio ($)", min_value=10_000, value=1_500_000,
+            "Starting Portfolio ($)", min_value=10_000, value=_default_portfolio,
             step=50_000, key="mc_portfolio",
+            help="Current total portfolio value from your latest data"
         )
         _mc_withdrawal = st.number_input(
-            "Annual Withdrawal ($)", min_value=1_000, value=80_000,
+            "Annual Withdrawal ($)", min_value=1_000, value=_default_expenses,
             step=5_000, key="mc_withdrawal",
+            help="Expected annual expenses from configuration"
         )
     with _s2:
         _mc_start_age = st.number_input(
-            "Retirement Age", min_value=40, max_value=80, value=62, key="mc_start_age",
+            "Retirement Age", min_value=40, max_value=80, value=_default_start_age, key="mc_start_age",
+            help="Planned retirement age from configuration"
         )
         _mc_end_age = st.number_input(
-            "Plan To Age", min_value=70, max_value=110, value=90, key="mc_end_age",
+            "Plan To Age", min_value=70, max_value=110, value=_default_end_age, key="mc_end_age",
+            help="Planning horizon (typically 90-95)"
         )
     with _s3:
         _mc_ss = st.number_input(
-            "Annual Social Security ($)", min_value=0, value=40_000,
+            "Annual Social Security ($)", min_value=0, value=_default_ss_amount,
             step=1_000, key="mc_ss",
+            help="Expected annual Social Security benefits from configuration"
         )
         _mc_ss_age = st.number_input(
-            "SS Start Age", min_value=62, max_value=70, value=70, key="mc_ss_age",
+            "SS Start Age", min_value=62, max_value=70, value=_default_ss_age, key="mc_ss_age",
+            help="Age to start Social Security from configuration"
         )
     with _s4:
-        _mc_inflation = st.slider(
-            "Inflation Rate", min_value=0.01, max_value=0.10,
-            value=0.029, step=0.001, format="%.1f%%", key="mc_inflation",
+        _mc_inflation_pct = st.slider(
+            "Inflation Rate", min_value=1.0, max_value=10.0,
+            value=_default_inflation * 100, step=0.1, format="%.1f%%", key="mc_inflation_pct",
+            help="Expected inflation rate from configuration"
         )
+        _mc_inflation = _mc_inflation_pct / 100
+        st.session_state["mc_inflation"] = _mc_inflation
         _mc_allocation = st.selectbox(
             "Portfolio Allocation", list(PORTFOLIO_PRESETS.keys()),
             index=1, key="mc_allocation",
+            help="Asset allocation mix (stocks/bonds)"
         )
         _mc_n_sims = st.select_slider(
             "Simulations", options=[1_000, 2_000, 5_000, 10_000, 20_000],
             value=10_000, key="mc_n_sims",
+            help="Number of Monte Carlo simulations to run"
         )
 
 st.markdown("---")

@@ -40,6 +40,34 @@ def _cs() -> None:
 # ── TAX PLANNER ─────────────────────────────────────────────────────────────
 with adv_tax_planner_tab:
     st.subheader("🧮 Tax Planner")
+    
+    with st.expander("📘 Strategy: Why Use the Tax Planner?", expanded=False):
+        st.markdown("""
+        The **Tax Planner** is a single-year tax projection tool that helps you estimate your tax liability and optimize key decisions before year-end.
+        
+        **Why This Matters:**
+        - **Avoid Surprises**: Project your total tax bill before filing, including federal, state, and Medicare surcharges
+        - **Optimize Conversions**: Determine the optimal Roth conversion amount to stay within your target tax bracket
+        - **Plan Withdrawals**: Calculate how much you can safely withdraw from tax-deferred accounts
+        - **Charitable Giving**: Model Donor Advised Fund (DAF) contributions to maximize deductions
+        - **Medicare Planning**: See how conversions affect IRMAA surcharges (2-year lookback)
+        
+        **Best Used For:**
+        - Year-end tax planning and adjustments
+        - Estimating quarterly tax payments
+        - Evaluating Roth conversion opportunities
+        - Optimizing charitable contribution timing
+        - Projecting the impact of capital gains on your tax situation
+        
+        **Key Features:**
+        - Real-time tax calculations using current IRS brackets
+        - Roth conversion headroom analysis
+        - IRMAA surcharge projections
+        - DAF contribution optimization (30% or 60% AGI limits)
+        - State tax estimates
+        - Account balance projections after transactions
+        """)
+    
     try:
         cash_value    = float(networth["cash"].iloc[-1])         if not networth.empty else 0.0
         trad_value    = float(networth["tax_deferred"].iloc[-1]) if not networth.empty else 0.0
@@ -226,6 +254,34 @@ with adv_tax_planner_tab:
 # ── MULTI-YEAR TAX PLANNING ──────────────────────────────────────────────────
 with adv_tax_tab:
     st.subheader("📅 5-Year Rolling Tax Optimization Window")
+    
+    with st.expander("📘 Strategy: Why Use Multi-Year Tax Planning?", expanded=False):
+        st.markdown("""
+        **Multi-Year Tax Planning** helps you optimize Roth conversions and tax strategies across a 5-10 year window, not just a single year.
+        
+        **Why This Matters:**
+        - **Bracket Management**: Identify years with lower income to maximize conversions
+        - **RMD Preparation**: Convert before Required Minimum Distributions push you into higher brackets
+        - **Tax Rate Arbitrage**: Take advantage of temporary low-income years (early retirement, sabbatical)
+        - **IRMAA Avoidance**: Plan conversions to avoid Medicare surcharges in future years
+        - **Smooth Tax Burden**: Spread conversions to avoid bracket spikes
+        
+        **Best Used For:**
+        - Early retirees (age 60-72) before RMDs begin
+        - Planning systematic Roth conversions over multiple years
+        - Optimizing QBI (Qualified Business Income) deductions
+        - Coordinating capital gains with conversion strategies
+        - Long-term tax bracket optimization
+        
+        **Key Features:**
+        - 5-10 year tax projection window
+        - Year-by-year effective and marginal rate analysis
+        - Bracket headroom identification (unused space in current bracket)
+        - QBI deduction calculator (IRC §199A for business owners)
+        - Optimization opportunity recommendations
+        - Visual comparison of tax burden across years
+        """)
+    
     _myt_col1, _myt_col2, _myt_col3 = st.columns(3)
     with _myt_col1:
         _myt_start_year = st.selectbox("Start Year", list(range(curr_year, curr_year + 6)), key="myt_start_year")
@@ -293,16 +349,83 @@ with adv_tax_tab:
 
     st.markdown("---")
     st.subheader("🏢 QBI Deduction Calculator (IRC §199A)")
+    
+    with st.expander("📘 Strategy: Why Use the QBI Deduction Calculator?", expanded=False):
+        st.markdown("""
+        The **Qualified Business Income (QBI) Deduction** under IRC §199A allows eligible business owners and self-employed individuals to deduct up to **20% of qualified business income** from pass-through entities.
+        
+        **Why This Matters:**
+        - **Significant Tax Savings**: Deduct up to 20% of business income, potentially saving thousands in taxes
+        - **Pass-Through Benefit**: Available for sole proprietors, partnerships, S-corps, and LLCs
+        - **No Additional Cost**: Unlike retirement contributions, this deduction doesn't require setting aside funds
+        - **Stacks with Other Deductions**: Works alongside standard/itemized deductions and retirement contributions
+        
+        **Who Qualifies:**
+        - Self-employed individuals (Schedule C)
+        - Partners in partnerships
+        - S-corporation shareholders
+        - LLC members (taxed as pass-through)
+        - Real estate investors with rental income
+        - Trust and estate beneficiaries with QBI
+        
+        **Income Thresholds (2026):**
+        - **Below Threshold**: Full 20% deduction, no limitations
+          - Married Filing Jointly: $394,600
+          - Single: $197,300
+        - **Phase-Out Range**: Deduction gradually limited by W-2 wages and property basis
+          - MFJ: $394,600 - $494,600
+          - Single: $197,300 - $247,300
+        - **Above Threshold**: W-2 wage and UBIA limitations fully apply
+        
+        **Specified Service Trade or Business (SSTB) Rules:**
+        SSTBs face stricter limitations and complete phase-out at higher incomes:
+        - **SSTB Examples**: Doctors, lawyers, accountants, consultants, financial advisors, athletes, performers
+        - **Non-SSTB Examples**: Manufacturing, retail, restaurants, construction, engineering, architecture
+        - **SSTB Impact**: Deduction phases out completely above income thresholds
+        
+        **W-2 Wage Limitation:**
+        Above income thresholds, deduction is limited to the greater of:
+        1. **50% of W-2 wages** paid by the business, OR
+        2. **25% of W-2 wages** + 2.5% of UBIA (unadjusted basis of qualified property)
+        
+        **Best Used For:**
+        - Annual tax planning for business owners
+        - Evaluating whether to take additional income in current year
+        - Deciding between W-2 compensation vs. distributions (S-corps)
+        - Planning major equipment purchases (UBIA impact)
+        - Assessing impact of Roth conversions on QBI deduction
+        - Comparing tax efficiency of different business structures
+        
+        **Strategic Considerations:**
+        - **Roth Conversions**: Large conversions can push you into phase-out range
+        - **Income Timing**: Consider deferring income if near threshold
+        - **W-2 Wages**: S-corp owners may benefit from higher W-2 compensation
+        - **Equipment Purchases**: Qualified property increases UBIA, expanding deduction
+        - **Business Structure**: QBI deduction may favor pass-through over C-corp
+        
+        **Common Scenarios:**
+        1. **Solo Consultant (SSTB)**: $180K income → Full 20% deduction ($36K)
+        2. **High-Income Doctor (SSTB)**: $550K income → No deduction (phased out)
+        3. **Manufacturing Business**: $450K income, $200K W-2 wages → Limited by W-2 wages
+        4. **Real Estate Investor**: $300K rental income → Full 20% deduction ($60K)
+        """)
+    
     with st.expander("Calculate your Qualified Business Income deduction", expanded=True):
         _qbi_c1, _qbi_c2 = st.columns(2)
         with _qbi_c1:
-            _qbi_income = st.number_input("QBI Income ($)", min_value=0, value=100_000, step=5_000, key="qbi_income")
-            _qbi_total  = st.number_input("Total Taxable Income ($)", min_value=0, value=200_000, step=5_000, key="qbi_total")
+            _qbi_income = st.number_input("QBI Income ($)", min_value=0, value=100_000, step=5_000, key="qbi_income",
+                help="Qualified business income from pass-through entities (Schedule C, K-1, etc.)")
+            _qbi_total  = st.number_input("Total Taxable Income ($)", min_value=0, value=200_000, step=5_000, key="qbi_total",
+                help="Total taxable income (determines phase-out and limitations)")
             _qbi_filing = st.selectbox("Filing Status", ["married_filing_jointly", "single"], key="qbi_filing")
         with _qbi_c2:
-            _qbi_w2   = st.number_input("W-2 Wages Paid by Business ($)", min_value=0, value=0, step=5_000, key="qbi_w2")
-            _qbi_ubia = st.number_input("UBIA of Qualified Property ($)", min_value=0, value=0, step=10_000, key="qbi_ubia")
-            _qbi_sstb = st.checkbox("Specified Service Trade or Business (SSTB)?", key="qbi_sstb")
+            _qbi_w2   = st.number_input("W-2 Wages Paid by Business ($)", min_value=0, value=0, step=5_000, key="qbi_w2",
+                help="Total W-2 wages paid by the business (for wage limitation)")
+            _qbi_ubia = st.number_input("UBIA of Qualified Property ($)", min_value=0, value=0, step=10_000, key="qbi_ubia",
+                help="Unadjusted basis immediately after acquisition of qualified property")
+            _qbi_sstb = st.checkbox("Specified Service Trade or Business (SSTB)?", key="qbi_sstb",
+                help="Check if business is health, law, accounting, consulting, financial services, etc.")
+        
         if st.button("Calculate QBI Deduction", key="qbi_calc"):
             _qbi_r = calculate_qbi_deduction_full(qbi_income=float(_qbi_income), total_taxable_income=float(_qbi_total),
                                                    w2_wages=float(_qbi_w2), ubia_qualified_property=float(_qbi_ubia),
@@ -312,15 +435,68 @@ with adv_tax_tab:
         if "qbi_result" in st.session_state:
             _qbi_r = st.session_state["qbi_result"]
             _qc1, _qc2, _qc3 = st.columns(3)
-            _qc1.metric("QBI Deduction", f"${_qbi_r['deduction']:,.0f}")
-            _qc2.metric("Base Deduction (20%)", f"${_qbi_r['base_deduction']:,.0f}")
-            _qc3.metric("Phase-Out %", f"{_qbi_r['phase_out_pct']:.1%}")
+            _qc1.metric("QBI Deduction", f"${_qbi_r['deduction']:,.0f}",
+                help="Final qualified business income deduction")
+            _qc2.metric("Base Deduction (20%)", f"${_qbi_r['base_deduction']:,.0f}",
+                help="20% of QBI before limitations")
+            _qc3.metric("Phase-Out %", f"{_qbi_r['phase_out_pct']:.1%}",
+                help="Percentage through phase-out range")
+            
+            st.markdown("#### Calculation Details")
             for _note in _qbi_r["notes"]:
                 st.caption(_note)
+            
+            # Add tax savings estimate
+            if _qbi_r['deduction'] > 0:
+                _est_tax_rate = 0.24  # Estimate
+                _est_savings = _qbi_r['deduction'] * _est_tax_rate
+                st.success(f"💰 **Estimated Tax Savings**: ${_est_savings:,.0f} (assuming 24% marginal rate)")
 
 # ── BACKDOOR & MEGA BACKDOOR ROTH ────────────────────────────────────────────
 with adv_backdoor_tab:
     st.subheader("🔄 Backdoor Roth IRA")
+    
+    with st.expander("📘 Strategy: Why Use Backdoor & Mega Backdoor Roth?", expanded=False):
+        st.markdown("""
+        **Backdoor Roth** strategies allow high-income earners to contribute to Roth accounts despite income limits.
+        
+        ### Regular Backdoor Roth IRA
+        **Why This Matters:**
+        - **Income Limit Workaround**: Contribute to Roth IRA even when MAGI exceeds $240,000 (married) or $161,000 (single)
+        - **Tax-Free Growth**: All future growth and withdrawals are tax-free
+        - **No RMDs**: Unlike Traditional IRAs, Roth IRAs have no Required Minimum Distributions
+        - **Estate Planning**: Pass tax-free wealth to heirs
+        
+        **Annual Contribution:** $7,000 ($8,000 if age 50+)
+        
+        **Critical Consideration:** The **Pro-Rata Rule** - if you have existing pre-tax IRA balances, conversions are partially taxable. Solution: Roll pre-tax IRAs into your 401(k) first.
+        
+        ### Mega Backdoor Roth (401k After-Tax)
+        **Why This Matters:**
+        - **Massive Contributions**: Up to $46,000 additional annually (2026 limits)
+        - **No Income Limits**: Available regardless of income level
+        - **No Pro-Rata Issues**: 401(k) conversions don't trigger IRA pro-rata rules
+        - **Accelerated Wealth Building**: Dramatically increase tax-free retirement savings
+        
+        **Requirements:**
+        - Employer 401(k) must allow after-tax contributions
+        - Plan must allow in-plan Roth conversions OR in-service distributions
+        - Check with your HR department or plan administrator
+        
+        ### BETR (Break-Even Tax Rate) Analysis
+        **Why This Matters:**
+        - **Scientific Decision Framework**: Determine if conversion makes financial sense
+        - **Beyond Simple Comparison**: Accounts for tax payment source, time horizon, and future opportunities
+        - **Personalized Analysis**: Calculate your specific break-even tax rate
+        
+        **Decision Rule:** If your expected future tax rate > BETR, conversion is recommended.
+        
+        **Best Used For:**
+        - High-income earners maximizing Roth contributions
+        - Those with employer 401(k) plans supporting mega backdoor
+        - Anyone wanting to enable future backdoor Roth contributions
+        - Evaluating whether Roth conversions make financial sense
+        """)
     
     with st.expander("Backdoor Roth IRA Calculator", expanded=True):
         _bd_c1, _bd_c2, _bd_c3 = st.columns(3)
@@ -470,6 +646,42 @@ with adv_backdoor_tab:
 with adv_nua_tab:
     st.subheader("📈 Net Unrealized Appreciation (NUA) Analysis")
     
+    with st.expander("📘 Strategy: Why Use NUA?", expanded=False):
+        st.markdown("""
+        **Net Unrealized Appreciation (NUA)** is a specialized tax strategy for company stock held in your 401(k).
+        
+        **Why This Matters:**
+        - **Tax Savings**: Pay capital gains rates (0-20%) instead of ordinary income rates (10-37%) on stock appreciation
+        - **Immediate Access**: Distribute stock to taxable account without 10% early withdrawal penalty
+        - **Estate Planning**: Heirs get step-up in basis on NUA amount
+        - **One-Time Opportunity**: Must be done as lump-sum distribution upon separation from service
+        
+        **How It Works:**
+        1. Distribute employer stock from 401(k) to taxable brokerage account
+        2. Pay ordinary income tax on original cost basis only
+        3. Pay capital gains tax on appreciation (NUA) when you sell
+        4. Appreciation is taxed at favorable long-term capital gains rates
+        
+        **Example:**
+        - Cost basis: $50,000 (taxed as ordinary income at distribution)
+        - Current value: $200,000
+        - NUA: $150,000 (taxed as capital gains when sold)
+        - Tax savings: Up to $25,500 vs. rolling to IRA
+        
+        **Best Used For:**
+        - Employees with highly appreciated company stock in 401(k)
+        - Those age 55+ separating from service (no early withdrawal penalty)
+        - Stock with low cost basis relative to current value
+        - When you expect to be in high tax bracket in retirement
+        
+        **Requirements:**
+        - Must take lump-sum distribution (entire 401(k) balance)
+        - Must occur after triggering event (separation, age 59½, death, disability)
+        - Stock must be distributed in-kind (not sold first)
+        
+        **Caution:** This is a complex, irrevocable decision. Consult a tax professional before proceeding.
+        """)
+    
     with st.expander("NUA Calculator", expanded=True):
         _nua_c1, _nua_c2, _nua_c3 = st.columns(3)
         with _nua_c1:
@@ -533,6 +745,52 @@ with adv_nua_tab:
 # ── QCD OPTIMIZER ─────────────────────────────────────────────────────────────
 with adv_qcd_tab:
     st.subheader("🎁 Qualified Charitable Distribution (QCD) Optimizer")
+    
+    with st.expander("📘 Strategy: Why Use QCD?", expanded=False):
+        st.markdown("""
+        **Qualified Charitable Distributions (QCD)** allow IRA owners age 70½+ to donate directly from an IRA to charity, tax-free.
+        
+        **Why This Matters:**
+        - **Tax-Free Giving**: Donations don't count as taxable income (better than itemized deduction)
+        - **Satisfy RMDs**: QCDs count toward Required Minimum Distributions
+        - **Lower AGI**: Reduces AGI, which can help with IRMAA, ACA subsidies, and other income-based thresholds
+        - **No Itemization Needed**: Benefit even if you take the standard deduction
+        - **Efficient Philanthropy**: More tax-efficient than taking distribution and donating separately
+        
+        **Annual Limit:** $105,000 per person (2026)
+        
+        **How It Works:**
+        1. Direct your IRA custodian to send funds directly to qualified charity
+        2. Distribution is excluded from taxable income
+        3. Counts toward your RMD requirement
+        4. Charity receives full amount (no taxes withheld)
+        
+        **Example:**
+        - RMD: $20,000
+        - Charitable giving goal: $10,000
+        - Strategy: Use $10,000 QCD + $10,000 regular distribution
+        - Tax savings: $2,200 (at 22% bracket) vs. taking full distribution and donating
+        
+        **Best Used For:**
+        - Retirees age 70½+ with charitable giving goals
+        - Those who don't itemize deductions
+        - Managing AGI to avoid IRMAA surcharges
+        - Satisfying RMDs while supporting charities
+        - Reducing taxable estate
+        
+        **Requirements:**
+        - Must be age 70½ or older
+        - Distribution must go directly from IRA to qualified 501(c)(3) charity
+        - Cannot receive any benefit in return (no tickets, meals, etc.)
+        - Must receive written acknowledgment from charity
+        
+        **Advantages Over Regular Donations:**
+        - Reduces AGI (not just taxable income)
+        - Works with standard deduction
+        - Avoids IRMAA and other AGI-based penalties
+        - More tax-efficient than distribute-then-donate
+        """)
+    
     st.markdown("QCDs allow IRA owners age 70½+ to donate up to $105,000/year directly from an IRA, satisfying RMDs tax-free.")
     
     with st.expander("QCD Calculator", expanded=True):
@@ -581,6 +839,73 @@ with adv_qcd_tab:
 # ── 72(t) SEPP CALCULATOR ─────────────────────────────────────────────────────
 with adv_sepp_tab:
     st.subheader("⏱️ 72(t) SEPP Calculator")
+    
+    with st.expander("📘 Strategy: Why Use 72(t) SEPP?", expanded=False):
+        st.markdown("""
+        **72(t) SEPP (Substantially Equal Periodic Payments)** allows penalty-free IRA withdrawals before age 59½.
+        
+        **Why This Matters:**
+        - **Early Retirement**: Access IRA funds before 59½ without 10% early withdrawal penalty
+        - **Bridge to 59½**: Create income stream until penalty-free withdrawals begin
+        - **Flexible Methods**: Choose from three IRS-approved calculation methods
+        - **Legal and Safe**: IRS-sanctioned exception to early withdrawal penalty
+        
+        **How It Works:**
+        1. Calculate annual payment using IRS-approved method
+        2. Take substantially equal payments for at least 5 years AND until age 59½
+        3. Payments must continue without modification (with limited exceptions)
+        4. Failure to comply triggers retroactive penalties plus interest
+        
+        **Three IRS-Approved Methods:**
+        
+        1. **Required Minimum Distribution (RMD)**
+           - Recalculated annually based on account balance
+           - Most flexible (payments adjust with balance)
+           - Typically lowest payment amount
+        
+        2. **Fixed Amortization**
+           - Fixed payment based on life expectancy and interest rate
+           - Moderate payment amount
+           - Can switch to RMD method once
+        
+        3. **Fixed Annuitization**
+           - Fixed payment using annuity factors
+           - Typically highest payment amount
+           - Can switch to RMD method once
+        
+        **Example:**
+        - IRA Balance: $500,000
+        - Age: 50
+        - Interest Rate: 5%
+        - Annual Payment: ~$20,000-$25,000 (method dependent)
+        - Must continue until age 59½ (9 years minimum)
+        
+        **Best Used For:**
+        - Early retirees (age 50-58) needing IRA income
+        - Those with sufficient IRA balance to support payments
+        - People committed to long-term payment schedule
+        - Bridging gap to age 59½ or Social Security
+        
+        **Critical Warnings:**
+        - **Irrevocable**: Once started, must continue for required period
+        - **Modification Penalty**: Changing payments triggers retroactive 10% penalty + interest
+        - **All or Nothing**: Applies to entire IRA (consider splitting IRAs first)
+        - **Still Taxable**: Payments are taxed as ordinary income (just no penalty)
+        
+        **Requirements:**
+        - Must continue for longer of: 5 years OR until age 59½
+        - Cannot modify payment amount (with limited exceptions)
+        - Must take payments at least annually
+        - Applies to entire IRA account
+        
+        **Planning Tips:**
+        - Consider splitting IRA before starting SEPP (only apply to portion needed)
+        - Choose conservative interest rate (lower payments = more flexibility)
+        - Ensure sufficient balance to sustain payments
+        - Have backup income sources in case of emergency
+        - Consult tax professional before implementing
+        """)
+    
     st.markdown("Substantially Equal Periodic Payments allow penalty-free IRA withdrawals before age 59½.")
     
     with st.expander("SEPP Calculator", expanded=True):
@@ -627,6 +952,82 @@ with adv_sepp_tab:
 # ── CAPITAL LOSS HARVESTING ───────────────────────────────────────────────────
 with adv_harvest_tab:
     st.subheader("🌾 Multi-Year Capital Loss Harvesting Plan")
+    
+    with st.expander("📘 Strategy: Why Use Capital Loss Harvesting?", expanded=False):
+        st.markdown("""
+        **Capital Loss Harvesting** (also called Tax-Loss Harvesting) involves strategically selling investments at a loss to offset capital gains and reduce taxes.
+        
+        **Why This Matters:**
+        - **Offset Gains**: Losses offset capital gains dollar-for-dollar
+        - **Reduce Ordinary Income**: Excess losses offset up to $3,000 of ordinary income annually
+        - **Carry Forward**: Unused losses carry forward indefinitely to future years
+        - **Lower AGI**: Reduces AGI, helping with IRMAA, ACA subsidies, and other thresholds
+        - **Free Tax Benefit**: Harvest losses without changing investment exposure (via wash sale planning)
+        
+        **How It Works:**
+        1. Identify positions with unrealized losses in taxable accounts
+        2. Sell losing positions to realize losses
+        3. Immediately buy similar (but not "substantially identical") investments
+        4. Use losses to offset gains or reduce ordinary income
+        5. Carry forward unused losses to future years
+        
+        **Tax Benefits:**
+        - **Offset Short-Term Gains**: Save up to 37% (ordinary income rates)
+        - **Offset Long-Term Gains**: Save up to 23.8% (20% + 3.8% NIIT)
+        - **Offset Ordinary Income**: Save up to $3,000 × your tax rate annually
+        - **Indefinite Carryforward**: Losses never expire
+        
+        **Example:**
+        - Realized capital gains: $50,000
+        - Harvest losses: $30,000
+        - Net taxable gains: $20,000
+        - Tax savings: $7,140 (at 23.8% LTCG rate)
+        
+        **Multi-Year Strategy:**
+        - Year 1: Harvest $50,000 losses, offset $20,000 gains + $3,000 income
+        - Year 2: Carry forward $27,000, offset $20,000 gains + $3,000 income
+        - Year 3: Carry forward $4,000, offset $4,000 gains
+        - Total tax savings: $11,900+ over 3 years
+        
+        **Best Used For:**
+        - Market downturns (harvest losses when available)
+        - Years with large capital gains (from sales, rebalancing, etc.)
+        - High-income years (maximize value of ordinary income offset)
+        - Retirees managing AGI for IRMAA and ACA subsidies
+        - Building loss carryforward "bank" for future use
+        
+        **Wash Sale Rule (Critical):**
+        - Cannot buy "substantially identical" security 30 days before or after sale
+        - 61-day window total (30 days before + day of sale + 30 days after)
+        - Violation defers loss (doesn't eliminate it, but delays benefit)
+        - Applies across all accounts (including spouse's and IRAs)
+        
+        **Strategies to Avoid Wash Sales:**
+        - Buy similar but not identical fund (e.g., different S&P 500 fund)
+        - Wait 31 days before repurchasing
+        - Double up (buy more shares, wait 31 days, sell original)
+        - Use different asset class with similar exposure
+        
+        **What You Can Harvest:**
+        - Individual stocks
+        - Mutual funds
+        - ETFs
+        - Bonds
+        - Any security in taxable accounts
+        
+        **What You CANNOT Harvest:**
+        - Losses in IRAs, 401(k)s, or other tax-advantaged accounts
+        - Losses on personal property (home, car, etc.)
+        
+        **Planning Tips:**
+        - Harvest losses throughout the year (not just December)
+        - Track cost basis carefully (use specific identification)
+        - Consider harvesting even without current gains (build carryforward)
+        - Coordinate with Roth conversion planning (losses reduce AGI)
+        - Review portfolio quarterly for harvesting opportunities
+        - Use this tool to model multi-year harvesting strategy
+        """)
+    
     st.markdown("Model how harvesting unrealized losses in your brokerage account reduces taxes over multiple years.")
     _hlv_c1, _hlv_c2, _hlv_c3 = st.columns(3)
     with _hlv_c1:
