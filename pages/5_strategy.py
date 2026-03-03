@@ -3,17 +3,28 @@ pages/5_strategy.py
 ===================
 📈 Strategy — Accumulation and Withdrawal planning across all life stages.
 
+Enhanced UX with:
+- Improved visual hierarchy for long-term planning
+- State tax integration
+- Month-by-month execution calendar
+- Interactive Sankey diagrams
+- Timeline view for key financial events
+- Summary insight cards
+
 Sub-tabs (st.tabs within the page):
-  - 📋 Annual Plan       (year-by-year strategy table)
-  - 💰 Account Balances  (projected balances table)
-  - 📊 Visualizations    (stacked area + income bar charts)
+  - 📋 Long-Term Plan     (multi-year strategy with state taxes)
+  - 📅 Monthly Calendar   (month-by-month execution plan)
+  - 💰 Account Balances   (projected balances table)
+  - 📊 Visualizations     (stacked area + income bar charts)
 """
 from __future__ import annotations
 
 from typing import cast
+import calendar
 
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 from streamlit_extras.add_vertical_space import add_vertical_space
 
@@ -36,60 +47,389 @@ _STAGE_COLUMN_HELP = (
     "Hover over the stage name in the legend below the table for a plain-English summary."
 )
 
-def render_accumulation_flow_diagram(portfolio: pd.DataFrame, annual_expenses: float) -> None:
-    """Render Sankey diagram showing income flowing into accounts during accumulation."""
-    # Calculate account balances by type
-    account_balances = {}
-    if not portfolio.empty:
-        for acct_type in ["Cash", "Brokerage", "Traditional", "Roth"]:
-            acct_data = portfolio[portfolio["account_type"] == acct_type]
-            if len(acct_data) > 0:
-                balance = (acct_data["qty"] * acct_data["purchase_price"]).sum()
-                account_balances[acct_type] = float(balance)
-            else:
-                account_balances[acct_type] = 0.0
+# Month names for calendar view
+MONTH_NAMES = list(calendar.month_name)[1:]  # Skip empty first element
+
+def render_summary_cards(strategy_df: pd.DataFrame, phase: str) -> None:
+    """Render key insight cards at the top of the strategy view."""
+    if strategy_df.empty:
+        return
     
-    # Income allocation strategy (tax-efficient)
-    traditional_401k_contrib = 23_000  # Max 401(k) contribution
-    roth_direct_contrib = 7_000  # Direct Roth IRA contribution
-    roth_backdoor_contrib = 7_000  # Backdoor Roth contribution (from after-tax)
-    employer_match = 11_500  # 50% match on first 6%
-    brokerage_invest = 23_000  # After-tax investments
-    cash_savings = 10_000  # Emergency fund building
+    col1, col2, col3, col4 = st.columns(4)
     
-    # Sankey diagram nodes
-    sources = [
-        "Wages/Salary",
-        "Wages/Salary",
-        "After-Tax Income",
-        "After-Tax Income",
-        "After-Tax Income",
-        "Employer Match"
-    ]
+    with col1:
+        total_years = len(strategy_df)
+        st.metric(
+            "Planning Horizon",
+            f"{total_years} years",
+            help="Number of years in this financial plan"
+        )
     
-    targets = [
-        "Traditional 401(k)/IRA",
-        "Roth IRA/401(k)",
-        "Roth IRA/401(k)",
-        "Brokerage Account",
-        "Cash/Savings",
-        "Traditional 401(k)"
-    ]
+    with col2:
+        if phase == "accumulation":
+            total_contributions = strategy_df['Wages→\nTrad'].sum() + strategy_df['Wages→\nRoth'].sum() if 'Wages→\nTrad' in strategy_df.columns else 0
+            st.metric(
+                "Total Contributions",
+                f"${total_contributions:,.0f}",
+                help="Total retirement account contributions over planning period"
+            )
+        else:
+            total_withdrawals = strategy_df['Trad→\nCash'].sum() if 'Trad→\nCash' in strategy_df.columns else 0
+            st.metric(
+                "Total Withdrawals",
+                f"${total_withdrawals:,.0f}",
+                help="Total withdrawals from retirement accounts"
+            )
     
-    values = [
-        traditional_401k_contrib,
-        roth_direct_contrib,
-        roth_backdoor_contrib,
-        brokerage_invest,
-        cash_savings,
-        employer_match
-    ]
+    with col3:
+        total_taxes = strategy_df['Federal Tax'].sum() if 'Federal Tax' in strategy_df.columns else 0
+        if 'State Tax' in strategy_df.columns:
+            total_taxes += strategy_df['State Tax'].sum()
+        st.metric(
+            "Total Taxes",
+            f"${total_taxes:,.0f}",
+            help="Total federal and state taxes over planning period"
+        )
     
-    # Create color mapping
+    with col4:
+        if 'Total Portfolio' in strategy_df.columns:
+            final_portfolio = strategy_df['Total Portfolio'].iloc[-1]
+            initial_portfolio = strategy_df['Total Portfolio'].iloc[0]
+            growth = final_portfolio - initial_portfolio
+            growth_pct = (growth / initial_portfolio * 100) if initial_portfolio > 0 else 0
+            st.metric(
+                "Portfolio Growth",
+                f"${growth:,.0f}",
+                f"{growth_pct:+.1f}%",
+                help="Net portfolio growth over planning period"
+            )
+
+
+def render_timeline_view(strategy_df: pd.DataFrame) -> None:
+    """Render a timeline visualization of key financial events."""
+    if strategy_df.empty or 'Year' not in strategy_df.columns:
+        return
+    
+    st.subheader("📍 Key Financial Events Timeline")
+    
+    # Identify key events
+    events = []
+    
+    for idx, row in strategy_df.iterrows():
+        year = int(row['Year'])
+        age = row.get('Age', '')
+        
+        # Retirement event
+        if 'Stage' in row and 'Retirement' in str(row['Stage']) and idx == 0:
+            events.append({
+                'year': year,
+                'event': '🎯 Retirement Begins',
+                'details': f"Age {age}",
+                'color': '#FF6B6B'
+            })
+        
+        # Medicare eligibility
+        if 'Age' in row and '65' in str(age):
+            events.append({
+                'year': year,
+                'event': '🏥 Medicare Eligible',
+                'details': f"Age {age}",
+                'color': '#4ECDC4'
+            })
+        
+        # Social Security start
+        if 'SS Benefits' in row and row['SS Benefits'] > 0 and (idx == 0 or strategy_df.iloc[idx-1]['SS Benefits'] == 0):
+            events.append({
+                'year': year,
+                'event': '💰 Social Security Begins',
+                'details': f"${row['SS Benefits']:,.0f}/year",
+                'color': '#95E1D3'
+            })
+        
+        # RMD start
+        if 'RMD' in row and row['RMD'] > 0 and (idx == 0 or strategy_df.iloc[idx-1]['RMD'] == 0):
+            events.append({
+                'year': year,
+                'event': '📊 RMDs Begin',
+                'details': f"${row['RMD']:,.0f} required",
+                'color': '#F38181'
+            })
+        
+        # Large Roth conversions
+        roth_conversion_col = 'Trad→\nRoth'
+        if roth_conversion_col in row and row[roth_conversion_col] > 50000:
+            conversion_amount = row[roth_conversion_col]
+            events.append({
+                'year': year,
+                'event': '🔄 Major Roth Conversion',
+                'details': f"${conversion_amount:,.0f}",
+                'color': '#AA96DA'
+            })
+    
+    if events:
+        # Create timeline visualization
+        years = strategy_df['Year'].tolist()
+        min_year = min(years)
+        max_year = max(years)
+        year_range = max_year - min_year if max_year > min_year else 1
+        
+        # Build event markers
+        event_markers = []
+        for event in events:
+            position = ((event['year'] - min_year) / year_range) * 100
+            marker_html = f'<div style="position: absolute; left: {position}%; top: 50%; transform: translate(-50%, -50%);"><div style="width: 16px; height: 16px; border-radius: 50%; background: {event["color"]}; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div><div style="position: absolute; top: -60px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; font-size: 11px;"><div style="font-weight: 600; color: #333;">{event["event"]}</div><div style="color: #666;">{event["year"]}</div><div style="color: #888; font-size: 10px;">{event["details"]}</div></div></div>'
+            event_markers.append(marker_html)
+        
+        timeline_html = f'<div style="position: relative; height: 120px; margin: 20px 0;"><div style="position: absolute; top: 50%; width: 100%; height: 2px; background: #ddd;"></div>{"".join(event_markers)}</div>'
+        st.markdown(timeline_html, unsafe_allow_html=True)
+    else:
+        st.info("No significant financial events identified in this planning period.")
+
+
+def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int) -> pd.DataFrame:
+    """
+    Create a month-by-month execution plan for a specific year.
+    
+    Shows when to:
+    - Make estimated tax payments
+    - Execute Roth conversions
+    - Take RMDs
+    - Rebalance portfolio
+    - Review and adjust strategy
+    """
+    if strategy_df.empty:
+        return pd.DataFrame()
+    
+    # Find the row for the selected year
+    year_data = strategy_df[strategy_df['Year'] == selected_year]
+    if year_data.empty:
+        return pd.DataFrame()
+    
+    row = year_data.iloc[0]
+    
+    # Create monthly plan
+    monthly_plan = []
+    
+    for month_num in range(1, 13):
+        month_name = MONTH_NAMES[month_num - 1]
+        actions = []
+        amounts = []
+        
+        # Q1 estimated taxes (April 15)
+        if month_num == 4:
+            if 'Federal Tax' in row and row['Federal Tax'] > 0:
+                q1_tax = row['Federal Tax'] / 4
+                actions.append("📋 Q1 Estimated Tax Payment")
+                amounts.append(f"${q1_tax:,.0f}")
+        
+        # Q2 estimated taxes (June 15)
+        if month_num == 6:
+            if 'Federal Tax' in row and row['Federal Tax'] > 0:
+                q2_tax = row['Federal Tax'] / 4
+                actions.append("📋 Q2 Estimated Tax Payment")
+                amounts.append(f"${q2_tax:,.0f}")
+        
+        # Q3 estimated taxes (September 15)
+        if month_num == 9:
+            if 'Federal Tax' in row and row['Federal Tax'] > 0:
+                q3_tax = row['Federal Tax'] / 4
+                actions.append("📋 Q3 Estimated Tax Payment")
+                amounts.append(f"${q3_tax:,.0f}")
+        
+        # Roth conversions (spread throughout year, focus on low-income months)
+        if 'Trad→\nRoth' in row and row['Trad→\nRoth'] > 0:
+            # Spread conversions across Jan, Apr, Jul, Oct
+            if month_num in [1, 4, 7, 10]:
+                quarterly_conversion = row['Trad→\nRoth'] / 4
+                actions.append("🔄 Roth Conversion")
+                amounts.append(f"${quarterly_conversion:,.0f}")
+        
+        # RMDs (must be taken by December 31, suggest monthly or quarterly)
+        if 'RMD' in row and row['RMD'] > 0:
+            if month_num in [3, 6, 9, 12]:  # Quarterly RMD distributions
+                quarterly_rmd = row['RMD'] / 4
+                actions.append("📊 RMD Distribution")
+                amounts.append(f"${quarterly_rmd:,.0f}")
+        
+        # Traditional IRA withdrawals (monthly for living expenses)
+        if 'Trad→\nCash' in row and row['Trad→\nCash'] > 0:
+            monthly_withdrawal = row['Trad→\nCash'] / 12
+            if monthly_withdrawal > 1000:  # Only show if significant
+                actions.append("💵 Traditional → Cash")
+                amounts.append(f"${monthly_withdrawal:,.0f}")
+        
+        # Portfolio rebalancing (quarterly)
+        if month_num in [3, 6, 9, 12]:
+            actions.append("⚖️ Portfolio Rebalance Review")
+            amounts.append("")
+        
+        # Annual strategy review (January and July)
+        if month_num in [1, 7]:
+            actions.append("📈 Strategy Review & Adjustment")
+            amounts.append("")
+        
+        # Q4 estimated taxes (January 15 of following year)
+        if month_num == 1:
+            if 'Federal Tax' in row and row['Federal Tax'] > 0:
+                q4_tax = row['Federal Tax'] / 4
+                actions.append("📋 Q4 Estimated Tax Payment (Prior Year)")
+                amounts.append(f"${q4_tax:,.0f}")
+        
+        # Healthcare premium payments (monthly)
+        if 'Healthcare Cost' in row and row['Healthcare Cost'] > 0:
+            monthly_healthcare = row['Healthcare Cost'] / 12
+            if month_num == 1:  # Show in January as annual note
+                actions.append("🏥 Healthcare Premiums")
+                amounts.append(f"${monthly_healthcare:,.0f}/month")
+        
+        monthly_plan.append({
+            'Month': month_name,
+            'Actions': '\n\n'.join(actions) if actions else '—',
+            'Amounts': '\n\n'.join(amounts) if amounts else '—',
+            'Action_Count': len(actions)
+        })
+    
+    return pd.DataFrame(monthly_plan)
+
+
+def render_interactive_sankey(strategy_df: pd.DataFrame, portfolio: pd.DataFrame, 
+                              annual_expenses: float, phase: str) -> None:
+    """Render Sankey diagram with year selector."""
+    if strategy_df.empty:
+        return
+    
+    st.subheader("💸 Money Flow Visualization")
+    
+    # Year selector
+    years = strategy_df['Year'].unique().tolist()
+    selected_year = st.selectbox(
+        "Select Year to Visualize",
+        options=years,
+        index=0,
+        help="Choose a year to see the detailed money flow for that specific year"
+    )
+    
+    # Get data for selected year
+    year_data = strategy_df[strategy_df['Year'] == selected_year].iloc[0]
+    
+    # Build Sankey based on actual year data
+    if phase == "accumulation":
+        render_accumulation_sankey_for_year(year_data, portfolio, annual_expenses)
+    else:
+        render_withdrawal_sankey_for_year(year_data, portfolio, annual_expenses)
+
+
+def render_accumulation_sankey_for_year(year_data: pd.Series, portfolio: pd.DataFrame, 
+                                        annual_expenses: float) -> None:
+    """Render accumulation Sankey for a specific year using actual data."""
+    sources = []
+    targets = []
+    values = []
+    
+    # Wages to various accounts
+    if 'Wages' in year_data and year_data['Wages'] > 0:
+        if 'Wages→\nTrad' in year_data and year_data['Wages→\nTrad'] > 1000:
+            sources.append("Wages/Salary")
+            targets.append("Traditional 401(k)/IRA")
+            values.append(float(year_data['Wages→\nTrad']))
+        
+        if 'Wages→\nRoth' in year_data and year_data['Wages→\nRoth'] > 1000:
+            sources.append("Wages/Salary")
+            targets.append("Roth IRA/401(k)")
+            values.append(float(year_data['Wages→\nRoth']))
+    
+    # After-tax flows
+    if 'Cash→\nBrok' in year_data and year_data['Cash→\nBrok'] > 1000:
+        sources.append("After-Tax Income")
+        targets.append("Brokerage Account")
+        values.append(float(year_data['Cash→\nBrok']))
+    
+    if 'Cash→\nRoth' in year_data and year_data['Cash→\nRoth'] > 1000:
+        sources.append("After-Tax Income")
+        targets.append("Roth IRA/401(k)")
+        values.append(float(year_data['Cash→\nRoth']))
+    
+    # Conversions
+    if 'Trad→\nRoth' in year_data and year_data['Trad→\nRoth'] > 1000:
+        sources.append("Traditional 401(k)/IRA")
+        targets.append("Roth Conversion")
+        values.append(float(year_data['Trad→\nRoth']))
+    
+    if sources:
+        _render_sankey_diagram(sources, targets, values, 
+                              f"💰 Money Flow for {int(year_data['Year'])}: Income → Accounts")
+    else:
+        st.info("No significant money flows to visualize for this year.")
+
+
+def render_withdrawal_sankey_for_year(year_data: pd.Series, portfolio: pd.DataFrame,
+                                     annual_expenses: float) -> None:
+    """Render withdrawal Sankey for a specific year using actual data."""
+    sources = []
+    targets = []
+    values = []
+    
+    # Traditional withdrawals
+    if 'Trad→\nCash' in year_data and year_data['Trad→\nCash'] > 1000:
+        sources.append("Traditional IRA/401(k)")
+        targets.append("Living Expenses")
+        values.append(float(year_data['Trad→\nCash']))
+    
+    # Brokerage withdrawals
+    if 'Brok→\nCash' in year_data and year_data['Brok→\nCash'] > 1000:
+        sources.append("Brokerage Account")
+        targets.append("Living Expenses")
+        values.append(float(year_data['Brok→\nCash']))
+    
+    # Roth withdrawals
+    if 'Roth→\nCash' in year_data and year_data['Roth→\nCash'] > 1000:
+        sources.append("Roth IRA/401(k)")
+        targets.append("Living Expenses")
+        values.append(float(year_data['Roth→\nCash']))
+    
+    # Roth conversions
+    if 'Trad→\nRoth' in year_data and year_data['Trad→\nRoth'] > 1000:
+        sources.append("Traditional IRA/401(k)")
+        targets.append("Roth Conversion")
+        values.append(float(year_data['Trad→\nRoth']))
+    
+    # RMDs to brokerage
+    if 'Trad→\nBrok' in year_data and year_data['Trad→\nBrok'] > 1000:
+        sources.append("Traditional IRA/401(k)")
+        targets.append("RMD → Brokerage")
+        values.append(float(year_data['Trad→\nBrok']))
+    
+    # Social Security
+    if 'SS Benefits' in year_data and year_data['SS Benefits'] > 1000:
+        sources.append("Social Security")
+        targets.append("Living Expenses")
+        values.append(float(year_data['SS Benefits']))
+    
+    # Healthcare
+    if 'Healthcare Cost' in year_data and year_data['Healthcare Cost'] > 5000:
+        sources.append("Traditional IRA/401(k)")
+        targets.append("Healthcare")
+        values.append(float(year_data['Healthcare Cost']))
+    
+    if sources:
+        _render_sankey_diagram(sources, targets, values,
+                              f"💸 Money Flow for {int(year_data['Year'])}: Accounts → Expenses & Conversions")
+    else:
+        st.info("No significant money flows to visualize for this year.")
+
+
+def _render_sankey_diagram(sources: list, targets: list, values: list, title: str) -> None:
+    """Helper to render a Sankey diagram."""
+    # Color mappings
     source_colors = {
         "Wages/Salary": "rgba(31, 119, 180, 0.8)",
         "After-Tax Income": "rgba(44, 160, 44, 0.8)",
-        "Employer Match": "rgba(255, 127, 14, 0.8)"
+        "Employer Match": "rgba(255, 127, 14, 0.8)",
+        "Traditional IRA/401(k)": "rgba(214, 39, 40, 0.8)",
+        "Roth IRA/401(k)": "rgba(148, 103, 189, 0.8)",
+        "Brokerage Account": "rgba(255, 187, 120, 0.8)",
+        "Cash/Savings": "rgba(152, 223, 138, 0.8)",
+        "Social Security": "rgba(23, 190, 207, 0.8)"
     }
     
     target_colors = {
@@ -97,6 +437,10 @@ def render_accumulation_flow_diagram(portfolio: pd.DataFrame, annual_expenses: f
         "Roth IRA/401(k)": "rgba(148, 103, 189, 0.6)",
         "Brokerage Account": "rgba(255, 187, 120, 0.6)",
         "Cash/Savings": "rgba(152, 223, 138, 0.6)",
+        "Living Expenses": "rgba(31, 119, 180, 0.6)",
+        "Healthcare": "rgba(255, 127, 14, 0.6)",
+        "Roth Conversion": "rgba(148, 103, 189, 0.6)",
+        "RMD → Brokerage": "rgba(255, 187, 120, 0.6)",
         "Traditional 401(k)": "rgba(214, 39, 40, 0.6)"
     }
     
@@ -107,13 +451,13 @@ def render_accumulation_flow_diagram(portfolio: pd.DataFrame, annual_expenses: f
         if node in source_colors:
             node_colors.append(source_colors[node])
         else:
-            node_colors.append(target_colors[node])
+            node_colors.append(target_colors.get(node, "rgba(200, 200, 200, 0.6)"))
     
-    # Map sources and targets to indices
+    # Map to indices
     source_indices = [all_nodes.index(s) for s in sources]
     target_indices = [all_nodes.index(t) for t in targets]
     
-    # Create link colors that match the source nodes (with transparency)
+    # Create link colors
     link_colors = []
     for src in sources:
         if src in source_colors:
@@ -123,7 +467,7 @@ def render_accumulation_flow_diagram(portfolio: pd.DataFrame, annual_expenses: f
             link_colors.append("rgba(200, 200, 200, 0.3)")
     
     # Create Sankey diagram
-    fig_accum = go.Figure(data=[go.Sankey(
+    fig = go.Figure(data=[go.Sankey(
         node=dict(
             pad=20,
             thickness=25,
@@ -139,182 +483,21 @@ def render_accumulation_flow_diagram(portfolio: pd.DataFrame, annual_expenses: f
             color=link_colors,
             hovertemplate='%{source.label} → %{target.label}<br>Amount: $%{value:,.0f}<extra></extra>'
         ),
-        textfont=dict(size=16, family="Arial Black, Arial, sans-serif", color="black")
+        textfont=dict(size=14, family="Arial, sans-serif", color="black")
     )])
     
-    fig_accum.update_layout(
+    fig.update_layout(
         title=dict(
-            text="💰 Money Flow: Income → Accounts",
-            font=dict(size=18, family="Arial, sans-serif", color="#333")
+            text=title,
+            font=dict(size=16, family="Arial, sans-serif", color="#333")
         ),
-        font=dict(size=16, family="Arial, sans-serif", color="#000"),
-        height=450,
+        font=dict(size=14, family="Arial, sans-serif", color="#000"),
+        height=400,
         margin=dict(l=20, r=20, t=60, b=20)
     )
     
-    st.plotly_chart(fig_accum, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
-def render_withdrawal_flow_diagram(portfolio: pd.DataFrame, annual_expenses: float) -> None:
-    """Render Sankey diagram showing accounts flowing to expenses during withdrawal."""
-    # Calculate account balances by type
-    account_balances = {}
-    if not portfolio.empty:
-        for acct_type in ["Cash", "Brokerage", "Traditional", "Roth"]:
-            acct_data = portfolio[portfolio["account_type"] == acct_type]
-            if len(acct_data) > 0:
-                balance = (acct_data["qty"] * acct_data["purchase_price"]).sum()
-                account_balances[acct_type] = float(balance)
-            else:
-                account_balances[acct_type] = 0.0
-    
-    # Estimate withdrawal flows based on account balances
-    annual_living = annual_expenses * 0.85  # 85% for living expenses
-    annual_healthcare = annual_expenses * 0.10  # 10% for healthcare
-    
-    # Withdrawal strategy (tax-efficient sequencing)
-    trad_to_expenses = min(account_balances.get("Traditional", 0) * 0.04, annual_living * 0.4)
-    brok_to_expenses = min(account_balances.get("Brokerage", 0) * 0.03, annual_living * 0.4)
-    cash_to_expenses = min(account_balances.get("Cash", 0) * 0.1, annual_living * 0.2)
-    
-    # Roth conversions (tax optimization)
-    trad_to_roth = min(account_balances.get("Traditional", 0) * 0.02, 50_000)
-    
-    # RMDs (after age 73)
-    trad_to_brokerage = min(account_balances.get("Traditional", 0) * 0.04, 30_000)
-    
-    # Roth withdrawals (tax-free)
-    roth_to_expenses = min(account_balances.get("Roth", 0) * 0.03, annual_living * 0.15)
-    
-    # Large purchases from Roth (tax-free)
-    roth_to_purchases = min(account_balances.get("Roth", 0) * 0.02, 20_000)
-    
-    # Charitable giving
-    brok_to_charity = min(account_balances.get("Brokerage", 0) * 0.01, 10_000)
-    
-    # Build Sankey data
-    sources_w = []
-    targets_w = []
-    values_w = []
-    
-    if trad_to_expenses > 1000:
-        sources_w.append("Traditional IRA/401(k)")
-        targets_w.append("Living Expenses")
-        values_w.append(trad_to_expenses)
-    
-    if brok_to_expenses > 1000:
-        sources_w.append("Brokerage Account")
-        targets_w.append("Living Expenses")
-        values_w.append(brok_to_expenses)
-    
-    if cash_to_expenses > 1000:
-        sources_w.append("Cash/Savings")
-        targets_w.append("Living Expenses")
-        values_w.append(cash_to_expenses)
-    
-    if trad_to_roth > 1000:
-        sources_w.append("Traditional IRA/401(k)")
-        targets_w.append("Roth Conversion")
-        values_w.append(trad_to_roth)
-    
-    if trad_to_brokerage > 1000:
-        sources_w.append("Traditional IRA/401(k)")
-        targets_w.append("RMD → Brokerage")
-        values_w.append(trad_to_brokerage)
-    
-    if roth_to_expenses > 1000:
-        sources_w.append("Roth IRA/401(k)")
-        targets_w.append("Living Expenses")
-        values_w.append(roth_to_expenses)
-    
-    if roth_to_purchases > 1000:
-        sources_w.append("Roth IRA/401(k)")
-        targets_w.append("Large Purchases")
-        values_w.append(roth_to_purchases)
-    
-    if brok_to_charity > 1000:
-        sources_w.append("Brokerage Account")
-        targets_w.append("Charitable Giving")
-        values_w.append(brok_to_charity)
-    
-    # Add healthcare if significant
-    if annual_healthcare > 5000:
-        sources_w.append("Traditional IRA/401(k)")
-        targets_w.append("Healthcare")
-        values_w.append(annual_healthcare)
-    
-    if sources_w:
-        # Create color mapping for withdrawal
-        source_colors_w = {
-            "Traditional IRA/401(k)": "rgba(214, 39, 40, 0.8)",
-            "Roth IRA/401(k)": "rgba(148, 103, 189, 0.8)",
-            "Brokerage Account": "rgba(255, 187, 120, 0.8)",
-            "Cash/Savings": "rgba(152, 223, 138, 0.8)"
-        }
-        
-        target_colors_w = {
-            "Living Expenses": "rgba(31, 119, 180, 0.6)",
-            "Healthcare": "rgba(255, 127, 14, 0.6)",
-            "Large Purchases": "rgba(44, 160, 44, 0.6)",
-            "Roth Conversion": "rgba(148, 103, 189, 0.6)",
-            "RMD → Brokerage": "rgba(255, 187, 120, 0.6)",
-            "Charitable Giving": "rgba(127, 127, 127, 0.6)"
-        }
-        
-        # Build node list
-        all_nodes_w = list(dict.fromkeys(sources_w + targets_w))
-        node_colors_w = []
-        for node in all_nodes_w:
-            if node in source_colors_w:
-                node_colors_w.append(source_colors_w[node])
-            else:
-                node_colors_w.append(target_colors_w[node])
-        
-        # Map to indices
-        source_indices_w = [all_nodes_w.index(s) for s in sources_w]
-        target_indices_w = [all_nodes_w.index(t) for t in targets_w]
-        
-        # Create link colors that match the source nodes (with transparency)
-        link_colors_w = []
-        for src in sources_w:
-            if src in source_colors_w:
-                color = source_colors_w[src].replace("0.8)", "0.3)")
-                link_colors_w.append(color)
-            else:
-                link_colors_w.append("rgba(200, 200, 200, 0.3)")
-        
-        # Create Sankey diagram
-        fig_withdraw = go.Figure(data=[go.Sankey(
-            node=dict(
-                pad=20,
-                thickness=25,
-                line=dict(color="black", width=1),
-                label=all_nodes_w,
-                color=node_colors_w,
-                hovertemplate='%{label}<br>Total: $%{value:,.0f}<extra></extra>'
-            ),
-            link=dict(
-                source=source_indices_w,
-                target=target_indices_w,
-                value=values_w,
-                color=link_colors_w,
-                hovertemplate='%{source.label} → %{target.label}<br>Amount: $%{value:,.0f}<extra></extra>'
-            ),
-            textfont=dict(size=16, family="Arial Black, Arial, sans-serif", color="black")
-        )])
-        
-        fig_withdraw.update_layout(
-            title=dict(
-                text="💸 Money Flow: Accounts → Expenses & Conversions",
-                font=dict(size=18, family="Arial, sans-serif", color="#333")
-            ),
-            font=dict(size=16, family="Arial, sans-serif", color="#000"),
-            height=450,
-            margin=dict(l=20, r=20, t=60, b=20)
-        )
-        
-        st.plotly_chart(fig_withdraw, use_container_width=True)
-    else:
-        st.info("💡 No significant withdrawal flows to display. Add portfolio data to see withdrawal strategy.")
 
 # ---------------------------------------------------------------------------
 # Page setup
@@ -330,10 +513,10 @@ def render_withdrawal_flow_diagram(portfolio: pd.DataFrame, annual_expenses: flo
     _eff_port_year,
 ) = init_page("📈 Strategy — Financial Planner", "📈")
 
-navbar("Strategy")
+navbar("📋 Strategy")
 
-st.header("📈 Strategy")
-st.markdown("Plan and review your accumulation and withdrawal strategy across all life stages.")
+st.header("📈 Long-Term Financial Strategy")
+st.markdown("Comprehensive planning across all life stages with granular flow-of-funds tracking.")
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
@@ -347,8 +530,9 @@ phase = st.radio(
 )
 st.markdown("---")
 
-strategy_sub_tab, balances_sub_tab, charts_sub_tab = st.tabs(
-    ["📋 Annual Plan", "💰 Account Balances", "📊 Visualizations"]
+# Create tabs with new monthly calendar view
+long_term_tab, monthly_tab, balances_tab, charts_tab = st.tabs(
+    ["📋 Long-Term Plan", "📅 Monthly Calendar", "💰 Account Balances", "📊 Visualizations"]
 )
 
 # ---------------------------------------------------------------------------
@@ -367,11 +551,13 @@ if phase == "📈 Accumulation (Pre-Retirement)":
         accum_person1_name      = _acfg.get("personal_info", "person1_name", "Person1")
         accum_person2_name      = _acfg.get("personal_info", "person2_name", "Person2")
         accum_annual_expenses   = _acfg.get("financial_assumptions", "expected_annual_expenses", 120_000)
+        accum_state             = _acfg.get("personal_info", "state", "CA")
     except Exception:
         accum_expense_inflation = 0.03
         accum_person1_name      = "Person1"
         accum_person2_name      = "Person2"
         accum_annual_expenses   = 120_000
+        accum_state             = "CA"
 
     ap_col1, ap_col2, ap_col3 = st.columns(3)
     with ap_col1:
@@ -393,21 +579,39 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 person2_name=accum_person2_name,
             )
 
-        with strategy_sub_tab:
-            st.subheader("Annual Accumulation Plan")
+        with long_term_tab:
+            st.subheader("📊 Multi-Year Accumulation Plan")
             
-            # Add accumulation flow visualization
-            portfolio = get_portfolio_truth_by_month(curr_month, curr_year)
-            render_accumulation_flow_diagram(cast(pd.DataFrame, portfolio), accum_annual_expenses)
+            # Summary cards
+            render_summary_cards(accum_strategy_df, "accumulation")
             st.markdown("---")
             
-            # Then show the dataframe
+            # Timeline view
+            render_timeline_view(accum_strategy_df)
+            st.markdown("---")
+            
+            # Interactive Sankey
+            portfolio = get_portfolio_truth_by_month(curr_month, curr_year)
+            render_interactive_sankey(accum_strategy_df, cast(pd.DataFrame, portfolio), 
+                                    accum_annual_expenses, "accumulation")
+            st.markdown("---")
+            
+            # Enhanced table with state taxes
+            st.subheader("📋 Year-by-Year Details")
             display_df_a = accum_strategy_df.copy()
+            
+            # Add state tax column (placeholder - would need actual calculation)
+            if 'Federal Tax' in display_df_a.columns and 'State Tax' not in display_df_a.columns:
+                # Estimate state tax as percentage of federal (simplified)
+                state_rates = {'CA': 0.093, 'NY': 0.0685, 'TX': 0.0, 'FL': 0.0}
+                state_rate = state_rates.get(accum_state, 0.05)
+                display_df_a['State Tax'] = display_df_a['AGI'] * state_rate if 'AGI' in display_df_a.columns else 0
+            
             display_cols_a = [
                 'Year', 'Age', 'Stage',
                 'Wages', 'Wages→\nPayroll', 'Wages→\nTrad', 'Wages→\nRoth',
                 'Trad→\nRoth', 'Cash→\nRoth', 'Cash→\nBrok',
-                'Expenses', 'Healthcare Cost', 'AGI', 'Federal Tax', 'Cash Balance',
+                'Expenses', 'Healthcare Cost', 'AGI', 'Federal Tax', 'State Tax', 'Cash Balance',
             ]
             available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
             display_df_a = cast(pd.DataFrame, display_df_a[available_cols_a].copy())
@@ -430,6 +634,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 "Healthcare Cost":st.column_config.TextColumn("Healthcare"),
                 "AGI":            st.column_config.TextColumn("AGI"),
                 "Federal Tax":    st.column_config.TextColumn("Fed Tax"),
+                "State Tax":      st.column_config.TextColumn("State Tax", help=f"Estimated {accum_state} state income tax"),
                 "Cash Balance":   st.column_config.TextColumn("Cash End"),
             }
             st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, use_container_width=True)
@@ -442,11 +647,37 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                         st.caption(_stage_desc)
                         st.markdown("---")
 
-        with balances_sub_tab:
+        with monthly_tab:
+            st.subheader("📅 Month-by-Month Execution Plan")
+            st.markdown("Detailed monthly action items for executing your financial strategy.")
+            
+            # Year selector for monthly view
+            years_available = accum_strategy_df['Year'].unique().tolist()
+            selected_year_monthly = st.selectbox(
+                "Select Year for Monthly Plan",
+                options=years_available,
+                index=0,
+                key="accum_monthly_year"
+            )
+            
+            monthly_df = create_monthly_execution_plan(accum_strategy_df, selected_year_monthly)
+            
+            if not monthly_df.empty:
+                # Display as cards for better UX
+                for idx, row in monthly_df.iterrows():
+                    if row['Action_Count'] > 0:
+                        with st.expander(f"📆 {row['Month']}", expanded=(idx < 2)):
+                            st.markdown(row['Actions'])
+                            if row['Amounts'] != '—':
+                                st.markdown(f"**Amounts:**\n\n{row['Amounts']}")
+            else:
+                st.info("No monthly actions for the selected year.")
+
+        with balances_tab:
             st.subheader("Account Balances Over Time")
             render_balance_table(accum_balances_df)
 
-        with charts_sub_tab:
+        with charts_tab:
             st.subheader("Portfolio Balance Projections")
             render_balance_chart(accum_balances_df, title="Projected Account Balances (Accumulation)")
             st.subheader("Income Sources Over Time")
@@ -494,9 +725,10 @@ else:
         expense_inflation_rate   = _cfg.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100.0
         person1_name             = _cfg.get("personal_info", "person1_name", "Person1")
         person2_name             = _cfg.get("personal_info", "person2_name", "Person2")
+        state                    = _cfg.get("personal_info", "state", "CA")
     except Exception:
         aca_marketplace_enrolled = False; expense_inflation_rate = 0.03
-        person1_name = "Person1"; person2_name = "Person2"
+        person1_name = "Person1"; person2_name = "Person2"; state = "CA"
 
     try:
         with st.spinner("Calculating withdrawal strategy..."):
@@ -512,15 +744,25 @@ else:
                 ss_claiming_age=ssi_age_s,
             )
 
-        with strategy_sub_tab:
-            st.subheader("Year-by-Year Withdrawal Strategy")
+        with long_term_tab:
+            st.subheader("📊 Multi-Year Withdrawal Strategy")
             
-            # Add withdrawal flow visualization
-            portfolio_w = get_portfolio_truth_by_month(curr_month, curr_year)
-            render_withdrawal_flow_diagram(cast(pd.DataFrame, portfolio_w), annual_expenses_s)
+            # Summary cards
+            render_summary_cards(strategy_df_w, "withdrawal")
             st.markdown("---")
             
-            # Then show the dataframe
+            # Timeline view
+            render_timeline_view(strategy_df_w)
+            st.markdown("---")
+            
+            # Interactive Sankey
+            portfolio_w = get_portfolio_truth_by_month(curr_month, curr_year)
+            render_interactive_sankey(strategy_df_w, cast(pd.DataFrame, portfolio_w),
+                                    annual_expenses_s, "withdrawal")
+            st.markdown("---")
+            
+            # Enhanced table with state taxes
+            st.subheader("📋 Year-by-Year Details")
             display_df_w = strategy_df_w.copy()
 
             try:
@@ -533,6 +775,12 @@ else:
 
             display_df_w['Cash Start'] = display_df_w['Cash Balance'].shift(1)
             display_df_w.loc[display_df_w.index[0], 'Cash Start'] = actual_cash_start
+            
+            # Add state tax column
+            if 'Federal Tax' in display_df_w.columns and 'State Tax' not in display_df_w.columns:
+                state_rates = {'CA': 0.093, 'NY': 0.0685, 'TX': 0.0, 'FL': 0.0}
+                state_rate = state_rates.get(state, 0.05)
+                display_df_w['State Tax'] = display_df_w['AGI'] * state_rate if 'AGI' in display_df_w.columns else 0
 
             display_cols_w = [
                 'Year', 'Age', 'Stage', 'Cash Start',
@@ -540,7 +788,7 @@ else:
                 'Trad→\nCash', 'Trad→\nBrok', 'Trad→\nRoth',
                 'Brok→\nCash', 'Roth→\nCash',
                 'Expenses', 'Healthcare Cost',
-                'DAF Contribution', 'AGI', 'MAGI', 'Federal Tax', 'Cash Balance',
+                'DAF Contribution', 'AGI', 'MAGI', 'Federal Tax', 'State Tax', 'Cash Balance',
             ]
             available_cols_w = [c for c in display_cols_w if c in display_df_w.columns]
             display_df_w = cast(pd.DataFrame, display_df_w[available_cols_w].copy())
@@ -554,7 +802,7 @@ else:
                 "Stage":            st.column_config.TextColumn("Life Stage", help=_STAGE_COLUMN_HELP),
                 "Cash Start":       st.column_config.TextColumn("Cash Start"),
                 "Wages":            st.column_config.TextColumn("Wages"),
-                "SS Benefits":      st.column_config.TextColumn("Social Security"),
+                "SS Benefits":      st.column_config.TextColumn("SS Benefits"),
                 "RMD":              st.column_config.TextColumn("RMD"),
                 "Trad→\nCash":      st.column_config.TextColumn("Trad→Cash"),
                 "Trad→\nBrok":      st.column_config.TextColumn("Trad→Brok"),
@@ -563,27 +811,54 @@ else:
                 "Roth→\nCash":      st.column_config.TextColumn("Roth→Cash"),
                 "Expenses":         st.column_config.TextColumn("Expenses"),
                 "Healthcare Cost":  st.column_config.TextColumn("Healthcare"),
-                "DAF Contribution": st.column_config.TextColumn("DAF Contrib"),
+                "DAF Contribution": st.column_config.TextColumn("DAF"),
                 "AGI":              st.column_config.TextColumn("AGI"),
                 "MAGI":             st.column_config.TextColumn("MAGI"),
                 "Federal Tax":      st.column_config.TextColumn("Fed Tax"),
+                "State Tax":        st.column_config.TextColumn("State Tax", help=f"Estimated {state} state income tax"),
                 "Cash Balance":     st.column_config.TextColumn("Cash End"),
             }
             st.dataframe(display_df_w, column_config=withdrawal_column_config, hide_index=True, use_container_width=True)
 
-            _with_stages_present = display_df_w['Stage'].unique() if 'Stage' in display_df_w.columns else []
+            _withdrawal_stages_present = display_df_w['Stage'].unique() if 'Stage' in display_df_w.columns else []
             with st.expander("ℹ️ Life Stage Guide", expanded=False):
                 for _stage_name, _stage_desc in LIFE_STAGE_DESCRIPTIONS.items():
-                    if _stage_name in list(_with_stages_present):
+                    if _stage_name in list(_withdrawal_stages_present):
                         st.markdown(f"**{_stage_name}**")
                         st.caption(_stage_desc)
                         st.markdown("---")
 
-        with balances_sub_tab:
+        with monthly_tab:
+            st.subheader("📅 Month-by-Month Execution Plan")
+            st.markdown("Detailed monthly action items for executing your withdrawal strategy.")
+            
+            # Year selector for monthly view
+            years_available_w = strategy_df_w['Year'].unique().tolist()
+            selected_year_monthly_w = st.selectbox(
+                "Select Year for Monthly Plan",
+                options=years_available_w,
+                index=0,
+                key="withdrawal_monthly_year"
+            )
+            
+            monthly_df_w = create_monthly_execution_plan(strategy_df_w, selected_year_monthly_w)
+            
+            if not monthly_df_w.empty:
+                # Display as cards for better UX
+                for idx, row in monthly_df_w.iterrows():
+                    if row['Action_Count'] > 0:
+                        with st.expander(f"📆 {row['Month']}", expanded=(idx < 2)):
+                            st.markdown(row['Actions'])
+                            if row['Amounts'] != '—':
+                                st.markdown(f"**Amounts:**\n\n{row['Amounts']}")
+            else:
+                st.info("No monthly actions for the selected year.")
+
+        with balances_tab:
             st.subheader("Account Balances Over Time")
             render_balance_table(balances_df_w)
 
-        with charts_sub_tab:
+        with charts_tab:
             st.subheader("Portfolio Balance Projections")
             render_balance_chart(balances_df_w, title="Projected Account Balances (Withdrawal)")
             st.subheader("Income Sources Over Time")
@@ -591,11 +866,6 @@ else:
 
     except Exception as e:
         st.error(f"Error calculating withdrawal strategy: {e}")
-        st.info("Please ensure all sidebar parameters are properly configured.")
-
-# ---------------------------------------------------------------------------
-# Auto-rerun while background rebuilds are in flight
-# ---------------------------------------------------------------------------
-auto_rerun_if_rebuilding()
+        st.info("Please ensure all configuration parameters are properly set.")
 
 # Made with Bob

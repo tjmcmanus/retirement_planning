@@ -17,7 +17,7 @@ from components.shared import init_page
 
 # Initialize page
 init_page("🔧 Tax Data Admin", "🔧")
-navbar("Tax Data Admin")
+navbar("🔧 Tax Data Admin")
 
 # Get current year for filtering
 CURRENT_YEAR = datetime.now().year

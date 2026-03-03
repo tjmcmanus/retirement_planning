@@ -23,7 +23,7 @@ from components.shared import auto_rerun_if_rebuilding, init_page
 from load_data import get_atm_costs, get_cap_gains_brackets, get_income_tax_brackets, get_medicare_costs, get_std_deduction
 
 (networth, _pdf, _pcr, _sl, curr_month, curr_year, _epm, _epy) = init_page("🎯 Advanced Strategy Tools", "🎯")
-navbar("Advanced Strategy Tools")
+navbar("🧠 Advanced Strategy Tools")
 st.header("🎯 Advanced Strategy Tools")
 st.markdown("Multi-year tax planning, backdoor Roth, NUA, QCD, and 72(t) SEPP calculators.")
 st.markdown("---")

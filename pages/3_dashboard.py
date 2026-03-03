@@ -55,7 +55,7 @@ from load_data import get_month_account_values, get_networth_by_month
     _eff_port_year,
 ) = init_page("📊 Dashboard — Financial Planner", "📊")
 
-navbar("Dashboard")
+navbar("🏠 Dashboard")
 
 st.title("📊 Financial Dashboard")
 st.caption("Your complete financial picture at a glance.")
