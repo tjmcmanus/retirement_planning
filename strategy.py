@@ -179,10 +179,113 @@ def calculate_ssi_benefits_dynamic(year: int, person_name: str, birth_year: int,
                 f"Claiming age {claiming_age}, Monthly benefit ${monthly_benefit:,.2f}")
     
     return monthly_benefit
+def calculate_ss_taxable_amount(ss_benefits: float, agi_without_ss: float, 
+                                filing_status: str = "married_filing_jointly") -> float:
+    """
+    Calculate the actual taxable portion of Social Security benefits.
+    
+    Uses the IRS formula for determining how much of SS benefits are taxable
+    based on "combined income" (AGI + nontaxable interest + 50% of SS benefits).
+    
+    Args:
+        ss_benefits: Annual Social Security benefits
+        agi_without_ss: AGI excluding SS benefits (includes other income sources)
+        filing_status: Tax filing status
+        
+    Returns:
+        Taxable portion of SS benefits (0 to 85% of benefits)
+        
+    Reference: IRS Publication 915 - Social Security and Equivalent Railroad Retirement Benefits
+    """
+    if ss_benefits <= 0:
+        return 0.0
+    
+    # Calculate combined income
+    combined_income = agi_without_ss + (ss_benefits * 0.5)
+    
+    # Thresholds based on filing status
+    if filing_status == "married_filing_jointly":
+        threshold_1 = 32000  # 0% to 50% taxable range
+        threshold_2 = 44000  # 50% to 85% taxable range
+    else:  # single, head_of_household, married_filing_separately
+        threshold_1 = 25000
+        threshold_2 = 34000
+    
+    # Calculate taxable amount using IRS formula
+    if combined_income <= threshold_1:
+        # No SS benefits are taxable
+        return 0.0
+    elif combined_income <= threshold_2:
+        # Up to 50% of benefits are taxable
+        # Taxable = lesser of: (a) 50% of benefits, or (b) 50% of (combined income - threshold_1)
+        taxable = min(
+            ss_benefits * 0.5,
+            (combined_income - threshold_1) * 0.5
+        )
+        return taxable
+    else:
+        # Up to 85% of benefits are taxable
+        # Taxable = lesser of:
+        #   (a) 85% of benefits, or
+        #   (b) 85% of (combined income - threshold_2) + lesser of:
+        #       - Amount from 50% calculation, or
+        #       - $6,000 (MFJ) or $4,500 (Single)
+        max_50_pct_amount = 6000 if filing_status == "married_filing_jointly" else 4500
+        amount_from_50_pct = min(
+            ss_benefits * 0.5,
+            (threshold_2 - threshold_1) * 0.5
+        )
+        amount_from_50_pct = min(amount_from_50_pct, max_50_pct_amount)
+        
+        taxable = min(
+            ss_benefits * 0.85,
+            0.85 * (combined_income - threshold_2) + amount_from_50_pct
+        )
+        return taxable
+
+
+def calculate_preretirement_healthcare_for_year(year: int, age_primary: int, age_spouse: int) -> float:
+    """
+    Calculate total pre-retirement (working) healthcare premium for a given year.
+    
+    This covers employer or private insurance while still working, before retirement.
+    
+    Args:
+        year: Current year
+        age_primary: Primary person's age
+        age_spouse: Spouse's age
+    
+    Returns:
+        Annual pre-retirement healthcare premium cost (sum of both people if applicable)
+    """
+    config_mgr = get_config_manager()
+    
+    # Get retirement ages
+    person1_retirement_age = config_mgr.get("personal_info", "person1_retirement_age", 62)
+    person2_retirement_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
+    
+    # Get pre-retirement healthcare premiums
+    person1_monthly_premium = config_mgr.get("healthcare", "person1_preretirement_insurance_monthly", 0)
+    person2_monthly_premium = config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0)
+    
+    total_annual_premium = 0.0
+    
+    # Person 1: pre-retirement healthcare applies if still working (before retirement age)
+    if age_primary < person1_retirement_age and person1_monthly_premium > 0:
+        total_annual_premium += person1_monthly_premium * 12
+    
+    # Person 2: pre-retirement healthcare applies if still working (before retirement age)
+    if age_spouse > 0 and age_spouse < person2_retirement_age and person2_monthly_premium > 0:
+        total_annual_premium += person2_monthly_premium * 12
+    
+    return total_annual_premium
+
 
 def calculate_aca_premium_for_year(year: int, age_primary: int, age_spouse: int) -> float:
     """
     Calculate total ACA premium for a given year based on both people's ages and configuration.
+    
+    This covers ACA marketplace insurance after retirement but before Medicare eligibility.
     
     Args:
         year: Current year
@@ -206,11 +309,11 @@ def calculate_aca_premium_for_year(year: int, age_primary: int, age_spouse: int)
     
     total_annual_premium = 0.0
     
-    # Check if person 1 is in ACA coverage period
+    # Check if person 1 is in ACA coverage period (retired but not yet on Medicare)
     if person1_aca_start_age <= age_primary < person1_aca_end_age and person1_monthly_premium > 0:
         total_annual_premium += person1_monthly_premium * 12
     
-    # Check if person 2 is in ACA coverage period
+    # Check if person 2 is in ACA coverage period (retired but not yet on Medicare)
     if person2_aca_start_age <= age_spouse < person2_aca_end_age and person2_monthly_premium > 0:
         total_annual_premium += person2_monthly_premium * 12
     
@@ -1275,6 +1378,7 @@ class HealthcareCostBreakdown:
     """
     medicare: float = 0.0
     pre_medicare: float = 0.0
+    preretirement_working: float = 0.0
     out_of_pocket: float = 0.0
     ltc_insurance: float = 0.0
     medicare_detail: MedicareBreakdown = field(default_factory=lambda: _EMPTY_MEDICARE_BREAKDOWN)
@@ -1282,7 +1386,7 @@ class HealthcareCostBreakdown:
     @property
     def total(self) -> float:
         """Sum of all cost components."""
-        return self.medicare + self.pre_medicare + self.out_of_pocket + self.ltc_insurance
+        return self.medicare + self.pre_medicare + self.preretirement_working + self.out_of_pocket + self.ltc_insurance
 
 
 def _calculate_medicare(
@@ -1358,7 +1462,11 @@ def calculate_total_healthcare_costs(age_primary: int,
         filing_status, has_medigap
     )
 
-    # --- Pre-Medicare / ACA costs (one or both persons under 65) ---------
+    # --- Pre-retirement working healthcare (before retirement) ------------
+    # Covers employer or private insurance while still working
+    preretirement_cost = calculate_preretirement_healthcare_for_year(year, age_primary, age_spouse)
+
+    # --- Pre-Medicare / ACA costs (retired but under 65) -----------------
     # calculate_aca_premium_for_year returns 0.0 when neither person is in
     # their configured ACA age window, so no guard is needed here.
     aca_cost = calculate_aca_premium_for_year(year, age_primary, age_spouse)
@@ -1373,6 +1481,7 @@ def calculate_total_healthcare_costs(age_primary: int,
     breakdown = HealthcareCostBreakdown(
         medicare=medicare_cost,
         pre_medicare=aca_cost,
+        preretirement_working=preretirement_cost,
         out_of_pocket=oop_cost,
         ltc_insurance=ltc_cost,
         medicare_detail=medicare_detail,
@@ -2790,8 +2899,31 @@ class Stage1Accumulation(LifeStage):
             f"cash_added=${cash_to_add:,.0f}, surplus_to_brok=${surplus_to_brokerage:,.0f}"
         )
         
-        # Calculate ACA premium based on configuration
-        aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
+        # Calculate healthcare costs (includes pre-retirement working, ACA, and Medicare)
+        prior_magi = kwargs.get('prior_magi', 0)
+        try:
+            healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=prior_magi,
+                year=year,
+                filing_status=filing_status,
+                has_medigap=True
+            )
+            medical_costs = healthcare_breakdown.medicare
+            # Include ALL non-Medicare healthcare: pre-retirement working + ACA
+            aca_premium = healthcare_breakdown.pre_medicare + healthcare_breakdown.preretirement_working
+            
+            if healthcare_breakdown.preretirement_working > 0:
+                logger.info(f"Stage 1: Pre-retirement working healthcare=${healthcare_breakdown.preretirement_working:,.2f}")
+            if healthcare_breakdown.pre_medicare > 0:
+                logger.info(f"Stage 1: ACA/pre-Medicare premium=${healthcare_breakdown.pre_medicare:,.2f}")
+            if medical_costs > 0:
+                logger.info(f"Stage 1: Medicare costs=${medical_costs:,.2f}")
+        except Exception as e:
+            logger.warning(f"Could not calculate healthcare costs for Stage 1: {e}")
+            medical_costs = 0.0
+            aca_premium = 0.0
         
         # Execute account rebalancing (includes Roth conversion and expense payment)
         new_balances, transactions, rebal_dl = rebalance_accounts(
@@ -2804,7 +2936,7 @@ class Stage1Accumulation(LifeStage):
             federal_tax=federal_tax,
             irmaa_penalty=0.0,
             aca_premium=aca_premium,
-            medical_costs=0.0,
+            medical_costs=medical_costs,
             cash_target_override=accum_cash_target,
         )
         
@@ -2855,7 +2987,7 @@ class Stage1Accumulation(LifeStage):
             agi=agi,
             magi=magi,
             federal_tax=federal_tax,
-            irmaa_penalty=0,
+            irmaa_penalty=medical_costs,
             aca_premium=aca_premium,
             balances=new_balances,
             payroll_tax=payroll_tax,
@@ -3191,13 +3323,16 @@ class Stage2PrepForRetirement(LifeStage):
                 has_medigap=True
             )
             medical_costs = healthcare_breakdown.medicare
-            aca_premium = healthcare_breakdown.pre_medicare
+            # Include ALL non-Medicare healthcare: pre-retirement working + ACA
+            aca_premium = healthcare_breakdown.pre_medicare + healthcare_breakdown.preretirement_working
             
             if medical_costs > 0:
                 logger.info(f"Stage 2 Prep: Medicare costs=${medical_costs:,.2f} "
                           f"(one or both spouses age 65+)")
-            if aca_premium > 0:
-                logger.info(f"Stage 2 Prep: ACA/pre-Medicare premium=${aca_premium:,.2f}")
+            if healthcare_breakdown.preretirement_working > 0:
+                logger.info(f"Stage 2 Prep: Pre-retirement working healthcare=${healthcare_breakdown.preretirement_working:,.2f}")
+            if healthcare_breakdown.pre_medicare > 0:
+                logger.info(f"Stage 2 Prep: ACA/pre-Medicare premium=${healthcare_breakdown.pre_medicare:,.2f}")
         except Exception as e:
             logger.warning(f"Could not calculate healthcare costs for Stage 2: {e}")
             medical_costs = 0.0
@@ -3280,7 +3415,7 @@ class Stage2PrepForRetirement(LifeStage):
             agi=agi,
             magi=magi,
             federal_tax=federal_tax,
-            irmaa_penalty=0,
+            irmaa_penalty=medical_costs,
             aca_premium=aca_premium,
             balances=new_balances,
             payroll_tax=payroll_tax,
@@ -3319,7 +3454,12 @@ class Stage3EarlyRetirement(LifeStage):
 
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
-        """Applies when retired but before Medicare and SS"""
+        """Applies when retired but before Medicare and SS.
+        
+        Requires BOTH spouses to be under Medicare age to maximize the
+        Roth conversion window before Medicare/IRMAA considerations begin.
+        This is the optimal stage for aggressive Roth conversions.
+        """
         return (not has_wages and not has_ss and
                 age_primary < MEDICARE_AGE and age_spouse < MEDICARE_AGE)
     
@@ -3592,10 +3732,15 @@ class Stage4Medicare(LifeStage):
     
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
-        """Applies when on Medicare but before SS and RMDs"""
+        """Applies when on Medicare but before SS and RMDs.
+        
+        Uses the OLDER spouse's age for RMD threshold to ensure tax strategy
+        is driven by the person closest to RMD age (more conservative approach).
+        """
+        older_age = max(age_primary, age_spouse)
         return (not has_wages and not has_ss and
                 (age_primary >= MEDICARE_AGE or age_spouse >= MEDICARE_AGE) and
-                age_primary < RMD_AGE)
+                older_age < RMD_AGE)
     
     def calculate_strategy(self, year: int, balances: PortfolioBalances,
                           expenses: float, target_conversion: float = 0,
@@ -3925,8 +4070,13 @@ class Stage5SocialSecurity(LifeStage):
     
     def applies(self, age_primary: int, age_spouse: int, year: int,
                 has_wages: bool, has_ss: bool) -> bool:
-        """Applies when collecting SS but before RMDs"""
-        return (not has_wages and has_ss and age_primary < RMD_AGE)
+        """Applies when collecting SS but before RMDs.
+        
+        Uses the OLDER spouse's age for RMD threshold to ensure tax strategy
+        is driven by the person closest to RMD age (more conservative approach).
+        """
+        older_age = max(age_primary, age_spouse)
+        return (not has_wages and has_ss and older_age < RMD_AGE)
     
     def calculate_strategy(self, year: int, balances: PortfolioBalances,
                           expenses: float, ss_benefits: float = 0,
@@ -3961,9 +4111,6 @@ class Stage5SocialSecurity(LifeStage):
         people_on_medicare = sum([age_primary >= MEDICARE_AGE, age_spouse >= MEDICARE_AGE])
         irmaa_penalty = calculate_irmma_penalty(prior_magi, irmaa_brackets, people_on_medicare)
         
-        # 85% of SS is taxable at higher incomes
-        taxable_ss = ss_benefits * TAXABLE_SS_RATE
-        
         # Calculate cash buffer target (2 years in Cash, 3 years in Taxable)
         start_year = kwargs.get('start_year', year)
         cash_target, taxable_target = calculate_cash_buffer_targets(expenses)
@@ -3979,8 +4126,10 @@ class Stage5SocialSecurity(LifeStage):
         # Calculate withdrawal need (SS covers part of expenses)
         withdrawal_need = max(0, expenses + irmaa_penalty - ss_benefits)
         
-        # Harvest LTCG if needed
+        # Harvest LTCG if needed (preliminary calculation without SS taxation yet)
         ltcg_harvested = 0
+        preliminary_agi_without_ss = 0  # Will be updated after LTCG harvest
+        
         if withdrawal_need > 0 and balances.taxable > 0:
             cg_0_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0])
             if len(cg_0_percent) > 0:
@@ -3988,9 +4137,37 @@ class Stage5SocialSecurity(LifeStage):
             else:
                 cg_0_percent_limit = std_deduction
                 logger.warning(f"No 0% capital gains bracket found for year {year}, using standard deduction")
-            ltcg_room = max(0, cg_0_percent_limit - taxable_ss - std_deduction)
             
             # Calculate maximum withdrawal from brokerage (considering only 40% is taxable LTCG)
+            # We'll refine this after calculating accurate SS taxation
+            max_brokerage_withdrawal = min(
+                withdrawal_need / BROKERAGE_LTCG_RATIO,  # Withdrawal needed
+                balances.taxable * 0.5  # Don't withdraw more than 50%
+            )
+            ltcg_harvested = max_brokerage_withdrawal * BROKERAGE_LTCG_RATIO
+            preliminary_agi_without_ss = ltcg_harvested
+        
+        # Calculate accurate taxable SS amount using IRS formula
+        taxable_ss = calculate_ss_taxable_amount(
+            ss_benefits=ss_benefits,
+            agi_without_ss=preliminary_agi_without_ss,
+            filing_status=filing_status
+        )
+        
+        logger.debug(f"SS taxation: ${ss_benefits:,.0f} benefits → ${taxable_ss:,.0f} taxable "
+                    f"({taxable_ss/ss_benefits*100:.1f}% taxable)")
+        
+        # Refine LTCG harvest with accurate SS taxation
+        if withdrawal_need > 0 and balances.taxable > 0:
+            cg_0_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0])
+            if len(cg_0_percent) > 0:
+                cg_0_percent_limit = float(cg_0_percent['upper'].iloc[0])
+            else:
+                cg_0_percent_limit = std_deduction
+            
+            ltcg_room = max(0, cg_0_percent_limit - taxable_ss - std_deduction)
+            
+            # Recalculate with accurate SS taxation
             max_brokerage_withdrawal = min(
                 withdrawal_need / BROKERAGE_LTCG_RATIO,  # Withdrawal needed
                 ltcg_room / BROKERAGE_LTCG_RATIO,  # Max to stay in 0% bracket
@@ -4000,6 +4177,18 @@ class Stage5SocialSecurity(LifeStage):
         
         # Calculate Roth conversion room
         current_income = taxable_ss + ltcg_harvested
+        
+        # Check if either person is under Medicare age (ACA subsidy consideration)
+        person_under_medicare = (age_primary < MEDICARE_AGE or age_spouse < MEDICARE_AGE)
+        aca_subsidy_threshold = float('inf')
+        aca_subsidy_preserved = False
+        
+        if person_under_medicare:
+            # Federal Poverty Level for 2-person household (approximate)
+            fpl_2026 = 20440 + 7320  # Base + 1 additional person
+            aca_subsidy_threshold = fpl_2026 * 4.0  # 400% FPL threshold (~$111,040)
+            
+            logger.debug(f"ACA subsidy threshold (400% FPL): ${aca_subsidy_threshold:,.0f}")
         
         # Find IRMAA threshold
         next_irmaa_threshold = float('inf')
@@ -4011,6 +4200,15 @@ class Stage5SocialSecurity(LifeStage):
                 break
         
         irmaa_headroom = next_irmaa_threshold - current_income - std_deduction
+        
+        # Calculate ACA subsidy headroom (if applicable)
+        aca_headroom = float('inf')
+        if person_under_medicare:
+            # MAGI for ACA = AGI + tax-exempt interest + foreign income
+            # For simplicity, we use current_income as proxy for MAGI
+            projected_magi = current_income + std_deduction  # Approximate MAGI
+            aca_headroom = max(0, aca_subsidy_threshold - projected_magi)
+            logger.debug(f"ACA headroom: ${aca_headroom:,.0f} (projected MAGI: ${projected_magi:,.0f})")
         
         # Calculate Roth conversion using BETR algorithm with SS income
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
@@ -4032,39 +4230,55 @@ class Stage5SocialSecurity(LifeStage):
                 annual_return=kwargs.get('growth_rate', 1.07) - 1.0
             )
             
-            # Early check: skip all IRMAA checks if no conversion is optimal
+            # Early check: skip all checks if no conversion is optimal
             if optimal_amount <= 0:
                 roth_conversion = 0
                 logger.info('No conversion: insufficient tax bracket room with SS income')
             else:
-                # Check IRMAA impact
-                if optimal_amount > irmaa_headroom:
-                    # Would cross IRMAA threshold - reduce conversion
-                    irmaa_safe_amount = max(0, irmaa_headroom)
+                # Determine the most restrictive constraint
+                # Priority: ACA subsidy (if applicable) > IRMAA > Tax bracket
+                max_safe_conversion = optimal_amount
+                limiting_factor = "tax_bracket"
+                
+                # Check ACA subsidy impact (highest priority for ages 62-64)
+                if person_under_medicare and aca_headroom < max_safe_conversion:
+                    max_safe_conversion = max(0, aca_headroom)
+                    limiting_factor = "aca_subsidy"
+                    aca_subsidy_preserved = True
+                    logger.info(f"ACA subsidy constraint: limiting conversion to ${max_safe_conversion:,.0f}")
+                
+                # Check IRMAA impact (second priority)
+                if irmaa_headroom < max_safe_conversion:
+                    max_safe_conversion = max(0, irmaa_headroom)
+                    limiting_factor = "irmaa" if limiting_factor == "tax_bracket" else f"{limiting_factor}+irmaa"
+                    logger.info(f"IRMAA constraint: limiting conversion to ${max_safe_conversion:,.0f}")
+                
+                # Apply the most restrictive constraint
+                if max_safe_conversion > 0 and max_safe_conversion < optimal_amount:
+                    # Verify reduced amount is still beneficial
+                    reduced_inputs = BETRInputs(
+                        current_marginal_rate=max_conversion_rate,
+                        expected_future_rate=0.24,
+                        conversion_amount=max_safe_conversion,
+                        traditional_ira_balance=balances.traditional,
+                        pay_from_taxable=True,
+                        taxable_account_balance=balances.taxable,
+                        years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 10,
+                        annual_return=kwargs.get('growth_rate', 1.07) - 1.0
+                    )
+                    reduced_results = calculate_betr(reduced_inputs)
                     
-                    if irmaa_safe_amount > 0:
-                        # Verify reduced amount is still beneficial
-                        reduced_inputs = BETRInputs(
-                            current_marginal_rate=max_conversion_rate,
-                            expected_future_rate=0.24,
-                            conversion_amount=irmaa_safe_amount,
-                            traditional_ira_balance=balances.traditional,
-                            pay_from_taxable=True,
-                            taxable_account_balance=balances.taxable,
-                            years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 10,
-                            annual_return=kwargs.get('growth_rate', 1.07) - 1.0
-                        )
-                        reduced_results = calculate_betr(reduced_inputs)
-                        
-                        if reduced_results.conversion_recommended:
-                            roth_conversion = irmaa_safe_amount
-                            logger.info(f"BETR: {reduced_results.betr:.2%}, Converting ${irmaa_safe_amount:,.0f} (IRMAA-limited, with SS)")
-                        else:
-                            logger.info(f"BETR: {reduced_results.betr:.2%}, Conversion not recommended with SS income")
+                    if reduced_results.conversion_recommended:
+                        roth_conversion = max_safe_conversion
+                        logger.info(f"BETR: {reduced_results.betr:.2%}, Converting ${max_safe_conversion:,.0f} "
+                                  f"({limiting_factor}-limited, with SS)")
                     else:
-                        logger.info("No conversion room due to SS income and IRMAA threshold")
+                        logger.info(f"BETR: {reduced_results.betr:.2%}, Conversion not recommended "
+                                  f"even at {limiting_factor}-limited amount")
+                elif max_safe_conversion <= 0:
+                    logger.info(f"No conversion room due to SS income and {limiting_factor} constraint")
                 else:
-                    # Conversion fits within IRMAA headroom
+                    # Conversion fits within all constraints
                     if betr_results.conversion_recommended:
                         roth_conversion = optimal_amount
                         logger.info(f"BETR: {betr_results.betr:.2%}, Converting ${optimal_amount:,.0f} with SS income")
@@ -4088,14 +4302,14 @@ class Stage5SocialSecurity(LifeStage):
         
         logger.debug(f"Roth conversion: ${roth_conversion:,.2f} with SS income")
         
-        # Calculate taxes
-        total_income = taxable_ss + ltcg_harvested + roth_conversion
-        agi = total_income - std_deduction
-        
-        result = calculate_taxable_income(agi, tax_brackets)
-        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
-        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
-        total_tax = federal_tax + cg_tax
+        # Calculate preliminary tax estimate for rebalancing
+        # (will be recalculated after we know actual Traditional withdrawals)
+        preliminary_income = taxable_ss + ltcg_harvested + roth_conversion
+        preliminary_agi = preliminary_income - std_deduction
+        preliminary_result = calculate_taxable_income(preliminary_agi, tax_brackets)
+        preliminary_federal_tax = preliminary_result.total_tax
+        preliminary_cg_tax = calculate_cap_gains(preliminary_agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        preliminary_total_tax = preliminary_federal_tax + preliminary_cg_tax
         
         # Add SS benefits to cash before rebalancing
         balances_with_ss = PortfolioBalances(
@@ -4119,7 +4333,7 @@ class Stage5SocialSecurity(LifeStage):
             year=year,
             age_primary=age_primary,
             stage=self.name,
-            federal_tax=total_tax,
+            federal_tax=preliminary_total_tax,  # Use preliminary estimate
             irmaa_penalty=irmaa_penalty,
             aca_premium=aca_premium,
             medical_costs=0.0
@@ -4135,9 +4349,23 @@ class Stage5SocialSecurity(LifeStage):
             daf=new_balances.daf
         )
         
-        # Calculate MAGI for this year
+        # Calculate MAGI and taxes AFTER rebalancing (when we know actual withdrawals)
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = (ss_benefits * TAXABLE_SS_RATE +
+        
+        # Recalculate taxes with actual Traditional withdrawals included
+        total_income = taxable_ss + ltcg_harvested + roth_conversion + trad_withdrawal
+        agi = total_income - std_deduction
+        
+        result = calculate_taxable_income(agi, tax_brackets)
+        federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
+        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        total_tax = federal_tax + cg_tax
+        
+        logger.debug(f"Tax calculation: Taxable SS=${taxable_ss:,.0f}, Trad Withdrawal=${trad_withdrawal:,.0f}, "
+                    f"Roth Conv=${roth_conversion:,.0f}, LTCG=${ltcg_harvested:,.0f}, "
+                    f"Total Income=${total_income:,.0f}, AGI=${agi:,.0f}, Fed Tax=${federal_tax:,.0f}")
+        
+        magi = (taxable_ss +  # Use accurate taxable SS amount
                 trad_withdrawal +
                 roth_conversion +
                 ltcg_harvested)
@@ -4146,15 +4374,17 @@ class Stage5SocialSecurity(LifeStage):
         dl = DecisionLog()
 
         # SS income / taxation
+        ss_tax_pct = (taxable_ss / ss_benefits * 100) if ss_benefits > 0 else 0
         dl.add(
             "ss_decisions",
             "Social Security Income",
-            f"${ss_benefits:,.0f}/yr (${taxable_ss:,.0f} taxable at {TAXABLE_SS_RATE:.0%})",
-            f"Up to {TAXABLE_SS_RATE:.0%} of SS benefits are included in taxable income at higher "
-            "income levels. SS income reduces the amount that must be withdrawn from investment accounts.",
+            f"${ss_benefits:,.0f}/yr (${taxable_ss:,.0f} taxable = {ss_tax_pct:.1f}%)",
+            f"Social Security taxation uses IRS formula based on 'combined income' (AGI + 50% of SS). "
+            f"At this income level, {ss_tax_pct:.1f}% of SS benefits are taxable. "
+            f"SS income reduces the amount that must be withdrawn from investment accounts.",
             ss_benefits=f"${ss_benefits:,.0f}",
             taxable_ss=f"${taxable_ss:,.0f}",
-            taxable_ss_rate=f"{TAXABLE_SS_RATE:.0%}",
+            taxable_ss_pct=f"{ss_tax_pct:.1f}%",
         )
 
         # IRMAA assessment
@@ -4181,37 +4411,97 @@ class Stage5SocialSecurity(LifeStage):
             brokerage_ltcg_ratio=f"{BROKERAGE_LTCG_RATIO:.0%}",
         )
 
+        # ACA subsidy decision (if applicable)
+        if person_under_medicare:
+            if aca_subsidy_preserved:
+                dl.add(
+                    "aca_decisions",
+                    "ACA Subsidy Preservation",
+                    f"Conversion limited to preserve ACA subsidy (threshold: ${aca_subsidy_threshold:,.0f})",
+                    f"One or both persons are under Medicare age (65) and may qualify for ACA subsidies. "
+                    f"Roth conversions are limited to keep MAGI below 400% FPL (${aca_subsidy_threshold:,.0f}) "
+                    f"to preserve subsidies worth $10,000-$15,000/year. This takes priority over IRMAA optimization.",
+                    aca_threshold=f"${aca_subsidy_threshold:,.0f}",
+                    aca_headroom=f"${aca_headroom:,.0f}",
+                    subsidy_preserved="Yes",
+                )
+            else:
+                dl.add(
+                    "aca_decisions",
+                    "ACA Subsidy Status",
+                    f"ACA subsidy threshold: ${aca_subsidy_threshold:,.0f} (headroom: ${aca_headroom:,.0f})",
+                    f"One or both persons are under Medicare age (65). Conversion fits within ACA subsidy limits.",
+                    aca_threshold=f"${aca_subsidy_threshold:,.0f}",
+                    aca_headroom=f"${aca_headroom:,.0f}",
+                )
+        
         # Roth conversion decision
+        older_age = max(age_primary, age_spouse)
+        years_to_rmd = max(0, RMD_AGE - older_age)
+        
         if roth_conversion > 0 and roth_conversion < optimal_amount:
+            # Calculate projected RMD impact
+            projected_rmd = balances.traditional / 26.5 if years_to_rmd <= 0 else 0  # Life expectancy factor at 73
+            
+            constraint_reason = "IRMAA"
+            if person_under_medicare and aca_subsidy_preserved:
+                constraint_reason = "ACA subsidy preservation"
+            
             dl.add(
                 "roth_conversion",
                 "Roth Conversion",
-                f"Convert ${roth_conversion:,.0f} (IRMAA-limited with SS income)",
-                "BETR algorithm recommended a larger conversion but it was capped at the IRMAA "
-                "headroom. SS income reduces available conversion room.",
+                f"Convert ${roth_conversion:,.0f} ({constraint_reason}-limited)",
+                f"BETR algorithm recommended ${optimal_amount:,.0f} but conversion was limited by {constraint_reason}. "
+                f"With {years_to_rmd} years until RMDs, continuing conversions at this rate could reduce "
+                f"Traditional IRA balance significantly before RMDs begin.",
                 optimal_betr_amount=f"${optimal_amount:,.0f}",
-                irmaa_headroom=f"${irmaa_headroom:,.0f}",
                 conversion_executed=f"${roth_conversion:,.0f}",
+                years_to_rmd=years_to_rmd,
+                limiting_factor=constraint_reason,
             )
         elif roth_conversion > 0:
             dl.add(
                 "roth_conversion",
                 "Roth Conversion",
                 f"Convert ${roth_conversion:,.0f} (with SS income)",
-                "BETR algorithm recommended this conversion. "
-                "It fits within the IRMAA headroom despite SS income.",
-                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                f"BETR algorithm recommended this conversion. It fits within all constraints (IRMAA, ACA subsidy). "
+                f"With {years_to_rmd} years until RMDs, this helps reduce future required distributions.",
                 conversion_executed=f"${roth_conversion:,.0f}",
+                years_to_rmd=years_to_rmd,
             )
         else:
             dl.add(
                 "roth_conversion",
                 "Roth Conversion",
                 "No conversion",
-                "BETR did not recommend a conversion, or SS income plus IRMAA constraints "
-                "left no room for a beneficial conversion.",
-                irmaa_headroom=f"${irmaa_headroom:,.0f}",
+                f"BETR did not recommend a conversion, or SS income plus constraints (IRMAA/ACA) "
+                f"left no room for a beneficial conversion. {years_to_rmd} years remain until RMDs.",
                 traditional_balance=f"${balances.traditional:,.0f}",
+                years_to_rmd=years_to_rmd,
+            )
+        
+        # RMD planning visibility
+        if years_to_rmd > 0 and years_to_rmd <= 10:
+            projected_rmd = balances.traditional / 26.5  # Approximate RMD at age 73
+            total_conversion_capacity = roth_conversion * years_to_rmd if roth_conversion > 0 else 0
+            projected_balance_at_rmd = max(0, balances.traditional - total_conversion_capacity)
+            projected_rmd_reduced = projected_balance_at_rmd / 26.5
+            
+            dl.add(
+                "rmd_decisions",
+                "RMD Planning Outlook",
+                f"{years_to_rmd} years until RMDs (age {RMD_AGE})",
+                f"Current Traditional IRA: ${balances.traditional:,.0f}. "
+                f"At current conversion rate (${roth_conversion:,.0f}/yr), could convert ${total_conversion_capacity:,.0f} "
+                f"before RMDs begin, reducing balance to ~${projected_balance_at_rmd:,.0f}. "
+                f"This would lower the first RMD from ${projected_rmd:,.0f} to ${projected_rmd_reduced:,.0f}. "
+                f"RMDs are forced taxable income that cannot be avoided.",
+                years_to_rmd=years_to_rmd,
+                current_traditional=f"${balances.traditional:,.0f}",
+                annual_conversion=f"${roth_conversion:,.0f}",
+                total_conversion_capacity=f"${total_conversion_capacity:,.0f}",
+                projected_balance_at_rmd=f"${projected_balance_at_rmd:,.0f}",
+                projected_first_rmd=f"${projected_rmd_reduced:,.0f}",
             )
 
         # ACA premium
@@ -4317,9 +4607,28 @@ class Stage6RMD(LifeStage):
         
         logger.debug(f"RMD amount: ${rmd_amount:,.2f} (rate: {rmd_rate})")
         
-        # Calculate IRMAA
-        people_on_medicare = sum([age_primary >= MEDICARE_AGE, age_spouse >= MEDICARE_AGE])
-        irmaa_penalty = calculate_irmma_penalty(prior_magi, irmaa_brackets, people_on_medicare)
+        # Calculate healthcare costs (Medicare for both at this stage)
+        try:
+            healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=prior_magi,
+                year=year,
+                filing_status=filing_status,
+                has_medigap=True
+            )
+            medical_costs = healthcare_breakdown.medicare
+            # At Stage 6 (RMD), both should be on Medicare, but include all costs
+            aca_premium = healthcare_breakdown.pre_medicare + healthcare_breakdown.preretirement_working
+            irmaa_penalty = healthcare_breakdown.medicare_detail.get('irmaa_penalty', 0.0)
+            
+            if medical_costs > 0:
+                logger.info(f"Stage 6: Medicare costs=${medical_costs:,.2f} (IRMAA=${irmaa_penalty:,.2f})")
+        except Exception as e:
+            logger.warning(f"Could not calculate healthcare costs for Stage 6: {e}")
+            medical_costs = 0.0
+            aca_premium = 0.0
+            irmaa_penalty = 0.0
         
         # Calculate cash buffer target (2 years in Cash, 3 years in Taxable)
         start_year = kwargs.get('start_year', year)
@@ -4408,9 +4717,6 @@ class Stage6RMD(LifeStage):
         
         logger.info(f"Year {year}: Added SS benefits ${ss_benefits:,.2f} to cash")
         
-        # Calculate ACA premium (should be 0 at this stage, but check anyway)
-        aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
-        
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         # Note: RMD is handled separately as it's mandatory
         new_balances, transactions, rebal_dl = rebalance_accounts(
@@ -4423,7 +4729,7 @@ class Stage6RMD(LifeStage):
             federal_tax=total_tax,
             irmaa_penalty=irmaa_penalty,
             aca_premium=aca_premium,
-            medical_costs=0.0
+            medical_costs=medical_costs
         )
         
         # Apply RMD (mandatory distribution from Traditional to Brokerage)
@@ -4557,7 +4863,7 @@ class Stage6RMD(LifeStage):
             agi=agi,
             magi=magi,
             federal_tax=total_tax,
-            irmaa_penalty=irmaa_penalty,
+            irmaa_penalty=medical_costs,
             aca_premium=aca_premium,
             balances=new_balances,
             # Fund movement tracking

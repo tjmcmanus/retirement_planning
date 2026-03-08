@@ -23,9 +23,14 @@ from portfolio_data_entry import (
     start_from_scratch,
     revert_to_last_backup,
     VALID_ACCOUNT_TYPES,
+    VALID_ACCOUNT_OWNERS,
     VALID_SECTORS,
 )
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
+from ltc_hsa_export import (
+    export_ltc_analysis_to_csv, export_ltc_analysis_to_json, export_ltc_analysis_to_markdown,
+    export_hsa_analysis_to_csv, export_hsa_analysis_to_json, export_hsa_analysis_to_markdown
+)
 
 st.set_page_config(page_title="Configuration", page_icon="⚙️", layout="wide")
 
@@ -59,7 +64,7 @@ st.title("⚙️ Retirement Planning Configuration")
 st.markdown("Configure your personal information, financial assumptions, and planning parameters.")
 
 # Create tabs for different configuration sections
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "👤 Personal Info",
     "💰 Financial Assumptions",
     "🏥 Healthcare",
@@ -68,6 +73,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "📊 Portfolio Data",
     "🏠 Real Estate",
     "⚖️ Rebalancing",
+    "🪣 Bucket Strategy",
     "🔧 Advanced"
 ])
 
@@ -378,34 +384,71 @@ with tab3:
     st.header("Healthcare Costs")
     st.markdown("Configure healthcare insurance and Medicare assumptions for both people.")
     
-    # ACA Marketplace enrollment (household level)
-    aca_marketplace_enrolled = st.checkbox(
-        "Enrolled in ACA Marketplace",
-        value=config_mgr.get("healthcare", "aca_marketplace_enrolled", False),
-        help="Check if you plan to purchase insurance from the ACA marketplace. This affects withdrawal strategy optimization for subsidy eligibility.",
-        key="aca_marketplace_enrolled"
-    )
-    
-    if aca_marketplace_enrolled:
-        st.info("💡 Withdrawal strategy will optimize income to maximize ACA subsidies (typically keeping MAGI below 400% FPL)")
-    
-    st.markdown("---")
-    
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader(f"{person1_name}'s Healthcare")
         
-        st.markdown("**ACA Insurance (Pre-Medicare)**")
-        person1_aca_insurance_monthly = st.number_input(
-            "Monthly ACA Premium ($)",
-            min_value=0,
-            max_value=5000,
-            value=config_mgr.get("healthcare", "person1_aca_insurance_monthly", 0),
-            step=50,
-            help=f"Monthly premium for {person1_name}'s ACA marketplace insurance (before subsidies)",
-            key="person1_aca_insurance_monthly"
+        st.markdown("**Pre-Retirement Healthcare (While Working)**")
+        
+        # Healthcare type selection for pre-retirement
+        person1_preretirement_coverage_type = st.selectbox(
+            "Pre-Retirement Coverage Type",
+            options=["None", "Employer", "ACA Marketplace"],
+            index=["None", "Employer", "ACA Marketplace"].index(
+                config_mgr.get("healthcare", "person1_preretirement_coverage_type", "None")
+            ),
+            help=f"Select {person1_name}'s healthcare coverage type before retirement",
+            key="person1_preretirement_coverage_type"
         )
+        
+        if person1_preretirement_coverage_type != "None":
+            person1_preretirement_insurance_monthly = st.number_input(
+                "Monthly Pre-Retirement Premium ($)",
+                min_value=0,
+                max_value=5000,
+                value=config_mgr.get("healthcare", "person1_preretirement_insurance_monthly", 0),
+                step=50,
+                help=f"Monthly premium for {person1_name}'s {person1_preretirement_coverage_type.lower()} insurance before retirement",
+                key="person1_preretirement_insurance_monthly"
+            )
+            
+            if person1_preretirement_insurance_monthly > 0:
+                annual_preretirement_cost_1 = person1_preretirement_insurance_monthly * 12
+                st.metric("Annual Pre-Retirement Cost", f"${annual_preretirement_cost_1:,.0f}")
+        else:
+            person1_preretirement_insurance_monthly = 0
+        
+        st.markdown("---")
+        
+        st.markdown("**Retirement Healthcare (Pre-Medicare)**")
+        
+        # Retirement coverage type selection
+        person1_retirement_coverage_type = st.selectbox(
+            "Retirement Coverage Type (Post-Retirement, Pre-Medicare)",
+            options=["None", "Employer Retiree", "ACA Marketplace"],
+            index=["None", "Employer Retiree", "ACA Marketplace"].index(
+                config_mgr.get("healthcare", "person1_retirement_coverage_type", "None")
+            ),
+            help=f"Select {person1_name}'s healthcare coverage type after retirement but before Medicare eligibility",
+            key="person1_retirement_coverage_type"
+        )
+        
+        if person1_retirement_coverage_type == "ACA Marketplace":
+            st.info("💡 Withdrawal strategy will optimize income to maximize ACA subsidies (typically keeping MAGI below 400% FPL)")
+        
+        if person1_retirement_coverage_type != "None":
+            person1_aca_insurance_monthly = st.number_input(
+                f"Monthly {person1_retirement_coverage_type} Premium ($)",
+                min_value=0,
+                max_value=5000,
+                value=config_mgr.get("healthcare", "person1_aca_insurance_monthly", 0),
+                step=50,
+                help=f"Monthly premium for {person1_name}'s {person1_retirement_coverage_type.lower()} insurance (before subsidies if ACA)",
+                key="person1_aca_insurance_monthly"
+            )
+        else:
+            person1_aca_insurance_monthly = 0
         
         person1_aca_start_age = st.number_input(
             "ACA Coverage Start Age",
@@ -442,23 +485,72 @@ with tab3:
             years_on_aca_1 = max(0, person1_aca_end_age - person1_aca_start_age)
             total_aca_cost_1 = annual_aca_cost_1 * years_on_aca_1
             
-            st.metric("Annual ACA Cost", f"${annual_aca_cost_1:,.0f}")
-            st.metric("Total ACA Cost", f"${total_aca_cost_1:,.0f}",
+            st.metric("Annual Retirement Healthcare Cost", f"${annual_aca_cost_1:,.0f}")
+            st.metric("Total Retirement Healthcare Cost", f"${total_aca_cost_1:,.0f}",
                      help=f"Total cost for {years_on_aca_1} years on ACA")
     
     with col2:
         st.subheader(f"{person2_name}'s Healthcare")
         
-        st.markdown("**ACA Insurance (Pre-Medicare)**")
-        person2_aca_insurance_monthly = st.number_input(
-            "Monthly ACA Premium ($)",
-            min_value=0,
-            max_value=5000,
-            value=config_mgr.get("healthcare", "person2_aca_insurance_monthly", 0),
-            step=50,
-            help=f"Monthly premium for {person2_name}'s ACA marketplace insurance (before subsidies)",
-            key="person2_aca_insurance_monthly"
+        st.markdown("**Pre-Retirement Healthcare (While Working)**")
+        
+        # Healthcare type selection for pre-retirement
+        person2_preretirement_coverage_type = st.selectbox(
+            "Pre-Retirement Coverage Type",
+            options=["None", "Employer", "ACA Marketplace"],
+            index=["None", "Employer", "ACA Marketplace"].index(
+                config_mgr.get("healthcare", "person2_preretirement_coverage_type", "None")
+            ),
+            help=f"Select {person2_name}'s healthcare coverage type before retirement",
+            key="person2_preretirement_coverage_type"
         )
+        
+        if person2_preretirement_coverage_type != "None":
+            person2_preretirement_insurance_monthly = st.number_input(
+                "Monthly Pre-Retirement Premium ($)",
+                min_value=0,
+                max_value=5000,
+                value=config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0),
+                step=50,
+                help=f"Monthly premium for {person2_name}'s {person2_preretirement_coverage_type.lower()} insurance before retirement",
+                key="person2_preretirement_insurance_monthly"
+            )
+            
+            if person2_preretirement_insurance_monthly > 0:
+                annual_preretirement_cost_2 = person2_preretirement_insurance_monthly * 12
+                st.metric("Annual Pre-Retirement Cost", f"${annual_preretirement_cost_2:,.0f}")
+        else:
+            person2_preretirement_insurance_monthly = 0
+        
+        st.markdown("---")
+        st.markdown("**Retirement Healthcare (Pre-Medicare)**")
+        
+        # Retirement coverage type selection
+        person2_retirement_coverage_type = st.selectbox(
+            "Retirement Coverage Type (Post-Retirement, Pre-Medicare)",
+            options=["None", "Employer Retiree", "ACA Marketplace"],
+            index=["None", "Employer Retiree", "ACA Marketplace"].index(
+                config_mgr.get("healthcare", "person2_retirement_coverage_type", "None")
+            ),
+            help=f"Select {person2_name}'s healthcare coverage type after retirement but before Medicare eligibility",
+            key="person2_retirement_coverage_type"
+        )
+        
+        if person2_retirement_coverage_type == "ACA Marketplace":
+            st.info("💡 Withdrawal strategy will optimize income to maximize ACA subsidies (typically keeping MAGI below 400% FPL)")
+        
+        if person2_retirement_coverage_type != "None":
+            person2_aca_insurance_monthly = st.number_input(
+                f"Monthly {person2_retirement_coverage_type} Premium ($)",
+                min_value=0,
+                max_value=5000,
+                value=config_mgr.get("healthcare", "person2_aca_insurance_monthly", 0),
+                step=50,
+                help=f"Monthly premium for {person2_name}'s {person2_retirement_coverage_type.lower()} insurance (before subsidies if ACA)",
+                key="person2_aca_insurance_monthly"
+            )
+        else:
+            person2_aca_insurance_monthly = 0
         
         person2_aca_start_age = st.number_input(
             "ACA Coverage Start Age",
@@ -495,8 +587,8 @@ with tab3:
             years_on_aca_2 = max(0, person2_aca_end_age - person2_aca_start_age)
             total_aca_cost_2 = annual_aca_cost_2 * years_on_aca_2
             
-            st.metric("Annual ACA Cost", f"${annual_aca_cost_2:,.0f}")
-            st.metric("Total ACA Cost", f"${total_aca_cost_2:,.0f}",
+            st.metric("Annual Retirement Healthcare Cost", f"${annual_aca_cost_2:,.0f}")
+            st.metric("Total Retirement Healthcare Cost", f"${total_aca_cost_2:,.0f}",
                      help=f"Total cost for {years_on_aca_2} years on ACA")
     
     # Display combined household costs
@@ -512,7 +604,731 @@ with tab3:
         
         with col_health2:
             total_annual_aca = total_monthly_aca * 12
-            st.metric("Total Annual ACA Cost", f"${total_annual_aca:,.0f}")
+    
+    # Long-Term Care Planning Section
+    st.markdown("---")
+    st.header("🏥 Long-Term Care (LTC) Planning")
+    st.markdown("Plan for potential long-term care needs and evaluate insurance options.")
+    
+    with st.expander("📊 LTC Cost Projections & Analysis", expanded=False):
+        from ltc_planning import (
+            project_ltc_costs, analyze_medicaid_spend_down,
+            analyze_ltc_insurance_vs_self_insurance, calculate_ltc_probability,
+            generate_ltc_cost_comparison, STATE_NURSING_HOME_COSTS
+        )
+        
+        st.subheader("LTC Planning Parameters")
+        
+        ltc_col1, ltc_col2, ltc_col3 = st.columns(3)
+        
+        with ltc_col1:
+            ltc_state = st.selectbox(
+                "State for Cost Projections",
+                options=['National'] + sorted(STATE_NURSING_HOME_COSTS.keys()),
+                index=0,
+                help="Select your state for accurate LTC cost projections",
+                key="ltc_state"
+            )
+            
+            ltc_years_until_need = st.number_input(
+                "Years Until LTC Needed",
+                min_value=0,
+                max_value=40,
+                value=config_mgr.get("ltc_planning", "years_until_need", 15),
+                help="Estimated years until long-term care is needed",
+                key="ltc_years_until_need"
+            )
+        
+        with ltc_col2:
+            ltc_expected_duration = st.number_input(
+                "Expected Years of Care",
+                min_value=1,
+                max_value=10,
+                value=config_mgr.get("ltc_planning", "expected_duration", 3),
+                help="Expected duration of long-term care (average is 3 years)",
+                key="ltc_expected_duration"
+            )
+            
+            ltc_current_assets = st.number_input(
+                "Current Countable Assets ($)",
+                min_value=0,
+                max_value=10000000,
+                value=config_mgr.get("ltc_planning", "current_assets", 500000),
+                step=10000,
+                help="Assets that count toward Medicaid eligibility (excludes primary home)",
+                key="ltc_current_assets"
+            )
+        
+        with ltc_col3:
+            ltc_is_married = st.checkbox(
+                "Married/Partnered",
+                value=config_mgr.get("ltc_planning", "is_married", True),
+                help="Affects Medicaid asset limits and spend-down strategies",
+                key="ltc_is_married"
+            )
+            
+            if ltc_is_married:
+                ltc_spouse_assets = st.number_input(
+                    "Spouse's Assets ($)",
+                    min_value=0,
+                    max_value=10000000,
+                    value=config_mgr.get("ltc_planning", "spouse_assets", 250000),
+                    step=10000,
+                    help="Assets in spouse's name",
+                    key="ltc_spouse_assets"
+                )
+            else:
+                ltc_spouse_assets = 0
+        
+        # Run LTC Analysis
+        if st.button("🔍 Run LTC Analysis", key="run_ltc_analysis"):
+            st.markdown("---")
+            st.subheader("LTC Analysis Results")
+            
+            # Cost Comparison Table
+            st.markdown("#### Cost Comparison by Care Type")
+            cost_comparison = generate_ltc_cost_comparison(ltc_state, ltc_years_until_need)
+            st.dataframe(
+                cost_comparison.style.format({
+                    'Current Annual Cost': '${:,.0f}',
+                    'Projected Annual Cost': '${:,.0f}',
+                    'Monthly Cost': '${:,.0f}',
+                    '3-Year Total Cost': '${:,.0f}'
+                }),
+                use_container_width=True
+            )
+            
+            # Medicaid Spend-Down Analysis
+            st.markdown("#### Medicaid Eligibility Analysis")
+            medicaid_analysis = analyze_medicaid_spend_down(
+                ltc_current_assets,
+                ltc_is_married,
+                ltc_spouse_assets,
+                ltc_state if ltc_state != 'National' else 'default'
+            )
+            
+            med_col1, med_col2, med_col3 = st.columns(3)
+            with med_col1:
+                st.metric("Current Assets", f"${medicaid_analysis.current_assets:,.0f}")
+            with med_col2:
+                st.metric("Asset Limit", f"${medicaid_analysis.asset_limit:,.0f}")
+            with med_col3:
+                if medicaid_analysis.excess_assets > 0:
+                    st.metric("Excess Assets", f"${medicaid_analysis.excess_assets:,.0f}", 
+                             delta=f"{medicaid_analysis.months_to_qualify} months to qualify")
+                else:
+                    st.success("✅ Currently Medicaid Eligible")
+            
+            st.markdown("**Spend-Down Strategies:**")
+            for strategy in medicaid_analysis.spend_down_strategies:
+                st.write(f"• {strategy}")
+            
+            if ltc_is_married:
+                st.info(f"💡 **Protected Spouse Assets:** ${medicaid_analysis.protected_spouse_assets:,.0f} can be retained by community spouse")
+            
+            st.markdown("**Lookback Period Concerns:**")
+            for concern in medicaid_analysis.lookback_concerns:
+                if "No concerning" in concern:
+                    st.success(f"✅ {concern}")
+                else:
+                    st.warning(f"⚠️ {concern}")
+            
+            # LTC Probability
+            st.markdown("#### Probability of Needing LTC")
+            person1_age = config_mgr.calculate_age(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01"))
+            person1_gender = config_mgr.get("personal_info", "person1_gender", "M")
+            
+            ltc_prob = calculate_ltc_probability(person1_age, person1_gender)
+            
+            prob_col1, prob_col2, prob_col3 = st.columns(3)
+            with prob_col1:
+                st.metric("Probability of Any LTC", f"{ltc_prob['any_ltc']*100:.0f}%")
+            with prob_col2:
+                st.metric("Expected Duration", f"{ltc_prob['expected_duration_years']:.1f} years")
+            with prob_col3:
+            
+            # Export LTC Analysis
+            st.markdown("---")
+            st.markdown("#### 📥 Export LTC Analysis")
+            
+            export_col1, export_col2, export_col3 = st.columns(3)
+            
+            with export_col1:
+                # CSV Export
+                csv_data = export_ltc_analysis_to_csv(
+                    cost_comparison,
+                    medicaid_analysis,
+                    ltc_probability=ltc_prob
+                )
+                st.download_button(
+                    label="📄 Download CSV",
+                    data=csv_data,
+                    file_name=f"ltc_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_ltc_csv"
+                )
+            
+            with export_col2:
+                # JSON Export
+                json_data = export_ltc_analysis_to_json(
+                    cost_comparison,
+                    medicaid_analysis,
+                    ltc_probability=ltc_prob
+                )
+                st.download_button(
+                    label="📋 Download JSON",
+                    data=json_data,
+                    file_name=f"ltc_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    key="download_ltc_json"
+                )
+            
+            with export_col3:
+                # Markdown Export
+                md_data = export_ltc_analysis_to_markdown(
+                    cost_comparison,
+                    medicaid_analysis,
+                    ltc_probability=ltc_prob
+                )
+                st.download_button(
+                    label="📝 Download Markdown",
+                    data=md_data,
+                    file_name=f"ltc_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    key="download_ltc_md"
+                )
+                st.metric("Probability >5 Years", f"{ltc_prob['more_than_5_years']*100:.0f}%")
+    
+    # LTC Insurance Analysis
+    with st.expander("💰 LTC Insurance vs Self-Insurance Analysis", expanded=False):
+        st.markdown("Compare purchasing LTC insurance versus self-insuring (paying out of pocket).")
+        
+        ins_col1, ins_col2, ins_col3 = st.columns(3)
+        
+        with ins_col1:
+            ltc_ins_annual_premium = st.number_input(
+                "Annual LTC Insurance Premium ($)",
+                min_value=0,
+                max_value=20000,
+                value=config_mgr.get("ltc_planning", "insurance_annual_premium", 3000),
+                step=100,
+                help="Annual premium for LTC insurance policy",
+                key="ltc_ins_annual_premium"
+            )
+            
+            ltc_ins_daily_benefit = st.number_input(
+                "Daily Benefit Amount ($)",
+                min_value=0,
+                max_value=500,
+                value=config_mgr.get("ltc_planning", "insurance_daily_benefit", 200),
+                step=10,
+                help="Daily benefit amount from insurance policy",
+                key="ltc_ins_daily_benefit"
+            )
+        
+        with ins_col2:
+            ltc_ins_benefit_period = st.selectbox(
+                "Benefit Period (Years)",
+                options=[2, 3, 4, 5, 'lifetime'],
+                index=2,
+                help="How many years the policy will pay benefits",
+                key="ltc_ins_benefit_period"
+            )
+            
+            ltc_ins_waiting_period = st.selectbox(
+                "Waiting Period (Days)",
+                options=[0, 30, 60, 90, 180],
+                index=3,
+                help="Days before benefits begin (elimination period)",
+                key="ltc_ins_waiting_period"
+            )
+        
+        with ins_col3:
+            ltc_ins_inflation_protection = st.checkbox(
+                "Inflation Protection (3% compound)",
+                value=config_mgr.get("ltc_planning", "insurance_inflation_protection", True),
+                help="Policy includes 3% compound inflation protection",
+                key="ltc_ins_inflation_protection"
+            )
+        
+        if st.button("📊 Compare Insurance vs Self-Insurance", key="compare_ltc_insurance"):
+            person1_age = config_mgr.calculate_age(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01"))
+            
+            insurance_analysis = analyze_ltc_insurance_vs_self_insurance(
+                person1_age,
+                ltc_ins_annual_premium,
+                ltc_ins_daily_benefit,
+                ltc_ins_benefit_period if isinstance(ltc_ins_benefit_period, int) else 99,
+                ltc_ins_waiting_period,
+                ltc_years_until_need,
+                ltc_expected_duration,
+                ltc_state,
+                ltc_ins_inflation_protection
+            )
+            
+            st.markdown("---")
+            st.subheader("Insurance Analysis Results")
+            
+            # Key Metrics
+            ins_metric_col1, ins_metric_col2, ins_metric_col3, ins_metric_col4 = st.columns(4)
+            
+            with ins_metric_col1:
+                st.metric("Total Premiums Paid", f"${insurance_analysis.total_premiums_paid:,.0f}")
+            with ins_metric_col2:
+                st.metric("Insurance Benefit", f"${insurance_analysis.total_insurance_benefit:,.0f}")
+            with ins_metric_col3:
+                st.metric("Self-Insurance Cost", f"${insurance_analysis.self_insurance_cost:,.0f}")
+            with ins_metric_col4:
+                if insurance_analysis.break_even_year < 99:
+                    st.metric("Break-Even Year", f"{insurance_analysis.break_even_year}")
+                else:
+                    st.metric("Break-Even", "Never")
+            
+            # Recommendation
+            if "Recommended" in insurance_analysis.recommendation:
+                st.success(f"✅ **{insurance_analysis.recommendation}**")
+            elif "Marginally" in insurance_analysis.recommendation:
+                st.info(f"ℹ️ **{insurance_analysis.recommendation}**")
+            else:
+                st.warning(f"⚠️ **{insurance_analysis.recommendation}**")
+            
+            # Detailed Notes
+            st.markdown("**Analysis Details:**")
+            for note in insurance_analysis.notes:
+            
+            # Export LTC Insurance Analysis
+            st.markdown("---")
+            st.markdown("#### 📥 Export Insurance Analysis")
+            
+            ins_export_col1, ins_export_col2, ins_export_col3 = st.columns(3)
+            
+            # Need to get cost comparison for complete export
+            cost_comparison_ins = generate_ltc_cost_comparison(ltc_state, ltc_years_until_need)
+            medicaid_analysis_ins = analyze_medicaid_spend_down(
+                ltc_current_assets,
+                ltc_is_married,
+                ltc_spouse_assets,
+                ltc_state if ltc_state != 'National' else 'default'
+            )
+            
+            with ins_export_col1:
+                # CSV Export
+                csv_data = export_ltc_analysis_to_csv(
+                    cost_comparison_ins,
+                    medicaid_analysis_ins,
+                    insurance_analysis=insurance_analysis
+                )
+                st.download_button(
+                    label="📄 Download CSV",
+                    data=csv_data,
+                    file_name=f"ltc_insurance_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_ltc_ins_csv"
+                )
+            
+            with ins_export_col2:
+                # JSON Export
+                json_data = export_ltc_analysis_to_json(
+                    cost_comparison_ins,
+                    medicaid_analysis_ins,
+                    insurance_analysis=insurance_analysis
+                )
+                st.download_button(
+                    label="📋 Download JSON",
+                    data=json_data,
+                    file_name=f"ltc_insurance_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    key="download_ltc_ins_json"
+                )
+            
+            with ins_export_col3:
+                # Markdown Export
+                md_data = export_ltc_analysis_to_markdown(
+                    cost_comparison_ins,
+                    medicaid_analysis_ins,
+                    insurance_analysis=insurance_analysis
+                )
+                st.download_button(
+                    label="📝 Download Markdown",
+                    data=md_data,
+                    file_name=f"ltc_insurance_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    key="download_ltc_ins_md"
+                )
+                st.write(f"• {note}")
+    
+    # HSA Integration Section
+    st.markdown("---")
+    st.header("💳 Health Savings Account (HSA) Planning")
+    st.markdown("Maximize your HSA's triple tax advantage for retirement healthcare costs.")
+    
+    with st.expander("📈 HSA Contribution Planning & Projections", expanded=False):
+        from hsa_integration import (
+            get_hsa_contribution_limit, project_hsa_growth,
+            optimize_hsa_contribution_strategy, estimate_retirement_healthcare_costs
+        )
+        
+        st.subheader("HSA Account Information")
+        
+        hsa_col1, hsa_col2, hsa_col3 = st.columns(3)
+        
+        with hsa_col1:
+            hsa_current_balance = st.number_input(
+                "Current HSA Balance ($)",
+                min_value=0,
+                max_value=1000000,
+                value=config_mgr.get("hsa", "current_balance", 0),
+                step=1000,
+                help="Your current HSA account balance",
+                key="hsa_current_balance"
+            )
+            
+            hsa_coverage_type = st.selectbox(
+                "Coverage Type",
+                options=['individual', 'family'],
+                index=1 if config_mgr.get("hsa", "coverage_type", "family") == "family" else 0,
+                help="Individual or family HDHP coverage",
+                key="hsa_coverage_type"
+            )
+        
+        with hsa_col2:
+            hsa_employer_contribution = st.number_input(
+                "Annual Employer Contribution ($)",
+                min_value=0,
+                max_value=10000,
+                value=config_mgr.get("hsa", "employer_contribution", 1000),
+                step=100,
+                help="Annual employer HSA contribution",
+                key="hsa_employer_contribution"
+            )
+            
+            hsa_employee_contribution = st.number_input(
+                "Annual Employee Contribution ($)",
+                min_value=0,
+                max_value=10000,
+                value=config_mgr.get("hsa", "employee_contribution", 3000),
+                step=100,
+                help="Your annual HSA contribution",
+                key="hsa_employee_contribution"
+            )
+        
+        with hsa_col3:
+            hsa_investment_return = st.slider(
+                "Expected Investment Return (%)",
+                min_value=0.0,
+                max_value=12.0,
+                value=config_mgr.get("hsa", "investment_return", 6.0),
+                step=0.5,
+                help="Expected annual return on HSA investments",
+                key="hsa_investment_return"
+            ) / 100
+            
+            hsa_annual_medical_expenses = st.number_input(
+                "Annual Medical Expenses from HSA ($)",
+                min_value=0,
+                max_value=50000,
+                value=config_mgr.get("hsa", "annual_medical_expenses", 0),
+                step=500,
+                help="Annual medical expenses paid from HSA (reduces balance)",
+                key="hsa_annual_medical_expenses"
+            )
+        
+        # Show current year contribution limit
+        person1_age = config_mgr.calculate_age(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01"))
+        current_limit = get_hsa_contribution_limit(2024, hsa_coverage_type, person1_age)
+        
+        st.info(f"💡 **2024 HSA Contribution Limit:** ${current_limit:,.0f} ({hsa_coverage_type} coverage" + 
+                (f", includes $1,000 catch-up for age 55+" if person1_age >= 55 else "") + ")")
+        
+        # Check if maxing out
+        total_contribution = hsa_employer_contribution + hsa_employee_contribution
+        if total_contribution < current_limit:
+            shortfall = current_limit - total_contribution
+            st.warning(f"⚠️ You're contributing ${total_contribution:,.0f}, which is ${shortfall:,.0f} below the maximum. Consider increasing contributions to maximize tax benefits!")
+        elif total_contribution == current_limit:
+            st.success(f"✅ You're maxing out your HSA contributions!")
+        
+        if st.button("📊 Run HSA Analysis", key="run_hsa_analysis"):
+            st.markdown("---")
+            st.subheader("HSA Growth Projection")
+            
+            # Project HSA growth
+            projection = project_hsa_growth(
+                hsa_current_balance,
+                person1_age,
+                hsa_coverage_type,
+                hsa_employer_contribution,
+                hsa_employee_contribution,
+                hsa_investment_return,
+                hsa_annual_medical_expenses
+            )
+            
+            # Display key metrics
+            hsa_metric_col1, hsa_metric_col2, hsa_metric_col3, hsa_metric_col4 = st.columns(4)
+            
+            with hsa_metric_col1:
+                st.metric("Current Balance", f"${projection.current_balance:,.0f}")
+            with hsa_metric_col2:
+                st.metric("Years to Medicare", projection.years_to_medicare)
+            with hsa_metric_col3:
+                st.metric("Total Contributions", f"${projection.total_contributions:,.0f}")
+            with hsa_metric_col4:
+                st.metric("Balance at Age 65", f"${projection.final_balance:,.0f}")
+            
+            # Show year-by-year projection
+            if projection.annual_projections:
+                st.markdown("#### Year-by-Year Projection")
+                proj_df = pd.DataFrame(projection.annual_projections)
+                proj_df_display = proj_df[['year', 'age', 'contributions', 'medical_expenses', 'investment_growth', 'ending_balance']].copy()
+                proj_df_display.columns = ['Year', 'Age', 'Contributions', 'Medical Expenses', 'Investment Growth', 'Ending Balance']
+                
+                st.dataframe(
+                    proj_df_display.style.format({
+                        'Contributions': '${:,.0f}',
+                        'Medical Expenses': '${:,.0f}',
+                        'Investment Growth': '${:,.0f}',
+                        'Ending Balance': '${:,.0f}'
+                    }),
+                    use_container_width=True,
+                    height=300
+                )
+            
+            # Estimate retirement healthcare costs
+            person1_retirement_age = config_mgr.get("personal_info", "person1_retirement_age", 65)
+            person1_life_expectancy = config_mgr.get("personal_info", "person1_life_expectancy", 85)
+            
+            healthcare_costs = estimate_retirement_healthcare_costs(
+                person1_retirement_age,
+                person1_life_expectancy,
+                include_ltc=False
+            )
+            
+            st.markdown("---")
+            st.subheader("Retirement Healthcare Cost Estimates")
+            
+            cost_col1, cost_col2, cost_col3 = st.columns(3)
+            
+            with cost_col1:
+                st.metric("Total Healthcare Costs", f"${healthcare_costs['total_healthcare_costs']:,.0f}",
+                         help="Estimated total healthcare costs in retirement (excluding LTC)")
+            with cost_col2:
+                st.metric("Annual Average", f"${healthcare_costs['annual_average']:,.0f}",
+                         help="Average annual healthcare cost")
+            with cost_col3:
+                coverage_pct = (projection.final_balance / healthcare_costs['total_healthcare_costs']) * 100
+                st.metric("HSA Coverage", f"{coverage_pct:.0f}%",
+                         help="Percentage of healthcare costs covered by projected HSA balance")
+            
+            # Coverage assessment
+            if coverage_pct >= 100:
+                st.success("✅ **Excellent!** Your projected HSA balance will cover all estimated healthcare costs in retirement.")
+            elif coverage_pct >= 75:
+                st.info("ℹ️ **Good!** Your HSA will cover most healthcare costs. Consider increasing contributions if possible.")
+            elif coverage_pct >= 50:
+                st.warning("⚠️ **Fair.** Your HSA will cover about half of healthcare costs. Strongly consider maxing out contributions.")
+            else:
+            
+            # Export HSA Analysis
+            st.markdown("---")
+            st.markdown("#### 📥 Export HSA Analysis")
+            
+            hsa_export_col1, hsa_export_col2, hsa_export_col3 = st.columns(3)
+            
+            with hsa_export_col1:
+                # CSV Export
+                csv_data = export_hsa_analysis_to_csv(
+                    projection,
+                    healthcare_costs=healthcare_costs
+                )
+                st.download_button(
+                    label="📄 Download CSV",
+                    data=csv_data,
+                    file_name=f"hsa_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_hsa_csv"
+                )
+            
+            with hsa_export_col2:
+                # JSON Export
+                json_data = export_hsa_analysis_to_json(
+                    projection,
+                    healthcare_costs=healthcare_costs
+                )
+                st.download_button(
+                    label="📋 Download JSON",
+                    data=json_data,
+                    file_name=f"hsa_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    key="download_hsa_json"
+                )
+            
+            with hsa_export_col3:
+                # Markdown Export
+                md_data = export_hsa_analysis_to_markdown(
+                    projection,
+                    healthcare_costs=healthcare_costs
+                )
+                st.download_button(
+                    label="📝 Download Markdown",
+                    data=md_data,
+                    file_name=f"hsa_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    key="download_hsa_md"
+                )
+                st.error("❌ **Low Coverage.** Your HSA will cover less than half of healthcare costs. Maximize contributions to take advantage of tax benefits!")
+    
+    # HSA Withdrawal Strategies
+    with st.expander("💰 HSA Withdrawal Strategies in Retirement", expanded=False):
+        from hsa_integration import analyze_hsa_withdrawal_strategies, calculate_hsa_triple_tax_advantage
+        
+        st.markdown("Compare different strategies for using your HSA in retirement.")
+        
+        # Get retirement parameters
+        person1_retirement_age = config_mgr.get("personal_info", "person1_retirement_age", 65)
+        person1_life_expectancy = config_mgr.get("personal_info", "person1_life_expectancy", 85)
+        marginal_tax_rate = config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 22) / 100
+        
+        hsa_ret_col1, hsa_ret_col2 = st.columns(2)
+        
+        with hsa_ret_col1:
+            hsa_balance_at_retirement = st.number_input(
+                "Projected HSA Balance at Retirement ($)",
+                min_value=0,
+                max_value=1000000,
+                value=int(hsa_current_balance * 1.5) if hsa_current_balance > 0 else 50000,
+                step=5000,
+                help="Your estimated HSA balance when you retire",
+                key="hsa_balance_at_retirement"
+            )
+        
+        with hsa_ret_col2:
+            hsa_annual_medical_ret = st.number_input(
+                "Expected Annual Medical Expenses ($)",
+                min_value=0,
+                max_value=50000,
+                value=8000,
+                step=500,
+                help="Expected annual medical expenses in retirement",
+                key="hsa_annual_medical_ret"
+            )
+        
+        if st.button("📊 Analyze Withdrawal Strategies", key="analyze_hsa_withdrawal"):
+            strategies = analyze_hsa_withdrawal_strategies(
+                hsa_balance_at_retirement,
+                hsa_annual_medical_ret,
+                person1_retirement_age,
+                person1_life_expectancy,
+                marginal_tax_rate
+            )
+            
+            st.markdown("---")
+            st.subheader("Withdrawal Strategy Comparison")
+            
+            for i, strategy in enumerate(strategies, 1):
+                with st.container():
+                    st.markdown(f"### Strategy {i}: {strategy.strategy_name}")
+                    
+                    strat_col1, strat_col2, strat_col3, strat_col4 = st.columns(4)
+                    
+                    with strat_col1:
+                        st.metric("HSA Withdrawals", f"${strategy.hsa_withdrawals:,.0f}")
+                    with strat_col2:
+                        st.metric("Taxable Withdrawals", f"${strategy.taxable_withdrawals:,.0f}")
+                    with strat_col3:
+                        st.metric("Years HSA Lasts", strategy.years_hsa_lasts)
+                    with strat_col4:
+                        st.metric("Total Tax Savings", f"${strategy.total_tax_savings:,.0f}")
+                    
+                    st.markdown("**Strategy Notes:**")
+                    for note in strategy.notes:
+                        st.write(f"• {note}")
+                    
+                    st.markdown("---")
+            
+            # Calculate triple tax advantage
+            st.subheader("HSA Triple Tax Advantage")
+            st.markdown("HSAs offer three unique tax benefits:")
+            
+            # Estimate total contributions and growth
+            years_contributing = max(1, 65 - person1_age)
+            total_contributions = (hsa_employer_contribution + hsa_employee_contribution) * years_contributing
+            investment_growth = hsa_balance_at_retirement - hsa_current_balance - total_contributions
+            
+            tax_advantage = calculate_hsa_triple_tax_advantage(
+                total_contributions,
+                investment_growth,
+                marginal_tax_rate,
+                0.15  # Long-term capital gains rate
+            )
+            
+            tax_col1, tax_col2, tax_col3 = st.columns(3)
+            
+            with tax_col1:
+                st.metric("Tax Savings on Contributions", f"${tax_advantage.tax_savings_contributions:,.0f}",
+                         help="Contributions are tax-deductible")
+            with tax_col2:
+                st.metric("Tax Savings on Growth", f"${tax_advantage.tax_savings_growth:,.0f}",
+                         help="Investment growth is tax-free")
+            with tax_col3:
+                st.metric("Tax Savings on Withdrawals", f"${tax_advantage.tax_savings_withdrawals:,.0f}",
+                         help="Qualified medical withdrawals are tax-free")
+            
+            st.success(f"💰 **Total Tax Advantage: ${tax_advantage.total_tax_advantage:,.0f}**")
+            
+            
+            # Export HSA Withdrawal Strategies
+            st.markdown("---")
+            st.markdown("#### 📥 Export Withdrawal Strategy Analysis")
+            
+            strat_export_col1, strat_export_col2, strat_export_col3 = st.columns(3)
+            
+            with strat_export_col1:
+                # CSV Export
+                csv_data = export_hsa_analysis_to_csv(
+                    projection=None,  # Not available in this context
+                    strategies=strategies,
+                    tax_advantage=tax_advantage
+                )
+                st.download_button(
+                    label="📄 Download CSV",
+                    data=csv_data,
+                    file_name=f"hsa_withdrawal_strategies_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="download_hsa_strat_csv"
+                )
+            
+            with strat_export_col2:
+                # JSON Export
+                json_data = export_hsa_analysis_to_json(
+                    projection=None,  # Not available in this context
+                    strategies=strategies,
+                    tax_advantage=tax_advantage
+                )
+                st.download_button(
+                    label="📋 Download JSON",
+                    data=json_data,
+                    file_name=f"hsa_withdrawal_strategies_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    key="download_hsa_strat_json"
+                )
+            
+            with strat_export_col3:
+                # Markdown Export
+                md_data = export_hsa_analysis_to_markdown(
+                    projection=None,  # Not available in this context
+                    strategies=strategies,
+                    tax_advantage=tax_advantage
+                )
+                st.download_button(
+                    label="📝 Download Markdown",
+                    data=md_data,
+                    file_name=f"hsa_withdrawal_strategies_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    key="download_hsa_strat_md"
+                )
+            st.info(f"💡 To achieve the same after-tax value in a taxable account, you would need ${tax_advantage.equivalent_taxable_account:,.0f}")
+
+            st.metric("Total Annual Retirement Healthcare Cost", f"${total_annual_aca:,.0f}")
 
 # Social Security Tab
 with tab4:
@@ -619,6 +1435,389 @@ with tab4:
             st.metric("Total Annual Benefits", f"${total_annual:,.0f}")
         
         st.info("💡 These benefits will be automatically calculated with COLA adjustments in the withdrawal strategy.")
+    
+    # Social Security Optimization Section
+    st.markdown("---")
+    st.header("🎯 Social Security Optimization")
+    st.markdown("Analyze optimal claiming strategies to maximize lifetime benefits.")
+    
+    with st.expander("📊 **Run Optimization Analysis**", expanded=False):
+        st.markdown("""
+        This tool analyzes different claiming age combinations to help you make informed decisions about when to claim Social Security.
+        
+        **What it considers:**
+        - Individual and spousal benefits
+        - Break-even analysis
+        - Net present value (NPV)
+        - Life expectancy assumptions
+        - Survivor benefits
+        """)
+        
+        # Optimization inputs
+        opt_col1, opt_col2 = st.columns(2)
+        
+        with opt_col1:
+            st.subheader(f"{person1_name}'s Profile")
+            person1_birth_year = st.number_input(
+                "Birth Year",
+                min_value=1940,
+                max_value=2010,
+                value=config_mgr.get("social_security", "person1_birth_year", 1960),
+                key="person1_birth_year_opt"
+            )
+            person1_gender = st.selectbox(
+                "Gender",
+                options=['M', 'F'],
+                index=0 if config_mgr.get("social_security", "person1_gender", 'M') == 'M' else 1,
+                help="Used for default life expectancy (M=84, F=87)",
+                key="person1_gender_opt"
+            )
+            person1_life_exp = st.number_input(
+                "Life Expectancy",
+                min_value=65,
+                max_value=110,
+                value=config_mgr.get("social_security", "person1_life_expectancy", 84 if person1_gender == 'M' else 87),
+                help="Expected age at death (affects lifetime benefit calculations)",
+                key="person1_life_exp_opt"
+            )
+            person1_earnings = st.number_input(
+                "Current Annual Earnings ($)",
+                min_value=0,
+                max_value=500000,
+                value=config_mgr.get("social_security", "person1_current_earnings", 0),
+                step=5000,
+                help="If still working, used for earnings test analysis",
+                key="person1_earnings_opt"
+            )
+        
+        with opt_col2:
+            st.subheader(f"{person2_name}'s Profile")
+            person2_birth_year = st.number_input(
+                "Birth Year",
+                min_value=1940,
+                max_value=2010,
+                value=config_mgr.get("social_security", "person2_birth_year", 1962),
+                key="person2_birth_year_opt"
+            )
+            person2_gender = st.selectbox(
+                "Gender",
+                options=['M', 'F'],
+                index=0 if config_mgr.get("social_security", "person2_gender", 'F') == 'M' else 1,
+                help="Used for default life expectancy (M=84, F=87)",
+                key="person2_gender_opt"
+            )
+            person2_life_exp = st.number_input(
+                "Life Expectancy",
+                min_value=65,
+                max_value=110,
+                value=config_mgr.get("social_security", "person2_life_expectancy", 84 if person2_gender == 'M' else 87),
+                help="Expected age at death (affects lifetime benefit calculations)",
+                key="person2_life_exp_opt"
+            )
+            person2_earnings = st.number_input(
+                "Current Annual Earnings ($)",
+                min_value=0,
+                max_value=500000,
+                value=config_mgr.get("social_security", "person2_current_earnings", 0),
+                step=5000,
+                help="If still working, used for earnings test analysis",
+                key="person2_earnings_opt"
+            )
+        
+        # Advanced options
+        with st.expander("⚙️ Advanced Options"):
+            cola_rate = st.slider(
+                "Annual COLA Rate (%)",
+                min_value=0.0,
+                max_value=5.0,
+                value=2.0,
+                step=0.1,
+                help="Expected annual cost-of-living adjustment"
+            ) / 100
+            
+            discount_rate = st.slider(
+                "Discount Rate for NPV (%)",
+                min_value=0.0,
+                max_value=10.0,
+                value=3.0,
+                step=0.5,
+                help="Real discount rate for net present value calculations"
+            ) / 100
+            
+            portfolio_return = st.slider(
+                "Expected Portfolio Return (%)",
+                min_value=0.0,
+                max_value=15.0,
+                value=7.0,
+                step=0.5,
+                help="Expected annual portfolio return rate (used for opportunity cost analysis)"
+            ) / 100
+        
+        # Run optimization button
+        if st.button("🚀 Run Optimization Analysis", type="primary", use_container_width=True):
+            if person1_ssi_amount == 0 and person2_ssi_amount == 0:
+                st.error("❌ Please enter Social Security benefit amounts above before running optimization.")
+            else:
+                with st.spinner("Analyzing claiming strategies..."):
+                    try:
+                        from ss_optimization import (
+                            PersonProfile,
+                            optimize_couple_claiming_strategy,
+                            calculate_break_even_age,
+                            calculate_break_even_with_portfolio_impact,
+                            generate_claiming_age_comparison,
+                            calculate_earnings_test_impact
+                        )
+                        
+                        # Create person profiles
+                        person1_profile = PersonProfile(
+                            name=person1_name,
+                            birth_year=person1_birth_year,
+                            fra_benefit=person1_ssi_amount,
+                            gender=person1_gender,
+                            life_expectancy=person1_life_exp,
+                            current_earnings=person1_earnings
+                        )
+                        
+                        person2_profile = PersonProfile(
+                            name=person2_name,
+                            birth_year=person2_birth_year,
+                            fra_benefit=person2_ssi_amount,
+                            gender=person2_gender,
+                            life_expectancy=person2_life_exp,
+                            current_earnings=person2_earnings
+                        )
+                        
+                        # Run couple optimization
+                        strategies = optimize_couple_claiming_strategy(
+                            person1_profile,
+                            person2_profile,
+                            cola_rate=cola_rate,
+                            discount_rate=discount_rate
+                        )
+                        
+                        # Display results
+                        st.success("✅ Optimization Complete!")
+                        
+                        # Top 5 strategies
+                        st.subheader("🏆 Top 5 Claiming Strategies")
+                        st.markdown("Ranked by Net Present Value (NPV)")
+                        
+                        for i, strategy in enumerate(strategies[:5], 1):
+                            with st.container():
+                                rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                                
+                                col_a, col_b, col_c = st.columns([2, 1, 1])
+                                with col_a:
+                                    st.markdown(f"**{rank_emoji} {strategy.strategy_name}**")
+                                    for note in strategy.notes:
+                                        st.caption(f"• {note}")
+                                with col_b:
+                                    st.metric("NPV", f"${strategy.net_present_value:,.0f}")
+                                with col_c:
+                                    st.metric("Lifetime Total", f"${strategy.total_lifetime_benefits:,.0f}")
+                                
+                                if i < 5:
+                                    st.markdown("---")
+                        
+                        # Break-even analysis
+                        st.markdown("---")
+                        st.subheader("📈 Break-Even Analysis")
+                        st.markdown("Comparing claiming at age 62 vs 70")
+                        
+                        # Explanation of opportunity cost
+                        with st.expander("ℹ️ Understanding Portfolio Opportunity Cost"):
+                            st.markdown("""
+                            **Simple Break-Even**: Compares only Social Security benefits received.
+                            
+                            **Portfolio-Adjusted Break-Even**: Accounts for the opportunity cost of delaying SS.
+                            
+                            **Why it matters:**
+                            - When you delay SS, you must withdraw from your portfolio to cover expenses
+                            - Those withdrawals lose the opportunity to grow at your portfolio return rate
+                            - This "opportunity cost" typically adds 2-4 years to the break-even age
+                            - Higher portfolio returns = longer break-even age
+                            
+                            **Example:** If you withdraw $21,000/year from age 62-70 (8 years) and your portfolio
+                            grows at 7%/year, you're giving up ~$280,000 in potential growth by age 80.
+                            """)
+                        
+                        be_col1, be_col2 = st.columns(2)
+                        
+                        with be_col1:
+                            if person1_ssi_amount > 0:
+                                st.markdown(f"**{person1_name}**: Age 62 vs 70")
+                                
+                                # Calculate both simple and portfolio-adjusted
+                                be_results_1 = calculate_break_even_with_portfolio_impact(
+                                    person1_ssi_amount, 62, 70, cola_rate, portfolio_return
+                                )
+                                
+                                # Display side-by-side comparison
+                                metric_col1, metric_col2 = st.columns(2)
+                                with metric_col1:
+                                    st.metric(
+                                        "Simple Break-Even",
+                                        f"Age {be_results_1['simple'].break_even_age}",
+                                        help="Comparing only SS benefits"
+                                    )
+                                with metric_col2:
+                                    st.metric(
+                                        "Portfolio-Adjusted",
+                                        f"Age {be_results_1['portfolio_adjusted'].break_even_age}",
+                                        delta=f"+{be_results_1['additional_years']} years",
+                                        delta_color="off",
+                                        help="Including portfolio opportunity cost"
+                                    )
+                                
+                                st.caption(f"💰 Monthly difference: ${be_results_1['simple'].monthly_difference:,.0f}")
+                                st.caption(f"📊 Portfolio return assumption: {portfolio_return*100:.1f}%")
+                                
+                                if be_results_1['additional_years'] > 0:
+                                    st.warning(
+                                        f"⚠️ Portfolio opportunity cost adds **{be_results_1['additional_years']} years** "
+                                        f"to break-even age"
+                                    )
+                        
+                        with be_col2:
+                            if person2_ssi_amount > 0:
+                                st.markdown(f"**{person2_name}**: Age 62 vs 70")
+                                
+                                # Calculate both simple and portfolio-adjusted
+                                be_results_2 = calculate_break_even_with_portfolio_impact(
+                                    person2_ssi_amount, 62, 70, cola_rate, portfolio_return
+                                )
+                                
+                                # Display side-by-side comparison
+                                metric_col1, metric_col2 = st.columns(2)
+                                with metric_col1:
+                                    st.metric(
+                                        "Simple Break-Even",
+                                        f"Age {be_results_2['simple'].break_even_age}",
+                                        help="Comparing only SS benefits"
+                                    )
+                                with metric_col2:
+                                    st.metric(
+                                        "Portfolio-Adjusted",
+                                        f"Age {be_results_2['portfolio_adjusted'].break_even_age}",
+                                        delta=f"+{be_results_2['additional_years']} years",
+                                        delta_color="off",
+                                        help="Including portfolio opportunity cost"
+                                    )
+                                
+                                st.caption(f"💰 Monthly difference: ${be_results_2['simple'].monthly_difference:,.0f}")
+                                st.caption(f"📊 Portfolio return assumption: {portfolio_return*100:.1f}%")
+                                
+                                if be_results_2['additional_years'] > 0:
+                                    st.warning(
+                                        f"⚠️ Portfolio opportunity cost adds **{be_results_2['additional_years']} years** "
+                                        f"to break-even age"
+                                    )
+                        
+                        # Earnings test impact (if applicable)
+                        if person1_earnings > 0 or person2_earnings > 0:
+                            st.markdown("---")
+                            st.subheader("💼 Earnings Test Impact")
+                            st.markdown("Impact of working while collecting Social Security before Full Retirement Age")
+                            
+                            et_col1, et_col2 = st.columns(2)
+                            
+                            with et_col1:
+                                if person1_earnings > 0 and person1_ssi_age < 67:
+                                    st.markdown(f"**{person1_name}** (Age {person1_ssi_age})")
+                                    from ssi_calculator import calculate_benefit_at_claiming_age
+                                    person1_monthly = calculate_benefit_at_claiming_age(person1_ssi_amount, person1_ssi_age)
+                                    et_impact_1 = calculate_earnings_test_impact(
+                                        person1_earnings,
+                                        person1_ssi_age,
+                                        person1_monthly
+                                    )
+                                    
+                                    if et_impact_1.annual_reduction > 0:
+                                        st.warning(f"⚠️ Benefit reduced by ${et_impact_1.annual_reduction:,.0f}/year")
+                                        st.caption(f"Before: ${et_impact_1.monthly_benefit_before:,.0f}/mo")
+                                        st.caption(f"After: ${et_impact_1.monthly_benefit_after:,.0f}/mo")
+                                        st.caption(f"Months withheld: {et_impact_1.months_withheld}")
+                                    else:
+                                        st.success("✅ No earnings test impact")
+                            
+                            with et_col2:
+                                if person2_earnings > 0 and person2_ssi_age < 67:
+                                    st.markdown(f"**{person2_name}** (Age {person2_ssi_age})")
+                                    from ssi_calculator import calculate_benefit_at_claiming_age
+                                    person2_monthly = calculate_benefit_at_claiming_age(person2_ssi_amount, person2_ssi_age)
+                                    et_impact_2 = calculate_earnings_test_impact(
+                                        person2_earnings,
+                                        person2_ssi_age,
+                                        person2_monthly
+                                    )
+                                    
+                                    if et_impact_2.annual_reduction > 0:
+                                        st.warning(f"⚠️ Benefit reduced by ${et_impact_2.annual_reduction:,.0f}/year")
+                                        st.caption(f"Before: ${et_impact_2.monthly_benefit_before:,.0f}/mo")
+                                        st.caption(f"After: ${et_impact_2.monthly_benefit_after:,.0f}/mo")
+                                        st.caption(f"Months withheld: {et_impact_2.months_withheld}")
+                                    else:
+                                        st.success("✅ No earnings test impact")
+                        
+                        # Claiming age comparison table
+                        st.markdown("---")
+                        st.subheader("📊 Claiming Age Comparison")
+                        
+                        comp_tab1, comp_tab2 = st.tabs([f"{person1_name}", f"{person2_name}"])
+                        
+                        with comp_tab1:
+                            if person1_ssi_amount > 0:
+                                comparison_df_1 = generate_claiming_age_comparison(
+                                    person1_ssi_amount,
+                                    person1_life_exp,
+                                    cola_rate,
+                                    discount_rate
+                                )
+                                st.dataframe(
+                                    comparison_df_1.style.format({
+                                        'Monthly Benefit': '${:,.0f}',
+                                        'Annual Benefit': '${:,.0f}',
+                                        'Lifetime Total': '${:,.0f}',
+                                        'Net Present Value': '${:,.0f}'
+                                    }).background_gradient(subset=['Net Present Value'], cmap='RdYlGn'),
+                                    use_container_width=True,
+                                    height=400
+                                )
+                        
+                        with comp_tab2:
+                            if person2_ssi_amount > 0:
+                                comparison_df_2 = generate_claiming_age_comparison(
+                                    person2_ssi_amount,
+                                    person2_life_exp,
+                                    cola_rate,
+                                    discount_rate
+                                )
+                                st.dataframe(
+                                    comparison_df_2.style.format({
+                                        'Monthly Benefit': '${:,.0f}',
+                                        'Annual Benefit': '${:,.0f}',
+                                        'Lifetime Total': '${:,.0f}',
+                                        'Net Present Value': '${:,.0f}'
+                                    }).background_gradient(subset=['Net Present Value'], cmap='RdYlGn'),
+                                    use_container_width=True,
+                                    height=400
+                                )
+                        
+                        # Key insights
+                        st.markdown("---")
+                        st.info("""
+                        **💡 Key Insights:**
+                        - **NPV** accounts for time value of money (higher is better)
+                        - **Break-even age** shows when delayed claiming pays off
+                        - **Earnings test** only applies before Full Retirement Age (67)
+                        - **Survivor benefits** favor higher earner delaying to age 70
+                        - Consider health, longevity, and cash flow needs in your decision
+                        """)
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error running optimization: {e}")
+                        st.exception(e)
 
 # Tax Strategy Tab
 with tab5:
@@ -1133,11 +2332,11 @@ with tab6:
             except Exception as e:
                 st.error(f"Error loading portfolio data: {e}")
                 st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
-                    'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+                    'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
                 ]))
         else:
             st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
-                'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+                'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
             ]))
     
     # Month/Year selector for loading prior month data
@@ -1171,6 +2370,7 @@ with tab6:
                 'year': [entry_year],
                 'account_name': [''],
                 'account_type': ['Brokerage'],
+                'owner': ['Joint'],
                 'symbol': [''],
                 'name': [''],
                 'sector': [''],
@@ -1225,7 +2425,7 @@ with tab6:
     with col4:
         if st.button("🗑️ Clear All", use_container_width=True):
             st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
-                'month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+                'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
             ]))
             st.rerun()
 
@@ -1318,6 +2518,8 @@ with tab6:
         'year': st.column_config.NumberColumn('Year', min_value=2000, max_value=2100, step=1, required=True),
         'account_name': st.column_config.TextColumn('Account Name', required=True),
         'account_type': st.column_config.SelectboxColumn('Account Type', options=VALID_ACCOUNT_TYPES, required=True),
+        'owner': st.column_config.SelectboxColumn('Owner', options=VALID_ACCOUNT_OWNERS, required=True,
+                                                   help="Joint (both spouses), Primary (person 1), or Spouse (person 2)"),
         'symbol': st.column_config.TextColumn('Symbol', required=True),
         'name': st.column_config.TextColumn('Name', required=True),
         'sector': st.column_config.SelectboxColumn('Sector', options=VALID_SECTORS, required=True),
@@ -1443,6 +2645,7 @@ with tab6:
         - `year`: Year (e.g., 2026)
         - `account_name`: Name of the account (e.g., "Fidelity", "Schwab")
         - `account_type`: Type of account (Cash, Brokerage, Traditional, Roth)
+        - `owner`: Account owner (Joint, Primary, Spouse)
         - `symbol`: Ticker symbol (e.g., "AAPL", "MF:CASH")
         - `name`: Security name (e.g., "Apple Inc.", "Money Market")
         - `sector`: Sector classification
@@ -1455,6 +2658,7 @@ with tab6:
             'year': [2026, 2026],
             'account_name': ['Schwab', 'Fidelity'],
             'account_type': ['Brokerage', 'Traditional'],
+            'owner': ['Joint', 'Primary'],
             'symbol': ['AAPL', 'MF:CASH'],
             'name': ['Apple Inc.', 'Money Market'],
             'sector': ['Technology', 'MF:Cash'],
@@ -1609,9 +2813,207 @@ with tab8:
     - Include the full name in parentheses for clarity (e.g., "VTI (Vanguard Total Market ETF)")
     """)
 
+# Bucket Strategy Tab
+with tab9:
+    st.header("🪣 Bucket Strategy Configuration")
+    st.markdown("""
+    The **Bucket Strategy** is a retirement portfolio management approach that divides your assets into three buckets 
+    based on when you'll need the money. This helps manage sequence of returns risk and provides peace of mind.
+    """)
+    
+    # Enable/Disable Bucket Strategy
+    bucket_enabled = st.checkbox(
+        "Enable Bucket Strategy",
+        value=config_mgr.get("bucket_strategy", "enabled", False),
+        help="Enable the three-bucket retirement strategy for your portfolio",
+        key="bucket_enabled"
+    )
+    
+    if bucket_enabled:
+        st.info("""
+        **📚 How the Bucket Strategy Works:**
+        - **Bucket 1 (Safety)**: Cash for near-term expenses (Years 1-2)
+        - **Bucket 2 (Transition)**: Graduated stock/bond mix (Years 3-10)
+        - **Bucket 3 (Growth)**: Long-term growth stocks (Years 11+)
+        
+        The strategy automatically rebalances based on market conditions to protect against sequence of returns risk.
+        """)
+        
+        st.markdown("---")
+        st.subheader("Bucket Sizing")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            bucket_1_years = st.number_input(
+                "Bucket 1: Years of Expenses (Safety)",
+                min_value=1.0,
+                max_value=5.0,
+                value=float(config_mgr.get("bucket_strategy", "bucket_1_years", 2)),
+                step=0.5,
+                help="Number of years of expenses to keep in cash/money market (typically 1-3 years)",
+                key="bucket_1_years"
+            )
+            
+            bucket_2_years = st.number_input(
+                "Bucket 2: Years of Expenses (Transition)",
+                min_value=5,
+                max_value=15,
+                value=int(config_mgr.get("bucket_strategy", "bucket_2_years", 8)),
+                step=1,
+                help="Number of years of expenses in the transition zone with graduated allocation (typically 5-10 years)",
+                key="bucket_2_years"
+            )
+        
+        with col2:
+            st.markdown("**Bucket 3: Growth**")
+            st.info(f"""
+            Bucket 3 automatically contains all remaining funds beyond Buckets 1 and 2.
+            
+            **Total Coverage:** {bucket_1_years + bucket_2_years} years of expenses in Buckets 1 & 2
+            """)
+        
+        st.markdown("---")
+        st.subheader("Bucket 2 Allocation Strategy")
+        st.markdown("Configure how stock allocation graduates through Bucket 2 years:")
+        
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            bucket_2_start_stock_pct = st.slider(
+                "Starting Stock % (Year 1 of Bucket 2)",
+                min_value=0,
+                max_value=50,
+                value=int(config_mgr.get("bucket_strategy", "bucket_2_start_stock_pct", 10)),
+                step=5,
+                help="Stock allocation at the beginning of Bucket 2 (typically 10-20%)",
+                key="bucket_2_start_stock_pct"
+            )
+        
+        with col4:
+            bucket_2_end_stock_pct = st.slider(
+                "Ending Stock % (Final Year of Bucket 2)",
+                min_value=50,
+                max_value=100,
+                value=int(config_mgr.get("bucket_strategy", "bucket_2_end_stock_pct", 80)),
+                step=5,
+                help="Stock allocation at the end of Bucket 2 (typically 70-90%)",
+                key="bucket_2_end_stock_pct"
+            )
+        
+        # Show allocation progression
+        st.markdown("**Allocation Progression Through Bucket 2:**")
+        progression_data = []
+        for year in range(1, bucket_2_years + 1):
+            stock_pct = bucket_2_start_stock_pct + (
+                (bucket_2_end_stock_pct - bucket_2_start_stock_pct) * (year - 1) / (bucket_2_years - 1)
+            )
+            bond_pct = 100 - stock_pct
+            progression_data.append({
+                "Year": f"Year {year}",
+                "Stocks %": f"{stock_pct:.0f}%",
+                "Bonds %": f"{bond_pct:.0f}%"
+            })
+        
+        progression_df = pd.DataFrame(progression_data)
+        st.dataframe(progression_df, hide_index=True, use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("Market Trend Adjustments")
+        st.markdown("Automatically adjust allocations based on market conditions:")
+        
+        market_trend_enabled = st.checkbox(
+            "Enable Market Trend-Based Adjustments",
+            value=config_mgr.get("bucket_strategy", "market_trend_adjustment", {}).get("enabled", True),
+            help="Dynamically adjust stock allocations based on market moving averages",
+            key="market_trend_enabled"
+        )
+        
+        if market_trend_enabled:
+            st.info("""
+            **📈 Market Trend Analysis:**
+            - Uses 10-week and 50-week moving averages of SPY (S&P 500)
+            - Automatically reduces stock exposure in warning/bear markets
+            - Helps protect against market downturns
+            """)
+            
+            col5, col6 = st.columns(2)
+            
+            with col5:
+                short_ma_weeks = st.number_input(
+                    "Short-term Moving Average (weeks)",
+                    min_value=5,
+                    max_value=20,
+                    value=int(config_mgr.get("bucket_strategy", "market_trend_adjustment", {}).get("short_ma_weeks", 10)),
+                    help="Short-term MA for trend detection (default: 10 weeks)",
+                    key="short_ma_weeks"
+                )
+                
+                long_ma_weeks = st.number_input(
+                    "Long-term Moving Average (weeks)",
+                    min_value=30,
+                    max_value=100,
+                    value=int(config_mgr.get("bucket_strategy", "market_trend_adjustment", {}).get("long_ma_weeks", 50)),
+                    help="Long-term MA for trend detection (default: 50 weeks)",
+                    key="long_ma_weeks"
+                )
+            
+            with col6:
+                st.markdown("**Allocation Adjustments by Market Condition:**")
+                
+                bull_adjustment = st.number_input(
+                    "Bull Market Adjustment (%)",
+                    min_value=-10.0,
+                    max_value=10.0,
+                    value=float(config_mgr.get("bucket_strategy", "market_trend_adjustment", {}).get("bull_adjustment", 0.0)),
+                    step=1.0,
+                    help="Stock % adjustment in bull markets (typically 0%)",
+                    key="bull_adjustment"
+                )
+                
+                warning_adjustment = st.number_input(
+                    "Warning Market Adjustment (%)",
+                    min_value=-30.0,
+                    max_value=0.0,
+                    value=float(config_mgr.get("bucket_strategy", "market_trend_adjustment", {}).get("warning_adjustment", -10.0)),
+                    step=1.0,
+                    help="Stock % adjustment in warning markets (typically -10%)",
+                    key="warning_adjustment"
+                )
+                
+                bear_adjustment = st.number_input(
+                    "Bear Market Adjustment (%)",
+                    min_value=-50.0,
+                    max_value=0.0,
+                    value=float(config_mgr.get("bucket_strategy", "market_trend_adjustment", {}).get("bear_adjustment", -20.0)),
+                    step=1.0,
+                    help="Stock % adjustment in bear markets (typically -20%)",
+                    key="bear_adjustment"
+                )
+        
+        st.markdown("---")
+        st.success("""
+        ✅ **Bucket Strategy Enabled**
+        
+        Your portfolio will be analyzed and managed according to the bucket strategy. 
+        View your current bucket allocation on the Dashboard.
+        """)
+    else:
+        st.warning("""
+        ⚠️ **Bucket Strategy Disabled**
+        
+        Enable the bucket strategy to:
+        - Manage sequence of returns risk
+        - Automatically rebalance based on market conditions
+        - Maintain appropriate cash reserves
+        - Graduate stock allocation over time
+        
+        Check the box above to enable this feature.
+        """)
+
 
 # Advanced Tab
-with tab9:
+with tab10:
     st.header("Advanced Settings")
     
     col1, col2 = st.columns(2)
@@ -1641,11 +3043,16 @@ with tab9:
             })
             
             config_mgr.update_section("healthcare", {
-                "aca_marketplace_enrolled": aca_marketplace_enrolled,
+                "person1_preretirement_coverage_type": person1_preretirement_coverage_type,
+                "person1_preretirement_insurance_monthly": person1_preretirement_insurance_monthly,
+                "person1_retirement_coverage_type": person1_retirement_coverage_type,
                 "person1_aca_insurance_monthly": person1_aca_insurance_monthly,
                 "person1_aca_start_age": person1_aca_start_age,
                 "person1_aca_end_age": person1_aca_end_age,
                 "person1_medicare_start_age": person1_medicare_start_age,
+                "person2_preretirement_coverage_type": person2_preretirement_coverage_type,
+                "person2_preretirement_insurance_monthly": person2_preretirement_insurance_monthly,
+                "person2_retirement_coverage_type": person2_retirement_coverage_type,
                 "person2_aca_insurance_monthly": person2_aca_insurance_monthly,
                 "person2_aca_start_age": person2_aca_start_age,
                 "person2_aca_end_age": person2_aca_end_age,
@@ -1657,6 +3064,15 @@ with tab9:
                 "person1_ssi_amount": person1_ssi_amount,
                 "person2_ssi_age": person2_ssi_age,
                 "person2_ssi_amount": person2_ssi_amount,
+                # SS Optimization fields
+                "person1_birth_year": st.session_state.get("person1_birth_year_opt", 1960),
+                "person1_gender": st.session_state.get("person1_gender_opt", 'M'),
+                "person1_life_expectancy": st.session_state.get("person1_life_exp_opt", 84),
+                "person1_current_earnings": st.session_state.get("person1_earnings_opt", 0),
+                "person2_birth_year": st.session_state.get("person2_birth_year_opt", 1962),
+                "person2_gender": st.session_state.get("person2_gender_opt", 'F'),
+                "person2_life_expectancy": st.session_state.get("person2_life_exp_opt", 87),
+                "person2_current_earnings": st.session_state.get("person2_earnings_opt", 0),
             })
             
             config_mgr.update_section("income", {
@@ -1684,6 +3100,34 @@ with tab9:
                 "daf_contribution_start_age": daf_contribution_start_age,
                 "daf_contribution_end_age": daf_contribution_end_age,
             })
+            
+            # Save bucket strategy configuration
+            if st.session_state.get("bucket_enabled", False):
+                market_trend_config = {}
+                if st.session_state.get("market_trend_enabled", True):
+                    market_trend_config = {
+                        "enabled": True,
+                        "short_ma_weeks": st.session_state.get("short_ma_weeks", 10),
+                        "long_ma_weeks": st.session_state.get("long_ma_weeks", 50),
+                        "bull_adjustment": st.session_state.get("bull_adjustment", 0.0),
+                        "warning_adjustment": st.session_state.get("warning_adjustment", -10.0),
+                        "bear_adjustment": st.session_state.get("bear_adjustment", -20.0),
+                    }
+                else:
+                    market_trend_config = {"enabled": False}
+                
+                config_mgr.update_section("bucket_strategy", {
+                    "enabled": True,
+                    "bucket_1_years": st.session_state.get("bucket_1_years", 2),
+                    "bucket_2_years": st.session_state.get("bucket_2_years", 8),
+                    "bucket_2_start_stock_pct": st.session_state.get("bucket_2_start_stock_pct", 10),
+                    "bucket_2_end_stock_pct": st.session_state.get("bucket_2_end_stock_pct", 80),
+                    "market_trend_adjustment": market_trend_config,
+                })
+            else:
+                config_mgr.update_section("bucket_strategy", {
+                    "enabled": False,
+                })
             
             if config_mgr.save_config():
                 # Sync configuration to session state for sidebar compatibility

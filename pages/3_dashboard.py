@@ -11,11 +11,9 @@ Layout
 ------
 Row 0 : KPI metric cards (Net Worth, MoM, YTD, 12-month, vs Benchmark)
 Row 1 : Financial Plan Readiness Indicator gauge + sub-indicators
-Row 2 : Portfolio Tax Efficiency metrics
-Row 3 : 3 charts (NW bar, stacked account bar, asset mix pie)
-Row 4 : Net Worth Statement (formal balance-sheet HTML table)
-Row 5 : Net Worth Trend line chart
-Row 6 : Account Mix treemap + Portfolio Mix treemap
+Row 2 : Net Worth Overview (Combined Bar + Trend)
+Row 3 : Net Worth Statement (formal balance-sheet HTML table)
+Row 4 : Account Mix treemap + Portfolio Mix treemap
 """
 from __future__ import annotations
 
@@ -38,6 +36,12 @@ from components.shared import (
     format_currency,
     init_page,
     render_net_worth_statement,
+)
+from components.ui_components import (
+    show_alert,
+    info_card,
+    section_header,
+    with_loading_state,
 )
 from load_data import get_month_account_values, get_networth_by_month
 
@@ -146,6 +150,7 @@ with kpi5:
         help="How your portfolio compares to a 7% annual benchmark since the first recorded month.",
     )
 
+
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
@@ -174,6 +179,7 @@ try:
 
     _estate_score = 0.0
     _ep_done, _ep_tot = 0, 0
+    _assess = {}  # Initialize outside try block for action items
     try:
         if _os.path.exists("estate_planning_data.json"):
             with open("estate_planning_data.json") as _ef:
@@ -206,12 +212,47 @@ try:
     _p2_ssi    = float(_cfg.get("social_security", "person2_ssi_amount", 0) or 0)
     _ssi_score = 100.0 if (_p1_ssi > 0 and _p2_ssi > 0) else (50.0 if (_p1_ssi > 0 or _p2_ssi > 0) else 0.0)
 
-    _aca_enrolled     = bool(_cfg.get("healthcare", "aca_marketplace_enrolled", False))
-    _p1_aca_amt       = float(_cfg.get("healthcare", "person1_aca_insurance_monthly", 0) or 0)
-    _p2_aca_amt       = float(_cfg.get("healthcare", "person2_aca_insurance_monthly", 0) or 0)
-    _healthcare_score = 100.0 if (_aca_enrolled and (_p1_aca_amt > 0 or _p2_aca_amt > 0)) else (
-        60.0 if (_p1_aca_amt > 0 or _p2_aca_amt > 0) else 20.0
-    )
+    # Check pre-retirement coverage (while working)
+    _p1_preretire_type = _cfg.get("healthcare", "person1_preretirement_coverage_type", "None")
+    _p2_preretire_type = _cfg.get("healthcare", "person2_preretirement_coverage_type", "None")
+    _p1_preretire_amt  = float(_cfg.get("healthcare", "person1_preretirement_insurance_monthly", 0) or 0)
+    _p2_preretire_amt  = float(_cfg.get("healthcare", "person2_preretirement_insurance_monthly", 0) or 0)
+    
+    # Check retirement coverage (post-retirement, pre-Medicare)
+    _p1_retire_type = _cfg.get("healthcare", "person1_retirement_coverage_type", "None")
+    _p2_retire_type = _cfg.get("healthcare", "person2_retirement_coverage_type", "None")
+    _p1_retire_amt  = float(_cfg.get("healthcare", "person1_aca_insurance_monthly", 0) or 0)
+    _p2_retire_amt  = float(_cfg.get("healthcare", "person2_aca_insurance_monthly", 0) or 0)
+    
+    # Check if each person has both phases covered
+    _p1_has_preretire = (_p1_preretire_type != "None" and _p1_preretire_amt > 0)
+    _p1_has_retire = (_p1_retire_type != "None" and _p1_retire_amt > 0)
+    _p2_has_preretire = (_p2_preretire_type != "None" and _p2_preretire_amt > 0)
+    _p2_has_retire = (_p2_retire_type != "None" and _p2_retire_amt > 0)
+    
+    _p1_fully_covered = _p1_has_preretire and _p1_has_retire
+    _p2_fully_covered = _p2_has_preretire and _p2_has_retire
+    
+    # Calculate healthcare score based on coverage status
+    # 100%: BOTH people have BOTH pre-retirement AND retirement coverage configured
+    # 80%: At least one person has both phases covered, OR both people have at least one phase
+    # 60%: One person has both phases OR multiple partial coverages
+    # 40%: Only one phase covered for one person
+    # 20%: No coverage configured
+    
+    if _p1_fully_covered and _p2_fully_covered:
+        _healthcare_score = 100.0  # Both people fully covered
+    elif _p1_fully_covered or _p2_fully_covered:
+        _healthcare_score = 80.0  # One person fully covered
+    elif (_p1_has_preretire or _p1_has_retire) and (_p2_has_preretire or _p2_has_retire):
+        _healthcare_score = 60.0  # Both people have partial coverage
+    elif _p1_has_preretire or _p1_has_retire or _p2_has_preretire or _p2_has_retire:
+        _healthcare_score = 40.0  # One person has partial coverage
+    else:
+        _healthcare_score = 20.0  # No coverage
+    
+    # Check if ACA marketplace is being used (for detail message)
+    _using_aca = (_p1_retire_type == "ACA Marketplace" or _p2_retire_type == "ACA Marketplace")
 
     _target_months   = int(_cfg.get("financial_assumptions", "accumulation_cash_buffer_months", 6) or 6)
     _wages_total     = (
@@ -272,11 +313,19 @@ try:
             else ("One person configured" if _ssi_score == 50
                   else "Not configured — add SSI amounts in Configuration")
         )
-        _hc_detail = (
-            "ACA enrolled & premiums set" if _healthcare_score == 100
-            else ("Premiums set" if _healthcare_score == 60
-                  else "Configure ACA/Medicare in Configuration")
-        )
+        # Build healthcare detail message based on coverage
+        if _healthcare_score == 100:
+            _hc_detail = "Both people fully covered (pre-retirement & retirement)"
+            if _using_aca:
+                _hc_detail += " (includes ACA)"
+        elif _healthcare_score == 80:
+            _hc_detail = "One person fully covered, complete coverage for second person"
+        elif _healthcare_score == 60:
+            _hc_detail = "Both people have partial coverage, complete both phases"
+        elif _healthcare_score == 40:
+            _hc_detail = "One person partially covered, add coverage for second person"
+        else:
+            _hc_detail = "Configure healthcare coverage in Configuration"
         _ind_labels = [
             ("💰 Portfolio Funding",    _funding_score,    f"{_funding_pct:.0f}% of 25x expenses target  (${_total_assets:,.0f} / ${_target_port:,.0f})"),
             ("⚖️ Estate Planning",      _estate_score,     f"{_ep_done if _estate_score > 0 else 0} of {_ep_tot if _estate_score > 0 else '?'} checklist items complete"),
@@ -305,20 +354,84 @@ try:
     _actions: list[str] = []
     if _funding_score < 75:
         _gap = _target_port - _total_assets
-        _actions.append(f"💰 **Portfolio gap:** ${_gap:,.0f} below the 25x expenses target.")
+        _pct_complete = (_total_assets / _target_port * 100) if _target_port > 0 else 0
+        _actions.append(
+            f"💰 **Portfolio Funding ({_pct_complete:.0f}% complete):** "
+            f"You need ${_gap:,.0f} more to reach your 25x expenses target of ${_target_port:,.0f}. "
+            f"Current total assets: ${_total_assets:,.0f}. "
+            f"Continue saving and investing to close this gap."
+        )
+    
     if _estate_score < 50:
-        _actions.append("⚖️ **Estate planning incomplete.** Visit the Estate Planning page.")
+        _ep_pct = (_ep_done / _ep_tot * 100) if _ep_tot > 0 else 0
+        _actions.append(
+            f"⚖️ **Estate Planning ({_ep_pct:.0f}% complete):** "
+            f"You have completed {_ep_done} of {_ep_tot} checklist items. "
+            f"Visit the Estate Planning page to review and complete remaining items. "
+            f"Core documents status: Will ({'✓' if _assess.get('has_will') else '✗'}), "
+            f"POA ({'✓' if _assess.get('has_poa') else '✗'}), "
+            f"Healthcare Directive ({'✓' if _assess.get('has_healthcare_directive') else '✗'}), "
+            f"Beneficiaries Current ({'✓' if _assess.get('beneficiaries_current') else '✗'})."
+        )
+    
     if _tax_div_score < 50:
         if _roth_r < 30:
-            _actions.append("🔀 **Low Roth ratio.** Consider Roth conversions.")
+            _actions.append(
+                f"🔀 **Tax Diversification (Roth ratio: {_roth_r:.0f}%):** "
+                f"Your Roth ratio is below the recommended 30-50% range. "
+                f"Consider Roth conversions to increase tax-free assets. "
+                f"Current: ${_roth_bal:,.0f} Roth vs ${_trad_bal:,.0f} Traditional."
+            )
         else:
-            _actions.append("🔀 **High Roth ratio.** Ensure sufficient Traditional assets.")
+            _actions.append(
+                f"🔀 **Tax Diversification (Roth ratio: {_roth_r:.0f}%):** "
+                f"Your Roth ratio is above the recommended 30-50% range. "
+                f"Ensure you have sufficient Traditional assets for tax-efficient withdrawals. "
+                f"Current: ${_roth_bal:,.0f} Roth vs ${_trad_bal:,.0f} Traditional."
+            )
+    
     if _ssi_score < 100:
-        _actions.append("📋 **Social Security not fully configured.** Add SSI amounts in Configuration.")
-    if _healthcare_score < 60:
-        _actions.append("🏥 **Healthcare coverage not configured.** Add ACA premiums in Configuration.")
+        _p1_ssi_status = f"${_p1_ssi:,.0f}/month at age {_cfg.get('social_security', 'person1_ssi_age', 70)}" if _p1_ssi > 0 else "Not configured"
+        _p2_ssi_status = f"${_p2_ssi:,.0f}/month at age {_cfg.get('social_security', 'person2_ssi_age', 70)}" if _p2_ssi > 0 else "Not configured"
+        _actions.append(
+            f"📋 **Social Security ({_ssi_score:.0f}% complete):** "
+            f"{_cfg.get('personal_info', 'person1_name', 'Person 1')}: {_p1_ssi_status}. "
+            f"{_cfg.get('personal_info', 'person2_name', 'Person 2')}: {_p2_ssi_status}. "
+            f"Add SSI benefit amounts in Configuration → Social Security to complete your retirement income plan."
+        )
+    
+    if _healthcare_score < 100:
+        # Build specific action items based on what's missing
+        _p1_name = _cfg.get('personal_info', 'person1_name', 'Person 1')
+        _p2_name = _cfg.get('personal_info', 'person2_name', 'Person 2')
+        _missing_details = []
+        
+        if not _p1_has_preretire:
+            _missing_details.append(f"{_p1_name}'s pre-retirement coverage (while working)")
+        if not _p1_has_retire:
+            _missing_details.append(f"{_p1_name}'s retirement coverage (post-retirement, pre-Medicare)")
+        if not _p2_has_preretire:
+            _missing_details.append(f"{_p2_name}'s pre-retirement coverage (while working)")
+        if not _p2_has_retire:
+            _missing_details.append(f"{_p2_name}'s retirement coverage (post-retirement, pre-Medicare)")
+        
+        if _missing_details:
+            _actions.append(
+                f"🏥 **Healthcare Coverage ({_healthcare_score:.0f}% complete):** "
+                f"Missing coverage for: {'; '.join(_missing_details)}. "
+                f"Go to Configuration → Healthcare to select coverage types (Employer, ACA Marketplace, or Employer Retiree) "
+                f"and enter monthly premium amounts for complete protection."
+            )
+    
     if _cash_score < 50:
-        _actions.append(f"🏦 **Cash buffer below target.** Current: ${_cash_bal:,.0f}. Build toward ${_cash_target:,.0f}.")
+        _cash_months = (_cash_bal / (_annual_exp / 12)) if _annual_exp > 0 else 0
+        _target_months = (_cash_target / (_annual_exp / 12)) if _annual_exp > 0 else 0
+        _actions.append(
+            f"🏦 **Cash/Emergency Fund ({_cash_score:.0f}% complete):** "
+            f"Current balance: ${_cash_bal:,.0f} ({_cash_months:.1f} months of expenses). "
+            f"Target: ${_cash_target:,.0f} ({_target_months:.1f} months). "
+            f"Build your emergency fund by ${_cash_target - _cash_bal:,.0f} to provide adequate liquidity buffer."
+        )
 
     if _actions:
         with st.expander(f"📋 {len(_actions)} Action Item(s) to Improve Your Score", expanded=False):
@@ -332,99 +445,7 @@ except Exception as _rri_err:
 
 st.markdown("---")
 
-# ---------------------------------------------------------------------------
-# ROW 2 — Portfolio Tax Efficiency Score
-# ---------------------------------------------------------------------------
-try:
-    _te_trad  = float(networth['tax_deferred'].iloc[-1]) if not networth.empty else 0.0
-    _te_roth  = float(networth['tax_free'].iloc[-1])     if not networth.empty else 0.0
-    _te_brok  = float(networth['taxable'].iloc[-1])      if not networth.empty else 0.0
-    _te_cash  = float(networth['cash'].iloc[-1])         if not networth.empty else 0.0
-    _te_total = _te_trad + _te_roth + _te_brok + _te_cash
-    _te_score  = ((_te_roth + _te_brok) / _te_total * 100) if _te_total > 0 else 0.0
-    _roth_ratio = (_te_roth / (_te_roth + _te_trad) * 100) if (_te_roth + _te_trad) > 0 else 0.0
-except Exception:
-    _te_score = _roth_ratio = 0.0
-    _te_trad = _te_roth = _te_brok = _te_cash = _te_total = 0.0
 
-st.markdown("### 🧮 Portfolio Tax Efficiency")
-st.caption(
-    "Measures how much of your portfolio is in tax-flexible accounts (Roth + Taxable Brokerage). "
-    "Higher scores provide more flexibility for tax planning and withdrawals."
-)
-
-_te_col1, _te_col2, _te_col3, _te_col4 = st.columns(4)
-with _te_col1:
-    _te_label = "🟢 Excellent" if _te_score >= 60 else ("🟡 Good" if _te_score >= 40 else "🔴 Improve")
-    st.metric("Portfolio Tax Efficiency Score", f"{_te_score:.0f}%",
-              help="(Roth + Taxable Brokerage) / Total Portfolio. Higher = more tax-flexible assets.")
-    st.caption(_te_label)
-with _te_col2:
-    st.metric("Roth Ratio", f"{_roth_ratio:.0f}%",
-              help="Roth / (Roth + Traditional). Higher = more tax-free retirement assets.")
-with _te_col3:
-    st.metric("Tax-Deferred (Trad)", f"${_te_trad:,.0f}")
-with _te_col4:
-    st.metric("Tax-Free (Roth)", f"${_te_roth:,.0f}")
-
-# Generate prescriptive recommendations
-_te_actions: list[str] = []
-
-if _te_score < 60:
-    _tax_flex_gap = 60 - _te_score
-    _te_actions.append(
-        f"📊 **Tax Efficiency Score is {_te_score:.0f}%** (target: 60%+). "
-        f"Increase tax-flexible assets by {_tax_flex_gap:.0f} percentage points."
-    )
-
-if _roth_ratio < 30:
-    _roth_gap = max(0, (_te_trad + _te_roth) * 0.30 - _te_roth)
-    _te_actions.append(
-        f"🔄 **Low Roth Ratio ({_roth_ratio:.0f}%)** — Consider Roth conversions. "
-        f"Target: Convert ~${_roth_gap:,.0f} to reach 30% Roth ratio (optimal range: 30-50%)."
-    )
-elif _roth_ratio > 50:
-    _te_actions.append(
-        f"⚠️ **High Roth Ratio ({_roth_ratio:.0f}%)** — You may have too much in Roth accounts. "
-        f"Consider increasing Traditional 401(k)/IRA contributions to balance tax diversification."
-    )
-
-if _te_brok < (_te_total * 0.10) and _te_total > 0:
-    _brok_target = _te_total * 0.10
-    _brok_gap = _brok_target - _te_brok
-    _te_actions.append(
-        f"💼 **Low Taxable Brokerage ({(_te_brok/_te_total*100):.0f}%)** — "
-        f"Consider building taxable brokerage to ${_brok_target:,.0f} (10% of portfolio) "
-        f"for tax-loss harvesting and flexible withdrawals."
-    )
-
-if _te_trad > (_te_total * 0.60) and _te_total > 0:
-    _te_actions.append(
-        f"🏦 **High Traditional Balance ({(_te_trad/_te_total*100):.0f}%)** — "
-        f"Large Traditional balances create RMD risk at age 73. "
-        f"Consider strategic Roth conversions during low-income years."
-    )
-
-# Display recommendations
-if _te_actions:
-    with st.expander(f"💡 {len(_te_actions)} Recommendation(s) to Improve Tax Efficiency", expanded=False):
-        st.markdown("**Actionable Steps:**")
-        for _te_act in _te_actions:
-            st.markdown(f"- {_te_act}")
-        st.markdown("---")
-        st.markdown("**Why This Matters:**")
-        st.markdown(
-            "- **Tax Diversification** reduces risk by spreading assets across different tax treatments\n"
-            "- **Roth accounts** provide tax-free withdrawals in retirement and no RMDs\n"
-            "- **Taxable brokerage** enables tax-loss harvesting and flexible access\n"
-            "- **Traditional accounts** offer upfront tax deductions but create RMD obligations at age 73"
-        )
-else:
-    st.success("✅ Your portfolio tax efficiency is well-balanced!")
-
-add_vertical_space(1)
-
-st.markdown("---")
 
 # ---------------------------------------------------------------------------
 # ROW 3 — Net Worth Overview (Combined Bar + Trend)

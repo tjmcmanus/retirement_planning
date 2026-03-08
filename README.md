@@ -26,7 +26,47 @@ Advanced Roth conversion analysis based on Vanguard research:
 
 See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_conversion.py`](betr_roth_conversion.py) for implementation.
 
-## Recent Updates (February 2026 — Latest)
+## Recent Updates (March 2026 — Latest)
+
+### 🏥 NEW: Long-Term Care (LTC) Planning & HSA Integration (2026-03-08)
+**Comprehensive healthcare planning tools for retirement**
+
+- **Long-Term Care Planning Module** (`ltc_planning.py`) — Complete LTC cost analysis and planning
+  - State-specific nursing home costs for all 50 states + DC (2024 data: $58K-$328K/year range)
+  - 6 care type options: Nursing home (private/semi-private), assisted living, home health (full/part-time), adult day care
+  - Medicaid spend-down analysis with asset limits, CSRA calculations, and 5-year lookback period
+  - LTC insurance vs self-insurance comparison with break-even analysis
+  - Probability calculations by age and gender (70% need LTC, 3-3.7 year average duration)
+  - Cost projections with 4% annual inflation adjustment
+- **Health Savings Account (HSA) Integration** (`hsa_integration.py`) — Maximize triple tax advantage
+  - Contribution planning with automatic limits (2024: $4,150 individual, $8,300 family, $1,000 catch-up 55+)
+  - Year-by-year growth projections to Medicare age (65) with multiple return scenarios
+  - Three retirement withdrawal strategies: Deplete early, Preserve & grow, Balanced approach
+  - Triple tax advantage calculator: Deductible contributions, tax-free growth, tax-free withdrawals
+  - Healthcare cost estimates: $165K per person in retirement (Fidelity 2024 data)
+  - Optimization engine with personalized recommendations
+- **Export Functionality** (`ltc_hsa_export.py`) — Save and share analysis results
+  - CSV format for spreadsheet analysis
+  - JSON format for data interchange
+  - Markdown format for human-readable reports
+  - Timestamped filenames with complete analysis data
+  - 12 download buttons integrated across 4 analysis types
+- **Comprehensive Documentation**
+  - [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING_GUIDE.md) — 745-line complete LTC planning guide
+  - [`HSA_INTEGRATION_GUIDE.md`](HSA_INTEGRATION_GUIDE.md) — 925-line complete HSA guide
+  - API references, examples, best practices, and FAQs
+- **Test Suites**
+  - `test_ltc_planning.py` — 475 lines, 40+ tests covering all LTC scenarios
+  - `test_hsa_integration.py` — 525 lines, 45+ tests covering all HSA features
+- **UI Integration** — Healthcare tab in Configuration page
+  - LTC Cost Projections & Analysis expander
+  - LTC Insurance vs Self-Insurance Analysis expander
+  - HSA Contribution Planning & Projections expander
+  - HSA Withdrawal Strategies expander
+
+See [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING_GUIDE.md) and [`HSA_INTEGRATION_GUIDE.md`](HSA_INTEGRATION_GUIDE.md) for complete documentation.
+
+## Recent Updates (February 2026)
 
 ### ⚖️ New: Portfolio Rebalancing with Tax-Efficient Suggestions (2026-02-28)
 - **Full portfolio rebalancing engine** (`portfolio_rebalancing.py`) — classifies every holding as Cash / Bonds / Stocks using sector keywords and computes drift from configurable targets
@@ -130,7 +170,10 @@ Comprehensive validation in [`test_strategy.py`](test_strategy.py):
 - **Personal Information**: Names, birth dates, retirement ages with automatic age calculation
 - **Financial Assumptions**: Expenses, inflation, returns, cash reserves
 - **Healthcare Settings**: ACA insurance premiums, Medicare start age
+  - **🏥 Long-Term Care Planning** *(NEW)*: State-specific cost projections, Medicaid analysis, insurance comparison
+  - **💳 HSA Integration** *(NEW)*: Contribution planning, growth projections, withdrawal strategies
 - **Social Security**: Benefit amounts and claiming ages for both spouses
+  - **Social Security Optimization** *(NEW)*: Spousal benefits, survivor benefits, break-even analysis, earnings test
 - **Tax Strategy**: Roth conversion parameters, DAF disbursement rates
 - **Portfolio Accounts**: Define investment accounts with names and types (e.g., "Schwab" - "Roth")
 - **Portfolio Data Entry**: Interactive editor for detailed holdings with validation
@@ -138,8 +181,9 @@ Comprehensive validation in [`test_strategy.py`](test_strategy.py):
   - Automatic timestamped backups before each save
   - Real-time validation of account types and sectors
 - **Configuration Management**: Export/import, backup/restore, reset to defaults
+- **📥 Export Functionality** *(NEW)*: Download analysis results in CSV, JSON, or Markdown format
 
-See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed configuration instructions.
+See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md), [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING_GUIDE.md), and [`HSA_INTEGRATION_GUIDE.md`](HSA_INTEGRATION_GUIDE.md) for detailed instructions.
 
 ### 1. Dashboard Tab
 - **Net Worth Tracking**: Monitor cash, brokerage, traditional IRA, and Roth IRA accounts
@@ -335,13 +379,6 @@ The application requires the following CSV files in the root directory:
   - **Net Worth Calculation**: Automatically computed from portfolio holdings with real-time prices
   - See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md) for detailed data entry instructions
 
-#### Legacy Files (DEPRECATED - Not Used by Application)
-The following files are **no longer used** by the application but sample files remain for reference:
-- ~~`financial_data.csv`~~ - Replaced by dynamic calculation from `portfolio_data_truth.csv`
-- ~~`financial_account.csv`~~ - Replaced by account aggregation from `portfolio_data_truth.csv`
-- ~~`portfolio.csv`~~ - Replaced by `portfolio_data_truth.csv`
-
-**Migration Note**: The application has transitioned from static CSV files to a dynamic portfolio tracking system. All net worth and account data is now calculated in real-time from `portfolio_data_truth.csv` using current market prices.
 
 ### Tax Reference Files
 
@@ -742,8 +779,24 @@ retirement_planning/
   - Best practices
   - Troubleshooting guide
 
+### Healthcare Planning *(NEW - March 2026)*
+- **[`LTC_PLANNING_GUIDE.md`](LTC_PLANNING_GUIDE.md)** - Long-Term Care planning guide
+  - State-specific nursing home cost projections
+  - Home health care expense modeling
+  - Medicaid spend-down strategies
+  - LTC insurance vs self-insurance analysis
+  - API reference and integration examples
+  - Best practices and common scenarios
+- **[`HSA_INTEGRATION_GUIDE.md`](HSA_INTEGRATION_GUIDE.md)** - Health Savings Account guide
+  - HSA contribution limits and tracking
+  - Investment growth projections to Medicare age
+  - Triple tax advantage optimization
+  - Withdrawal strategies (deplete early, preserve & grow, balanced)
+  - Healthcare cost estimation in retirement
+  - API reference and integration examples
+
 ### Advanced Roth Strategies
-- **[`BACKDOOR_ROTH_STRATEGY.md`](BACKDOOR_ROTH_STRATEGY.md)** *(NEW)* - Backdoor Roth IRA strategy guide
+- **[`BACKDOOR_ROTH_STRATEGY.md`](BACKDOOR_ROTH_STRATEGY.md)** - Backdoor Roth IRA strategy guide
   - Complete backdoor Roth IRA implementation guide
   - Income limits and eligibility
   - Step-by-step process (contribution → conversion)
@@ -1296,18 +1349,32 @@ For issues or questions:
   - Disability income scenarios
 
 #### 9. Social Security Optimization
-**Priority: Low - Refinement of existing feature**
-- **Advanced SS Strategies**
-  - File and suspend strategies (if applicable)
-  - Spousal benefit optimization
-  - Divorced spouse benefit calculations
-  - Survivor benefit planning
-  - Earnings test impact modeling (working while collecting)
-- **Break-Even Analysis**
-  - Claiming age break-even calculations
-  - Net present value comparisons
+**Status: ✅ FULLY IMPLEMENTED (March 2026)**
+
+**✅ Implemented:**
+- **Advanced SS Strategies** - `ss_optimization.py`
+  - Spousal benefit optimization (up to 50% of worker's FRA benefit)
+  - Survivor benefit planning (100% of deceased's benefit)
+  - Earnings test impact modeling (working while collecting SS)
+  - Couple optimization analyzing 16 claiming age combinations
+- **Break-Even Analysis** - Enhanced with portfolio opportunity cost
+  - Claiming age break-even calculations (simple and portfolio-adjusted)
+  - Net present value comparisons across all claiming ages (62-70)
   - Longevity-adjusted recommendations
-  - Spousal coordination strategies
+  - Spousal coordination strategies with lifetime benefit maximization
+  - Portfolio opportunity cost integration (lost growth from early withdrawals)
+- **Comprehensive UI** - Configuration page Social Security tab
+  - Top 5 optimal claiming strategies with lifetime benefits
+  - Break-even analysis (simple vs portfolio-adjusted)
+  - Earnings test impact calculator
+  - Claiming age comparison tables
+  - Export functionality (CSV, JSON, Markdown)
+- **Documentation** - `SS_OPTIMIZATION_GUIDE.md` (545 lines)
+- **Test Suite** - `test_ss_optimization.py` (698 lines, 33 tests)
+
+**🔄 Still Pending:**
+- File and suspend strategies (mostly obsolete after 2015 law changes)
+- Divorced spouse benefit calculations
 
 #### 10. Data Management & Security
 **Priority: Low - Operational improvements**
@@ -1440,7 +1507,7 @@ See development guidelines in the Contributing section above. Priority areas for
 
 ---
 
-**Made with IBM Bob** | Last Updated: 2026-02-23
+**Made with IBM Bob** | Last Updated: 2026-03-08
 
 ## Quick Links
 

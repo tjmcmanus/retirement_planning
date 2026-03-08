@@ -53,7 +53,20 @@ DEFAULT_CONFIG = {
         "aca_start_age": 62,
         "aca_end_age": 65,
         "medicare_start_age": 65,
-        "aca_marketplace_enrolled": False,  # Whether enrolled in ACA marketplace (affects subsidy optimization)
+        "person1_preretirement_coverage_type": "None",  # Pre-retirement coverage type: "None", "Employer", or "ACA Marketplace"
+        "person1_preretirement_insurance_monthly": 0,  # Monthly premium for person1's pre-retirement insurance
+        "person1_retirement_coverage_type": "None",  # Retirement coverage type: "None", "Employer Retiree", or "ACA Marketplace"
+        "person1_aca_insurance_monthly": 0,  # Monthly premium for person1's retirement insurance
+        "person1_aca_start_age": 62,
+        "person1_aca_end_age": 65,
+        "person1_medicare_start_age": 65,
+        "person2_preretirement_coverage_type": "None",  # Pre-retirement coverage type: "None", "Employer", or "ACA Marketplace"
+        "person2_preretirement_insurance_monthly": 0,  # Monthly premium for person2's pre-retirement insurance
+        "person2_retirement_coverage_type": "None",  # Retirement coverage type: "None", "Employer Retiree", or "ACA Marketplace"
+        "person2_aca_insurance_monthly": 0,  # Monthly premium for person2's retirement insurance
+        "person2_aca_start_age": 62,
+        "person2_aca_end_age": 65,
+        "person2_medicare_start_age": 65,
     },
     "tax_strategy": {
         "max_roth_conversion_tax_rate": 12,
@@ -78,6 +91,21 @@ DEFAULT_CONFIG = {
         "stocks_traditional": "VFIAX (Vanguard 500 Index Admiral)",
         "stocks_roth": "VTI (Vanguard Total Market ETF)",
         "stocks_brokerage": "VTI (Vanguard Total Market ETF)",
+    },
+    "bucket_strategy": {
+        "enabled": False,
+        "bucket_1_years": 2,
+        "bucket_2_years": 8,
+        "bucket_2_start_stock_pct": 10,
+        "bucket_2_end_stock_pct": 80,
+        "market_trend_adjustment": {
+            "enabled": True,
+            "short_ma_weeks": 10,
+            "long_ma_weeks": 50,
+            "bull_adjustment": 0.0,
+            "warning_adjustment": -10.0,
+            "bear_adjustment": -20.0
+        }
     },
     "metadata": {
         "last_updated": None,

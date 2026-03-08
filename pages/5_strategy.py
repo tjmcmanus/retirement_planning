@@ -29,6 +29,7 @@ import streamlit as st
 from streamlit_extras.add_vertical_space import add_vertical_space
 
 from components.navbar import navbar
+from config import get_config_manager
 from components.shared import (
     LIFE_STAGE_DESCRIPTIONS,
     BALANCE_COLUMN_CONFIG,
@@ -382,6 +383,12 @@ def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int)
                 actions.append("🏥 Healthcare Premiums")
                 amounts.append(f"${monthly_healthcare:,.0f}/month")
         
+        # DAF (Donor Advised Fund) contributions (typically made in December for tax deduction)
+        if 'DAF Contribution' in row and row['DAF Contribution'] > 0:
+            if month_num == 12:  # Suggest December for year-end tax planning
+                actions.append("🎁 DAF Contribution (Charitable Giving)")
+                amounts.append(f"${row['DAF Contribution']:,.0f}")
+        
         # Combine actions with their amounts for clearer display
         combined_actions = []
         for i, action in enumerate(actions):
@@ -729,6 +736,21 @@ def _render_sankey_diagram(sources: list, targets: list, values: list, title: st
     _eff_port_year,
 ) = init_page("📈 Strategy — Financial Planner", "📈")
 
+# Sync configuration to session state on page load
+config_mgr = get_config_manager()
+config_to_session_mappings = {
+    "SSI_AGE": ("social_security", "person1_ssi_age"),
+    "CONV_TAX_RATE": ("tax_strategy", "max_roth_conversion_tax_rate"),
+    "EXPENSE": ("financial_assumptions", "expected_annual_expenses"),
+    "EXPENSE_MULTIPLIER": ("financial_assumptions", "years_of_expenses_in_cash"),
+    "RATE": ("financial_assumptions", "expected_rate_of_return"),
+}
+
+for session_key, (section, config_key) in config_to_session_mappings.items():
+    value = config_mgr.get(section, config_key)
+    if value is not None:
+        st.session_state[session_key] = str(value)
+
 navbar("📋 Strategy")
 
 st.header("📈 Long-Term Financial Strategy")
@@ -736,19 +758,42 @@ st.markdown("Comprehensive planning across all life stages with granular flow-of
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Phase toggle
+# Check if accumulation phase has data (peek at strategy to determine options)
 # ---------------------------------------------------------------------------
-phase = st.radio(
-    "Planning Phase",
-    options=["📈 Accumulation (Pre-Retirement)", "💸 Withdrawal (Distribution)"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
+try:
+    from strategy import build_accumulation_strategy_display
+    # Quick check to see if there's accumulation data
+    _temp_accum_df, _ = build_accumulation_strategy_display(
+        start_year=curr_year,
+        growth_rate=1.06,  # Default values for check
+        expense_inflation_rate=0.03,
+        person1_name="Person1",
+        person2_name="Person2",
+    )
+    _has_accumulation_data = not _temp_accum_df.empty and len(_temp_accum_df) > 0
+except Exception:
+    _has_accumulation_data = True  # Default to showing it if check fails
+
+# ---------------------------------------------------------------------------
+# Phase toggle - only show accumulation option if there's data
+# ---------------------------------------------------------------------------
+if _has_accumulation_data:
+    phase = st.radio(
+        "Planning Phase",
+        options=["📈 Accumulation (Pre-Retirement)", "💸 Withdrawal (Distribution)"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+else:
+    # Only show withdrawal option if no accumulation data
+    st.info("ℹ️ You are in the retirement/withdrawal phase. No accumulation phase data available.")
+    phase = "💸 Withdrawal (Distribution)"
+    
 st.markdown("---")
 
-# Create tabs with new monthly calendar view
-long_term_tab, monthly_tab, balances_tab, charts_tab = st.tabs(
-    ["📋 Long-Term Plan", "📅 Monthly Calendar", "💰 Account Balances", "📊 Visualizations"]
+# Create tabs with new monthly calendar view and bucket strategy
+long_term_tab, monthly_tab, balances_tab, charts_tab, bucket_tab = st.tabs(
+    ["📋 Long-Term Plan", "📅 Monthly Calendar", "💰 Account Balances", "📊 Visualizations", "🪣 Bucket Strategy"]
 )
 
 # ---------------------------------------------------------------------------
@@ -812,56 +857,60 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                                     accum_annual_expenses, "accumulation")
             st.markdown("---")
             
-            # Enhanced table with state taxes
-            st.subheader("📋 Year-by-Year Details")
-            display_df_a = accum_strategy_df.copy()
-            
-            # Add state tax column (placeholder - would need actual calculation)
-            if 'Federal Tax' in display_df_a.columns and 'State Tax' not in display_df_a.columns:
-                # Estimate state tax as percentage of federal (simplified)
-                state_rates = {'CA': 0.093, 'NY': 0.0685, 'TX': 0.0, 'FL': 0.0}
-                state_rate = state_rates.get(accum_state, 0.05)
-                display_df_a['State Tax'] = display_df_a['AGI'] * state_rate if 'AGI' in display_df_a.columns else 0
-            
-            display_cols_a = [
-                'Year', 'Age', 'Stage',
-                'Wages', 'Wages→\nPayroll', 'Wages→\nTrad', 'Wages→\nRoth',
-                'Trad→\nRoth', 'Cash→\nRoth', 'Cash→\nBrok',
-                'Expenses', 'Healthcare Cost', 'AGI', 'Federal Tax', 'State Tax', 'Cash Balance',
-            ]
-            available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
-            display_df_a = cast(pd.DataFrame, display_df_a[available_cols_a].copy())
-            numeric_cols_a = [c for c in available_cols_a if c not in ['Year', 'Age', 'Stage']]
-            for col in numeric_cols_a:
-                display_df_a[col] = display_df_a[col].map(format_currency)
+            # Enhanced table with state taxes - only show if there are rows
+            if not accum_strategy_df.empty and len(accum_strategy_df) > 0:
+                st.subheader("📋 Year-by-Year Details")
+                display_df_a = accum_strategy_df.copy()
+                
+                # Add state tax column (placeholder - would need actual calculation)
+                if 'Federal Tax' in display_df_a.columns and 'State Tax' not in display_df_a.columns:
+                    # Estimate state tax as percentage of federal (simplified)
+                    state_rates = {'CA': 0.093, 'NY': 0.0685, 'TX': 0.0, 'FL': 0.0}
+                    state_rate = state_rates.get(accum_state, 0.05)
+                    display_df_a['State Tax'] = display_df_a['AGI'] * state_rate if 'AGI' in display_df_a.columns else 0
+                
+                display_cols_a = [
+                    'Year', 'Age', 'Stage',
+                    'Wages', 'Wages→\nPayroll', 'Wages→\nTrad', 'Wages→\nRoth',
+                    'Trad→\nRoth', 'Cash→\nRoth', 'Cash→\nBrok',
+                    'Expenses', 'Healthcare Cost', 'AGI', 'Federal Tax', 'State Tax', 'Cash Balance',
+                ]
+                available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
+                display_df_a = cast(pd.DataFrame, display_df_a[available_cols_a].copy())
+                numeric_cols_a = [c for c in available_cols_a if c not in ['Year', 'Age', 'Stage']]
+                for col in numeric_cols_a:
+                    display_df_a[col] = display_df_a[col].map(format_currency)
 
-            accum_column_config = {
-                "Year":           st.column_config.NumberColumn("Year", format="%d"),
-                "Age":            st.column_config.TextColumn("Age"),
-                "Stage":          st.column_config.TextColumn("Life Stage", help=_STAGE_COLUMN_HELP),
-                "Wages":          st.column_config.TextColumn("Wages"),
-                "Wages→\nPayroll":st.column_config.TextColumn("Payroll Tax"),
-                "Wages→\nTrad":   st.column_config.TextColumn("Wages→Trad"),
-                "Wages→\nRoth":   st.column_config.TextColumn("Wages→Roth"),
-                "Trad→\nRoth":    st.column_config.TextColumn("Trad→Roth"),
-                "Cash→\nRoth":    st.column_config.TextColumn("Cash→Roth"),
-                "Cash→\nBrok":    st.column_config.TextColumn("Cash→Brok"),
-                "Expenses":       st.column_config.TextColumn("Expenses"),
-                "Healthcare Cost":st.column_config.TextColumn("Healthcare"),
-                "AGI":            st.column_config.TextColumn("AGI"),
-                "Federal Tax":    st.column_config.TextColumn("Fed Tax"),
-                "State Tax":      st.column_config.TextColumn("State Tax", help=f"Estimated {accum_state} state income tax"),
-                "Cash Balance":   st.column_config.TextColumn("Cash End"),
-            }
-            st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, use_container_width=True)
-
-            _accum_stages_present = display_df_a['Stage'].unique() if 'Stage' in display_df_a.columns else []
-            with st.expander("ℹ️ Life Stage Guide", expanded=False):
-                for _stage_name, _stage_desc in LIFE_STAGE_DESCRIPTIONS.items():
-                    if _stage_name in list(_accum_stages_present):
-                        st.markdown(f"**{_stage_name}**")
-                        st.caption(_stage_desc)
-                        st.markdown("---")
+                accum_column_config = {
+                    "Year":           st.column_config.NumberColumn("Year", format="%d"),
+                    "Age":            st.column_config.TextColumn("Age"),
+                    "Stage":          st.column_config.TextColumn("Life Stage", help=_STAGE_COLUMN_HELP),
+                    "Wages":          st.column_config.TextColumn("Wages"),
+                    "Wages→\nPayroll":st.column_config.TextColumn("Payroll Tax"),
+                    "Wages→\nTrad":   st.column_config.TextColumn("Wages→Trad"),
+                    "Wages→\nRoth":   st.column_config.TextColumn("Wages→Roth"),
+                    "Trad→\nRoth":    st.column_config.TextColumn("Trad→Roth"),
+                    "Cash→\nRoth":    st.column_config.TextColumn("Cash→Roth"),
+                    "Cash→\nBrok":    st.column_config.TextColumn("Cash→Brok"),
+                    "Expenses":       st.column_config.TextColumn("Expenses"),
+                    "Healthcare Cost":st.column_config.TextColumn("Healthcare"),
+                    "AGI":            st.column_config.TextColumn("AGI"),
+                    "Federal Tax":    st.column_config.TextColumn("Fed Tax"),
+                    "State Tax":      st.column_config.TextColumn("State Tax", help=f"Estimated {accum_state} state income tax"),
+                    "Cash Balance":   st.column_config.TextColumn("Cash End"),
+                }
+                st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, use_container_width=True)
+                
+                # Life Stage Guide - only show if we have data
+                _accum_stages_present = display_df_a['Stage'].unique() if 'Stage' in display_df_a.columns else []
+                with st.expander("ℹ️ Life Stage Guide", expanded=False):
+                    for _stage_name, _stage_desc in LIFE_STAGE_DESCRIPTIONS.items():
+                        if _stage_name in list(_accum_stages_present):
+                            st.markdown(f"**{_stage_name}**")
+                            st.caption(_stage_desc)
+                            st.markdown("---")
+            else:
+                st.info("ℹ️ No accumulation phase data to display. You may already be in retirement phase.")
 
         with monthly_tab:
             st.subheader("📅 Month-by-Month Execution Plan")
@@ -896,6 +945,473 @@ if phase == "📈 Accumulation (Pre-Retirement)":
             render_balance_chart(accum_balances_df, title="Projected Account Balances (Accumulation)")
             st.subheader("Income Sources Over Time")
             render_income_chart(accum_strategy_df, title="Income Sources by Year (Accumulation)")
+        
+        with bucket_tab:
+            st.subheader("🪣 Bucket Strategy Analysis")
+            
+            try:
+                from config import get_config_manager as _get_bucket_cfg
+                from bucket_strategy import analyze_portfolio_buckets, load_bucket_config, BucketType, AssetClass, format_bucket_summary
+                from load_data import get_latest_portfolio_month_year
+                import plotly.graph_objects as go
+                
+                _bucket_cfg = _get_bucket_cfg()
+                _bucket_enabled = _bucket_cfg.get("bucket_strategy", "enabled", False)
+                
+                if not _bucket_enabled:
+                    st.info("""
+                    **🪣 Bucket Strategy Not Enabled**
+                    
+                    The bucket strategy helps manage sequence of returns risk by dividing your portfolio into three buckets:
+                    - **Bucket 1 (Safety)**: Cash for near-term expenses
+                    - **Bucket 2 (Transition)**: Graduated stock/bond mix
+                    - **Bucket 3 (Growth)**: Long-term growth stocks
+                    
+                    Enable it in the Configuration page to see detailed bucket analysis here.
+                    """)
+                    st.page_link("pages/2_configuration.py", label="⚙️ Go to Configuration", icon="⚙️")
+                else:
+                    month, year = get_latest_portfolio_month_year()
+                    bucket_config = load_bucket_config(_bucket_cfg)
+                    bucket_summary = analyze_portfolio_buckets(month, year, bucket_config)
+                    
+                    # ============================================================
+                    # BUCKET STRATEGY STATUS (moved from Dashboard)
+                    # ============================================================
+                    st.markdown("#### 📊 Bucket Strategy Status")
+                    
+                    bucket_col1, bucket_col2, bucket_col3, bucket_col4 = st.columns(4)
+                    
+                    with bucket_col1:
+                        bucket1_current = bucket_summary.bucket_1_value
+                        bucket1_target = bucket_summary.bucket_1_target
+                        bucket1_pct = (bucket1_current / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                        
+                        # Calculate annual need (expenses + taxes)
+                        annual_need = bucket_config.annual_expenses + bucket_config.annual_taxes
+                        help_text = f"Target: ${bucket1_target:,.0f}\n"
+                        help_text += f"= {bucket_config.bucket_1_years} years × ${annual_need:,.0f}/year\n"
+                        help_text += f"  (${bucket_config.annual_expenses:,.0f} expenses + ${bucket_config.annual_taxes:,.0f} taxes)"
+                        
+                        st.metric(
+                            "🛡️ Bucket 1 (Safety)",
+                            f"${bucket1_current:,.0f}",
+                            delta=f"{bucket1_pct:.1f}% of portfolio",
+                            help=help_text
+                        )
+                    
+                    with bucket_col2:
+                        bucket2_current = bucket_summary.bucket_2_value
+                        bucket2_target = bucket_summary.bucket_2_target
+                        bucket2_pct = (bucket2_current / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                        
+                        # Calculate base target and market adjustment
+                        annual_need = bucket_config.annual_expenses + bucket_config.annual_taxes
+                        base_bucket2_target = annual_need * bucket_config.bucket_2_years
+                        market_adjustment = bucket2_target - base_bucket2_target
+                        
+                        help_text = f"Base target: ${base_bucket2_target:,.0f}\n"
+                        help_text += f"= {bucket_config.bucket_2_years} years × ${annual_need:,.0f}/year\n"
+                        help_text += f"  (${bucket_config.annual_expenses:,.0f} expenses + ${bucket_config.annual_taxes:,.0f} taxes)"
+                        if market_adjustment != 0:
+                            if market_adjustment > 0:
+                                help_text += f"\n+ Market adjustment: ${market_adjustment:,.0f} (defensive)"
+                            else:
+                                help_text += f"\n- Market adjustment: ${abs(market_adjustment):,.0f} (aggressive)"
+                        help_text += f"\n= Total target: ${bucket2_target:,.0f}"
+                        
+                        st.metric(
+                            "🔄 Bucket 2 (Transition)",
+                            f"${bucket2_current:,.0f}",
+                            delta=f"{bucket2_pct:.1f}% of portfolio",
+                            help=help_text
+                        )
+                    
+                    with bucket_col3:
+                        bucket3_current = bucket_summary.bucket_3_value
+                        bucket3_target = bucket_summary.bucket_3_target
+                        bucket3_pct = (bucket3_current / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                        
+                        st.metric(
+                            "🚀 Bucket 3 (Growth)",
+                            f"${bucket3_current:,.0f}",
+                            delta=f"{bucket3_pct:.1f}% of portfolio",
+                            help=f"Target: ${bucket3_target:,.0f} (remaining funds)"
+                        )
+                    
+                    with bucket_col4:
+                        # Rebalancing status
+                        if bucket_summary.needs_rebalancing:
+                            st.error("⚠️ **Rebalancing Needed**")
+                            max_drift = max(
+                                abs(bucket_summary.get_bucket_drift(BucketType.BUCKET_1_SAFETY)),
+                                abs(bucket_summary.get_bucket_drift(BucketType.BUCKET_2_TRANSITION)),
+                                abs(bucket_summary.get_bucket_drift(BucketType.BUCKET_3_GROWTH))
+                            )
+                            st.caption(f"Max drift: {max_drift:.1f}%")
+                        else:
+                            st.success("✅ **Balanced**")
+                            st.caption("All buckets within target range")
+                    
+                    # Bucket Allocation Visualization
+                    st.markdown("#### Bucket Allocation Breakdown")
+                    
+                    # Create stacked bar chart showing current vs target
+                    fig = go.Figure()
+                    
+                    # Current allocation
+                    fig.add_trace(go.Bar(
+                        name='Current',
+                        x=['Bucket 1<br>(Safety)', 'Bucket 2<br>(Transition)', 'Bucket 3<br>(Growth)'],
+                        y=[bucket1_current, bucket2_current, bucket3_current],
+                        marker_color=['#21c354', '#ffa500', '#1f77b4'],
+                        text=[f'${bucket1_current:,.0f}', f'${bucket2_current:,.0f}', f'${bucket3_current:,.0f}'],
+                        textposition='inside',
+                        textfont=dict(color='white', size=12),
+                        hovertemplate='<b>%{x}</b><br>Current: %{y:$,.0f}<extra></extra>'
+                    ))
+                    
+                    # Target allocation
+                    fig.add_trace(go.Bar(
+                        name='Target',
+                        x=['Bucket 1<br>(Safety)', 'Bucket 2<br>(Transition)', 'Bucket 3<br>(Growth)'],
+                        y=[bucket1_target, bucket2_target, bucket3_target],
+                        marker_color=['rgba(33, 195, 84, 0.3)', 'rgba(255, 165, 0, 0.3)', 'rgba(31, 119, 180, 0.3)'],
+                        text=[f'${bucket1_target:,.0f}', f'${bucket2_target:,.0f}', f'${bucket3_target:,.0f}'],
+                        textposition='inside',
+                        textfont=dict(color='#333', size=12),
+                        hovertemplate='<b>%{x}</b><br>Target: %{y:$,.0f}<extra></extra>'
+                    ))
+                    
+                    fig.update_layout(
+                        barmode='group',
+                        title='Current vs Target Bucket Allocation',
+                        xaxis_title='',
+                        yaxis_title='Value ($)',
+                        hovermode='x unified',
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        height=400,
+                        showlegend=True,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1
+                        )
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.markdown("---")
+                    
+                    # Visual bucket allocation summary (detailed breakdown)
+                    st.markdown("#### 📋 Detailed Bucket Breakdown")
+                    
+                    # Total portfolio metric
+                    col_total = st.columns([1, 2, 1])
+                    with col_total[1]:
+                        st.metric(
+                            "💰 Total Portfolio Value",
+                            f"${bucket_summary.total_portfolio_value:,.0f}",
+                            help="Total value across all buckets"
+                        )
+                    
+                    st.markdown("---")
+                    
+                    # Bucket metrics in columns
+                    bucket_col1, bucket_col2, bucket_col3 = st.columns(3)
+                    
+                    # Bucket 1
+                    with bucket_col1:
+                        st.markdown("##### 🛡️ Bucket 1: Safety")
+                        st.caption(f"{bucket_config.bucket_1_years} years of expenses in cash")
+                        
+                        drift1 = bucket_summary.get_bucket_drift(BucketType.BUCKET_1_SAFETY)
+                        delta_color = "normal" if abs(drift1) < 10 else "inverse"
+                        
+                        st.metric(
+                            "Current Value",
+                            f"${bucket_summary.bucket_1_value:,.0f}",
+                            delta=f"{drift1:+.1f}% drift",
+                            delta_color=delta_color
+                        )
+                        
+                        st.caption(f"**Target:** ${bucket_summary.bucket_1_target:,.0f}")
+                        st.caption(f"**Allocation:** {bucket_summary.bucket_1_pct:.1f}% of portfolio")
+                        
+                        # Progress bar
+                        progress_pct = min(bucket_summary.bucket_1_value / bucket_summary.bucket_1_target, 1.0) if bucket_summary.bucket_1_target > 0 else 0
+                        st.progress(progress_pct)
+                    
+                    # Bucket 2
+                    with bucket_col2:
+                        st.markdown("##### 🔄 Bucket 2: Transition")
+                        st.caption(f"{bucket_config.bucket_2_years} years with graduated allocation")
+                        
+                        drift2 = bucket_summary.get_bucket_drift(BucketType.BUCKET_2_TRANSITION)
+                        delta_color = "normal" if abs(drift2) < 10 else "inverse"
+                        
+                        st.metric(
+                            "Current Value",
+                            f"${bucket_summary.bucket_2_value:,.0f}",
+                            delta=f"{drift2:+.1f}% drift",
+                            delta_color=delta_color
+                        )
+                        
+                        st.caption(f"**Target:** ${bucket_summary.bucket_2_target:,.0f}")
+                        st.caption(f"**Allocation:** {bucket_summary.bucket_2_pct:.1f}% of portfolio")
+                        
+                        # Progress bar
+                        progress_pct = min(bucket_summary.bucket_2_value / bucket_summary.bucket_2_target, 1.0) if bucket_summary.bucket_2_target > 0 else 0
+                        st.progress(progress_pct)
+                    
+                    # Bucket 3
+                    with bucket_col3:
+                        st.markdown("##### 🚀 Bucket 3: Growth")
+                        st.caption("Long-term growth with 100% stocks")
+                        
+                        drift3 = bucket_summary.get_bucket_drift(BucketType.BUCKET_3_GROWTH)
+                        delta_color = "normal" if abs(drift3) < 10 else "inverse"
+                        
+                        st.metric(
+                            "Current Value",
+                            f"${bucket_summary.bucket_3_value:,.0f}",
+                            delta=f"{drift3:+.1f}% drift",
+                            delta_color=delta_color
+                        )
+                        
+                        st.caption(f"**Target:** ${bucket_summary.bucket_3_target:,.0f}")
+                        st.caption(f"**Allocation:** {bucket_summary.bucket_3_pct:.1f}% of portfolio")
+                        
+                        # Progress bar
+                        progress_pct = min(bucket_summary.bucket_3_value / bucket_summary.bucket_3_target, 1.0) if bucket_summary.bucket_3_target > 0 else 0
+                        st.progress(progress_pct)
+                    
+                    # Market condition and rebalancing status
+                    st.markdown("---")
+                    status_col1, status_col2 = st.columns(2)
+                    
+                    with status_col1:
+                        if bucket_summary.market_condition:
+                            condition_name = bucket_summary.market_condition.value.replace("_", " ").title()
+                            if "BULL" in bucket_summary.market_condition.value:
+                                st.success(f"📈 **Market Condition:** {condition_name}")
+                            elif "WARNING" in bucket_summary.market_condition.value:
+                                st.warning(f"⚠️ **Market Condition:** {condition_name}")
+                            elif "BEAR" in bucket_summary.market_condition.value:
+                                st.error(f"📉 **Market Condition:** {condition_name}")
+                            else:
+                                st.info(f"**Market Condition:** {condition_name}")
+                    
+                    with status_col2:
+                        if bucket_summary.needs_rebalancing:
+                            max_drift = max(abs(drift1), abs(drift2), abs(drift3))
+                            st.error(f"⚠️ **Rebalancing Needed** (max drift: {max_drift:.1f}%)")
+                        else:
+                            st.success("✅ **Portfolio Balanced**")
+                    
+                    # Allocation visualization chart
+                    st.markdown("---")
+                    st.markdown("#### 📊 Allocation Breakdown")
+                    
+                    fig = go.Figure()
+                    
+                    # Current allocation
+                    fig.add_trace(go.Bar(
+                        name='Current',
+                        x=['Bucket 1<br>Safety', 'Bucket 2<br>Transition', 'Bucket 3<br>Growth'],
+                        y=[bucket_summary.bucket_1_value, bucket_summary.bucket_2_value, bucket_summary.bucket_3_value],
+                        marker_color=['#21c354', '#ffa500', '#1f77b4'],
+                        text=[f'${bucket_summary.bucket_1_value:,.0f}', f'${bucket_summary.bucket_2_value:,.0f}', f'${bucket_summary.bucket_3_value:,.0f}'],
+                        textposition='inside',
+                        textfont=dict(color='white', size=11),
+                        hovertemplate='<b>%{x}</b><br>Current: %{y:$,.0f}<extra></extra>'
+                    ))
+                    
+                    # Target allocation
+                    fig.add_trace(go.Bar(
+                        name='Target',
+                        x=['Bucket 1<br>Safety', 'Bucket 2<br>Transition', 'Bucket 3<br>Growth'],
+                        y=[bucket_summary.bucket_1_target, bucket_summary.bucket_2_target, bucket_summary.bucket_3_target],
+                        marker_color=['rgba(33, 195, 84, 0.3)', 'rgba(255, 165, 0, 0.3)', 'rgba(31, 119, 180, 0.3)'],
+                        text=[f'${bucket_summary.bucket_1_target:,.0f}', f'${bucket_summary.bucket_2_target:,.0f}', f'${bucket_summary.bucket_3_target:,.0f}'],
+                        textposition='inside',
+                        textfont=dict(color='#333', size=11),
+                        hovertemplate='<b>%{x}</b><br>Target: %{y:$,.0f}<extra></extra>'
+                    ))
+                    
+                    fig.update_layout(
+                        barmode='group',
+                        xaxis_title='',
+                        yaxis_title='Value ($)',
+                        hovermode='x unified',
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        height=350,
+                        showlegend=True,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1
+                        )
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Detailed holdings breakdown
+                    st.markdown("---")
+                    st.markdown("#### 📋 Holdings by Bucket")
+                    
+                    if bucket_summary.holdings:
+                        # Create DataFrame from holdings
+                        holdings_data = []
+                        for holding in bucket_summary.holdings:
+                            holdings_data.append({
+                                "Account": holding.account_name,
+                                "Account Type": holding.account_type,
+                                "Symbol": holding.symbol,
+                                "Name": holding.name,
+                                "Asset Class": holding.asset_class.value.title(),
+                                "Bucket": holding.bucket_assignment.value.replace("_", " ").title(),
+                                "Year": holding.year_in_bucket if holding.year_in_bucket else "-",
+                                "Value": holding.current_value,
+                            })
+                        
+                        holdings_df = pd.DataFrame(holdings_data)
+                        
+                        # Group by bucket
+                        for bucket_type in [BucketType.BUCKET_1_SAFETY, BucketType.BUCKET_2_TRANSITION, BucketType.BUCKET_3_GROWTH]:
+                            bucket_name = bucket_type.value.replace("_", " ").title()
+                            bucket_holdings = holdings_df[holdings_df["Bucket"] == bucket_name]
+                            
+                            if not bucket_holdings.empty:
+                                with st.expander(f"**{bucket_name}** ({len(bucket_holdings)} holdings)", expanded=True):
+                                    # Calculate total before formatting
+                                    total_value = bucket_holdings["Value"].sum()
+                                    
+                                    # Format value column for display
+                                    display_df = bucket_holdings.copy()
+                                    
+                                    st.dataframe(
+                                        display_df,
+                                        column_config={
+                                            "Account": st.column_config.TextColumn("Account", width="medium"),
+                                            "Account Type": st.column_config.TextColumn("Account Type", width="small"),
+                                            "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+                                            "Name": st.column_config.TextColumn("Name", width="large"),
+                                            "Asset Class": st.column_config.TextColumn("Asset Class", width="small"),
+                                            "Year": st.column_config.TextColumn("Year", width="small"),
+                                            "Value": st.column_config.NumberColumn("Value", format="$%.0f"),
+                                        },
+                                        hide_index=True,
+                                        use_container_width=True
+                                    )
+                                    
+                                    st.caption(f"**Total:** ${total_value:,.0f}")
+                    else:
+                        st.info("No holdings data available for bucket analysis.")
+                    
+                    # Rebalancing recommendations
+                    if bucket_summary.needs_rebalancing:
+                        st.markdown("---")
+                        st.markdown("#### ⚠️ Rebalancing Recommendations")
+                        
+                        st.warning("""
+                        **Action Required:** Your portfolio has drifted from target bucket allocations.
+                        
+                        Consider rebalancing to maintain your bucket strategy:
+                        """)
+                        
+                        # Calculate current asset allocation within each bucket
+                        bucket_asset_allocations = {}
+                        for bucket_type in [BucketType.BUCKET_1_SAFETY, BucketType.BUCKET_2_TRANSITION, BucketType.BUCKET_3_GROWTH]:
+                            bucket_holdings = [h for h in bucket_summary.holdings if h.bucket_assignment == bucket_type]
+                            total_value = sum(h.current_value for h in bucket_holdings)
+                            
+                            if total_value > 0:
+                                cash_value = sum(h.current_value for h in bucket_holdings if h.asset_class == AssetClass.CASH)
+                                bonds_value = sum(h.current_value for h in bucket_holdings if h.asset_class == AssetClass.BONDS)
+                                stocks_value = sum(h.current_value for h in bucket_holdings if h.asset_class == AssetClass.STOCKS)
+                                
+                                bucket_asset_allocations[bucket_type] = {
+                                    'cash_pct': (cash_value / total_value * 100),
+                                    'bonds_pct': (bonds_value / total_value * 100),
+                                    'stocks_pct': (stocks_value / total_value * 100)
+                                }
+                            else:
+                                bucket_asset_allocations[bucket_type] = {'cash_pct': 0, 'bonds_pct': 0, 'stocks_pct': 0}
+                        
+                        drift_data = []
+                        for bucket_type, bucket_name in [
+                            (BucketType.BUCKET_1_SAFETY, "Bucket 1 (Safety)"),
+                            (BucketType.BUCKET_2_TRANSITION, "Bucket 2 (Transition)"),
+                            (BucketType.BUCKET_3_GROWTH, "Bucket 3 (Growth)")
+                        ]:
+                            drift = bucket_summary.get_bucket_drift(bucket_type)
+                            
+                            # Get current asset allocation
+                            alloc = bucket_asset_allocations[bucket_type]
+                            current_alloc = f"Cash: {alloc['cash_pct']:.0f}%, Bonds: {alloc['bonds_pct']:.0f}%, Stocks: {alloc['stocks_pct']:.0f}%"
+                            
+                            # Define target asset allocation for each bucket
+                            if bucket_type == BucketType.BUCKET_1_SAFETY:
+                                target_alloc = "Cash: 100%, Bonds: 0%, Stocks: 0%"
+                            elif bucket_type == BucketType.BUCKET_2_TRANSITION:
+                                # Average of graduated allocation (10-80% stocks)
+                                avg_stocks = (bucket_config.bucket_2_start_stock_pct + bucket_config.bucket_2_end_stock_pct) / 2
+                                avg_bonds = 100 - avg_stocks
+                                target_alloc = f"Cash: 0%, Bonds: {avg_bonds:.0f}%, Stocks: {avg_stocks:.0f}%"
+                            else:  # BUCKET_3_GROWTH
+                                target_alloc = "Cash: 0%, Bonds: 0%, Stocks: 100%"
+                            
+                            # Calculate current and target bucket percentages
+                            if bucket_type == BucketType.BUCKET_1_SAFETY:
+                                current_pct = bucket_summary.bucket_1_pct
+                                target_pct = (bucket_summary.bucket_1_target / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                            elif bucket_type == BucketType.BUCKET_2_TRANSITION:
+                                current_pct = bucket_summary.bucket_2_pct
+                                target_pct = (bucket_summary.bucket_2_target / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                            else:  # BUCKET_3_GROWTH
+                                current_pct = bucket_summary.bucket_3_pct
+                                target_pct = (bucket_summary.bucket_3_target / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                            
+                            drift_data.append({
+                                "Bucket": bucket_name,
+                                "Current %": f"{current_pct:.1f}%",
+                                "Target %": f"{target_pct:.1f}%",
+                                "Current Asset Mix": current_alloc,
+                                "Target Asset Mix": target_alloc,
+                                "Drift": f"{drift:+.1f}%",
+                                "Status": "✅ OK" if abs(drift) < 10 else "⚠️ Rebalance"
+                            })
+                        
+                        drift_df = pd.DataFrame(drift_data)
+                        st.dataframe(
+                            drift_df,
+                            column_config={
+                                "Bucket": st.column_config.TextColumn("Bucket", width="medium"),
+                                "Current %": st.column_config.TextColumn("Current %", width="small"),
+                                "Target %": st.column_config.TextColumn("Target %", width="small"),
+                                "Current Asset Mix": st.column_config.TextColumn("Current Asset Mix", width="large"),
+                                "Target Asset Mix": st.column_config.TextColumn("Target Asset Mix", width="large"),
+                                "Drift": st.column_config.TextColumn("Drift", width="small"),
+                                "Status": st.column_config.TextColumn("Status", width="small"),
+                            },
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                    else:
+                        st.success("✅ **Portfolio is well-balanced** - No rebalancing needed at this time.")
+            
+            except ImportError as e:
+                st.error(f"Bucket strategy module not available: {e}")
+            except Exception as e:
+                st.error(f"Error analyzing bucket strategy: {e}")
+                st.info("Please ensure bucket strategy is properly configured.")
 
     except Exception as e:
         st.error(f"Error calculating accumulation strategy: {e}")
@@ -957,6 +1473,48 @@ else:
                 aca_optimize=aca_marketplace_enrolled,
                 ss_claiming_age=ssi_age_s,
             )
+        # Check for early SS filing and display warnings
+        if 'SS Benefits' in strategy_df_w.columns:
+            first_ss_year = strategy_df_w[strategy_df_w['SS Benefits'] > 0]
+            if not first_ss_year.empty:
+                age_str = str(first_ss_year.iloc[0]['Age'])
+                # Handle age format like "63/62" (person1/person2) or just "63"
+                if '/' in age_str:
+                    first_ss_age = int(age_str.split('/')[0])  # Use person1's age
+                else:
+                    first_ss_age = int(age_str)
+                first_ss_amount = float(first_ss_year.iloc[0]['SS Benefits'])
+                
+                if first_ss_age < 70:
+                    # Calculate taxable portion (approximate)
+                    taxable_ss_pct = 85  # Conservative estimate
+                    if first_ss_age < 65:
+                        # Check if under Medicare age
+                        taxable_ss_income = first_ss_amount * 0.85
+                        warning_msg = (
+                            f"⚠️ **Early Social Security Impact (Age {first_ss_age})**: Taking SS at age {first_ss_age} adds approximately "
+                            f"\\${taxable_ss_income:,.2f} "
+                            f"of taxable income annually (up to 85% of "
+                            f"\\${first_ss_amount:,.0f} benefits). This:\n\n"
+                            "- **Reduces Roth conversion capacity** by filling lower tax brackets\n"
+                            "- **May eliminate ACA subsidies** if MAGI exceeds 400% FPL (approximately \\$111,000 for couple), costing \\$10,000-\\$15,000/year until Medicare at 65\n"
+                            "- **Increases IRMAA risk** (2-year lookback affects Medicare premiums)\n"
+                            "- **Limits tax planning flexibility** for Traditional IRA distributions\n\n"
+                            f"💡 **Consider**: Delaying SS to age 70 maximizes lifetime benefits and preserves "
+                            f"Roth conversion opportunities during ages {first_ss_age}-69."
+                        )
+                        st.warning(warning_msg)
+                    else:
+                        taxable_ss_income = first_ss_amount * 0.85
+                        info_msg = (
+                            f"ℹ️ **Social Security Impact (Age {first_ss_age})**: "
+                            f"Taking SS at age {first_ss_age} adds approximately ${taxable_ss_income:,.0f} "
+                            f"of taxable income annually. This reduces Roth conversion capacity and may affect "
+                            f"IRMAA surcharges (2-year lookback). Delaying to age 70 would increase lifetime "
+                            f"benefits by approximately 24% and preserve more conversion room."
+                        )
+                        st.info(info_msg)
+
 
         with long_term_tab:
             st.subheader("📊 Multi-Year Withdrawal Strategy")
@@ -1075,6 +1633,341 @@ else:
             render_balance_chart(balances_df_w, title="Projected Account Balances (Withdrawal)")
             st.subheader("Income Sources Over Time")
             render_income_chart(strategy_df_w, title="Income Sources by Year (Withdrawal)")
+        
+        with bucket_tab:
+            st.subheader("🪣 Bucket Strategy Analysis")
+            
+            try:
+                from config import get_config_manager as _get_bucket_cfg
+                from bucket_strategy import analyze_portfolio_buckets, load_bucket_config, BucketType, AssetClass, format_bucket_summary
+                from load_data import get_latest_portfolio_month_year
+                
+                _bucket_cfg = _get_bucket_cfg()
+                _bucket_enabled = _bucket_cfg.get("bucket_strategy", "enabled", False)
+                
+                if not _bucket_enabled:
+                    st.info("""
+                    **🪣 Bucket Strategy Not Enabled**
+                    
+                    The bucket strategy helps manage sequence of returns risk by dividing your portfolio into three buckets:
+                    - **Bucket 1 (Safety)**: Cash for near-term expenses
+                    - **Bucket 2 (Transition)**: Graduated stock/bond mix
+                    - **Bucket 3 (Growth)**: Long-term growth stocks
+                    
+                    Enable it in the Configuration page to see detailed bucket analysis here.
+                    """)
+                    st.page_link("pages/2_configuration.py", label="⚙️ Go to Configuration", icon="⚙️")
+                else:
+                    month, year = get_latest_portfolio_month_year()
+                    bucket_config = load_bucket_config(_bucket_cfg)
+                    bucket_summary = analyze_portfolio_buckets(month, year, bucket_config)
+                    
+                    # Visual bucket allocation summary
+                    st.markdown("#### 📊 Current Bucket Allocation")
+                    
+                    # Total portfolio metric
+                    col_total = st.columns([1, 2, 1])
+                    with col_total[1]:
+                        st.metric(
+                            "💰 Total Portfolio Value",
+                            f"${bucket_summary.total_portfolio_value:,.0f}",
+                            help="Total value across all buckets"
+                        )
+                    
+                    st.markdown("---")
+                    
+                    # Bucket metrics in columns
+                    bucket_col1, bucket_col2, bucket_col3 = st.columns(3)
+                    
+                    # Bucket 1
+                    with bucket_col1:
+                        st.markdown("##### 🛡️ Bucket 1: Safety")
+                        st.caption(f"{bucket_config.bucket_1_years} years of expenses in cash")
+                        
+                        drift1 = bucket_summary.get_bucket_drift(BucketType.BUCKET_1_SAFETY)
+                        delta_color = "normal" if abs(drift1) < 10 else "inverse"
+                        
+                        st.metric(
+                            "Current Value",
+                            f"${bucket_summary.bucket_1_value:,.0f}",
+                            delta=f"{drift1:+.1f}% drift",
+                            delta_color=delta_color
+                        )
+                        
+                        st.caption(f"**Target:** ${bucket_summary.bucket_1_target:,.0f}")
+                        st.caption(f"**Allocation:** {bucket_summary.bucket_1_pct:.1f}% of portfolio")
+                        
+                        # Progress bar
+                        progress_pct = min(bucket_summary.bucket_1_value / bucket_summary.bucket_1_target, 1.0) if bucket_summary.bucket_1_target > 0 else 0
+                        st.progress(progress_pct)
+                    
+                    # Bucket 2
+                    with bucket_col2:
+                        st.markdown("##### 🔄 Bucket 2: Transition")
+                        st.caption(f"{bucket_config.bucket_2_years} years with graduated allocation")
+                        
+                        drift2 = bucket_summary.get_bucket_drift(BucketType.BUCKET_2_TRANSITION)
+                        delta_color = "normal" if abs(drift2) < 10 else "inverse"
+                        
+                        st.metric(
+                            "Current Value",
+                            f"${bucket_summary.bucket_2_value:,.0f}",
+                            delta=f"{drift2:+.1f}% drift",
+                            delta_color=delta_color
+                        )
+                        
+                        st.caption(f"**Target:** ${bucket_summary.bucket_2_target:,.0f}")
+                        st.caption(f"**Allocation:** {bucket_summary.bucket_2_pct:.1f}% of portfolio")
+                        
+                        # Progress bar
+                        progress_pct = min(bucket_summary.bucket_2_value / bucket_summary.bucket_2_target, 1.0) if bucket_summary.bucket_2_target > 0 else 0
+                        st.progress(progress_pct)
+                    
+                    # Bucket 3
+                    with bucket_col3:
+                        st.markdown("##### 🚀 Bucket 3: Growth")
+                        st.caption("Long-term growth with 100% stocks")
+                        
+                        drift3 = bucket_summary.get_bucket_drift(BucketType.BUCKET_3_GROWTH)
+                        delta_color = "normal" if abs(drift3) < 10 else "inverse"
+                        
+                        st.metric(
+                            "Current Value",
+                            f"${bucket_summary.bucket_3_value:,.0f}",
+                            delta=f"{drift3:+.1f}% drift",
+                            delta_color=delta_color
+                        )
+                        
+                        st.caption(f"**Target:** ${bucket_summary.bucket_3_target:,.0f}")
+                        st.caption(f"**Allocation:** {bucket_summary.bucket_3_pct:.1f}% of portfolio")
+                        
+                        # Progress bar
+                        progress_pct = min(bucket_summary.bucket_3_value / bucket_summary.bucket_3_target, 1.0) if bucket_summary.bucket_3_target > 0 else 0
+                        st.progress(progress_pct)
+                    
+                    # Market condition and rebalancing status
+                    st.markdown("---")
+                    status_col1, status_col2 = st.columns(2)
+                    
+                    with status_col1:
+                        if bucket_summary.market_condition:
+                            condition_name = bucket_summary.market_condition.value.replace("_", " ").title()
+                            if "BULL" in bucket_summary.market_condition.value:
+                                st.success(f"📈 **Market Condition:** {condition_name}")
+                            elif "WARNING" in bucket_summary.market_condition.value:
+                                st.warning(f"⚠️ **Market Condition:** {condition_name}")
+                            elif "BEAR" in bucket_summary.market_condition.value:
+                                st.error(f"📉 **Market Condition:** {condition_name}")
+                            else:
+                                st.info(f"**Market Condition:** {condition_name}")
+                    
+                    with status_col2:
+                        if bucket_summary.needs_rebalancing:
+                            max_drift = max(abs(drift1), abs(drift2), abs(drift3))
+                            st.error(f"⚠️ **Rebalancing Needed** (max drift: {max_drift:.1f}%)")
+                        else:
+                            st.success("✅ **Portfolio Balanced**")
+                    
+                    # Allocation visualization chart
+                    st.markdown("---")
+                    st.markdown("#### 📊 Allocation Breakdown")
+                    
+                    fig = go.Figure()
+                    
+                    # Current allocation
+                    fig.add_trace(go.Bar(
+                        name='Current',
+                        x=['Bucket 1<br>Safety', 'Bucket 2<br>Transition', 'Bucket 3<br>Growth'],
+                        y=[bucket_summary.bucket_1_value, bucket_summary.bucket_2_value, bucket_summary.bucket_3_value],
+                        marker_color=['#21c354', '#ffa500', '#1f77b4'],
+                        text=[f'${bucket_summary.bucket_1_value:,.0f}', f'${bucket_summary.bucket_2_value:,.0f}', f'${bucket_summary.bucket_3_value:,.0f}'],
+                        textposition='inside',
+                        textfont=dict(color='white', size=11),
+                        hovertemplate='<b>%{x}</b><br>Current: %{y:$,.0f}<extra></extra>'
+                    ))
+                    
+                    # Target allocation
+                    fig.add_trace(go.Bar(
+                        name='Target',
+                        x=['Bucket 1<br>Safety', 'Bucket 2<br>Transition', 'Bucket 3<br>Growth'],
+                        y=[bucket_summary.bucket_1_target, bucket_summary.bucket_2_target, bucket_summary.bucket_3_target],
+                        marker_color=['rgba(33, 195, 84, 0.3)', 'rgba(255, 165, 0, 0.3)', 'rgba(31, 119, 180, 0.3)'],
+                        text=[f'${bucket_summary.bucket_1_target:,.0f}', f'${bucket_summary.bucket_2_target:,.0f}', f'${bucket_summary.bucket_3_target:,.0f}'],
+                        textposition='inside',
+                        textfont=dict(color='#333', size=11),
+                        hovertemplate='<b>%{x}</b><br>Target: %{y:$,.0f}<extra></extra>'
+                    ))
+                    
+                    fig.update_layout(
+                        barmode='group',
+                        xaxis_title='',
+                        yaxis_title='Value ($)',
+                        hovermode='x unified',
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        height=350,
+                        showlegend=True,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1
+                        )
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Detailed holdings breakdown
+                    st.markdown("---")
+                    st.markdown("#### 📋 Holdings by Bucket")
+                    
+                    if bucket_summary.holdings:
+                        # Create DataFrame from holdings
+                        holdings_data = []
+                        for holding in bucket_summary.holdings:
+                            holdings_data.append({
+                                "Account": holding.account_name,
+                                "Account Type": holding.account_type,
+                                "Symbol": holding.symbol,
+                                "Name": holding.name,
+                                "Asset Class": holding.asset_class.value.title(),
+                                "Bucket": holding.bucket_assignment.value.replace("_", " ").title(),
+                                "Year": holding.year_in_bucket if holding.year_in_bucket else "-",
+                                "Value": holding.current_value,
+                            })
+                        
+                        holdings_df = pd.DataFrame(holdings_data)
+                        
+                        # Group by bucket
+                        for bucket_type in [BucketType.BUCKET_1_SAFETY, BucketType.BUCKET_2_TRANSITION, BucketType.BUCKET_3_GROWTH]:
+                            bucket_name = bucket_type.value.replace("_", " ").title()
+                            bucket_holdings = holdings_df[holdings_df["Bucket"] == bucket_name]
+                            
+                            if not bucket_holdings.empty:
+                                with st.expander(f"**{bucket_name}** ({len(bucket_holdings)} holdings)", expanded=True):
+                                    # Calculate total before formatting
+                                    total_value = bucket_holdings["Value"].sum()
+                                    
+                                    # Format value column for display
+                                    display_df = bucket_holdings.copy()
+                                    
+                                    st.dataframe(
+                                        display_df,
+                                        column_config={
+                                            "Account": st.column_config.TextColumn("Account", width="medium"),
+                                            "Account Type": st.column_config.TextColumn("Account Type", width="small"),
+                                            "Symbol": st.column_config.TextColumn("Symbol", width="small"),
+                                            "Name": st.column_config.TextColumn("Name", width="large"),
+                                            "Asset Class": st.column_config.TextColumn("Asset Class", width="small"),
+                                            "Year": st.column_config.TextColumn("Year", width="small"),
+                                            "Value": st.column_config.NumberColumn("Value", format="$%.0f"),
+                                        },
+                                        hide_index=True,
+                                        use_container_width=True
+                                    )
+                                    
+                                    st.caption(f"**Total:** ${total_value:,.0f}")
+                    else:
+                        st.info("No holdings data available for bucket analysis.")
+                    
+                    # Rebalancing recommendations
+                    if bucket_summary.needs_rebalancing:
+                        st.markdown("---")
+                        st.markdown("#### ⚠️ Rebalancing Recommendations")
+                        
+                        st.warning("""
+                        **Action Required:** Your portfolio has drifted from target bucket allocations.
+                        
+                        Consider rebalancing to maintain your bucket strategy:
+                        """)
+                        
+                        # Calculate current asset allocation within each bucket
+                        bucket_asset_allocations = {}
+                        for bucket_type in [BucketType.BUCKET_1_SAFETY, BucketType.BUCKET_2_TRANSITION, BucketType.BUCKET_3_GROWTH]:
+                            bucket_holdings = [h for h in bucket_summary.holdings if h.bucket_assignment == bucket_type]
+                            total_value = sum(h.current_value for h in bucket_holdings)
+                            
+                            if total_value > 0:
+                                cash_value = sum(h.current_value for h in bucket_holdings if h.asset_class == AssetClass.CASH)
+                                bonds_value = sum(h.current_value for h in bucket_holdings if h.asset_class == AssetClass.BONDS)
+                                stocks_value = sum(h.current_value for h in bucket_holdings if h.asset_class == AssetClass.STOCKS)
+                                
+                                bucket_asset_allocations[bucket_type] = {
+                                    'cash_pct': (cash_value / total_value * 100),
+                                    'bonds_pct': (bonds_value / total_value * 100),
+                                    'stocks_pct': (stocks_value / total_value * 100)
+                                }
+                            else:
+                                bucket_asset_allocations[bucket_type] = {'cash_pct': 0, 'bonds_pct': 0, 'stocks_pct': 0}
+                        
+                        drift_data = []
+                        for bucket_type, bucket_name in [
+                            (BucketType.BUCKET_1_SAFETY, "Bucket 1 (Safety)"),
+                            (BucketType.BUCKET_2_TRANSITION, "Bucket 2 (Transition)"),
+                            (BucketType.BUCKET_3_GROWTH, "Bucket 3 (Growth)")
+                        ]:
+                            drift = bucket_summary.get_bucket_drift(bucket_type)
+                            
+                            # Get current asset allocation
+                            alloc = bucket_asset_allocations[bucket_type]
+                            current_alloc = f"Cash: {alloc['cash_pct']:.0f}%, Bonds: {alloc['bonds_pct']:.0f}%, Stocks: {alloc['stocks_pct']:.0f}%"
+                            
+                            # Define target asset allocation for each bucket
+                            if bucket_type == BucketType.BUCKET_1_SAFETY:
+                                target_alloc = "Cash: 100%, Bonds: 0%, Stocks: 0%"
+                            elif bucket_type == BucketType.BUCKET_2_TRANSITION:
+                                # Average of graduated allocation (10-80% stocks)
+                                avg_stocks = (bucket_config.bucket_2_start_stock_pct + bucket_config.bucket_2_end_stock_pct) / 2
+                                avg_bonds = 100 - avg_stocks
+                                target_alloc = f"Cash: 0%, Bonds: {avg_bonds:.0f}%, Stocks: {avg_stocks:.0f}%"
+                            else:  # BUCKET_3_GROWTH
+                                target_alloc = "Cash: 0%, Bonds: 0%, Stocks: 100%"
+                            
+                            # Calculate current and target bucket percentages
+                            if bucket_type == BucketType.BUCKET_1_SAFETY:
+                                current_pct = bucket_summary.bucket_1_pct
+                                target_pct = (bucket_summary.bucket_1_target / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                            elif bucket_type == BucketType.BUCKET_2_TRANSITION:
+                                current_pct = bucket_summary.bucket_2_pct
+                                target_pct = (bucket_summary.bucket_2_target / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                            else:  # BUCKET_3_GROWTH
+                                current_pct = bucket_summary.bucket_3_pct
+                                target_pct = (bucket_summary.bucket_3_target / bucket_summary.total_portfolio_value * 100) if bucket_summary.total_portfolio_value > 0 else 0
+                            
+                            drift_data.append({
+                                "Bucket": bucket_name,
+                                "Current %": f"{current_pct:.1f}%",
+                                "Target %": f"{target_pct:.1f}%",
+                                "Current Asset Mix": current_alloc,
+                                "Target Asset Mix": target_alloc,
+                                "Drift": f"{drift:+.1f}%",
+                                "Status": "✅ OK" if abs(drift) < 10 else "⚠️ Rebalance"
+                            })
+                        
+                        drift_df = pd.DataFrame(drift_data)
+                        st.dataframe(
+                            drift_df,
+                            column_config={
+                                "Bucket": st.column_config.TextColumn("Bucket", width="medium"),
+                                "Current %": st.column_config.TextColumn("Current %", width="small"),
+                                "Target %": st.column_config.TextColumn("Target %", width="small"),
+                                "Current Asset Mix": st.column_config.TextColumn("Current Asset Mix", width="large"),
+                                "Target Asset Mix": st.column_config.TextColumn("Target Asset Mix", width="large"),
+                                "Drift": st.column_config.TextColumn("Drift", width="small"),
+                                "Status": st.column_config.TextColumn("Status", width="small"),
+                            },
+                            hide_index=True,
+                            use_container_width=True
+                        )
+                    else:
+                        st.success("✅ **Portfolio is well-balanced** - No rebalancing needed at this time.")
+            
+            except ImportError as e:
+                st.error(f"Bucket strategy module not available: {e}")
+            except Exception as e:
+                st.error(f"Error analyzing bucket strategy: {e}")
+                st.info("Please ensure bucket strategy is properly configured.")
 
     except Exception as e:
         st.error(f"Error calculating withdrawal strategy: {e}")
