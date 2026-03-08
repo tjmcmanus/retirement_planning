@@ -26,6 +26,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_extras.add_vertical_space import add_vertical_space
 
 from components.navbar import navbar
@@ -234,31 +235,95 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
             })
     
     if events:
-        # Create timeline visualization
-        years = strategy_df['Year'].tolist()
-        min_year = min(years)
-        max_year = max(years)
-        year_range = max_year - min_year if max_year > min_year else 1
+        # Create timeline visualization based on actual event years (not full strategy period)
+        event_years = [e['year'] for e in events]
+        min_event_year = min(event_years)
+        max_event_year = max(event_years)
         
-        # Build event markers with alternating vertical positions to avoid overlap
-        event_markers = []
-        for idx, event in enumerate(events):
-            position = ((event['year'] - min_year) / year_range) * 100
-            # Alternate between top and bottom positions to reduce overlap
-            vertical_offset = -70 if idx % 2 == 0 else 30
+        # Add some padding to the timeline (1 year on each side)
+        timeline_start = min_event_year - 1
+        timeline_end = max_event_year + 1
+        year_range = timeline_end - timeline_start if timeline_end > timeline_start else 1
+        
+        # Add year markers along the timeline for better context
+        year_markers = []
+        # Determine interval based on range (every 1-5 years depending on span)
+        if year_range <= 10:
+            year_interval = 1
+        elif year_range <= 20:
+            year_interval = 2
+        else:
+            year_interval = 5
             
-            marker_html = f'''<div style="position: absolute; left: {position}%; top: 50%; transform: translate(-50%, -50%);">
-                <div style="width: 16px; height: 16px; border-radius: 50%; background: {event["color"]}; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.2);"></div>
-                <div style="position: absolute; top: {vertical_offset}px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; font-size: 11px; min-width: 120px;">
-                    <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{event["event"]}</div>
-                    <div style="color: #666; margin-bottom: 1px;">{event["year"]}</div>
-                    <div style="color: #888; font-size: 10px;">{event["details"]}</div>
+        for year in range(timeline_start, timeline_end + 1, year_interval):
+            # Use same coordinate system as events: 2.5% to 97.5%
+            position = 2.5 + ((year - timeline_start) / year_range) * 95
+            year_markers.append(f'''
+                <div style="position: absolute; left: {position}%; top: 50%; transform: translate(-50%, 0);">
+                    <div style="width: 2px; height: 12px; background: #999; margin: 0 auto;"></div>
+                    <div style="text-align: center; font-size: 10px; color: #999; margin-top: 4px;">{year}</div>
                 </div>
-            </div>'''
-            event_markers.append(marker_html)
+            ''')
         
-        timeline_html = f'<div style="position: relative; height: 160px; margin: 20px 0;"><div style="position: absolute; top: 50%; width: 100%; height: 2px; background: #ddd;"></div>{"".join(event_markers)}</div>'
-        st.markdown(timeline_html, unsafe_allow_html=True)
+        # Group events by year to handle overlaps better
+        from collections import defaultdict
+        events_by_year = defaultdict(list)
+        for event in events:
+            events_by_year[event['year']].append(event)
+        
+        # Build event markers with smart vertical positioning for overlaps
+        event_markers = []
+        for year, year_events in events_by_year.items():
+            position = 2.5 + ((year - timeline_start) / year_range) * 95
+            
+            # For multiple events in same year, spread them vertically
+            num_events = len(year_events)
+            if num_events == 1:
+                # Single event: alternate top/bottom based on year
+                vertical_offset = -70 if year % 2 == 0 else 30
+                offsets = [vertical_offset]
+            elif num_events == 2:
+                # Two events: one top, one bottom
+                offsets = [-70, 30]
+            elif num_events == 3:
+                # Three events: top, middle-top, bottom
+                offsets = [-90, -50, 30]
+            else:
+                # Four or more: spread them out
+                offsets = [-110, -70, -30, 30] + [50 + (i * 20) for i in range(num_events - 4)]
+            
+            for idx, event in enumerate(year_events):
+                vertical_offset = offsets[idx] if idx < len(offsets) else 50
+                
+                marker_html = f'''<div style="position: absolute; left: {position}%; top: 50%; transform: translate(-50%, -50%);">
+                    <div style="width: 16px; height: 16px; border-radius: 50%; background: {event["color"]}; border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 10; position: relative;"></div>
+                    <div style="position: absolute; top: {vertical_offset}px; left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; font-size: 11px; min-width: 120px; z-index: 5;">
+                        <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{event["event"]}</div>
+                        <div style="color: #666; margin-bottom: 1px;">{event["year"]}</div>
+                        <div style="color: #888; font-size: 10px;">{event["details"]}</div>
+                    </div>
+                </div>'''
+                event_markers.append(marker_html)
+        
+        # Create the timeline with year markers and events
+        timeline_html = f'''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ margin: 0; padding: 0; }}
+            </style>
+        </head>
+        <body>
+        <div style="position: relative; height: 240px; margin: 30px 0; padding: 0 20px;">
+            <div style="position: absolute; top: 50%; left: 2.5%; right: 2.5%; height: 3px; background: linear-gradient(to right, #ddd 0%, #999 50%, #ddd 100%); border-radius: 2px;"></div>
+            {"".join(year_markers)}
+            {"".join(event_markers)}
+        </div>
+        </body>
+        </html>
+        '''
+        components.html(timeline_html, height=280)
     else:
         st.info("No significant financial events identified in this planning period.")
 
