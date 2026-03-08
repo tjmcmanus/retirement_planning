@@ -1198,23 +1198,29 @@ For issues or questions:
 
 **See:** `WITHDRAWAL_STRATEGY_PRODUCTION_GUIDE.md` for complete usage guide
 
-#### 2. Monte Carlo Simulation Engine
+#### 2. Monte Carlo Simulation Engine ✅ **IMPLEMENTED**
 **Priority: High - Critical for realistic retirement planning**
-- **Core Simulation**
-  - Implement 10,000+ iteration Monte Carlo analysis
-  - Model market volatility using historical return distributions
-  - Add sequence-of-returns risk analysis
-  - Calculate probability of success metrics (e.g., 90% confidence intervals)
-- **Scenario Analysis**
-  - Best case / worst case / median outcome projections
-  - Stress testing (2008 crash, stagflation, etc.)
-  - Longevity risk modeling (living to 95, 100, 105)
-  - Inflation shock scenarios
-- **Visualization**
-  - Fan charts showing outcome distributions
-  - Success probability heatmaps
-  - Interactive scenario comparison tools
-  - Downloadable Monte Carlo reports
+- **Core Simulation** ✅
+  - ✅ Implement 10,000+ iteration Monte Carlo analysis (configurable 1K-20K, default 10K)
+  - ✅ Model market volatility using historical return distributions (calibrated to US market data 1926-2024)
+  - ✅ Add sequence-of-returns risk analysis (worst-case vs median path comparison)
+  - ✅ Calculate probability of success metrics (5th, 10th, 25th, 50th, 75th, 90th, 95th percentiles)
+- **Scenario Analysis** ✅
+  - ✅ Best case / worst case / median outcome projections (percentile bands in all results)
+  - ✅ Stress testing (6 scenarios: 2008 crash, dot-com bust, stagflation, lost decade, inflation shock, early retirement bear)
+  - ✅ Longevity risk modeling (5 scenarios: ages 85, 90, 95, 100, 105)
+  - ✅ Inflation shock scenarios (2022-style 9.1% spike included)
+- **Visualization** ✅
+  - ✅ Fan charts showing outcome distributions (shaded percentile bands with median line)
+  - ✅ Success probability heatmaps (withdrawal × allocation grid with color coding)
+  - ✅ Interactive scenario comparison tools (5 sub-tabs: Run Simulation, Stress Tests, Longevity Risk, Success Heatmap, Scenario Comparison)
+  - ✅ Downloadable Monte Carlo reports (CSV export with all simulation data, stress tests, and longevity results)
+
+**Implementation Details:**
+- Module: `monte_carlo.py` (935 lines) - Core simulation engine
+- UI: `pages/6_monte_carlo.py` (680 lines) - Interactive 5-tab interface
+- Features: Safe withdrawal rate calculator, sequence-of-returns risk analysis, 8 asset classes with 4 portfolio presets
+- Historical data: Calibrated to Ibbotson/Morningstar SBBI (1926-2024)
 
 #### 3. Advanced Tax Optimization
 **Status: ✅ FULLY IMPLEMENTED - All features complete**
