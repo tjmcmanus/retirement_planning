@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # Constants
 PORTFOLIO_TRUTH_FILE = 'portfolio_data_truth.csv'
 VALID_ACCOUNT_TYPES = ['Cash', 'Brokerage', 'Traditional', 'Roth']
+VALID_ACCOUNT_OWNERS = ['Joint', 'Primary', 'Spouse']
 VALID_SECTORS = [
     'MF:Cash',
     'Stock/ETF',
@@ -105,7 +106,7 @@ def validate_portfolio_entry(row: pd.Series) -> Tuple[bool, str]:
     errors = []
     
     # Check required fields
-    required_fields = ['month', 'year', 'account_name', 'account_type', 'symbol', 'qty', 'purchase_price']
+    required_fields = ['month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'qty', 'purchase_price']
     for field in required_fields:
         if field not in row or bool(pd.isna(row[field])) or str(row[field]).strip() == '':
             errors.append(f"Missing required field: {field}")
@@ -132,6 +133,10 @@ def validate_portfolio_entry(row: pd.Series) -> Tuple[bool, str]:
     # Validate account_type
     if row['account_type'] not in VALID_ACCOUNT_TYPES:
         errors.append(f"Invalid account_type: {row['account_type']}. Must be one of {VALID_ACCOUNT_TYPES}")
+    
+    # Validate owner
+    if row['owner'] not in VALID_ACCOUNT_OWNERS:
+        errors.append(f"Invalid owner: {row['owner']}. Must be one of {VALID_ACCOUNT_OWNERS}")
     
     # Validate qty (must be positive number)
     try:
@@ -347,6 +352,7 @@ def create_empty_entry_template(month: Optional[int] = None, year: Optional[int]
         'year': [year],
         'account_name': [''],
         'account_type': ['Brokerage'],
+        'owner': ['Joint'],
         'symbol': [''],
         'name': [''],
         'sector': [''],

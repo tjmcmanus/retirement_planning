@@ -6,6 +6,8 @@ of the Financial Planner application.
 
 Extracted from planning_app.py so that each page module can import from
 a single source of truth rather than duplicating code.
+
+Now integrated with the unified theme system from components/theme.py
 """
 from __future__ import annotations
 
@@ -27,6 +29,13 @@ from load_data import (
     save_networth_cache,
 )
 from portfolio import render_portfolio, save_portfolio_cache, get_effective_portfolio_month_year
+
+# Import theme system
+try:
+    from components.theme import Colors, ChartConfig
+    THEME_AVAILABLE = True
+except ImportError:
+    THEME_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # App-wide CSS injected once per page load
@@ -64,18 +73,24 @@ HIDE_ST_STYLE = """
 """
 
 # ---------------------------------------------------------------------------
-# Color palette — consistent across all charts
+# Color palette — consistent across all charts (with theme integration)
 # ---------------------------------------------------------------------------
-COLOR_PALETTE = px.colors.qualitative.Pastel
-COLOR_SCALE = [
-    [0.0, "rgb(246, 207, 113)"],   # Pastel yellow  (low)
-    [0.5, "rgb(180, 151, 231)"],   # Pastel purple  (mid)
-    [1.0, "rgb(139, 224, 164)"],   # Pastel green   (high)
-]
+if THEME_AVAILABLE:
+    COLOR_PALETTE = ChartConfig.get_palette()
+    COLOR_SCALE = ChartConfig.get_color_scale()
+else:
+    # Fallback to original colors
+    COLOR_PALETTE = px.colors.qualitative.Pastel
+    COLOR_SCALE = [
+        [0.0, "rgb(246, 207, 113)"],   # Pastel yellow  (low)
+        [0.5, "rgb(180, 151, 231)"],   # Pastel purple  (mid)
+        [1.0, "rgb(139, 224, 164)"],   # Pastel green   (high)
+    ]
 
 # Account type → internal key mapping
 ACCOUNT_TYPE_MAP: dict[str, str] = {
     'Cash': 'cash',
+    'Savings': 'cash',  # Savings accounts are treated as cash/emergency funds
     'Brokerage': 'taxable',
     'Traditional': 'tax_deferred',
     'Roth': 'tax_free',

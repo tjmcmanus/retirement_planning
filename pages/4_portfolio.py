@@ -113,6 +113,98 @@ styled_portdf          = portdf.style.set_table_styles(_styles).map(color_negati
 styled_portdf_no_total = portdf_no_totals.style.set_table_styles(_styles).map(color_negative_positive)  # type: ignore[union-attr]
 
 # ---------------------------------------------------------------------------
+# Portfolio Tax Efficiency Score
+# ---------------------------------------------------------------------------
+try:
+    _te_trad  = float(networth['tax_deferred'].iloc[-1]) if not networth.empty else 0.0
+    _te_roth  = float(networth['tax_free'].iloc[-1])     if not networth.empty else 0.0
+    _te_brok  = float(networth['taxable'].iloc[-1])      if not networth.empty else 0.0
+    _te_cash  = float(networth['cash'].iloc[-1])         if not networth.empty else 0.0
+    _te_total = _te_trad + _te_roth + _te_brok + _te_cash
+    _te_score  = ((_te_roth + _te_brok) / _te_total * 100) if _te_total > 0 else 0.0
+    _roth_ratio = (_te_roth / (_te_roth + _te_trad) * 100) if (_te_roth + _te_trad) > 0 else 0.0
+except Exception:
+    _te_score = _roth_ratio = 0.0
+    _te_trad = _te_roth = _te_brok = _te_cash = _te_total = 0.0
+
+st.markdown("### 🧮 Portfolio Tax Efficiency")
+st.caption(
+    "Measures how much of your portfolio is in tax-flexible accounts (Roth + Taxable Brokerage). "
+    "Higher scores provide more flexibility for tax planning and withdrawals."
+)
+
+_te_col1, _te_col2, _te_col3, _te_col4 = st.columns(4)
+with _te_col1:
+    _te_label = "🟢 Excellent" if _te_score >= 60 else ("🟡 Good" if _te_score >= 40 else "🔴 Improve")
+    st.metric("Portfolio Tax Efficiency Score", f"{_te_score:.0f}%",
+              help="(Roth + Taxable Brokerage) / Total Portfolio. Higher = more tax-flexible assets.")
+    st.caption(_te_label)
+with _te_col2:
+    st.metric("Roth Ratio", f"{_roth_ratio:.0f}%",
+              help="Roth / (Roth + Traditional). Higher = more tax-free retirement assets.")
+with _te_col3:
+    st.metric("Tax-Deferred (Trad)", f"${_te_trad:,.0f}")
+with _te_col4:
+    st.metric("Tax-Free (Roth)", f"${_te_roth:,.0f}")
+
+# Generate prescriptive recommendations
+_te_actions: list[str] = []
+
+if _te_score < 60:
+    _tax_flex_gap = 60 - _te_score
+    _te_actions.append(
+        f"📊 **Tax Efficiency Score is {_te_score:.0f}%** (target: 60%+). "
+        f"Increase tax-flexible assets by {_tax_flex_gap:.0f} percentage points."
+    )
+
+if _roth_ratio < 30:
+    _roth_gap = max(0, (_te_trad + _te_roth) * 0.30 - _te_roth)
+    _te_actions.append(
+        f"🔄 **Low Roth Ratio ({_roth_ratio:.0f}%)** — Consider Roth conversions. "
+        f"Target: Convert ~${_roth_gap:,.0f} to reach 30% Roth ratio (optimal range: 30-50%)."
+    )
+elif _roth_ratio > 50:
+    _te_actions.append(
+        f"⚠️ **High Roth Ratio ({_roth_ratio:.0f}%)** — You may have too much in Roth accounts. "
+        f"Consider increasing Traditional 401(k)/IRA contributions to balance tax diversification."
+    )
+
+if _te_brok < (_te_total * 0.10) and _te_total > 0:
+    _brok_target = _te_total * 0.10
+    _brok_gap = _brok_target - _te_brok
+    _te_actions.append(
+        f"💼 **Low Taxable Brokerage ({(_te_brok/_te_total*100):.0f}%)** — "
+        f"Consider building taxable brokerage to ${_brok_target:,.0f} (10% of portfolio) "
+        f"for tax-loss harvesting and flexible withdrawals."
+    )
+
+if _te_trad > (_te_total * 0.60) and _te_total > 0:
+    _te_actions.append(
+        f"🏦 **High Traditional Balance ({(_te_trad/_te_total*100):.0f}%)** — "
+        f"Large Traditional balances create RMD risk at age 73. "
+        f"Consider strategic Roth conversions during low-income years."
+    )
+
+# Display recommendations
+if _te_actions:
+    with st.expander(f"💡 {len(_te_actions)} Recommendation(s) to Improve Tax Efficiency", expanded=False):
+        st.markdown("**Actionable Steps:**")
+        for _te_act in _te_actions:
+            st.markdown(f"- {_te_act}")
+        st.markdown("---")
+        st.markdown("**Why This Matters:**")
+        st.markdown(
+            "- **Tax Diversification** reduces risk by spreading assets across different tax treatments\n"
+            "- **Roth accounts** provide tax-free withdrawals in retirement and no RMDs\n"
+            "- **Taxable brokerage** enables tax-loss harvesting and flexible access\n"
+            "- **Traditional accounts** offer upfront tax deductions but create RMD obligations at age 73"
+        )
+else:
+    st.success("✅ Your portfolio tax efficiency is well-balanced!")
+
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
 # Sub-tabs
 # ---------------------------------------------------------------------------
 map_tab, details_tab, harvest_tab, rebalance_tab, daf_tab = st.tabs(
@@ -413,14 +505,74 @@ with rebalance_tab:
         "Rebalancing suggestions prioritise tax-advantaged accounts first."
     )
 
+    # Try to get bucket strategy cumulative target mix as defaults
+    _default_cash = 10
+    _default_bonds = 10
+    _default_stocks = 80
+    
+    try:
+        from config import get_config_manager as _get_rb_bucket_cfg
+        from bucket_strategy import load_bucket_config, BucketType
+        
+        _rb_bucket_cfg = _get_rb_bucket_cfg()
+        _rb_bucket_enabled = _rb_bucket_cfg.get("bucket_strategy", "enabled", False)
+        
+        if _rb_bucket_enabled:
+            bucket_config = load_bucket_config(_rb_bucket_cfg)
+            
+            # Calculate cumulative target mix based on bucket strategy
+            # Bucket 1: 100% cash
+            # Bucket 2: graduated (average of start and end stock %)
+            # Bucket 3: 100% stocks
+            
+            # Get total portfolio value to calculate weighted averages
+            total_value = float(networth["total"].iloc[-1]) if not networth.empty else 0.0
+            
+            if total_value > 0:
+                annual_need = bucket_config.annual_expenses + bucket_config.annual_taxes
+                bucket_1_target = annual_need * bucket_config.bucket_1_years
+                bucket_2_target = annual_need * bucket_config.bucket_2_years
+                bucket_3_target = max(0, total_value - bucket_1_target - bucket_2_target)
+                
+                # Calculate weighted percentages
+                bucket_1_weight = bucket_1_target / total_value
+                bucket_2_weight = bucket_2_target / total_value
+                bucket_3_weight = bucket_3_target / total_value
+                
+                # Bucket 1: 100% cash
+                cash_from_b1 = 100 * bucket_1_weight
+                
+                # Bucket 2: graduated allocation (average)
+                avg_stocks_b2 = (bucket_config.bucket_2_start_stock_pct + bucket_config.bucket_2_end_stock_pct) / 2
+                avg_bonds_b2 = 100 - avg_stocks_b2
+                stocks_from_b2 = avg_stocks_b2 * bucket_2_weight
+                bonds_from_b2 = avg_bonds_b2 * bucket_2_weight
+                
+                # Bucket 3: 100% stocks
+                stocks_from_b3 = 100 * bucket_3_weight
+                
+                # Cumulative targets
+                _default_cash = round(cash_from_b1)
+                _default_bonds = round(bonds_from_b2)
+                _default_stocks = round(stocks_from_b2 + stocks_from_b3)
+                
+                # Ensure they sum to 100
+                total = _default_cash + _default_bonds + _default_stocks
+                if total != 100:
+                    # Adjust stocks to make it exactly 100
+                    _default_stocks = 100 - _default_cash - _default_bonds
+    except Exception:
+        # If bucket strategy not available or any error, use hardcoded defaults
+        pass
+
     st.markdown("#### 🎯 Target Allocation & Drift Threshold")
     _rb_col1, _rb_col2, _rb_col3, _rb_col4 = st.columns(4)
     with _rb_col1:
-        _rb_cash_tgt   = st.number_input("Target Cash %",   min_value=0, max_value=100, value=10, step=1, key="rb_cash_tgt")
+        _rb_cash_tgt   = st.number_input("Target Cash %",   min_value=0, max_value=100, value=_default_cash, step=1, key="rb_cash_tgt")
     with _rb_col2:
-        _rb_bonds_tgt  = st.number_input("Target Bonds %",  min_value=0, max_value=100, value=10, step=1, key="rb_bonds_tgt")
+        _rb_bonds_tgt  = st.number_input("Target Bonds %",  min_value=0, max_value=100, value=_default_bonds, step=1, key="rb_bonds_tgt")
     with _rb_col3:
-        _rb_stocks_tgt = st.number_input("Target Stocks %", min_value=0, max_value=100, value=80, step=1, key="rb_stocks_tgt")
+        _rb_stocks_tgt = st.number_input("Target Stocks %", min_value=0, max_value=100, value=_default_stocks, step=1, key="rb_stocks_tgt")
     with _rb_col4:
         _rb_drift      = st.number_input("Drift Threshold %", min_value=1, max_value=20, value=5, step=1, key="rb_drift")
 
@@ -548,11 +700,11 @@ with daf_tab:
             config_mgr = get_config_manager()
             filing_status = config_mgr.get_filing_status()
             _daf_std_ded_df = get_std_deduction(curr_year, filing_status)
-            # Extract married filing jointly standard deduction (typically the highest)
+            # Extract standard deduction for the current filing status
             try:
-                _daf_std_ded = float(_daf_std_ded_df.iloc[0]['married'])
+                _daf_std_ded = float(_daf_std_ded_df.iloc[0]['deduction'])
             except (KeyError, IndexError, AttributeError):
-                _daf_std_ded = 27700.0  # Default 2024 married filing jointly standard deduction
+                _daf_std_ded = 32200.0  # Default 2026 married filing jointly standard deduction
             _daf_ltcg = get_ltcg_rate_for_income(float(_daf_agi), curr_year)
             
             _daf_analysis = analyze_daf_bundling(
