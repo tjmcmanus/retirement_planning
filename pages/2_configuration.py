@@ -746,6 +746,7 @@ with tab3:
             with prob_col2:
                 st.metric("Expected Duration", f"{ltc_prob['expected_duration_years']:.1f} years")
             with prob_col3:
+                st.metric("Expected Cost", f"${ltc_prob.get('expected_cost', 0):,.0f}")
             
             # Export LTC Analysis
             st.markdown("---")
@@ -895,6 +896,7 @@ with tab3:
             # Detailed Notes
             st.markdown("**Analysis Details:**")
             for note in insurance_analysis.notes:
+                st.markdown(f"- {note}")
             
             # Export LTC Insurance Analysis
             st.markdown("---")
@@ -1127,6 +1129,7 @@ with tab3:
             elif coverage_pct >= 50:
                 st.warning("⚠️ **Fair.** Your HSA will cover about half of healthcare costs. Strongly consider maxing out contributions.")
             else:
+                st.error("❌ **Insufficient!** Your HSA will cover less than half of healthcare costs. Maximize contributions immediately.")
             
             # Export HSA Analysis
             st.markdown("---")
