@@ -14,6 +14,7 @@ CONFIG_FILE = "retirement_config.json"
 # Default configuration values
 DEFAULT_CONFIG = {
     "personal_info": {
+        "is_single_person": False,  # True if planning for single person, False for couple
         "person1_name": "Tom",
         "person1_birth_date": "1965-01-01",
         "person1_retirement_age": 62,
@@ -288,8 +289,14 @@ class ConfigManager:
         Determine filing status based on personal information.
         
         Returns:
-            'married_filing_jointly' if person2_name is provided, 'single' otherwise
+            'married_filing_jointly' if not single person and person2_name is provided, 'single' otherwise
         """
+        # Check if explicitly set to single person mode
+        is_single_person = self.get("personal_info", "is_single_person", False)
+        if is_single_person:
+            return "single"
+        
+        # Otherwise, check if person2_name is provided
         person2_name = self.get("personal_info", "person2_name", "")
         if person2_name and person2_name.strip():
             return "married_filing_jointly"

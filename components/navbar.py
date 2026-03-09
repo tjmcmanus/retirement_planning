@@ -19,7 +19,7 @@ import streamlit as st
 # ---------------------------------------------------------------------------
 NAV_ROUTES: dict[str, str] = {
     "🏠 Dashboard":                "pages/3_dashboard.py",
-    "📊 Portfolio":                "pages/4_portfolio.py",
+    "📊 Portfolio":                "pages/4_portfolio_hub.py",
     "📋 Strategy":                 "pages/5_strategy.py",
     "🧠 Advanced Strategy Tools":  "pages/8_advanced_strategies.py",
     "🎲 Monte Carlo":              "pages/6_monte_carlo.py",
