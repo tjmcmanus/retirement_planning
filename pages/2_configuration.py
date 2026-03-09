@@ -498,6 +498,24 @@ with tab3:
             key="person1_medicare_start_age"
         )
         
+        # Medicare Guide and Eligibility Checkboxes
+        st.markdown("**Medicare Planning Checklist**")
+        st.caption("📚 Review the [Medicare Enrollment Guide](/8_advanced_strategies) in Advanced Strategies for comprehensive information.")
+        
+        person1_reviewed_medicare_guide = st.checkbox(
+            f"✅ {person1_name} has reviewed the Medicare Enrollment Guide",
+            value=config_mgr.get("healthcare", "person1_reviewed_medicare_guide", False),
+            help=f"Check this after {person1_name} has reviewed the Medicare Enrollment Guide in Advanced Strategies",
+            key="person1_reviewed_medicare_guide"
+        )
+        
+        person1_medicare_eligible = st.checkbox(
+            f"🏥 {person1_name} is Medicare eligible (or will be at age 65)",
+            value=config_mgr.get("healthcare", "person1_medicare_eligible", False),
+            help=f"Check this if {person1_name} is eligible for Medicare (typically at age 65, or earlier if disabled)",
+            key="person1_medicare_eligible"
+        )
+        
         # Display calculated costs for person1
         if person1_aca_insurance_monthly > 0:
             annual_aca_cost_1 = person1_aca_insurance_monthly * 12
@@ -603,6 +621,28 @@ with tab3:
             help=f"Age when {person2_name}'s Medicare coverage begins",
             key="person2_medicare_start_age"
         )
+        
+        # Medicare Guide and Eligibility Checkboxes
+        if not is_single_person:
+            st.markdown("**Medicare Planning Checklist**")
+            st.caption("📚 Review the [Medicare Enrollment Guide](/8_advanced_strategies) in Advanced Strategies for comprehensive information.")
+            
+            person2_reviewed_medicare_guide = st.checkbox(
+                f"✅ {person2_name} has reviewed the Medicare Enrollment Guide",
+                value=config_mgr.get("healthcare", "person2_reviewed_medicare_guide", False),
+                help=f"Check this after {person2_name} has reviewed the Medicare Enrollment Guide in Advanced Strategies",
+                key="person2_reviewed_medicare_guide"
+            )
+            
+            person2_medicare_eligible = st.checkbox(
+                f"🏥 {person2_name} is Medicare eligible (or will be at age 65)",
+                value=config_mgr.get("healthcare", "person2_medicare_eligible", False),
+                help=f"Check this if {person2_name} is eligible for Medicare (typically at age 65, or earlier if disabled)",
+                key="person2_medicare_eligible"
+            )
+        else:
+            person2_reviewed_medicare_guide = False
+            person2_medicare_eligible = False
         
         # Display calculated costs for person2
         if person2_aca_insurance_monthly > 0:
