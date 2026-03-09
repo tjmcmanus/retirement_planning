@@ -648,3 +648,227 @@ def get_rmd_value(age):
     
     return distribution_rate
 
+
+def calculate_age_adjusted_expenses(base_expenses: float, age: int) -> float:
+    """
+    Calculate age-adjusted annual expenses based on spending patterns by age.
+    
+    Research shows that retirees' spending typically follows a pattern:
+    - 60s: Higher spending (travel, activities, home improvements) - 5% above baseline
+    - 70s: Baseline spending - expenses as declared
+    - 80s: Lower spending (less travel, reduced activities) - 15% below baseline
+    - 90s: Significantly lower spending (limited mobility) - 30% below baseline
+    
+    Args:
+        base_expenses: Base annual expenses as declared in configuration
+        age: Current age of the person
+        
+    Returns:
+        float: Age-adjusted annual expenses
+        
+    Examples:
+        >>> calculate_age_adjusted_expenses(50000, 65)  # 60s: +5%
+        52500.0
+        >>> calculate_age_adjusted_expenses(50000, 75)  # 70s: baseline
+        50000.0
+        >>> calculate_age_adjusted_expenses(50000, 85)  # 80s: -15%
+        42500.0
+        >>> calculate_age_adjusted_expenses(50000, 95)  # 90s: -30%
+        35000.0
+    """
+    if age < 60:
+        # Pre-retirement or early retirement: use baseline
+        adjustment_factor = 1.0
+        age_group = "Pre-60"
+    elif 60 <= age < 70:
+        # 60s: Higher spending phase (+5%)
+        adjustment_factor = 1.05
+        age_group = "60s"
+    elif 70 <= age < 80:
+        # 70s: Baseline spending
+        adjustment_factor = 1.0
+        age_group = "70s"
+    elif 80 <= age < 90:
+        # 80s: Reduced spending (-15%)
+        adjustment_factor = 0.85
+        age_group = "80s"
+    else:
+        # 90+: Significantly reduced spending (-30%)
+        adjustment_factor = 0.70
+        age_group = "90+"
+    
+    adjusted_expenses = base_expenses * adjustment_factor
+    
+    logger.debug(
+        f"Age-adjusted expenses: age={age} ({age_group}), "
+        f"base=${base_expenses:,.2f}, factor={adjustment_factor:.2%}, "
+        f"adjusted=${adjusted_expenses:,.2f}"
+    )
+    
+    return adjusted_expenses
+
+
+def calculate_household_age_adjusted_expenses(
+    base_expenses: float,
+    person1_age: int,
+    person2_age: int | None = None,
+    is_single: bool = False
+) -> float:
+    """
+    Calculate age-adjusted expenses for a household (single or couple).
+    
+    For couples, uses the younger person's age as the primary driver of spending,
+    since household expenses tend to remain higher as long as one person is active.
+    
+    Args:
+        base_expenses: Base annual expenses as declared in configuration
+        person1_age: Age of primary person
+        person2_age: Age of spouse/partner (None if single)
+        is_single: Whether planning for single person
+        
+    Returns:
+        float: Age-adjusted annual expenses for the household
+        
+    Examples:
+        >>> # Single person in 60s
+        >>> calculate_household_age_adjusted_expenses(50000, 65, is_single=True)
+        52500.0
+        
+        >>> # Couple where both are in 70s
+        >>> calculate_household_age_adjusted_expenses(50000, 75, 77)
+        50000.0
+        
+        >>> # Couple with age gap (younger person drives spending)
+        >>> calculate_household_age_adjusted_expenses(50000, 85, 75)
+        50000.0
+    """
+    if is_single or person2_age is None:
+        # Single person: use their age directly
+        adjusted = calculate_age_adjusted_expenses(base_expenses, person1_age)
+        logger.debug(f"Single person household: age={person1_age}, adjusted=${adjusted:,.2f}")
+        return adjusted
+    
+    # Couple: use younger person's age (household remains more active)
+    younger_age = min(person1_age, person2_age)
+    adjusted = calculate_age_adjusted_expenses(base_expenses, younger_age)
+    
+    logger.debug(
+        f"Couple household: ages={person1_age}/{person2_age}, "
+        f"using younger age={younger_age}, adjusted=${adjusted:,.2f}"
+    )
+    
+    return adjusted
+
+
+
+def calculate_age_adjusted_healthcare_costs(base_healthcare_cost: float, age: int) -> float:
+    """
+    Calculate age-adjusted healthcare out-of-pocket costs based on age.
+    
+    Healthcare costs typically increase with age, following an inverse pattern
+    to discretionary spending:
+    - 60s: Lower healthcare costs (generally healthier) - 5% below baseline
+    - 70s: Baseline healthcare costs - expenses as expected
+    - 80s: Higher healthcare costs (more medical needs) - 15% above baseline
+    - 90s: Significantly higher healthcare costs - 30% above baseline
+    
+    Args:
+        base_healthcare_cost: Base annual out-of-pocket healthcare costs
+        age: Current age of the person
+        
+    Returns:
+        float: Age-adjusted annual healthcare costs
+        
+    Examples:
+        >>> calculate_age_adjusted_healthcare_costs(10000, 65)  # 60s: -5%
+        9500.0
+        >>> calculate_age_adjusted_healthcare_costs(10000, 75)  # 70s: baseline
+        10000.0
+        >>> calculate_age_adjusted_healthcare_costs(10000, 85)  # 80s: +15%
+        11500.0
+        >>> calculate_age_adjusted_healthcare_costs(10000, 95)  # 90s: +30%
+        13000.0
+    """
+    if age < 60:
+        # Pre-retirement or early retirement: use baseline
+        adjustment_factor = 1.0
+        age_group = "Pre-60"
+    elif 60 <= age < 70:
+        # 60s: Lower healthcare costs (-5%)
+        adjustment_factor = 0.95
+        age_group = "60s"
+    elif 70 <= age < 80:
+        # 70s: Baseline healthcare costs
+        adjustment_factor = 1.0
+        age_group = "70s"
+    elif 80 <= age < 90:
+        # 80s: Increased healthcare costs (+15%)
+        adjustment_factor = 1.15
+        age_group = "80s"
+    else:
+        # 90+: Significantly increased healthcare costs (+30%)
+        adjustment_factor = 1.30
+        age_group = "90+"
+    
+    adjusted_costs = base_healthcare_cost * adjustment_factor
+    
+    logger.debug(
+        f"Age-adjusted healthcare: age={age} ({age_group}), "
+        f"base=${base_healthcare_cost:,.2f}, factor={adjustment_factor:.2%}, "
+        f"adjusted=${adjusted_costs:,.2f}"
+    )
+    
+    return adjusted_costs
+
+
+def calculate_household_age_adjusted_healthcare_costs(
+    base_healthcare_cost: float,
+    person1_age: int,
+    person2_age: int | None = None,
+    is_single: bool = False
+) -> float:
+    """
+    Calculate age-adjusted healthcare costs for a household (single or couple).
+    
+    For couples, uses the older person's age as the primary driver of healthcare costs,
+    since household healthcare expenses tend to be driven by the person with greater
+    medical needs (typically the older person).
+    
+    Args:
+        base_healthcare_cost: Base annual out-of-pocket healthcare costs
+        person1_age: Age of primary person
+        person2_age: Age of spouse/partner (None if single)
+        is_single: Whether planning for single person
+        
+    Returns:
+        float: Age-adjusted annual healthcare costs for the household
+        
+    Examples:
+        >>> # Single person in 60s
+        >>> calculate_household_age_adjusted_healthcare_costs(10000, 65, is_single=True)
+        9500.0
+        
+        >>> # Couple where both are in 70s
+        >>> calculate_household_age_adjusted_healthcare_costs(10000, 75, 77)
+        10000.0
+        
+        >>> # Couple with age gap (older person drives healthcare costs)
+        >>> calculate_household_age_adjusted_healthcare_costs(10000, 85, 75)
+        11500.0
+    """
+    if is_single or person2_age is None:
+        # Single person: use their age directly
+        adjusted = calculate_age_adjusted_healthcare_costs(base_healthcare_cost, person1_age)
+        logger.debug(f"Single person healthcare: age={person1_age}, adjusted=${adjusted:,.2f}")
+        return adjusted
+    
+    # Couple: use older person's age (higher healthcare needs typically drive costs)
+    older_age = max(person1_age, person2_age)
+    adjusted = calculate_age_adjusted_healthcare_costs(base_healthcare_cost, older_age)
+    
+    logger.debug(
+        f"Couple healthcare: ages={person1_age}/{person2_age}, "
+        f"using older age={older_age}, adjusted=${adjusted:,.2f}"
+    )
+    
+    return adjusted

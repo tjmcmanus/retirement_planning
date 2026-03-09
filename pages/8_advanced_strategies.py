@@ -32,9 +32,10 @@ def _cs() -> None:
     st.session_state["submit"] = False
 
 (adv_tax_planner_tab, adv_tax_tab, adv_backdoor_tab, adv_nua_tab,
- adv_qcd_tab, adv_sepp_tab, adv_harvest_tab) = st.tabs([
+ adv_qcd_tab, adv_sepp_tab, adv_harvest_tab, adv_medicare_tab) = st.tabs([
     "🧮 Tax Planner", "📅 Multi-Year Tax Planning", "🔄 Backdoor & Mega Backdoor Roth",
     "📈 NUA Analysis", "🎁 QCD Optimizer", "⏱️ 72(t) SEPP Calculator", "🌾 Capital Loss Harvesting",
+    "🏥 Medicare Enrollment Guide",
 ])
 
 # ── TAX PLANNER ─────────────────────────────────────────────────────────────
@@ -1098,6 +1099,568 @@ with adv_harvest_tab:
             st.markdown("#### 📋 Notes")
             for _note in _hlv_r.notes:
                 st.caption(_note)
+
+# ── MEDICARE ENROLLMENT GUIDE ─────────────────────────────────────────────────
+with adv_medicare_tab:
+    st.markdown("### 🏥 Medicare Enrollment Guide")
+    st.markdown("""
+    This comprehensive guide helps you navigate Medicare enrollment, understand your options,
+    and avoid costly mistakes. Medicare decisions are complex and often irreversible, so it's
+    crucial to understand your choices before enrolling.
+    
+    ⚠️ **Important Recommendation**: For most retirees, **Original Medicare + Medigap (Supplement)**
+    is the safer choice despite higher premiums. While Medicare Advantage may seem attractive with
+    lower costs, switching back to Medigap later is extremely difficult or impossible due to medical
+    underwriting. The freedom and comprehensive coverage of Medigap is worth the extra cost.
+    """)
+    
+    # Overview Section
+    with st.expander("📋 Medicare Basics: Parts A, B, C, D", expanded=True):
+        st.markdown("""
+        #### Understanding Medicare Parts
+        
+        **Part A (Hospital Insurance)**
+        - Covers inpatient hospital stays, skilled nursing facility care, hospice, and some home health care
+        - Most people get Part A premium-free if they or their spouse paid Medicare taxes for 10+ years
+        - 2026 deductible: $1,632 per benefit period
+        
+        **Part B (Medical Insurance)**
+        - Covers doctor visits, outpatient care, preventive services, medical equipment
+        - Standard monthly premium in 2026: $174.70
+        - **⚠️ IRMAA Surcharges Apply**: Premium increases based on your MAGI from **2 years prior**
+        - Annual deductible: $240, then typically 20% coinsurance
+        
+        **🚨 CRITICAL: IRMAA (Income-Related Monthly Adjustment Amount)**
+        - Part B and Part D premiums increase based on your Modified Adjusted Gross Income (MAGI)
+        - **Uses income from 2 years ago** (2026 premiums based on 2024 tax return)
+        - Applies to individuals with MAGI > $103,000 or couples > $206,000 (2024 thresholds)
+        - Surcharges range from $69.90 to $419.30/month added to Part B premium
+        - Part D also has IRMAA surcharges ($12.90 to $81.00/month)
+        - **Tax Planning Opportunity**: Manage Roth conversions and withdrawals to minimize IRMAA
+        - Life-changing events (marriage, divorce, death of spouse, work stoppage) may allow appeals
+        
+        **Part C (Medicare Advantage) - ⚠️ Proceed with Caution**
+        - Alternative to Original Medicare (Parts A & B)
+        - Offered by private insurance companies approved by Medicare
+        - Often includes prescription drug coverage (Part D)
+        - May offer additional benefits like dental, vision, hearing
+        - **Major Drawbacks**:
+          - Network restrictions limit doctor and hospital choices
+          - Prior authorization required for many services (delays care)
+          - **Frequent denials** that can take months to resolve
+          - **Very difficult to switch back to Medigap** due to medical underwriting
+          - Networks change annually - you may lose your doctors
+        - **⚠️ Warning**: This is often a one-way door - choose carefully
+        
+        **Part D (Prescription Drug Coverage)**
+        - Covers prescription medications
+        - Offered by private insurance companies
+        - Required if you want drug coverage with Original Medicare
+        - Late enrollment penalty applies if you delay without creditable coverage
+        - Also subject to IRMAA surcharges based on 2-year-prior income
+        """)
+    
+    # Enrollment Timing
+    with st.expander("⏰ Critical Enrollment Periods & Penalties", expanded=True):
+        st.markdown("""
+        #### Initial Enrollment Period (IEP)
+        
+        **When to Enroll:**
+        - 7-month window: 3 months before your 65th birthday month, your birthday month, and 3 months after
+        - If still working with employer coverage (20+ employees), you may delay Part B without penalty
+        
+        **⚠️ Late Enrollment Penalties:**
+        
+        **Part A Penalty:**
+        - If you don't have 40 work credits and miss your IEP
+        - 10% premium increase for twice the number of years you were eligible but didn't enroll
+        - **This penalty is permanent**
+        
+        **Part B Penalty:**
+        - 10% premium increase for each 12-month period you were eligible but didn't enroll
+        - **This penalty is permanent and compounds annually**
+        - Example: 2 years late = 20% higher premiums for life
+        
+        **Part D Penalty:**
+        - 1% of the national base beneficiary premium × number of months without coverage
+        - **This penalty is permanent**
+        - 2026 base premium: ~$34.70, so 1% = $0.35/month per month delayed
+        
+        #### Special Enrollment Periods (SEP)
+        - When you lose employer coverage (8-month window)
+        - When you move out of your plan's service area
+        - If you qualify for Extra Help with costs
+        - Other qualifying life events
+        """)
+    
+    # Decision Tree
+    with st.expander("🔀 Decision Guide: Original Medicare vs Medicare Advantage", expanded=True):
+        st.markdown("""
+        #### Key Decision Factors
+        
+        **Choose Original Medicare + Medigap if you:**
+        - Want freedom to see any doctor/specialist nationwide who accepts Medicare
+        - Travel frequently or spend time in multiple states
+        - Have complex medical needs requiring specialist care
+        - Value predictable out-of-pocket costs
+        - Can afford higher monthly premiums for comprehensive coverage
+        
+        **Choose Medicare Advantage if you:**
+        - Prefer lower monthly premiums (often $0)
+        - Are comfortable with network restrictions (HMO/PPO)
+        - Stay in one geographic area
+        - Want extra benefits (dental, vision, hearing, gym membership)
+        - Have relatively simple medical needs
+        - Can handle potentially higher out-of-pocket costs when sick
+        
+        #### Cost Comparison Example
+        
+        **Original Medicare + Medigap Plan G:**
+        - Part B Premium: $174.70/month
+        - Medigap Plan G: $150-250/month (varies by age, location, company)
+        - Part D: $30-80/month
+        - **Total: ~$355-505/month**
+        - Predictable costs, minimal out-of-pocket when you need care
+        
+        **Medicare Advantage:**
+        - Combined premium: $0-100/month (often $0)
+        - Out-of-pocket maximum: $3,000-8,000/year
+        - Copays for services: $10-50 per visit
+        - **Total: Variable based on usage**
+        - Lower monthly cost, but higher costs when you need care
+        """)
+    
+    # The 20% Gap
+    with st.expander("💰 Covering the 20% Gap: Medigap vs Advantage", expanded=True):
+        st.markdown("""
+        #### Understanding the 20% Coinsurance
+        
+        Original Medicare Part B covers 80% of approved costs after you meet the deductible.
+        You're responsible for the remaining 20%, which has **no annual limit**. This can be
+        financially devastating for expensive treatments.
+        
+        **Example of 20% Risk Without Supplemental Coverage:**
+        - $100,000 hospital bill = $20,000 out-of-pocket
+        - $500,000 cancer treatment = $100,000 out-of-pocket
+        - **This unlimited exposure is why supplemental coverage is essential**
+        
+        #### ✅ Option 1: Medigap (Medicare Supplement Insurance) - STRONGLY RECOMMENDED
+        
+        **What it covers:**
+        - Fills the gaps in Original Medicare
+        - Covers the 20% coinsurance with **no limit**
+        - May cover Part A deductible, Part B deductible, foreign travel emergency care
+        - **No claim denials** - if Medicare approves it, Medigap pays
+        - **No prior authorization** - get care when you need it
+        
+        **Popular Plans:**
+        - **Plan G** (most popular): Covers everything except Part B deductible ($240)
+        - **Plan N**: Lower premiums, small copays ($20 office, $50 ER)
+        - **High Deductible Plan G**: Lower premiums, $2,800 deductible (2026)
+        
+        **Key Features:**
+        - Guaranteed renewable for life
+        - Works with any doctor who accepts Medicare (no networks)
+        - Premiums increase with age but coverage remains comprehensive
+        - No network restrictions - travel freely
+        - **No fighting with insurance when you're sick**
+        
+        **When to Buy:**
+        - **CRITICAL**: Buy during 6-month Medigap Open Enrollment (starts when you turn 65 and enroll in Part B)
+        - Guaranteed issue regardless of health conditions during this window
+        - After this window, you may face medical underwriting and denial
+        - **This is your one chance to get Medigap without health questions**
+        
+        **Why Medigap is Worth the Extra Cost:**
+        - Peace of mind when you're sick
+        - No surprise bills
+        - No claim denials to fight
+        - Freedom to see any doctor
+        - Comprehensive protection against catastrophic costs
+        
+        #### ⚠️ Option 2: Medicare Advantage - Understand the Risks
+        
+        **What it covers:**
+        - Replaces Original Medicare
+        - Includes the 20% coverage
+        - Has an annual out-of-pocket maximum
+        
+        **Major Drawbacks:**
+        - **Frequent claim denials** that can take months to resolve
+        - **Prior authorization required** for many services (delays care)
+        - Network restrictions (HMO/PPO) limit doctor choices
+        - Networks change annually - you may lose your doctors
+        - **Very difficult to switch back to Medigap** later
+        - May include extra benefits, but at the cost of freedom and comprehensive coverage
+        
+        **⚠️ Warning**: While Medicare Advantage has an out-of-pocket maximum, getting to that
+        point often involves fighting denials, waiting for authorizations, and dealing with
+        network restrictions when you're sick and need care most.
+        
+        #### ❌ Option 3: No Supplemental Coverage (NEVER RECOMMENDED)
+        
+        **Risks:**
+        - Unlimited exposure to 20% coinsurance
+        - Financial catastrophe from serious illness
+        - **This is the biggest mistake retirees make**
+        - Don't risk your retirement savings on medical bills
+        """)
+    
+    # Switching Rules
+    with st.expander("🔄 What You Can and Cannot Switch", expanded=True):
+        st.markdown("""
+        #### 🚨 CRITICAL: The One-Way Door Problem
+        
+        **Switching FROM Original Medicare + Medigap TO Medicare Advantage**
+        
+        **When you can switch:**
+        - During Annual Enrollment Period (October 15 - December 7)
+        - During Medicare Advantage Open Enrollment (January 1 - March 31)
+        - Special Enrollment Periods (if you qualify)
+        
+        **What happens:**
+        - You can easily drop your Medigap policy
+        - ⚠️ **CRITICAL WARNING**: If you later want to return to Medigap, you'll face medical underwriting
+        - You may be **permanently denied** Medigap coverage due to health conditions
+        - **This is almost always a one-way door - you can't go back**
+        
+        **Why This is Dangerous:**
+        - Most people who switch to Advantage do so for the lower premium
+        - When they get sick and face denials/restrictions, they want to switch back
+        - By then, they have health conditions that make them uninsurable for Medigap
+        - They're stuck in Medicare Advantage forever
+        - **Don't make this mistake - start with Medigap and stay there**
+        
+        ---
+        
+        #### ⚠️ Switching FROM Medicare Advantage TO Original Medicare + Medigap
+        
+        **When you can switch:**
+        - During Annual Enrollment Period (October 15 - December 7)
+        - During Medicare Advantage Open Enrollment (January 1 - March 31)
+        
+        **The Major Challenge:**
+        - You'll need to apply for Medigap coverage
+        - **Medical underwriting applies** (except in rare guaranteed issue situations)
+        - Insurance companies will review your health history
+        - **They can deny you or charge much higher premiums based on health**
+        - Pre-existing conditions (diabetes, heart disease, cancer, etc.) often result in denial
+        - Even minor health issues can make you uninsurable
+        - **Most people who try to switch back are denied**
+        
+        **Guaranteed Issue Rights (No Medical Underwriting) - RARE:**
+        - Your Medicare Advantage plan leaves your area or stops providing care
+        - You move out of the plan's service area
+        - Your plan violated contract or misled you
+        - You're in a Medicare SELECT policy and move out of area
+        - You have Original Medicare and employer coverage ends
+        
+        **Reality Check:**
+        - These guaranteed issue situations are rare
+        - Most people don't qualify
+        - Don't count on being able to switch back
+        - **Assume Medicare Advantage is permanent once you choose it**
+        
+        #### Switching Between Medicare Advantage Plans
+        
+        **When you can switch:**
+        - Annual Enrollment Period (October 15 - December 7)
+        - Medicare Advantage Open Enrollment (January 1 - March 31, one change allowed)
+        
+        **What to consider:**
+        - Check if your doctors are in the new plan's network
+        - Compare out-of-pocket maximums
+        - Review prescription drug coverage
+        - Verify hospital and specialist access
+        
+        #### Switching Between Medigap Plans
+        
+        **When you can switch:**
+        - Anytime, but subject to medical underwriting
+        - Some states have additional protections (birthday rule, annual open enrollment)
+        
+        **States with Special Rules:**
+        - **California**: Birthday Rule (30 days after birthday to switch to equal/lesser plan)
+        - **Oregon**: Birthday Rule (similar to California)
+        - **Missouri**: Annual open enrollment for Medigap
+        - Check your state's specific rules
+        """)
+    
+    # State Considerations
+    with st.expander("🗺️ State-Specific Considerations", expanded=True):
+        st.markdown("""
+        #### Medicare Advantage Availability Varies by State
+        
+        **High Availability States:**
+        - Florida, California, Texas, Arizona, Pennsylvania
+        - Many plan options, competitive pricing
+        - Extensive provider networks
+        
+        **Limited Availability States:**
+        - Rural areas in Montana, Wyoming, Alaska
+        - Fewer plan choices
+        - Smaller provider networks
+        
+        #### State Medigap Protections
+        
+        **States with Birthday Rule:**
+        - California, Oregon, Idaho, Illinois, Nevada
+        - Allows annual switching to equal or lesser Medigap plans without underwriting
+        
+        **States with Continuous Open Enrollment:**
+        - Connecticut, Maine, Massachusetts, New York
+        - Can switch Medigap plans year-round with some protections
+        
+        **Community Rating States:**
+        - Some states require community rating (same price regardless of age)
+        - Others allow attained-age rating (premiums increase with age)
+        - Issue-age rating (premium based on age when you first buy)
+        
+        #### State-Specific Programs
+        
+        **State Pharmaceutical Assistance Programs (SPAPs):**
+        - Help with prescription drug costs
+        - Eligibility varies by state
+        - Can work alongside Medicare Part D
+        
+        **State Health Insurance Assistance Programs (SHIP):**
+        - Free, unbiased Medicare counseling
+        - Available in every state
+        - Can help you compare plans and understand options
+        """)
+    
+    # Doctor Access
+    with st.expander("👨‍⚕️ Doctor Access and Network Concerns", expanded=True):
+        st.markdown("""
+        #### Original Medicare + Medigap
+        
+        **Advantages:**
+        - See any doctor who accepts Medicare (about 93% of doctors)
+        - No referrals needed for specialists
+        - No network restrictions
+        - Freedom to travel and get care anywhere in the US
+        
+        **Considerations:**
+        - Some doctors don't accept new Medicare patients
+        - A small percentage opt out of Medicare entirely
+        - Always verify a new doctor accepts Medicare assignment
+        
+        #### Medicare Advantage
+        
+        **Network Types:**
+        
+        **HMO (Health Maintenance Organization):**
+        - Must use network doctors (except emergencies)
+        - Need referrals for specialists
+        - Lower premiums, more restrictions
+        - No coverage outside network (except emergencies)
+        
+        **PPO (Preferred Provider Organization):**
+        - Can see out-of-network doctors (higher cost)
+        - No referrals needed
+        - Higher premiums, more flexibility
+        - Some coverage outside network
+        
+        **PFFS (Private Fee-for-Service):**
+        - Can see any doctor who accepts plan's terms
+        - No network, but doctors can refuse
+        - Less common
+        
+        **SNP (Special Needs Plan):**
+        - For specific conditions or circumstances
+        - Tailored networks and benefits
+        
+        **Critical Questions to Ask:**
+        1. Are my current doctors in the network?
+        2. Are my specialists in the network?
+        3. Is my preferred hospital in the network?
+        4. What happens if I need care while traveling?
+        5. How do I get referrals to specialists?
+        6. What if my doctor leaves the network?
+        
+        #### Losing Access to Your Doctor
+        
+        **With Medicare Advantage:**
+        - Networks change annually
+        - Doctors can leave networks
+        - You may need to switch doctors or plans
+        - Review network changes during Annual Enrollment Period
+        
+        **With Original Medicare + Medigap:**
+        - Rare to lose access (only if doctor stops accepting Medicare)
+        - More stability in doctor relationships
+        - Easier to maintain continuity of care
+        """)
+    
+    # Common Mistakes
+    with st.expander("⚠️ Common Mistakes to Avoid", expanded=True):
+        st.markdown("""
+        #### Top 12 Medicare Enrollment Mistakes
+        
+        1. **Missing the Initial Enrollment Period**
+           - Results in permanent late enrollment penalties
+           - Can cost thousands over your lifetime
+           - Set reminders 3 months before turning 65
+        
+        2. **Not Understanding Employer Coverage Coordination**
+           - If you have employer coverage (20+ employees), you can delay Part B
+           - If fewer than 20 employees, you MUST enroll in Medicare at 65
+           - Get written confirmation from HR about your coverage
+        
+        3. **🚨 Choosing Medicare Advantage Over Medigap (BIGGEST MISTAKE)**
+           - **This is the #1 regret among Medicare beneficiaries**
+           - You may never be able to get Medigap later due to health conditions
+           - Denials and prior authorization delays when you're sick
+           - Network restrictions limit your doctor choices
+           - **Start with Medigap - it's worth the extra cost**
+        
+        4. **Switching from Medigap to Medicare Advantage**
+           - You may never be able to get Medigap again
+           - Health conditions could make you permanently uninsurable
+           - This is almost always irreversible
+           - **Don't do it - even for a $0 premium**
+        
+        5. **Choosing Medicare Advantage Based Only on Premium**
+           - $0 premium plans can have high out-of-pocket costs
+           - Frequent denials can delay or prevent care
+           - Check the out-of-pocket maximum and denial rates
+           - Review copays, coinsurance, and prior authorization requirements
+        
+        6. **Not Checking if Your Doctors Are In-Network (Advantage Plans)**
+           - Verify every doctor, specialist, and hospital
+           - Networks change annually - you may lose your doctors
+           - Out-of-network care can be very expensive or not covered
+           - **With Medigap, this isn't a concern**
+        
+        7. **Ignoring Prescription Drug Coverage**
+           - Part D late enrollment penalty is permanent
+           - Check if your medications are covered
+           - Review formulary tiers and restrictions
+        
+        8. **🚨 Not Understanding IRMAA Surcharges**
+           - **IRMAA is based on your MAGI from 2 years prior**
+           - 2026 premiums based on 2024 tax return
+           - Can add $69.90 to $419.30/month to Part B premium
+           - Plus $12.90 to $81.00/month to Part D premium
+           - **Plan Roth conversions carefully to avoid IRMAA brackets**
+           - Life-changing events may allow appeals
+        
+        9. **Not Buying Medigap During Open Enrollment**
+           - 6-month window starting when you turn 65 and enroll in Part B
+           - Guaranteed issue regardless of health
+           - After this window, you may be denied or pay much more
+           - **This is your one chance - don't miss it**
+        
+        10. **Assuming All Medigap Plans Are the Same**
+            - Plans are standardized, but prices vary significantly
+            - Shop around - same coverage, different prices
+            - Consider financial strength of insurance company
+        
+        11. **Not Reviewing Coverage Annually**
+            - Plans change benefits, costs, and networks every year
+            - Annual Enrollment Period: October 15 - December 7
+            - Review your coverage even if you're happy with it
+        
+        12. **Relying on Biased Advice**
+            - Insurance agents may push Medicare Advantage for higher commissions
+            - Use SHIP (State Health Insurance Assistance Program) for unbiased help
+            - Get multiple quotes and opinions
+            - **Be skeptical of agents pushing $0 premium plans**
+        """)
+    
+    # Action Checklist
+    with st.expander("✅ Medicare Enrollment Checklist", expanded=False):
+        st.markdown("""
+        #### 6 Months Before Turning 65
+        - [ ] Determine if you need to enroll or can delay (employer coverage?)
+        - [ ] Research Original Medicare vs Medicare Advantage
+        - [ ] List your current doctors and medications
+        - [ ] Contact SHIP for free counseling
+        - [ ] Review your state's specific Medicare rules
+        
+        #### 3 Months Before Turning 65
+        - [ ] Enroll in Part A (if not automatic)
+        - [ ] Decide on Part B enrollment timing
+        - [ ] If choosing Original Medicare, research Medigap plans
+        - [ ] If choosing Medicare Advantage, compare plans in your area
+        - [ ] Research Part D prescription drug plans
+        - [ ] Verify doctor and hospital networks
+        
+        #### During Your Birthday Month
+        - [ ] Complete all enrollment applications
+        - [ ] Confirm coverage start dates
+        - [ ] Set up premium payments
+        - [ ] Request Medicare card if not received
+        
+        #### After Enrollment
+        - [ ] Receive Medicare card and supplemental insurance cards
+        - [ ] Inform doctors of your new coverage
+        - [ ] Update pharmacy with Part D information
+        - [ ] Keep all enrollment documents
+        - [ ] Set calendar reminder for Annual Enrollment Period
+        
+        #### Annual Review (Every October)
+        - [ ] Review Annual Notice of Change from your plans
+        - [ ] Check if doctors are still in network
+        - [ ] Verify medications are still covered
+        - [ ] Compare plans during Annual Enrollment Period
+        - [ ] Make changes if needed (effective January 1)
+        """)
+    
+    # Resources
+    with st.expander("📚 Additional Resources", expanded=False):
+        st.markdown("""
+        #### Official Medicare Resources
+        
+        **Medicare.gov**
+        - Official Medicare website
+        - Plan comparison tool
+        - Coverage information
+        - Find doctors and facilities
+        
+        **1-800-MEDICARE (1-800-633-4227)**
+        - 24/7 customer service
+        - TTY: 1-877-486-2048
+        - Help with enrollment and questions
+        
+        **State Health Insurance Assistance Program (SHIP)**
+        - Free, unbiased Medicare counseling
+        - Find your local SHIP: www.shiphelp.org
+        - One-on-one help with plan selection
+        
+        #### Plan Comparison Tools
+        
+        **Medicare Plan Finder**
+        - Compare all plans in your area
+        - Enter your medications for accurate cost estimates
+        - Check doctor and pharmacy networks
+        - Available at www.medicare.gov/plan-compare
+        
+        **Medigap Plan Comparison**
+        - Compare standardized Medigap plans
+        - Get quotes from multiple companies
+        - Review financial ratings of insurers
+        
+        #### Educational Resources
+        
+        **Medicare & You Handbook**
+        - Comprehensive annual guide
+        - Mailed to all Medicare beneficiaries
+        - Available online at Medicare.gov
+        
+        **State Insurance Department**
+        - State-specific Medicare rules
+        - Consumer protection
+        - Complaint resolution
+        
+        #### Important Phone Numbers
+        
+        - **Social Security**: 1-800-772-1213
+        - **Medicare**: 1-800-633-4227
+        - **Medicare Rights Center**: 1-800-333-4114
+        - **SHIP**: Find local number at shiphelp.org
+        - **State Insurance Department**: Varies by state
+        """)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 auto_rerun_if_rebuilding()

@@ -88,6 +88,17 @@ with tab1:
     st.header("Personal Information")
     st.markdown("Enter information about yourself and your spouse/partner.")
     
+    # Single person checkbox
+    is_single_person = st.checkbox(
+        "Planning for single person (not a couple)",
+        value=config_mgr.get("personal_info", "is_single_person", False),
+        help="Check this if you are planning for yourself only. This will hide spouse/partner fields and use single filing status for tax calculations.",
+        key="is_single_person"
+    )
+    
+    if is_single_person:
+        st.info("💡 **Single Person Mode**: The application will assume single filing status and optimize strategies for one person.")
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -118,31 +129,39 @@ with tab1:
         st.info(f"Current Age: {current_age_1} years")
     
     with col2:
-        st.subheader("Spouse/Partner")
-        person2_name = st.text_input(
-            "Name",
-            value=config_mgr.get("personal_info", "person2_name", ""),
-            key="person2_name"
-        )
-        person2_birth_date = st.date_input(
-            "Birth Date",
-            value=datetime.strptime(
-                config_mgr.get("personal_info", "person2_birth_date", "1967-01-01"),
-                "%Y-%m-%d"
-            ),
-            key="person2_birth_date"
-        )
-        person2_retirement_age = st.number_input(
-            "Planned Retirement Age",
-            min_value=50,
-            max_value=75,
-            value=config_mgr.get("personal_info", "person2_retirement_age", 62),
-            key="person2_retirement_age"
-        )
-        
-        # Display current age
-        current_age_2 = config_mgr.calculate_age(person2_birth_date.strftime("%Y-%m-%d"))
-        st.info(f"Current Age: {current_age_2} years")
+        if not is_single_person:
+            st.subheader("Spouse/Partner")
+            person2_name = st.text_input(
+                "Name",
+                value=config_mgr.get("personal_info", "person2_name", ""),
+                key="person2_name"
+            )
+            person2_birth_date = st.date_input(
+                "Birth Date",
+                value=datetime.strptime(
+                    config_mgr.get("personal_info", "person2_birth_date", "1967-01-01"),
+                    "%Y-%m-%d"
+                ),
+                key="person2_birth_date"
+            )
+            person2_retirement_age = st.number_input(
+                "Planned Retirement Age",
+                min_value=50,
+                max_value=75,
+                value=config_mgr.get("personal_info", "person2_retirement_age", 62),
+                key="person2_retirement_age"
+            )
+            
+            # Display current age
+            current_age_2 = config_mgr.calculate_age(person2_birth_date.strftime("%Y-%m-%d"))
+            st.info(f"Current Age: {current_age_2} years")
+        else:
+            # Set default values for person2 when in single mode
+            person2_name = ""
+            person2_birth_date = datetime.strptime("1967-01-01", "%Y-%m-%d")
+            person2_retirement_age = 62
+            st.subheader("Spouse/Partner")
+            st.info("👤 Single person mode - spouse/partner information hidden")
     
     # Retirement Location
     st.subheader("Retirement Location")
@@ -490,36 +509,40 @@ with tab3:
                      help=f"Total cost for {years_on_aca_1} years on ACA")
     
     with col2:
-        st.subheader(f"{person2_name}'s Healthcare")
-        
-        st.markdown("**Pre-Retirement Healthcare (While Working)**")
-        
-        # Healthcare type selection for pre-retirement
-        person2_preretirement_coverage_type = st.selectbox(
-            "Pre-Retirement Coverage Type",
-            options=["None", "Employer", "ACA Marketplace"],
-            index=["None", "Employer", "ACA Marketplace"].index(
-                config_mgr.get("healthcare", "person2_preretirement_coverage_type", "None")
-            ),
-            help=f"Select {person2_name}'s healthcare coverage type before retirement",
-            key="person2_preretirement_coverage_type"
-        )
-        
-        if person2_preretirement_coverage_type != "None":
-            person2_preretirement_insurance_monthly = st.number_input(
-                "Monthly Pre-Retirement Premium ($)",
-                min_value=0,
-                max_value=5000,
-                value=config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0),
-                step=50,
-                help=f"Monthly premium for {person2_name}'s {person2_preretirement_coverage_type.lower()} insurance before retirement",
-                key="person2_preretirement_insurance_monthly"
+        if not is_single_person:
+            st.subheader(f"{person2_name}'s Healthcare")
+            
+            st.markdown("**Pre-Retirement Healthcare (While Working)**")
+            
+            # Healthcare type selection for pre-retirement
+            person2_preretirement_coverage_type = st.selectbox(
+                "Pre-Retirement Coverage Type",
+                options=["None", "Employer", "ACA Marketplace"],
+                index=["None", "Employer", "ACA Marketplace"].index(
+                    config_mgr.get("healthcare", "person2_preretirement_coverage_type", "None")
+                ),
+                help=f"Select {person2_name}'s healthcare coverage type before retirement",
+                key="person2_preretirement_coverage_type"
             )
             
-            if person2_preretirement_insurance_monthly > 0:
-                annual_preretirement_cost_2 = person2_preretirement_insurance_monthly * 12
-                st.metric("Annual Pre-Retirement Cost", f"${annual_preretirement_cost_2:,.0f}")
+            if person2_preretirement_coverage_type != "None":
+                person2_preretirement_insurance_monthly = st.number_input(
+                    "Monthly Pre-Retirement Premium ($)",
+                    min_value=0,
+                    max_value=5000,
+                    value=config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0),
+                    step=50,
+                    help=f"Monthly premium for {person2_name}'s {person2_preretirement_coverage_type.lower()} insurance before retirement",
+                    key="person2_preretirement_insurance_monthly"
+                )
+                
+                if person2_preretirement_insurance_monthly > 0:
+                    annual_preretirement_cost_2 = person2_preretirement_insurance_monthly * 12
+                    st.metric("Annual Pre-Retirement Cost", f"${annual_preretirement_cost_2:,.0f}")
+            else:
+                person2_preretirement_insurance_monthly = 0
         else:
+            person2_preretirement_coverage_type = "None"
             person2_preretirement_insurance_monthly = 0
         
         st.markdown("---")
@@ -590,6 +613,17 @@ with tab3:
             st.metric("Annual Retirement Healthcare Cost", f"${annual_aca_cost_2:,.0f}")
             st.metric("Total Retirement Healthcare Cost", f"${total_aca_cost_2:,.0f}",
                      help=f"Total cost for {years_on_aca_2} years on ACA")
+        else:
+            # Single person mode - set default values for person2
+            st.subheader("Spouse/Partner Healthcare")
+            st.info("👤 Single person mode - spouse/partner healthcare information hidden")
+            person2_preretirement_coverage_type = "None"
+            person2_preretirement_insurance_monthly = 0
+            person2_retirement_coverage_type = "None"
+            person2_aca_insurance_monthly = 0
+            person2_aca_start_age = 62
+            person2_aca_end_age = 65
+            person2_medicare_start_age = 65
     
     # Display combined household costs
     if person1_aca_insurance_monthly > 0 or person2_aca_insurance_monthly > 0:
@@ -1382,8 +1416,9 @@ with tab4:
             st.metric("Annual Benefit", f"${annual_benefit:,.0f}")
     
     with col2:
-        st.subheader(f"{person2_name}'s Social Security")
-        person2_ssi_age = st.number_input(
+        if not is_single_person:
+            st.subheader(f"{person2_name}'s Social Security")
+            person2_ssi_age = st.number_input(
             "Age to Start Benefits",
             min_value=62,
             max_value=70,
@@ -1418,6 +1453,12 @@ with tab4:
                 st.info(f"Monthly Benefit at FRA: ${adjusted_benefit:,.0f}/mo")
             
             st.metric("Annual Benefit", f"${annual_benefit:,.0f}")
+        else:
+            # Single person mode - set default values for person2
+            st.subheader("Spouse/Partner Social Security")
+            st.info("👤 Single person mode - spouse/partner Social Security information hidden")
+            person2_ssi_age = 70
+            person2_ssi_amount = 0
     
     # Display combined benefits
     if person1_ssi_amount > 0 or person2_ssi_amount > 0:
@@ -3028,6 +3069,7 @@ with tab10:
         if st.button("💾 Save All Changes", type="primary", width='stretch'):
             # Update all configuration values
             config_mgr.update_section("personal_info", {
+                "is_single_person": is_single_person,
                 "person1_name": person1_name,
                 "person1_birth_date": person1_birth_date.strftime("%Y-%m-%d"),
                 "person1_retirement_age": person1_retirement_age,

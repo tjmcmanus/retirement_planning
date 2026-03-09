@@ -1473,7 +1473,27 @@ def calculate_total_healthcare_costs(age_primary: int,
 
     # --- Out-of-pocket expenses -------------------------------------------
     # Falls back to OOP_COST_DEFAULT ("average") for unrecognised health_status values.
-    oop_cost: int = OOP_COSTS_BY_HEALTH_STATUS.get(health_status, OOP_COST_DEFAULT)
+    base_oop_cost: int = OOP_COSTS_BY_HEALTH_STATUS.get(health_status, OOP_COST_DEFAULT)
+    
+    # Apply age-based adjustment to out-of-pocket costs
+    # Healthcare costs increase with age (inverse of discretionary spending)
+    from calculations import calculate_household_age_adjusted_healthcare_costs
+    from config import get_config_manager
+    
+    config_mgr = get_config_manager()
+    is_single = config_mgr.get("personal_info", "is_single_person", False)
+    
+    oop_cost = calculate_household_age_adjusted_healthcare_costs(
+        float(base_oop_cost),
+        age_primary,
+        age_spouse if age_spouse > 0 else None,
+        is_single
+    )
+    
+    logger.debug(
+        f"Out-of-pocket healthcare: base=${base_oop_cost:,.0f}, "
+        f"age-adjusted=${oop_cost:,.0f} (ages {age_primary}/{age_spouse})"
+    )
 
     # --- Long-term care insurance premiums --------------------------------
     ltc_cost = LTC_ANNUAL_PREMIUM_PER_PERSON * status.total_persons if has_ltc_insurance else 0.0
@@ -5127,8 +5147,47 @@ class WithdrawalStrategyEngine:
             
             # Update for next year
             balances = strategy.balances
-            # Apply 1% spending decrease, then inflation: expenses × 0.99 × (1 + inflation_rate)
-            expenses = expenses * (1 - spending_decrease_rate) * (1 + expense_inflation_rate)
+            
+            # Calculate age-adjusted expenses for next year
+            # Import the age-adjustment function
+            from calculations import calculate_household_age_adjusted_expenses
+            from config import get_value_with_session_override
+            
+            # Get base expenses from config (without inflation)
+            base_expenses = float(get_value_with_session_override(
+                'financial_assumptions', 'expected_annual_expenses', 'EXPENSE',
+                kwargs.get('initial_expenses', 120000)
+            ))
+            
+            # Check if single person mode
+            is_single = config_mgr.get("personal_info", "is_single_person", False)
+            
+            # Calculate next year's ages
+            next_year_age_primary = age_primary + 1
+            next_year_age_spouse = age_spouse + 1
+            
+            # Apply age-based adjustment to base expenses
+            age_adjusted_base = calculate_household_age_adjusted_expenses(
+                base_expenses,
+                next_year_age_primary,
+                next_year_age_spouse if not is_single else None,
+                is_single
+            )
+            
+            # Apply inflation to the age-adjusted base
+            # Calculate years from start to get cumulative inflation
+            years_from_start = (year + 1) - start_year
+            inflation_multiplier = (1 + expense_inflation_rate) ** years_from_start
+            expenses = age_adjusted_base * inflation_multiplier
+            
+            logger.debug(
+                f"Year {year+1} expense calculation: "
+                f"base=${base_expenses:,.2f}, "
+                f"age_adjusted=${age_adjusted_base:,.2f} "
+                f"(ages {next_year_age_primary}/{next_year_age_spouse}), "
+                f"inflation_mult={inflation_multiplier:.4f}, "
+                f"final=${expenses:,.2f}"
+            )
             
             # Store result
             results.append(strategy)
