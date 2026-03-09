@@ -484,26 +484,37 @@ try:
     _p1_retire_amt  = float(_cfg.get("healthcare", "person1_aca_insurance_monthly", 0) or 0)
     _p2_retire_amt  = float(_cfg.get("healthcare", "person2_aca_insurance_monthly", 0) or 0)
     
+    # Check Medicare planning completion
+    _p1_reviewed_guide = _cfg.get("healthcare", "person1_reviewed_medicare_guide", False)
+    _p2_reviewed_guide = _cfg.get("healthcare", "person2_reviewed_medicare_guide", False)
+    _p1_medicare_eligible = _cfg.get("healthcare", "person1_medicare_eligible", False)
+    _p2_medicare_eligible = _cfg.get("healthcare", "person2_medicare_eligible", False)
+    
     # Check if each person has both phases covered
     _p1_has_preretire = (_p1_preretire_type != "None" and _p1_preretire_amt > 0)
     _p1_has_retire = (_p1_retire_type != "None" and _p1_retire_amt > 0)
     _p2_has_preretire = (_p2_preretire_type != "None" and _p2_preretire_amt > 0)
     _p2_has_retire = (_p2_retire_type != "None" and _p2_retire_amt > 0)
     
-    _p1_fully_covered = _p1_has_preretire and _p1_has_retire
-    _p2_fully_covered = _p2_has_preretire and _p2_has_retire
+    # Check Medicare planning completion for each person
+    _p1_medicare_complete = _p1_reviewed_guide and _p1_medicare_eligible
+    _p2_medicare_complete = _p2_reviewed_guide and _p2_medicare_eligible
+    
+    # Full coverage now includes Medicare planning
+    _p1_fully_covered = _p1_has_preretire and _p1_has_retire and _p1_medicare_complete
+    _p2_fully_covered = _p2_has_preretire and _p2_has_retire and _p2_medicare_complete
     
     # Calculate healthcare score based on coverage status
-    # 100%: BOTH people have BOTH pre-retirement AND retirement coverage configured
-    # 80%: At least one person has both phases covered, OR both people have at least one phase
-    # 60%: One person has both phases OR multiple partial coverages
-    # 40%: Only one phase covered for one person
+    # 100%: BOTH people have BOTH pre-retirement AND retirement coverage configured AND Medicare planning complete
+    # 80%: At least one person has full coverage including Medicare planning
+    # 60%: Both people have partial coverage (missing Medicare planning or one phase)
+    # 40%: Only one phase covered for one person, or Medicare planning incomplete
     # 20%: No coverage configured
     
     if _p1_fully_covered and _p2_fully_covered:
-        _healthcare_score = 100.0  # Both people fully covered
+        _healthcare_score = 100.0  # Both people fully covered including Medicare
     elif _p1_fully_covered or _p2_fully_covered:
-        _healthcare_score = 80.0  # One person fully covered
+        _healthcare_score = 80.0  # One person fully covered including Medicare
     elif (_p1_has_preretire or _p1_has_retire) and (_p2_has_preretire or _p2_has_retire):
         _healthcare_score = 60.0  # Both people have partial coverage
     elif _p1_has_preretire or _p1_has_retire or _p2_has_preretire or _p2_has_retire:
@@ -575,17 +586,17 @@ try:
         )
         # Build healthcare detail message based on coverage
         if _healthcare_score == 100:
-            _hc_detail = "Both people fully covered (pre-retirement & retirement)"
+            _hc_detail = "Both people fully covered (pre-retirement, retirement & Medicare planning complete)"
             if _using_aca:
                 _hc_detail += " (includes ACA)"
         elif _healthcare_score == 80:
-            _hc_detail = "One person fully covered, complete coverage for second person"
+            _hc_detail = "One person fully covered including Medicare, complete coverage for second person"
         elif _healthcare_score == 60:
-            _hc_detail = "Both people have partial coverage, complete both phases"
+            _hc_detail = "Both people have partial coverage, complete Medicare planning"
         elif _healthcare_score == 40:
-            _hc_detail = "One person partially covered, add coverage for second person"
+            _hc_detail = "One person partially covered, add coverage and Medicare planning"
         else:
-            _hc_detail = "Configure healthcare coverage in Configuration"
+            _hc_detail = "Configure healthcare coverage and Medicare planning in Configuration"
         _ind_labels = [
             ("💰 Portfolio Funding",    _funding_score,    f"{_funding_pct:.0f}% of 25x expenses target  (${_total_assets:,.0f} / ${_target_port:,.0f})"),
             ("⚖️ Estate Planning",      _estate_score,     f"{_ep_done if _estate_score > 0 else 0} of {_ep_tot if _estate_score > 0 else '?'} checklist items complete"),
@@ -670,17 +681,28 @@ try:
             _missing_details.append(f"{_p1_name}'s pre-retirement coverage (while working)")
         if not _p1_has_retire:
             _missing_details.append(f"{_p1_name}'s retirement coverage (post-retirement, pre-Medicare)")
+        if not _p1_medicare_complete:
+            if not _p1_reviewed_guide:
+                _missing_details.append(f"{_p1_name} needs to review Medicare Enrollment Guide")
+            if not _p1_medicare_eligible:
+                _missing_details.append(f"{_p1_name} needs to indicate Medicare eligibility status")
         if not _p2_has_preretire:
             _missing_details.append(f"{_p2_name}'s pre-retirement coverage (while working)")
         if not _p2_has_retire:
             _missing_details.append(f"{_p2_name}'s retirement coverage (post-retirement, pre-Medicare)")
+        if not _p2_medicare_complete:
+            if not _p2_reviewed_guide:
+                _missing_details.append(f"{_p2_name} needs to review Medicare Enrollment Guide")
+            if not _p2_medicare_eligible:
+                _missing_details.append(f"{_p2_name} needs to indicate Medicare eligibility status")
         
         if _missing_details:
             _actions.append(
                 f"🏥 **Healthcare Coverage ({_healthcare_score:.0f}% complete):** "
-                f"Missing coverage for: {'; '.join(_missing_details)}. "
-                f"Go to Configuration → Healthcare to select coverage types (Employer, ACA Marketplace, or Employer Retiree) "
-                f"and enter monthly premium amounts for complete protection."
+                f"Missing: {'; '.join(_missing_details)}. "
+                f"Go to Configuration → Healthcare to select coverage types (Employer, ACA Marketplace, or Employer Retiree), "
+                f"enter monthly premium amounts, and complete Medicare planning. "
+                f"📚 Review the Medicare Enrollment Guide in Advanced Strategies page for comprehensive Medicare information."
             )
     
     if _cash_score < 50:

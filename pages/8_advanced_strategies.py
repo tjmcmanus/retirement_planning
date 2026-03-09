@@ -32,10 +32,10 @@ def _cs() -> None:
     st.session_state["submit"] = False
 
 (adv_tax_planner_tab, adv_tax_tab, adv_backdoor_tab, adv_nua_tab,
- adv_qcd_tab, adv_sepp_tab, adv_harvest_tab, adv_medicare_tab) = st.tabs([
+ adv_qcd_tab, adv_sepp_tab, adv_harvest_tab, adv_medicare_tab, adv_ssa_tab) = st.tabs([
     "🧮 Tax Planner", "📅 Multi-Year Tax Planning", "🔄 Backdoor & Mega Backdoor Roth",
     "📈 NUA Analysis", "🎁 QCD Optimizer", "⏱️ 72(t) SEPP Calculator", "🌾 Capital Loss Harvesting",
-    "🏥 Medicare Enrollment Guide",
+    "🏥 Medicare Enrollment Guide", "💰 Social Security Enrollment Guide",
 ])
 
 # ── TAX PLANNER ─────────────────────────────────────────────────────────────
@@ -1115,7 +1115,7 @@ with adv_medicare_tab:
     """)
     
     # Overview Section
-    with st.expander("📋 Medicare Basics: Parts A, B, C, D", expanded=True):
+    with st.expander("📋 Medicare Basics: Parts A, B, C, D", expanded=False):
         st.markdown("""
         #### Understanding Medicare Parts
         
@@ -1161,7 +1161,7 @@ with adv_medicare_tab:
         """)
     
     # Enrollment Timing
-    with st.expander("⏰ Critical Enrollment Periods & Penalties", expanded=True):
+    with st.expander("⏰ Critical Enrollment Periods & Penalties", expanded=False):
         st.markdown("""
         #### Initial Enrollment Period (IEP)
         
@@ -1194,7 +1194,7 @@ with adv_medicare_tab:
         """)
     
     # Decision Tree
-    with st.expander("🔀 Decision Guide: Original Medicare vs Medicare Advantage", expanded=True):
+    with st.expander("🔀 Decision Guide: Original Medicare vs Medicare Advantage", expanded=False):
         st.markdown("""
         #### Key Decision Factors
         
@@ -1231,7 +1231,7 @@ with adv_medicare_tab:
         """)
     
     # The 20% Gap
-    with st.expander("💰 Covering the 20% Gap: Medigap vs Advantage", expanded=True):
+    with st.expander("💰 Covering the 20% Gap: Medigap vs Advantage", expanded=False):
         st.markdown("""
         #### Understanding the 20% Coinsurance
         
@@ -1307,7 +1307,7 @@ with adv_medicare_tab:
         """)
     
     # Switching Rules
-    with st.expander("🔄 What You Can and Cannot Switch", expanded=True):
+    with st.expander("🔄 What You Can and Cannot Switch", expanded=False):
         st.markdown("""
         #### 🚨 CRITICAL: The One-Way Door Problem
         
@@ -1387,7 +1387,7 @@ with adv_medicare_tab:
         """)
     
     # State Considerations
-    with st.expander("🗺️ State-Specific Considerations", expanded=True):
+    with st.expander("🗺️ State-Specific Considerations", expanded=False):
         st.markdown("""
         #### Medicare Advantage Availability Varies by State
         
@@ -1430,7 +1430,7 @@ with adv_medicare_tab:
         """)
     
     # Doctor Access
-    with st.expander("👨‍⚕️ Doctor Access and Network Concerns", expanded=True):
+    with st.expander("👨‍⚕️ Doctor Access and Network Concerns", expanded=False):
         st.markdown("""
         #### Original Medicare + Medigap
         
@@ -1493,7 +1493,7 @@ with adv_medicare_tab:
         """)
     
     # Common Mistakes
-    with st.expander("⚠️ Common Mistakes to Avoid", expanded=True):
+    with st.expander("⚠️ Common Mistakes to Avoid", expanded=False):
         st.markdown("""
         #### Top 12 Medicare Enrollment Mistakes
         
@@ -1566,6 +1566,225 @@ with adv_medicare_tab:
             - Use SHIP (State Health Insurance Assistance Program) for unbiased help
             - Get multiple quotes and opinions
             - **Be skeptical of agents pushing $0 premium plans**
+        """)
+    
+    # HSA and Medicare Section
+    with st.expander("💰 Health Savings Accounts (HSA) and Medicare", expanded=False):
+        st.markdown("""
+        #### Using Your HSA with Medicare
+        
+        If you're age 60+, you probably have figured out how to use your health savings account (HSA)
+        to help pay for qualified medical expenses—and even save something extra for unanticipated
+        health care expenses you may soon be facing in retirement.
+        
+        But watch out: There are a few important rules to follow if you want to avoid being subject
+        to stern financial penalties when you enroll in Medicare in a few short years.
+        
+        #### 🚨 CRITICAL: Stop Contributing Before Medicare Enrollment
+        
+        **You must stop contributing to your HSA at least 6 months before you enroll in Medicare**,
+        as Part A coverage is often backdated. This is one of the most important rules to avoid
+        tax penalties.
+        
+        **Why 6 months?**
+        - When you receive Social Security retirement benefits, your Part A coverage is back-dated
+          6 months (but no earlier than the first month you're eligible for Medicare)
+        - If you contribute to your HSA during those 6 months, you may face a **6% excise tax**
+          and an **income tax** for those contributions
+        - This "6-month lookback" starts when you enroll in Medicare or begin your Social Security
+          retirement benefits
+        
+        **If you're currently contributing to your HSA and plan to start Medicare at age 65:**
+        - Make sure all HSA contributions end **before your 65th birthday month**
+        - If your birthday is on the first of the month, stop contributions by the beginning of
+          the month before your birthday month
+        
+        **If you continue to work after age 65:**
+        - Stop making contributions to your HSA up to 6 months before applying for Medicare Part A
+          only or Part A and Part B or starting your Social Security retirement benefits
+        - This HSA restriction leads some working past age 65 to defer Medicare and maintain their
+          current employer-based health insurance coverage so they can keep contributing to their
+          HSA until they retire
+        
+        **How to fix excess contributions:**
+        - Withdraw your excess contributions by your tax filing deadline, including extensions,
+          for the year you made them
+        - Withdraw any earnings attributed to the withdrawn excess contributions and include the
+          earnings in "other income" on your tax return for the year you withdrew them
+        - Learn more about excess contributions on the IRS website
+        
+        #### ✅ What You CAN Use HSA Funds For with Medicare
+        
+        **Allowed Medicare Premiums (Tax-Free):**
+        - ✅ Medicare Part A premiums (if you have to pay for Part A)
+        - ✅ Medicare Part B premiums
+        - ✅ Medicare Part C (Medicare Advantage) premiums
+        - ✅ Medicare Part D (prescription drug) premiums
+        - ✅ Employer-sponsored health premiums (if you're over 65 and still working)
+        
+        **Other Qualified Medical Expenses:**
+        - ✅ Deductibles, copayments, and coinsurance
+        - ✅ Vision and dental care
+        - ✅ Hearing aids
+        - ✅ Nursing services
+        - ✅ Long-term care services
+        - ✅ Medical equipment and supplies
+        
+        #### ❌ What You CANNOT Use HSA Funds For
+        
+        **🚨 Medigap/Medicare Supplement Premiums Are NOT Allowed**
+        
+        **No, you cannot use Health Savings Account (HSA) funds to pay for Medicare Supplement
+        (Medigap) policy premiums.** IRS regulations do not consider Medigap premiums a qualified
+        medical expense, making them ineligible for tax-free HSA reimbursement.
+        
+        This is an important distinction because:
+        - Medigap premiums can be $150-250/month or more
+        - You'll need to pay these from other sources (not your HSA)
+        - This is a key cost to factor into your Medicare budget
+        
+        #### 💡 HSA Advantage: Medicare Advantage vs Medigap
+        
+        **For Cost-Conscious Retirees with HSA Funds:**
+        
+        If you have a substantial HSA balance, there's a financial advantage to choosing Medicare
+        Advantage over Original Medicare + Medigap:
+        
+        **Medicare Advantage + HSA = Tax-Free Premium Payments**
+        - ✅ Medicare Advantage premiums CAN be paid with HSA funds (tax-free)
+        - ✅ Often $0-100/month premiums (many plans are $0)
+        - ✅ Use your HSA tax-free for premiums, copays, and out-of-pocket costs
+        - ✅ Maximize the value of your HSA savings
+        - ✅ Lower monthly costs leave more room in your budget
+        
+        **Original Medicare + Medigap = Higher Out-of-Pocket Costs**
+        - ❌ Medigap premiums CANNOT be paid with HSA funds
+        - ❌ Medigap premiums: $150-250+/month (must pay with after-tax dollars)
+        - ✅ Part B premiums CAN be paid with HSA funds
+        - Higher total monthly costs ($355-505/month typical)
+        
+        **Cost Comparison Example with HSA:**
+        
+        **Medicare Advantage Path:**
+        - Part B: $174.70/month (HSA eligible ✅)
+        - Medicare Advantage: $0-50/month (HSA eligible ✅)
+        - **Total: $174.70-224.70/month - ALL can be paid tax-free from HSA**
+        - Out-of-pocket max: $3,000-8,000/year (HSA eligible ✅)
+        
+        **Original Medicare + Medigap Path:**
+        - Part B: $174.70/month (HSA eligible ✅)
+        - Medigap Plan G: $150-250/month (NOT HSA eligible ❌)
+        - Part D: $30-80/month (HSA eligible ✅)
+        - **Total: $355-505/month - Only $205-255 can be paid from HSA**
+        - **$150-250/month must come from other sources**
+        
+        **Financial Benefit for HSA Holders:**
+        - With Medicare Advantage, you can use your HSA for 100% of premiums
+        - With Medigap, you lose the tax advantage on $1,800-3,000/year in premiums
+        - Over 20 years of retirement, that's $36,000-60,000 in premiums that can't use HSA funds
+        - If you have a large HSA balance, Medicare Advantage lets you maximize its tax-free benefit
+        
+        **⚠️ Important Considerations:**
+        
+        While the HSA advantage favors Medicare Advantage financially, remember:
+        - Medicare Advantage has network restrictions and prior authorization requirements
+        - Switching back to Medigap later is very difficult due to medical underwriting
+        - The tax savings may not outweigh the loss of freedom and comprehensive coverage
+        - Consider your health status, travel plans, and doctor preferences
+        - **This is a personal decision** - the HSA benefit is just one factor
+        
+        **Best for HSA + Medicare Advantage:**
+        - You have a substantial HSA balance ($50,000+)
+        - You want to maximize tax-free healthcare spending
+        - You're comfortable with network restrictions
+        - You stay in one geographic area
+        - You have relatively simple medical needs
+        - Lower monthly costs are a priority
+        
+        **Best for HSA + Medigap (Despite No HSA Benefit):**
+        - You value freedom to see any doctor
+        - You travel frequently or have complex medical needs
+        - You can afford the higher premiums from other sources
+        - Peace of mind is worth more than tax savings
+        - You want comprehensive coverage without claim denials
+        
+        #### 💡 HSA Triple Tax Advantage
+        
+        HSAs offer triple tax savings:
+        1. **Contribute pre-tax dollars** - Reduces your taxable income
+        2. **Earnings grow tax-deferred** - No taxes on investment gains
+        3. **Withdraw tax-free for qualified medical expenses** - Including Medicare premiums
+        
+        #### 🏥 Bridging the Gap to Medicare (Before Age 65)
+        
+        If you retired before age 65, you still need health care coverage before enrolling in Medicare.
+        You may be able to use your HSA to pay for insurance premiums, but the situations in which
+        you can do so are limited:
+        
+        **Allowed Premium Payments Before Age 65:**
+        - ✅ COBRA continuation coverage
+        - ✅ Health insurance while receiving unemployment compensation
+        - ❌ Other health insurance premiums (not allowed before age 65)
+        
+        #### 📊 After Age 65: Expanded HSA Flexibility
+        
+        Once you turn age 65, you can use your HSA to pay for any nonqualified medical expenses
+        (like buying a boat or new patio furniture), but you don't get to take full advantage of
+        the tax savings:
+        - You're required to pay federal and potentially state taxes for such expenditures
+        - No 20% penalty (unlike withdrawals before age 65)
+        - However, it's still better to use HSA funds for qualified medical expenses to maximize
+          tax benefits
+        
+        **Note:** If you're not age 65 or older, you will pay a 20% penalty and taxes on withdrawals
+        for anything other than qualified medical expenses.
+        
+        #### 🎯 Strategic HSA Planning for Medicare
+        
+        **Best Practices:**
+        1. **Build your HSA balance before Medicare** - Maximize contributions while you can
+        2. **Stop contributions 6 months before Medicare** - Avoid tax penalties
+        3. **Use HSA for Medicare premiums** - Parts A, B, C, D (but not Medigap)
+        4. **Save HSA for medical expenses** - Let it grow tax-free for healthcare costs
+        5. **Consider delaying Medicare if still working** - Keep contributing to HSA
+        
+        **Tax Planning Opportunity:**
+        - HSA withdrawals for Medicare premiums are tax-free
+        - This can help manage your taxable income in retirement
+        - Coordinate with Roth conversions and other income strategies
+        - Remember: IRMAA surcharges are based on income from 2 years prior
+        
+        #### ⚠️ Common HSA and Medicare Mistakes
+        
+        1. **Contributing to HSA after enrolling in Medicare** - Results in tax penalties
+        2. **Not stopping contributions 6 months before Medicare** - Backdated Part A causes issues
+        3. **Trying to use HSA for Medigap premiums** - Not allowed by IRS
+        4. **Not maximizing HSA before Medicare** - Missing opportunity to build tax-free healthcare fund
+        5. **Withdrawing HSA for non-medical expenses before 65** - 20% penalty plus taxes
+        
+        #### 📋 HSA and Medicare Checklist
+        
+        **12 Months Before Medicare:**
+        - [ ] Review your HSA balance and contribution strategy
+        - [ ] Maximize contributions if possible
+        - [ ] Plan when to stop contributions (6 months before Medicare)
+        
+        **6 Months Before Medicare:**
+        - [ ] Stop all HSA contributions (yours and employer's)
+        - [ ] Notify your employer to stop HSA contributions
+        - [ ] Verify no contributions are being made
+        
+        **At Medicare Enrollment:**
+        - [ ] Confirm HSA contributions have stopped
+        - [ ] Plan to use HSA for Medicare Part B, C, D premiums
+        - [ ] Budget for Medigap premiums from other sources (not HSA)
+        - [ ] Keep HSA funds invested for future medical expenses
+        
+        **After Medicare Enrollment:**
+        - [ ] Use HSA for qualified Medicare expenses
+        - [ ] Track HSA withdrawals for tax purposes
+        - [ ] Continue to let unused HSA funds grow tax-free
+        - [ ] Remember: You can still use HSA funds, just can't contribute
         """)
     
     # Action Checklist
@@ -1660,6 +1879,753 @@ with adv_medicare_tab:
         - **Medicare Rights Center**: 1-800-333-4114
         - **SHIP**: Find local number at shiphelp.org
         - **State Insurance Department**: Varies by state
+        """)
+
+# ── SOCIAL SECURITY ENROLLMENT GUIDE ──────────────────────────────────────────
+with adv_ssa_tab:
+    st.markdown("### 💰 Social Security Enrollment Guide")
+    st.markdown("""
+    This comprehensive guide helps you navigate Social Security enrollment, understand your options,
+    optimize your claiming strategy, and avoid costly mistakes. Social Security decisions are often
+    irreversible, so it's crucial to understand your choices before enrolling.
+    
+    ⚠️ **Critical Connection with Medicare**: Enrolling in Social Security retirement benefits
+    automatically enrolls you in Medicare Part A (and Part B unless you opt out). This has important
+    implications for HSA contributions and healthcare planning.
+    """)
+    
+    # Overview Section
+    with st.expander("📋 Social Security Basics: What You Need to Know", expanded=False):
+        st.markdown("""
+        #### Understanding Social Security Retirement Benefits
+        
+        **What is Social Security?**
+        - Monthly retirement income based on your lifetime earnings
+        - Funded by payroll taxes (FICA) you paid during your working years
+        - Provides inflation-adjusted income for life
+        - Spousal and survivor benefits available
+        
+        **Key Ages:**
+        - **Age 62**: Earliest you can claim (reduced benefits)
+        - **Full Retirement Age (FRA)**: 66-67 depending on birth year
+          - Born 1943-1954: FRA is 66
+          - Born 1955: FRA is 66 and 2 months
+          - Born 1956: FRA is 66 and 4 months
+          - Born 1957: FRA is 66 and 6 months
+          - Born 1958: FRA is 66 and 8 months
+          - Born 1959: FRA is 66 and 10 months
+          - Born 1960 or later: FRA is 67
+        - **Age 70**: Maximum benefit (8% increase per year after FRA)
+        
+        **Benefit Calculation:**
+        - Based on your highest 35 years of earnings
+        - Indexed for inflation
+        - If you worked fewer than 35 years, zeros are averaged in
+        - Claiming early reduces benefits permanently
+        - Delaying past FRA increases benefits permanently
+        
+        **Reduction for Early Claiming:**
+        - Claim at 62 (FRA 67): ~30% reduction (70% of FRA benefit)
+        - Claim at 63 (FRA 67): ~25% reduction
+        - Claim at 64 (FRA 67): ~20% reduction
+        - Claim at 65 (FRA 67): ~13.3% reduction
+        - Claim at 66 (FRA 67): ~6.7% reduction
+        
+        **Increase for Delayed Claiming:**
+        - Delay to 68 (FRA 67): +8% (108% of FRA benefit)
+        - Delay to 69 (FRA 67): +16% (116% of FRA benefit)
+        - Delay to 70 (FRA 67): +24% (124% of FRA benefit)
+        - **No benefit to delaying past age 70**
+        """)
+    
+    # Medicare Connection
+    with st.expander("🏥 Critical: Social Security and Medicare Connection", expanded=False):
+        st.markdown("""
+        #### 🚨 Automatic Medicare Enrollment When You Claim Social Security
+        
+        **The Connection:**
+        - When you apply for Social Security retirement benefits, you are **automatically enrolled
+          in Medicare Part A and Part B**
+        - Part A enrollment is backdated 6 months (or to age 65, whichever is later)
+        - You can opt out of Part B, but Part A enrollment is automatic
+        
+        **Critical HSA Implications:**
+        - Once enrolled in Medicare Part A, you **cannot contribute to an HSA**
+        - Part A is backdated 6 months, so you may owe penalties for HSA contributions during that period
+        - If you're still working and contributing to an HSA, **do not claim Social Security** until
+          you're ready to stop HSA contributions
+        
+        **Strategies to Preserve HSA Contributions:**
+        
+        **Option 1: Delay Social Security Past 65**
+        - Continue working and contributing to HSA
+        - Delay Social Security until you're ready to stop HSA contributions
+        - Enroll in Medicare separately when you stop working
+        - Maximize both HSA contributions and Social Security delayed credits
+        
+        **Option 2: Claim Social Security, Stop HSA Contributions**
+        - Stop HSA contributions 6 months before claiming Social Security
+        - Accept automatic Medicare enrollment
+        - Use existing HSA funds for Medicare premiums and expenses
+        
+        **Option 3: Opt Out of Part B (But Not Part A)**
+        - You can decline Part B if you have employer coverage
+        - Part A is still automatic (and free for most people)
+        - HSA contributions still prohibited once Part A starts
+        - Must enroll in Part B within 8 months of losing employer coverage to avoid penalties
+        
+        #### When to Enroll in Medicare vs Social Security
+        
+        **Scenario 1: Still Working at 65 with Employer Coverage (20+ employees)**
+        - Delay Medicare Part B (keep employer coverage)
+        - Part A is free, so usually accept it
+        - Can delay Social Security to age 70 for maximum benefit
+        - **Problem**: Part A enrollment stops HSA contributions
+        
+        **Scenario 2: Still Working at 65 with HSA**
+        - Delay both Social Security and Medicare
+        - Continue HSA contributions
+        - Enroll in Medicare when you stop working
+        - Claim Social Security when optimal (up to age 70)
+        
+        **Scenario 3: Retired Before 65**
+        - Decide Social Security claiming age independently (62-70)
+        - Must enroll in Medicare at 65 to avoid penalties
+        - If claiming Social Security before 65, Medicare enrollment is separate
+        - If claiming Social Security at/after 65, Medicare enrollment is automatic
+        
+        **Scenario 4: Need Income at 62, Want to Maximize Benefits**
+        - Claim Social Security at 62 for income
+        - Enroll in Medicare separately at 65
+        - Accept reduced Social Security benefit
+        - Consider if other income sources could delay claiming
+        """)
+    
+    # When to Enroll
+    with st.expander("⏰ When to Enroll: Timing Your Application", expanded=False):
+        st.markdown("""
+        #### Application Timeline
+        
+        **When Can You Apply?**
+        - You can apply up to **4 months before** you want benefits to start
+        - Earliest benefit start: Age 62
+        - Latest benefit increase: Age 70
+        
+        **Recommended Application Timeline:**
+        
+        **If Claiming at 62:**
+        - Apply 3-4 months before your 62nd birthday
+        - Benefits can start as early as the month you turn 62
+        - Allows time for processing
+        
+        **If Claiming at Full Retirement Age:**
+        - Apply 3 months before your FRA birthday month
+        - Ensures benefits start on time
+        - Avoids processing delays
+        
+        **If Claiming at 70:**
+        - Apply 3-4 months before turning 70
+        - Don't wait past 70 - no additional benefit
+        - Ensures you don't miss any payments
+        
+        #### Processing Timeline
+        
+        **Application to First Payment:**
+        - **Application processing**: 2-4 weeks typically
+        - **First payment**: Usually 2-3 months after application
+        - **Direct deposit setup**: 1-2 weeks after approval
+        - **Retroactive payments**: If applicable, paid in lump sum
+        
+        **Example Timeline (Claiming at FRA):**
+        - 3 months before birthday: Submit application
+        - 2-3 weeks later: Application approved
+        - Birthday month: Benefits begin
+        - 1 month after birthday: First payment received (for birthday month)
+        - Ongoing: Payments on 2nd, 3rd, or 4th Wednesday based on birth date
+        
+        #### Payment Schedule
+        
+        **When You Get Paid:**
+        - Benefits are paid the month after they're earned
+        - Payment date based on your birth date:
+          - Born 1st-10th: 2nd Wednesday of month
+          - Born 11th-20th: 3rd Wednesday of month
+          - Born 21st-31st: 4th Wednesday of month
+        - If you claimed before May 1997: Payment on 3rd of month
+        
+        **Direct Deposit:**
+        - Required for all new beneficiaries (since 2013)
+        - Set up during application process
+        - Funds typically available on payment date
+        - Can take 1-2 business days to appear in account
+        - More secure than paper checks
+        """)
+    
+    # How to Enroll
+    with st.expander("📝 How to Enroll: Application Process", expanded=False):
+        st.markdown("""
+        #### Three Ways to Apply
+        
+        **1. Online (Recommended) ✅**
+        - **Website**: www.ssa.gov/benefits/retirement/apply.html
+        - **Advantages**:
+          - Apply anytime, 24/7
+          - Save and return to application
+          - Faster processing
+          - Immediate confirmation
+          - No appointment needed
+        - **Time required**: 15-30 minutes
+        - **Best for**: Most applicants, especially straightforward cases
+        
+        **2. By Phone**
+        - **Number**: 1-800-772-1213 (TTY 1-800-325-0778)
+        - **Hours**: Monday-Friday, 8:00 AM - 7:00 PM local time
+        - **Advantages**:
+          - Can ask questions during application
+          - Help with complex situations
+          - Assistance for those uncomfortable with online
+        - **Disadvantages**:
+          - Long wait times (especially Monday mornings)
+          - Limited hours
+        - **Best for**: Complex cases, need assistance
+        
+        **3. In Person**
+        - **Location**: Local Social Security office
+        - **Appointment**: Required - call 1-800-772-1213 or schedule online
+        - **Advantages**:
+          - Face-to-face assistance
+          - Can bring documents for review
+          - Help with complex situations
+        - **Disadvantages**:
+          - Must schedule appointment
+          - Travel required
+          - Limited office hours
+        - **Best for**: Very complex cases, prefer in-person help
+        
+        #### Required Information for Application
+        
+        **Personal Information:**
+        - [ ] Social Security number
+        - [ ] Birth certificate or proof of birth
+        - [ ] U.S. citizenship or lawful alien status documents
+        - [ ] Military service papers (if applicable - DD-214)
+        - [ ] W-2 forms or self-employment tax returns for last year
+        
+        **Banking Information for Direct Deposit:**
+        - [ ] Bank name
+        - [ ] Routing number (9 digits)
+        - [ ] Account number
+        - [ ] Account type (checking or savings)
+        - [ ] Voided check or bank letter (helpful but not required)
+        
+        **Spouse Information (if applicable):**
+        - [ ] Spouse's Social Security number
+        - [ ] Spouse's date of birth
+        - [ ] Marriage certificate
+        - [ ] Divorce decree (if claiming on ex-spouse's record)
+        
+        **Children Information (if applicable):**
+        - [ ] Children's Social Security numbers
+        - [ ] Children's birth certificates
+        - [ ] Proof of adoption (if applicable)
+        
+        **Work History:**
+        - [ ] Employer names and addresses for last 2 years
+        - [ ] Dates of employment
+        - [ ] Self-employment information (if applicable)
+        
+        #### Documents to Have Ready
+        
+        **Essential Documents:**
+        1. **Birth Certificate** - Original or certified copy
+        2. **Social Security Card** - Or know your number
+        3. **W-2 Forms** - Most recent year
+        4. **Tax Returns** - If self-employed
+        5. **Bank Information** - For direct deposit
+        
+        **Additional Documents (if applicable):**
+        6. **Marriage Certificate** - For spousal benefits
+        7. **Divorce Decree** - If claiming on ex-spouse
+        8. **Death Certificate** - For survivor benefits
+        9. **Military Discharge Papers** - DD-214
+        10. **Proof of Citizenship** - If not born in U.S.
+        
+        **Tips for Document Preparation:**
+        - Make copies of all documents before submitting
+        - SSA will return original documents
+        - If you don't have a document, SSA can help you get it
+        - Some documents can be uploaded online
+        - Keep confirmation numbers from online applications
+        """)
+    
+    # Spousal Benefits
+    with st.expander("👫 Spousal and Survivor Benefits", expanded=False):
+        st.markdown("""
+        #### Spousal Benefits
+        
+        **Eligibility:**
+        - Married for at least 1 year
+        - Spouse must have filed for their own benefit
+        - You must be at least 62 years old
+        - Or caring for child under 16 (or disabled)
+        
+        **Benefit Amount:**
+        - Up to 50% of spouse's FRA benefit
+        - Reduced if claimed before your FRA
+        - Not increased by delaying past your FRA
+        - You receive the higher of: your own benefit or spousal benefit
+        
+        **Claiming Strategy:**
+        - If your own benefit is higher, claim your own
+        - If spousal benefit is higher, you'll automatically receive it
+        - Can't claim spousal benefit until spouse files
+        - Deemed filing rules: If you claim before FRA, you must claim all benefits
+        
+        **Divorced Spouse Benefits:**
+        - Marriage lasted at least 10 years
+        - You're unmarried
+        - You're at least 62
+        - Ex-spouse is entitled to benefits (doesn't have to be claiming)
+        - Your benefit doesn't affect ex-spouse's benefit
+        - Ex-spouse doesn't need to know you're claiming
+        
+        #### Survivor Benefits
+        
+        **Eligibility:**
+        - Widow/widower of deceased worker
+        - At least 60 years old (50 if disabled)
+        - Or caring for child under 16 (or disabled)
+        - Marriage lasted at least 9 months (exceptions for accidents)
+        
+        **Benefit Amount:**
+        - Up to 100% of deceased spouse's benefit
+        - Amount depends on when deceased spouse claimed
+        - Reduced if you claim before your FRA
+        - Can switch from survivor to your own benefit later
+        
+        **Strategic Claiming:**
+        - Claim survivor benefit at 60, switch to your own at 70
+        - Claim your own benefit early, switch to survivor at FRA
+        - Choose strategy that maximizes lifetime benefits
+        - Survivor benefits have different FRA than retirement benefits
+        
+        **Divorced Survivor Benefits:**
+        - Marriage lasted at least 10 years
+        - You're unmarried (or remarried after age 60)
+        - Same benefit as if still married
+        - Ex-spouse's remarriage doesn't affect your benefit
+        """)
+    
+    # Working While Receiving Benefits
+    with st.expander("💼 Working While Receiving Social Security", expanded=False):
+        st.markdown("""
+        #### Earnings Test (Before Full Retirement Age)
+        
+        **If You're Under FRA for the Entire Year:**
+        - **2026 Limit**: $22,320 per year
+        - **Penalty**: $1 in benefits withheld for every $2 earned above limit
+        - **Example**: Earn $32,320 = $10,000 over limit = $5,000 withheld
+        
+        **In the Year You Reach FRA:**
+        - **2026 Limit**: $59,520 per year (only months before FRA count)
+        - **Penalty**: $1 withheld for every $3 earned above limit
+        - **After FRA month**: No earnings limit
+        
+        **After Full Retirement Age:**
+        - **No earnings limit** - Earn as much as you want
+        - No benefit reduction
+        - Benefits may increase due to additional earnings
+        
+        #### What Counts as Earnings?
+        
+        **Counts Toward Limit:**
+        - ✅ Wages from employment
+        - ✅ Net self-employment income
+        - ✅ Bonuses and commissions
+        
+        **Does NOT Count:**
+        - ❌ Pensions
+        - ❌ Annuities
+        - ❌ Investment income
+        - ❌ Interest and dividends
+        - ❌ Capital gains
+        - ❌ Rental income (if not real estate business)
+        - ❌ IRA/401(k) withdrawals
+        
+        #### Benefits Are Not Lost Forever
+        
+        **Important**: Withheld benefits are not lost!
+        - At FRA, SSA recalculates your benefit
+        - Increases your benefit to account for months withheld
+        - Essentially converts early claiming to later claiming
+        - You'll eventually receive the money
+        
+        **Example:**
+        - Claim at 62, work and have benefits withheld for 3 years
+        - At FRA, benefit is recalculated as if you claimed at 65
+        - Higher monthly benefit for rest of life
+        """)
+    
+    # Taxation
+    with st.expander("💰 Taxation of Social Security Benefits", expanded=False):
+        st.markdown("""
+        #### How Social Security is Taxed
+        
+        **Combined Income Formula:**
+        - Adjusted Gross Income (AGI)
+        - Plus: Tax-exempt interest
+        - Plus: 50% of Social Security benefits
+        - = Combined Income
+        
+        **Taxation Thresholds (2026):**
+        
+        **Single Filers:**
+        - Combined income < $25,000: 0% taxable
+        - Combined income $25,000-$34,000: Up to 50% taxable
+        - Combined income > $34,000: Up to 85% taxable
+        
+        **Married Filing Jointly:**
+        - Combined income < $32,000: 0% taxable
+        - Combined income $32,000-$44,000: Up to 50% taxable
+        - Combined income > $44,000: Up to 85% taxable
+        
+        **Married Filing Separately:**
+        - Usually 85% of benefits are taxable
+        - Very limited exceptions
+        
+        #### Tax Planning Strategies
+        
+        **Minimize Taxable Social Security:**
+        1. **Roth conversions before claiming** - Reduce future RMDs
+        2. **Qualified Charitable Distributions (QCDs)** - Reduce AGI
+        3. **Tax-loss harvesting** - Offset capital gains
+        4. **Manage retirement account withdrawals** - Control AGI
+        5. **Consider Roth accounts** - Withdrawals don't count as income
+        
+        **State Taxation:**
+        - 38 states don't tax Social Security benefits
+        - 12 states do tax benefits (some with exemptions):
+          - Colorado, Connecticut, Kansas, Minnesota, Missouri
+          - Montana, Nebraska, New Mexico, Rhode Island
+          - Utah, Vermont, West Virginia
+        - Check your state's specific rules
+        
+        #### Withholding Options
+        
+        **Voluntary Withholding:**
+        - You can request federal tax withholding
+        - Choose 7%, 10%, 12%, or 22%
+        - Use Form W-4V
+        - Can change anytime
+        - Helps avoid underpayment penalties
+        
+        **Estimated Tax Payments:**
+        - If not withholding, may need quarterly estimated payments
+        - Use Form 1040-ES
+        - Due dates: April 15, June 15, September 15, January 15
+        - Avoid underpayment penalties
+        """)
+    
+    # Opting Out and Suspending
+    with st.expander("🔄 Can You Opt Out, Suspend, or Change Your Mind?", expanded=False):
+        st.markdown("""
+        #### Withdrawing Your Application (Within 12 Months)
+        
+        **The Do-Over Option:**
+        - Available only once in your lifetime
+        - Must be within 12 months of claiming
+        - Must repay all benefits received (including spousal/dependent benefits)
+        - No interest charged on repayment
+        - Resets your record as if you never claimed
+        
+        **How to Withdraw:**
+        1. Complete Form SSA-521 (Request for Withdrawal)
+        2. Submit to Social Security
+        3. Repay all benefits within 60 days of approval
+        4. Can reapply later for higher benefit
+        
+        **When This Makes Sense:**
+        - Claimed early and regret it
+        - Financial situation improved
+        - Want to maximize lifetime benefits
+        - Can afford to repay benefits
+        
+        **Example:**
+        - Claimed at 62, received $20,000 in benefits
+        - Within 12 months, repay $20,000
+        - Wait until 70 to claim for 76% higher benefit
+        - Lifetime benefit increase can be substantial
+        
+        #### Suspending Benefits (After Full Retirement Age)
+        
+        **Voluntary Suspension:**
+        - Available only after reaching FRA
+        - Can suspend for any reason
+        - Benefits grow 8% per year while suspended
+        - Can suspend up to age 70
+        - No repayment required
+        - Can restart anytime
+        
+        **How to Suspend:**
+        1. Call Social Security: 1-800-772-1213
+        2. Or visit local office
+        3. Request voluntary suspension
+        4. Effective the month after request
+        
+        **When This Makes Sense:**
+        - Returned to work after claiming
+        - Don't need the income currently
+        - Want to increase future benefits
+        - Maximize survivor benefit for spouse
+        
+        **Important Notes:**
+        - Spousal benefits also suspended
+        - Medicare premiums still deducted (if applicable)
+        - Can restart benefits anytime
+        - Automatic restart at age 70
+        
+        #### Changing Your Mind After FRA
+        
+        **After 12-Month Window:**
+        - Can't withdraw application
+        - Can suspend benefits (if at FRA)
+        - Can't undo claiming decision
+        - Stuck with reduced benefit if claimed early
+        
+        **This is Why Timing Matters:**
+        - Early claiming decision is mostly permanent
+        - Only one 12-month do-over opportunity
+        - Suspension only available after FRA
+        - Plan carefully before claiming
+        """)
+    
+    # Common Mistakes
+    with st.expander("⚠️ Common Social Security Mistakes to Avoid", expanded=False):
+        st.markdown("""
+        #### Top 15 Social Security Mistakes
+        
+        1. **Claiming Too Early Without Considering Longevity**
+           - Claiming at 62 reduces benefits by ~30%
+           - Break-even age is typically around 78-80
+           - If you live past break-even, you lose money
+           - Consider family longevity and health
+        
+        2. **Not Coordinating with Medicare and HSA**
+           - Claiming Social Security auto-enrolls you in Medicare
+           - Medicare Part A stops HSA contributions
+           - Part A is backdated 6 months
+           - Can owe penalties for HSA contributions during backdated period
+        
+        3. **Ignoring Spousal Benefits**
+           - Spousal benefit can be up to 50% of spouse's FRA benefit
+           - May be higher than your own benefit
+           - Divorced spouses (10+ year marriage) also eligible
+           - Doesn't reduce spouse's benefit
+        
+        4. **Not Understanding Survivor Benefits**
+           - Survivor gets up to 100% of deceased spouse's benefit
+           - Can claim survivor benefit and switch to own later
+           - Strategic claiming can maximize lifetime benefits
+           - Divorced spouses (10+ year marriage) eligible
+        
+        5. **Claiming Early While Still Working**
+           - Earnings test reduces benefits before FRA
+           - $1 withheld for every $2 over limit (under FRA)
+           - Benefits are recalculated later, but creates cash flow issues
+           - Better to delay claiming if still earning
+        
+        6. **Not Checking Your Earnings Record**
+           - Benefits based on highest 35 years of earnings
+           - Errors in earnings record reduce benefits
+           - Check annually at www.ssa.gov/myaccount
+           - Report errors immediately
+        
+        7. **Forgetting About Taxes**
+           - Up to 85% of benefits may be taxable
+           - Depends on combined income
+           - Can push you into higher tax bracket
+           - Plan for tax withholding or estimated payments
+        
+        8. **Not Maximizing Delayed Retirement Credits**
+           - Benefits increase 8% per year from FRA to 70
+           - That's a guaranteed 8% return
+           - No benefit to delaying past 70
+           - Consider if you can afford to wait
+        
+        9. **Claiming Before Reviewing All Options**
+           - Many claiming strategies available
+           - Spousal, survivor, divorced spouse benefits
+           - File and suspend (if at FRA)
+           - Consult with financial advisor
+        
+        10. **Not Setting Up Direct Deposit**
+            - Required for new beneficiaries
+            - More secure than paper checks
+            - Faster access to funds
+            - Set up during application
+        
+        11. **Ignoring State Taxation**
+            - 12 states tax Social Security benefits
+            - May affect where you retire
+            - Some states have income exemptions
+            - Factor into retirement planning
+        
+        12. **Not Understanding the Earnings Test**
+            - Only applies before FRA
+            - Many types of income don't count
+            - Withheld benefits aren't lost forever
+            - Benefits recalculated at FRA
+        
+        13. **Claiming Without Considering Inflation**
+            - Benefits are adjusted for inflation (COLA)
+            - Higher initial benefit = higher COLA increases
+            - Compounds over lifetime
+            - Delaying increases inflation-adjusted income
+        
+        14. **Not Coordinating with Overall Retirement Plan**
+            - Social Security is one piece of retirement income
+            - Coordinate with pensions, 401(k), IRA withdrawals
+            - Consider tax implications of all income sources
+            - Optimize total retirement income strategy
+        
+        15. **Relying on Social Security Alone**
+            - Average benefit: ~$1,900/month (2026)
+            - Replaces only ~40% of pre-retirement income
+            - Need additional retirement savings
+            - Plan for healthcare costs not covered by Medicare
+        """)
+    
+    # Enrollment Checklist
+    with st.expander("✅ Social Security Enrollment Checklist", expanded=False):
+        st.markdown("""
+        #### 12 Months Before Claiming
+        - [ ] Review your earnings record at www.ssa.gov/myaccount
+        - [ ] Correct any errors in your earnings history
+        - [ ] Estimate your benefit at different claiming ages
+        - [ ] Consider longevity, health, and family history
+        - [ ] Review spousal and survivor benefit options
+        - [ ] Coordinate with Medicare enrollment plans
+        - [ ] Check HSA contribution implications
+        - [ ] Consult with financial advisor on claiming strategy
+        
+        #### 6 Months Before Claiming
+        - [ ] Decide on claiming age (62-70)
+        - [ ] If claiming before 65, plan separate Medicare enrollment
+        - [ ] If claiming at/after 65, understand automatic Medicare enrollment
+        - [ ] Stop HSA contributions if claiming at/after 65
+        - [ ] Gather required documents (birth certificate, W-2s, etc.)
+        - [ ] Set up direct deposit information
+        - [ ] Review tax withholding options
+        - [ ] Plan for taxation of benefits
+        
+        #### 4 Months Before Claiming
+        - [ ] Submit online application at www.ssa.gov
+        - [ ] Or schedule phone/in-person appointment
+        - [ ] Upload or mail required documents
+        - [ ] Confirm direct deposit setup
+        - [ ] Request tax withholding if desired (Form W-4V)
+        - [ ] Save application confirmation number
+        
+        #### After Application Submitted
+        - [ ] Wait for approval notification (2-4 weeks)
+        - [ ] Confirm benefit start date
+        - [ ] Confirm payment schedule (based on birth date)
+        - [ ] Set up online account at www.ssa.gov/myaccount
+        - [ ] Verify direct deposit is working
+        - [ ] Keep all correspondence from SSA
+        
+        #### First Payment Received
+        - [ ] Verify payment amount is correct
+        - [ ] Confirm direct deposit is working properly
+        - [ ] Set up tax withholding if not done already
+        - [ ] Plan for quarterly estimated tax payments if needed
+        - [ ] Update budget with actual benefit amount
+        - [ ] Coordinate with other retirement income sources
+        
+        #### Annual Review
+        - [ ] Review annual COLA adjustment notice
+        - [ ] Check for any changes in benefit amount
+        - [ ] Verify earnings record is still accurate
+        - [ ] Review tax withholding adequacy
+        - [ ] Adjust estimated tax payments if needed
+        - [ ] Update retirement income plan
+        """)
+    
+    # Resources
+    with st.expander("📚 Additional Resources", expanded=False):
+        st.markdown("""
+        #### Official Social Security Resources
+        
+        **Social Security Administration Website**
+        - www.ssa.gov
+        - Create account: www.ssa.gov/myaccount
+        - Benefit calculators and estimators
+        - Online application portal
+        - Check earnings record
+        
+        **Social Security Phone Numbers**
+        - **Main number**: 1-800-772-1213
+        - **TTY**: 1-800-325-0778
+        - **Hours**: Monday-Friday, 8:00 AM - 7:00 PM local time
+        - **Best times to call**: Mid-week, mid-month, mid-morning
+        
+        **Local Social Security Office**
+        - Find office: www.ssa.gov/locator
+        - Appointments required
+        - Schedule online or by phone
+        - Bring all required documents
+        
+        #### Planning Tools
+        
+        **Benefit Calculators**
+        - **Quick Calculator**: www.ssa.gov/benefits/retirement/planner/AnypiaApplet.html
+        - **Retirement Estimator**: www.ssa.gov/benefits/retirement/estimator.html
+        - **Detailed Calculator**: www.ssa.gov/benefits/retirement/planner/anyPiaWepjs04.html
+        
+        **Publications**
+        - **Retirement Benefits** (Publication No. 05-10035)
+        - **Understanding the Benefits** (Publication No. 05-10024)
+        - **Your Retirement Checklist** (Publication No. 05-10377)
+        - **When to Start Receiving Benefits** (Publication No. 05-10147)
+        - All available at www.ssa.gov/pubs
+        
+        #### Educational Resources
+        
+        **AARP Social Security Resource Center**
+        - www.aarp.org/retirement/social-security
+        - Claiming strategies
+        - Benefit calculators
+        - Educational articles
+        
+        **Financial Planning Association**
+        - Find a CFP® professional
+        - Social Security claiming strategies
+        - Retirement income planning
+        
+        **Medicare.gov**
+        - Coordinate Medicare enrollment
+        - Understand Part A/B enrollment with Social Security
+        - Plan for healthcare costs
+        
+        #### Important Forms
+        
+        - **SSA-1 (Application for Retirement Benefits)** - Online or paper
+        - **SSA-521 (Request for Withdrawal)** - Within 12 months of claiming
+        - **SSA-795 (Statement of Claimant)** - Correct earnings record
+        - **W-4V (Voluntary Withholding Request)** - Tax withholding
+        - **SSA-44 (Medicare Income-Related Monthly Adjustment Amount)** - IRMAA appeal
+        
+        #### State-Specific Information
+        
+        **State Taxation of Benefits**
+        - Check your state's Department of Revenue website
+        - Some states offer exemptions based on income
+        - May affect retirement location decision
+        
+        **State Disability Programs**
+        - Some states have additional disability benefits
+        - May coordinate with Social Security Disability
+        - Check your state's social services department
         """)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
