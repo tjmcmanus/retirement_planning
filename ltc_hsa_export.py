@@ -172,20 +172,21 @@ def export_hsa_analysis_to_csv(
     output.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     output.write("\n")
     
-    # HSA Projection Summary
-    output.write("=== HSA GROWTH PROJECTION SUMMARY ===\n")
-    output.write(f"Current Balance,${projection.current_balance:,.2f}\n")
-    output.write(f"Years to Medicare,{projection.years_to_medicare}\n")
-    output.write(f"Total Contributions,${projection.total_contributions:,.2f}\n")
-    output.write(f"Investment Growth,${projection.investment_growth:,.2f}\n")
-    output.write(f"Final Balance at Age 65,${projection.final_balance:,.2f}\n")
-    output.write("\n")
-    
-    # Year-by-Year Projection
-    output.write("=== YEAR-BY-YEAR PROJECTION ===\n")
-    proj_df = pd.DataFrame(projection.annual_projections)
-    proj_df.to_csv(output, index=False)
-    output.write("\n")
+    # HSA Projection Summary (only if projection data is available)
+    if projection:
+        output.write("=== HSA GROWTH PROJECTION SUMMARY ===\n")
+        output.write(f"Current Balance,${projection.current_balance:,.2f}\n")
+        output.write(f"Years to Medicare,{projection.years_to_medicare}\n")
+        output.write(f"Total Contributions,${projection.total_contributions:,.2f}\n")
+        output.write(f"Investment Growth,${projection.investment_growth:,.2f}\n")
+        output.write(f"Final Balance at Age 65,${projection.final_balance:,.2f}\n")
+        output.write("\n")
+        
+        # Year-by-Year Projection
+        output.write("=== YEAR-BY-YEAR PROJECTION ===\n")
+        proj_df = pd.DataFrame(projection.annual_projections)
+        proj_df.to_csv(output, index=False)
+        output.write("\n")
     
     # Withdrawal Strategies
     if strategies:
@@ -248,8 +249,11 @@ def export_hsa_analysis_to_json(
     """
     data = {
         "report_type": "Health Savings Account Analysis",
-        "generated": datetime.now().isoformat(),
-        "projection": {
+        "generated": datetime.now().isoformat()
+    }
+    
+    if projection:
+        data["projection"] = {
             "current_balance": projection.current_balance,
             "years_to_medicare": projection.years_to_medicare,
             "total_contributions": projection.total_contributions,
@@ -257,7 +261,6 @@ def export_hsa_analysis_to_json(
             "final_balance": projection.final_balance,
             "annual_projections": projection.annual_projections
         }
-    }
     
     if strategies:
         data["withdrawal_strategies"] = [
@@ -392,19 +395,20 @@ def export_hsa_analysis_to_markdown(
     output.append("# Health Savings Account (HSA) Analysis Report")
     output.append(f"\n**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
-    # HSA Projection Summary
-    output.append("## HSA Growth Projection Summary\n")
-    output.append(f"- **Current Balance:** ${projection.current_balance:,.2f}")
-    output.append(f"- **Years to Medicare:** {projection.years_to_medicare}")
-    output.append(f"- **Total Contributions:** ${projection.total_contributions:,.2f}")
-    output.append(f"- **Investment Growth:** ${projection.investment_growth:,.2f}")
-    output.append(f"- **Final Balance at Age 65:** ${projection.final_balance:,.2f}\n")
-    
-    # Year-by-Year Projection
-    output.append("## Year-by-Year Projection\n")
-    proj_df = pd.DataFrame(projection.annual_projections)
-    output.append(proj_df.to_markdown(index=False))
-    output.append("\n")
+    # HSA Projection Summary (only if projection data is available)
+    if projection:
+        output.append("## HSA Growth Projection Summary\n")
+        output.append(f"- **Current Balance:** ${projection.current_balance:,.2f}")
+        output.append(f"- **Years to Medicare:** {projection.years_to_medicare}")
+        output.append(f"- **Total Contributions:** ${projection.total_contributions:,.2f}")
+        output.append(f"- **Investment Growth:** ${projection.investment_growth:,.2f}")
+        output.append(f"- **Final Balance at Age 65:** ${projection.final_balance:,.2f}\n")
+        
+        # Year-by-Year Projection
+        output.append("## Year-by-Year Projection\n")
+        proj_df = pd.DataFrame(projection.annual_projections)
+        output.append(proj_df.to_markdown(index=False))
+        output.append("\n")
     
     # Withdrawal Strategies
     if strategies:

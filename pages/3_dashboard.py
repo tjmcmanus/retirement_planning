@@ -154,6 +154,266 @@ with kpi5:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
+# Long-Term Market Forecast
+# ---------------------------------------------------------------------------
+st.markdown("### 📈 Long-Term Market Forecast")
+st.caption(
+    "Strategic market outlook based on 8-month and 18-month exponential moving averages of the S&P 500 (SPY). "
+    "This long-term perspective helps inform major portfolio decisions and risk management."
+)
+
+try:
+    from market_trend_longterm import (
+        get_longterm_market_condition,
+        get_market_cycle_phase,
+        get_strategic_allocation_adjustment,
+        LongTermMarketCondition,
+        LongTermMarketTrendConfig
+    )
+    
+    # Get long-term market condition
+    lt_config = LongTermMarketTrendConfig()
+    lt_condition, lt_ema_data = get_longterm_market_condition(lt_config, use_cache=True)
+    
+    if lt_condition != LongTermMarketCondition.UNKNOWN and lt_ema_data:
+        # Display market condition with color coding
+        condition_colors = {
+            LongTermMarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
+            LongTermMarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
+            LongTermMarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
+            LongTermMarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+        }
+        
+        icon, color, label = condition_colors.get(
+            lt_condition, ("⚪", "#808080", "Unknown")
+        )
+        
+        # Market condition summary
+        lt_col1, lt_col2, lt_col3, lt_col4 = st.columns(4)
+        
+        with lt_col1:
+            st.markdown(f"**Market Condition**")
+            st.markdown(f"<h3 style='color: {color}; margin: 0;'>{icon} {label}</h3>", unsafe_allow_html=True)
+        
+        with lt_col2:
+            cycle_phase = get_market_cycle_phase(lt_ema_data)
+            st.metric(
+                "Market Cycle Phase",
+                cycle_phase,
+                help="Current phase of the market cycle based on trend duration and direction"
+            )
+        
+        with lt_col3:
+            allocation_adj = get_strategic_allocation_adjustment(lt_condition, lt_config)
+            st.metric(
+                "Strategic Adjustment",
+                f"{allocation_adj:+.1f}%",
+                delta=f"Stock allocation",
+                delta_color="normal" if allocation_adj >= 0 else "inverse",
+                help="Suggested adjustment to stock allocation based on current market condition"
+            )
+        
+        with lt_col4:
+            st.metric(
+                "Confidence Score",
+                f"{lt_ema_data.confidence * 100:.0f}%",
+                help="Confidence in the current market condition assessment (0-100%)"
+            )
+        
+        # Detailed metrics in expander
+        with st.expander("📊 Detailed Market Analysis", expanded=False):
+            detail_col1, detail_col2, detail_col3 = st.columns(3)
+            
+            with detail_col1:
+                st.markdown("**Current Prices & EMAs**")
+                st.write(f"SPY Price: ${lt_ema_data.current_price:.2f}")
+                st.write(f"8-Month EMA: ${lt_ema_data.short_ema:.2f}")
+                st.write(f"18-Month EMA: ${lt_ema_data.long_ema:.2f}")
+                st.write(f"Price vs 8-Month: {lt_ema_data.price_vs_short_ema:+.2f}%")
+                st.write(f"Price vs 18-Month: {lt_ema_data.price_vs_long_ema:+.2f}%")
+            
+            with detail_col2:
+                st.markdown("**Trend Analysis**")
+                st.write(f"8-Month Trend: {lt_ema_data.short_trend.value.title()}")
+                st.write(f"18-Month Trend: {lt_ema_data.long_trend.value.title()}")
+                st.write(f"8-Month Slope: {lt_ema_data.short_slope:+.2f}% per month")
+                st.write(f"18-Month Slope: {lt_ema_data.long_slope:+.2f}% per month")
+                st.write(f"Months in Trend: {lt_ema_data.months_in_trend}")
+            
+            with detail_col3:
+                st.markdown("**Strategic Guidance**")
+                
+                if lt_condition == LongTermMarketCondition.BULL:
+                    st.success(
+                        "✅ **Bull Market**: Both short and long-term trends are positive. "
+                        "Maintain normal risk allocation. Consider rebalancing if overweight."
+                    )
+                elif lt_condition == LongTermMarketCondition.WARNING_NEGATIVE:
+                    st.warning(
+                        "⚠️ **Early Warning**: Short-term trend turning negative while long-term remains positive. "
+                        "Consider reducing risk exposure. Monitor closely for further deterioration."
+                    )
+                elif lt_condition == LongTermMarketCondition.WARNING_POSITIVE:
+                    st.info(
+                        "ℹ️ **Recovery Attempt**: Short-term trend turning positive while long-term remains negative. "
+                        "Cautious optimism warranted. Wait for confirmation before increasing risk."
+                    )
+                elif lt_condition == LongTermMarketCondition.BEAR:
+                    st.error(
+                        "🔴 **Bear Market**: Both trends are negative. "
+                        "Reduce risk exposure. Focus on capital preservation and quality holdings."
+                    )
+                
+                st.write(f"EMA Crossover Distance: {lt_ema_data.ema_crossover_distance:+.2f}%")
+                st.caption(f"Last updated: {lt_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    else:
+        st.info(
+            "📊 Long-term market forecast data is currently unavailable. "
+            "This may be due to market data service issues or network connectivity. "
+            "The forecast will update automatically when data becomes available."
+        )
+
+except Exception as lt_err:
+    st.warning(f"⚠️ Could not load long-term market forecast: {lt_err}")
+    import traceback
+    st.caption(f"Debug info: {traceback.format_exc()}")
+
+# ---------------------------------------------------------------------------
+# Short-Term Market Forecast
+# ---------------------------------------------------------------------------
+st.markdown("### 📊 Short-Term Market Forecast")
+st.caption(
+    "Tactical market outlook based on 10-week and 50-week moving averages of the S&P 500 (SPY). "
+    "This short-term perspective helps inform tactical rebalancing and near-term risk adjustments."
+)
+
+try:
+    from market_trend_analysis import (
+        get_market_condition,
+        MarketCondition,
+        MarketTrendConfig
+    )
+    
+    # Get short-term market condition
+    st_config = MarketTrendConfig()
+    st_condition, st_ma_data = get_market_condition(st_config, use_cache=True)
+    
+    if st_condition != MarketCondition.UNKNOWN and st_ma_data:
+        # Display market condition with color coding
+        st_condition_colors = {
+            MarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
+            MarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
+            MarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
+            MarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+        }
+        
+        st_icon, st_color, st_label = st_condition_colors.get(
+            st_condition, ("⚪", "#808080", "Unknown")
+        )
+        
+        # Market condition summary
+        st_col1, st_col2, st_col3, st_col4 = st.columns(4)
+        
+        with st_col1:
+            st.markdown(f"**Market Condition**")
+            st.markdown(f"<h3 style='color: {st_color}; margin: 0;'>{st_icon} {st_label}</h3>", unsafe_allow_html=True)
+        
+        with st_col2:
+            # Calculate price position
+            price_vs_short = ((st_ma_data.current_price - st_ma_data.short_ma) / st_ma_data.short_ma) * 100
+            price_vs_long = ((st_ma_data.current_price - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
+            
+            st.metric(
+                "Price vs 10-Week MA",
+                f"{price_vs_short:+.2f}%",
+                delta=f"${st_ma_data.current_price:.2f}",
+                help="Current SPY price relative to 10-week moving average"
+            )
+        
+        with st_col3:
+            st.metric(
+                "Price vs 50-Week MA",
+                f"{price_vs_long:+.2f}%",
+                delta=f"${st_ma_data.current_price:.2f}",
+                help="Current SPY price relative to 50-week moving average"
+            )
+        
+        with st_col4:
+            st.metric(
+                "Confidence Score",
+                f"{st_ma_data.confidence * 100:.0f}%",
+                help="Confidence in the current market condition assessment (0-100%)"
+            )
+        
+        # Detailed metrics in expander
+        with st.expander("📊 Detailed Short-Term Analysis", expanded=False):
+            st_detail_col1, st_detail_col2, st_detail_col3 = st.columns(3)
+            
+            with st_detail_col1:
+                st.markdown("**Current Prices & MAs**")
+                st.write(f"SPY Price: ${st_ma_data.current_price:.2f}")
+                st.write(f"10-Week MA: ${st_ma_data.short_ma:.2f}")
+                st.write(f"50-Week MA: ${st_ma_data.long_ma:.2f}")
+                st.write(f"Price vs 10-Week: {price_vs_short:+.2f}%")
+                st.write(f"Price vs 50-Week: {price_vs_long:+.2f}%")
+            
+            with st_detail_col2:
+                st.markdown("**Trend Analysis**")
+                st.write(f"10-Week Trend: {st_ma_data.short_trend.value.title()}")
+                st.write(f"50-Week Trend: {st_ma_data.long_trend.value.title()}")
+                st.write(f"10-Week Slope: {st_ma_data.short_slope:+.3f}% per week")
+                st.write(f"50-Week Slope: {st_ma_data.long_slope:+.3f}% per week")
+                
+                # Calculate MA crossover distance
+                ma_crossover = ((st_ma_data.short_ma - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
+                st.write(f"MA Crossover: {ma_crossover:+.2f}%")
+            
+            with st_detail_col3:
+                st.markdown("**Tactical Guidance**")
+                
+                if st_condition == MarketCondition.BULL:
+                    st.success(
+                        "✅ **Bull Market**: Both short and long-term trends are positive. "
+                        "Favorable environment for maintaining or increasing equity exposure. "
+                        "Consider tactical rebalancing if significantly overweight."
+                    )
+                elif st_condition == MarketCondition.WARNING_NEGATIVE:
+                    st.warning(
+                        "⚠️ **Warning Signal**: Short-term trend turning negative. "
+                        "Consider reducing tactical risk exposure by 10%. "
+                        "Monitor daily for potential bear market transition."
+                    )
+                elif st_condition == MarketCondition.WARNING_POSITIVE:
+                    st.info(
+                        "ℹ️ **Recovery Signal**: Short-term trend improving. "
+                        "Cautiously consider adding exposure. "
+                        "Wait for 50-week MA confirmation before major increases."
+                    )
+                elif st_condition == MarketCondition.BEAR:
+                    st.error(
+                        "🔴 **Bear Market**: Both trends negative. "
+                        "Reduce tactical risk by 20%. "
+                        "Focus on capital preservation and defensive positioning."
+                    )
+                
+                st.caption(f"Last updated: {st_ma_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    else:
+        st.info(
+            "📊 Short-term market forecast data is currently unavailable. "
+            "This may be due to market data service issues or network connectivity. "
+            "The forecast will update automatically when data becomes available."
+        )
+
+except Exception as st_err:
+    st.warning(f"⚠️ Could not load short-term market forecast: {st_err}")
+    import traceback
+    st.caption(f"Debug info: {traceback.format_exc()}")
+
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
 # ROW 1 — Financial Plan Readiness Indicator (RRI)
 # ---------------------------------------------------------------------------
 st.markdown("### 🎯 Financial Plan Readiness Indicator")
