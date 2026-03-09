@@ -1261,7 +1261,8 @@ with tab3:
                 total_contributions,
                 investment_growth,
                 marginal_tax_rate,
-                0.15  # Long-term capital gains rate
+                0.15,  # Long-term capital gains rate
+                years_contributing
             )
             
             tax_col1, tax_col2, tax_col3 = st.columns(3)
