@@ -48,6 +48,8 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+REM Re-enable delayed expansion after activation
+setlocal enabledelayedexpansion
 echo [32m✓[0m Virtual environment activated
 echo.
 
