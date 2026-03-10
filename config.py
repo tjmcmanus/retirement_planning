@@ -43,6 +43,40 @@ DEFAULT_CONFIG = {
         "contribution_roth_percent": 5.0,    # Roth 401k / Roth IRA contribution rate
         "contribution_brokerage_percent": 5.0,  # After-tax brokerage contribution rate
     },
+    "expenses": {
+        # Living Expenses - expenses that do not go away in retirement
+        "living_expenses": {
+            "property_tax": 0,
+            "homeowners_insurance": 0,
+            "auto_insurance": 0,
+            "food_groceries": 0,
+            "utilities_phone": 0,
+            "utilities_internet": 0,
+            "utilities_cable": 0,
+            "utilities_electric": 0,
+            "utilities_gas": 0,
+            "utilities_water": 0,
+            "gifts_donations": 0,
+            "other_living": 0,
+        },
+        # Big Ticket Items - major purchases that occur periodically
+        "big_ticket_items": [
+            # Each item: {"name": str, "amount": float, "frequency_years": int, "start_year": int, "end_year": int}
+            # Example: {"name": "New Car", "amount": 35000, "frequency_years": 10, "start_year": 2025, "end_year": 2050}
+        ],
+        # Entertainment Expenses - expenses that typically decline in retirement
+        "entertainment_expenses": {
+            "travel_vacations": 0,
+            "dining_out": 0,
+            "clothing": 0,
+            "hobbies": 0,
+            "entertainment_other": 0,
+            # Retirement decline settings
+            "retirement_decline_enabled": True,
+            "retirement_decline_percent": 30,  # Percentage reduction in retirement (0-100)
+            "retirement_decline_start_age": 65,  # Age when decline begins
+        },
+    },
     "social_security": {
         "person1_ssi_age": 70,
         "person1_ssi_amount": 0,
