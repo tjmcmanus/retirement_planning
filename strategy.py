@@ -597,6 +597,7 @@ def optimize_rmd_lookback(strategies: list,
                             continue
                         
                         # Increase conversion
+                        old_conversion = year_strategy.roth_conversion
                         year_strategy.roth_conversion += max_additional_conversion
                         
                         # CRITICAL: Recalculate balances to reflect the increased conversion
@@ -608,6 +609,84 @@ def optimize_rmd_lookback(strategies: list,
                             roth=year_strategy.balances.roth + max_additional_conversion,
                             daf=year_strategy.balances.daf
                         )
+                        
+                        # CRITICAL: Recalculate AGI, MAGI, and taxes with the new conversion amount
+                        # AGI includes the Roth conversion, so it must be updated
+                        year_strategy.agi += max_additional_conversion
+                        year_strategy.magi += max_additional_conversion
+                        
+                        # Recalculate federal tax with new AGI
+                        # Get tax data for this year
+                        try:
+                            config_mgr = get_config_manager()
+                            filing_status = config_mgr.get_filing_status()
+                            tax_brackets = get_income_tax_brackets(year_strategy.year)
+                            std_deduction_df = get_std_deduction(year_strategy.year, filing_status)
+                            std_deduction = std_deduction_df.iloc[0]['deduction']
+                            cg_brackets = pd.DataFrame(get_cap_gains_brackets(year_strategy.year))
+                            
+                            # Recalculate federal tax
+                            taxable_income = year_strategy.agi - std_deduction
+                            result = calculate_taxable_income(taxable_income, tax_brackets)
+                            federal_tax = result.total_tax
+                            
+                            # Recalculate capital gains tax (if any LTCG)
+                            cg_tax = calculate_cap_gains(
+                                taxable_income - year_strategy.ltcg_harvested,
+                                cg_brackets,
+                                year_strategy.ltcg_harvested
+                            )
+                            year_strategy.federal_tax = federal_tax + cg_tax
+                            
+                            # Recalculate state tax with new AGI
+                            # Get state from config
+                            try:
+                                state = config_mgr.get('personal_info', 'retirement_state', 'FL')
+                            except:
+                                state = 'FL'
+                            
+                            # CRITICAL: Use the UPDATED conversion amount for retirement_income
+                            # The year_strategy.roth_conversion has already been increased by max_additional_conversion
+                            total_retirement_income = year_strategy.traditional_withdrawal + year_strategy.roth_conversion
+                            
+                            # CRITICAL: Calculate the taxable SS portion that's actually in the AGI
+                            # AGI = retirement_income + taxable_ss + ltcg
+                            # Therefore: taxable_ss = AGI - retirement_income - ltcg
+                            #
+                            # We MUST pass only the taxable SS portion to calculate_state_tax, not the full SS benefits.
+                            # Otherwise, states like PA will try to exempt more than what's in the AGI, causing
+                            # negative taxable income.
+                            taxable_ss_in_agi = year_strategy.agi - total_retirement_income - year_strategy.ltcg_harvested
+                            
+                            # Ensure it's not negative (shouldn't happen, but safety check)
+                            taxable_ss_in_agi = max(0, taxable_ss_in_agi)
+                            
+                            logger.info(f"  State tax inputs: AGI=${year_strategy.agi:,.0f}, "
+                                      f"retirement_income=${total_retirement_income:,.0f}, "
+                                      f"taxable_ss_in_agi=${taxable_ss_in_agi:,.0f}, "
+                                      f"full_ss_benefits=${year_strategy.ss_benefits:,.0f}, "
+                                      f"ltcg_harvested=${year_strategy.ltcg_harvested:,.0f}")
+                            logger.info(f"  Expected state taxable after exemptions: "
+                                      f"${year_strategy.agi - total_retirement_income - taxable_ss_in_agi:,.0f} "
+                                      f"(should equal ltcg_harvested)")
+                            
+                            state_tax, state_details = calculate_state_tax(
+                                state_agi=year_strategy.agi,
+                                state=state,
+                                year=year_strategy.year,
+                                filing_status=filing_status,
+                                retirement_income=total_retirement_income,
+                                ss_benefits=taxable_ss_in_agi  # Pass only the taxable portion in AGI
+                            )
+                            year_strategy.state_tax = state_tax
+                            
+                            logger.info(f"  State tax result: taxable_income=${state_details.get('taxable_income', 0):,.0f}, "
+                                      f"state_tax=${state_tax:,.0f}")
+                            
+                            logger.info(f"  Tax recalculation: AGI increased by ${max_additional_conversion:,.2f}")
+                            logger.info(f"  New AGI: ${year_strategy.agi:,.2f}, New Federal Tax: ${year_strategy.federal_tax:,.2f}, New State Tax: ${year_strategy.state_tax:,.2f}")
+                        except Exception as e:
+                            logger.warning(f"  Could not recalculate taxes after optimization: {e}")
                         
                         total_additional_conversions += max_additional_conversion
                         years_adjusted += 1
@@ -1978,6 +2057,9 @@ class YearlyStrategy:
     # Account balances (end of year)
     balances: PortfolioBalances
     
+    # State income tax (added after balances to maintain field order)
+    state_tax: float = 0.0
+    
     # NEW: Fund movement tracking (v2.0 - Account Rebalancing)
     cash_replenishment: float = 0.0
     payroll_tax: float = 0.0    # FICA + Medicare + State + FUTA/SUTA (wages years only)
@@ -2364,6 +2446,106 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
 
     return balances, transactions, dl
 
+def calculate_anticipated_buffer_needs(balances: PortfolioBalances,
+                                       expenses: float,
+                                       age_primary: int,
+                                       federal_tax: float = 0.0,
+                                       irmaa_penalty: float = 0.0,
+                                       aca_premium: float = 0.0,
+                                       medical_costs: float = 0.0) -> Dict[str, float]:
+    """
+    Calculate anticipated buffer replenishment needs BEFORE executing conversions.
+    
+    This lookahead function estimates how much will need to be withdrawn from
+    Traditional and Roth accounts to maintain cash and brokerage buffers, allowing
+    the conversion optimizer to account for these needs and avoid over-converting.
+    
+    Args:
+        balances: Current portfolio balances
+        expenses: Annual expenses
+        age_primary: Primary person's age
+        federal_tax: Estimated federal tax
+        irmaa_penalty: Estimated IRMAA penalty
+        aca_premium: Estimated ACA premium
+        medical_costs: Estimated medical costs
+    
+    Returns:
+        Dict with anticipated withdrawals:
+        - 'traditional_to_cash': Anticipated Traditional → Cash
+        - 'traditional_to_brokerage': Anticipated Traditional → Brokerage
+        - 'roth_to_cash': Anticipated Roth → Cash
+        - 'brokerage_to_cash': Anticipated Brokerage → Cash
+        - 'total_traditional_need': Total Traditional needed for buffers
+    """
+    # Simulate cash deductions
+    total_cash_outflow = expenses + federal_tax + irmaa_penalty + aca_premium + medical_costs
+    simulated_cash = balances.cash - total_cash_outflow
+    
+    # Calculate buffer targets
+    cash_target, brokerage_target = calculate_cash_buffer_targets(expenses)
+    
+    # Anticipate cash buffer needs
+    cash_deficit = max(0, cash_target - simulated_cash)
+    traditional_to_cash = 0.0
+    roth_to_cash = 0.0
+    brokerage_to_cash = 0.0
+    
+    if cash_deficit > 100:  # Ignore trivial amounts
+        # Step 1: Brokerage → Cash
+        if balances.taxable > 0:
+            transfer = min(cash_deficit, balances.taxable)
+            brokerage_to_cash = transfer
+            cash_deficit -= transfer
+            simulated_cash += transfer
+        
+        # Step 2: Roth → Cash (if age qualified)
+        if cash_deficit > 0 and balances.roth > 0 and age_primary >= 59.5:
+            distribution = min(cash_deficit, balances.roth * 0.10)
+            roth_to_cash = distribution
+            cash_deficit -= distribution
+            simulated_cash += distribution
+        
+        # Step 3: Traditional → Cash (if age qualified)
+        if cash_deficit > 0 and balances.traditional > 0 and age_primary >= EARLY_WITHDRAWAL_PENALTY_AGE:
+            distribution = min(cash_deficit, balances.traditional * 0.10)
+            traditional_to_cash = distribution
+            cash_deficit -= distribution
+            simulated_cash += distribution
+        
+        # Step 4: Emergency Roth if still needed
+        if cash_deficit > 0 and balances.roth > 0:
+            distribution = min(cash_deficit, balances.roth * 0.05)
+            roth_to_cash += distribution
+    
+    # Anticipate brokerage buffer needs
+    simulated_brokerage = balances.taxable - brokerage_to_cash
+    brokerage_deficit = max(0, brokerage_target - simulated_brokerage)
+    traditional_to_brokerage = 0.0
+    
+    if brokerage_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
+        if balances.traditional > 0 and age_primary >= EARLY_WITHDRAWAL_PENALTY_AGE:
+            # Account for Traditional already used for cash
+            available_traditional = balances.traditional - traditional_to_cash
+            distribution = min(brokerage_deficit, available_traditional * _MAX_TRADITIONAL_TO_BROKERAGE_RATE)
+            traditional_to_brokerage = distribution
+    
+    total_traditional_need = traditional_to_cash + traditional_to_brokerage
+    
+    logger.debug(f"Anticipated buffer needs: Trad→Cash=${traditional_to_cash:,.0f}, "
+                f"Trad→Brok=${traditional_to_brokerage:,.0f}, "
+                f"Total Trad need=${total_traditional_need:,.0f}")
+    
+    return {
+        'traditional_to_cash': traditional_to_cash,
+        'traditional_to_brokerage': traditional_to_brokerage,
+        'roth_to_cash': roth_to_cash,
+        'brokerage_to_cash': brokerage_to_cash,
+        'total_traditional_need': total_traditional_need,
+        'cash_deficit_after_buffers': max(0, cash_target - simulated_cash),
+        'brokerage_deficit_after_buffers': max(0, brokerage_target - simulated_brokerage)
+    }
+
+
 
 def execute_roth_conversion(balances: PortfolioBalances,
                            conversion_amount: float,
@@ -2495,22 +2677,126 @@ def rebalance_accounts(balances: PortfolioBalances,
 
     logger.info(f"  Cash after deductions: ${balances.cash:,.2f}")
 
-    # Step 2: Replenish cash buffer (after expenses paid)
-    balances, cash_txns, cash_dl = replenish_cash_buffer(
-        balances, expenses, age_primary, year,
-        cash_target_override=cash_target_override
-    )
-    transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
-    transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
-    transactions['roth_to_cash'] = cash_txns['roth_to_cash']
-    transactions['cash_replenishment'] = cash_txns['cash_replenishment']
-    dl.cash_replenishment.extend(cash_dl.cash_replenishment)
+    # Step 2: Optimized buffer replenishment strategy
+    # Check if Brokerage can cover cash needs AND maintain its own buffer
+    cash_target, brokerage_target = calculate_cash_buffer_targets(expenses)
+    if cash_target_override is not None:
+        cash_target = cash_target_override
+    
+    cash_deficit = max(0, cash_target - balances.cash)
+    
+    # Calculate what brokerage would have after covering cash deficit
+    brokerage_after_cash = balances.taxable - cash_deficit
+    brokerage_deficit_after_cash = max(0, brokerage_target - brokerage_after_cash)
+    
+    # Tax-efficient routing decision:
+    # If Brokerage can cover cash AND maintain buffer: use normal flow (Brokerage→Cash, then Trad→Brokerage)
+    # If Brokerage cannot maintain buffer after cash: route Traditional directly to Cash for the shortfall
+    if cash_deficit > 0 and brokerage_deficit_after_cash > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
+        # Brokerage can't cover both - use optimized routing
+        logger.info(f"Year {year}: Optimized routing - Brokerage insufficient for both cash and buffer")
+        logger.info(f"  Cash deficit: ${cash_deficit:,.0f}")
+        logger.info(f"  Brokerage balance: ${balances.taxable:,.0f}")
+        logger.info(f"  Brokerage after cash transfer: ${brokerage_after_cash:,.0f}")
+        logger.info(f"  Brokerage target: ${brokerage_target:,.0f}")
+        logger.info(f"  Brokerage deficit after cash: ${brokerage_deficit_after_cash:,.0f}")
+        
+        # Route what Brokerage CAN provide to Cash (maintaining its buffer)
+        brokerage_can_provide = max(0, balances.taxable - brokerage_target)
+        
+        if brokerage_can_provide > 0:
+            # Transfer available brokerage to cash
+            transfer = min(cash_deficit, brokerage_can_provide)
+            balances = PortfolioBalances(
+                cash=balances.cash + transfer,
+                taxable=balances.taxable - transfer,
+                traditional=balances.traditional,
+                roth=balances.roth,
+                daf=balances.daf
+            )
+            transactions['brokerage_to_cash'] = transfer
+            cash_deficit -= transfer
+            logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash")
+            
+            dl.add("cash_replenishment", "Brokerage → Cash (Partial)",
+                   f"Transfer ${transfer:,.0f}",
+                   "Brokerage provided what it could while maintaining its buffer target. "
+                   "Remaining cash deficit will be sourced directly from Traditional to avoid "
+                   "double taxation (ordinary income on Trad→Broker, then LTCG on Broker→Cash).",
+                   transferred=f"${transfer:,.0f}",
+                   remaining_deficit=f"${cash_deficit:,.0f}")
+        
+        # Route remaining cash deficit directly from Traditional (avoiding Brokerage)
+        if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.traditional > 0:
+            if age_primary >= EARLY_WITHDRAWAL_PENALTY_AGE:
+                distribution = min(cash_deficit, balances.traditional * 0.15)  # Cap at 15%
+                balances = PortfolioBalances(
+                    cash=balances.cash + distribution,
+                    taxable=balances.taxable,
+                    traditional=balances.traditional - distribution,
+                    roth=balances.roth,
+                    daf=balances.daf
+                )
+                transactions['traditional_to_cash'] = distribution
+                cash_deficit -= distribution
+                logger.info(f"  Distributed ${distribution:,.0f} directly from Traditional to Cash (optimized routing)")
+                
+                dl.add("cash_replenishment", "Traditional → Cash (Optimized)",
+                       f"Distribute ${distribution:,.0f}",
+                       "TAX OPTIMIZATION: Routing Traditional directly to Cash instead of through Brokerage. "
+                       "This avoids double taxation: we pay ordinary income tax once on the Traditional withdrawal, "
+                       "rather than paying ordinary income on Trad→Broker PLUS LTCG when those funds later move Broker→Cash. "
+                       "This saves approximately 15-20% in LTCG on 40% of the amount.",
+                       distributed=f"${distribution:,.0f}",
+                       tax_savings_strategy="Direct routing avoids LTCG on replenishment",
+                       remaining_deficit=f"${cash_deficit:,.0f}")
+        
+        # Handle any remaining deficit with Roth if needed
+        if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.roth > 0 and age_primary >= 59.5:
+            distribution = min(cash_deficit, balances.roth * 0.10)
+            balances = PortfolioBalances(
+                cash=balances.cash + distribution,
+                taxable=balances.taxable,
+                traditional=balances.traditional,
+                roth=balances.roth - distribution,
+                daf=balances.daf
+            )
+            transactions['roth_to_cash'] = distribution
+            logger.info(f"  Distributed ${distribution:,.0f} from Roth to Cash")
+            
+            dl.add("cash_replenishment", "Roth → Cash",
+                   f"Distribute ${distribution:,.0f}",
+                   "Roth used to cover remaining cash deficit after Traditional.",
+                   distributed=f"${distribution:,.0f}")
+        
+        transactions['cash_replenishment'] = (transactions['brokerage_to_cash'] +
+                                             transactions['traditional_to_cash'] +
+                                             transactions['roth_to_cash'])
+        
+        # No brokerage replenishment needed - it maintained its buffer
+        transactions['traditional_to_brokerage'] = 0.0
+        transactions['brokerage_replenishment'] = 0.0
+        
+    else:
+        # Normal flow - Brokerage can handle it
+        logger.info(f"Year {year}: Normal routing - Brokerage sufficient for cash and buffer")
+        
+        # Step 2a: Replenish cash buffer (after expenses paid)
+        balances, cash_txns, cash_dl = replenish_cash_buffer(
+            balances, expenses, age_primary, year,
+            cash_target_override=cash_target_override
+        )
+        transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
+        transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
+        transactions['roth_to_cash'] = cash_txns['roth_to_cash']
+        transactions['cash_replenishment'] = cash_txns['cash_replenishment']
+        dl.cash_replenishment.extend(cash_dl.cash_replenishment)
 
-    # Step 3: Replenish brokerage buffer
-    balances, brokerage_txns, brok_dl = replenish_brokerage_buffer(balances, expenses, age_primary, year)
-    transactions['traditional_to_brokerage'] = brokerage_txns['traditional_to_brokerage']
-    transactions['brokerage_replenishment'] = brokerage_txns['brokerage_replenishment']
-    dl.brokerage_replenishment.extend(brok_dl.brokerage_replenishment)
+        # Step 2b: Replenish brokerage buffer
+        balances, brokerage_txns, brok_dl = replenish_brokerage_buffer(balances, expenses, age_primary, year)
+        transactions['traditional_to_brokerage'] = brokerage_txns['traditional_to_brokerage']
+        transactions['brokerage_replenishment'] = brokerage_txns['brokerage_replenishment']
+        dl.brokerage_replenishment.extend(brok_dl.brokerage_replenishment)
 
     # Step 4: Execute Roth conversion (after buffers are replenished)
     if roth_conversion > 0:
@@ -2590,21 +2876,42 @@ def _get_latest_retirement_year() -> int:
     return _get_retirement_years()[1]
 
 
-def _calculate_daf_for_year(age_primary: int, std_deduction: float) -> Tuple[float, float]:
+def _calculate_daf_for_year(age_primary: int, age_spouse: int, std_deduction: float,
+                           state_tax: float = 0.0, property_tax: float = 0.0,
+                           brokerage_balance: float = 0.0) -> Tuple[float, float]:
     """Calculate DAF contribution and tax deduction excess for a given year/age.
 
-    Uses the same bundling formula as the Configuration page:
-      bundle_interval = floor(std_ded / annual_giving) + 1  (capped at 5, min 2)
-      bundle_amount   = annual_giving * bundle_interval
-      bundle_years    = years where (age_primary - daf_start_age) % bundle_interval == 0
+    Uses the eldest person's age for DAF contribution timing and stops contributions
+    once the eldest reaches QCD eligibility age (70.5 years old).
+
+    Bundling strategy:
+      - First year: daf_initial_contribution (if configured)
+      - Subsequent years: bundle based on daf_annual_contribution from config
+      - Bundle interval calculated from config or defaults to every 2 years
+      - Stops at QCD eligibility age (70.5) or daf_contribution_end_age, whichever is earlier
+
+    When calculating itemized deductions, includes SALT (State And Local Taxes) which consists
+    of state income tax and property tax, capped at $10,000 per IRS rules.
+
+    Args:
+        age_primary: Primary person's age
+        age_spouse: Spouse's age (0 if single)
+        std_deduction: Standard deduction amount for the year
+        state_tax: State income tax paid (default 0.0)
+        property_tax: Property tax paid (default 0.0)
+        brokerage_balance: Current brokerage account balance (default 0.0)
 
     Returns:
         (daf_contribution, daf_tax_deduction_excess)
         daf_contribution          — amount contributed to DAF this year (0 in non-bundle years)
-        daf_tax_deduction_excess  — amount by which the DAF contribution exceeds the standard
-                                    deduction (i.e. the incremental itemized deduction benefit).
-                                    This is subtracted from taxable income in bundle years.
+        daf_tax_deduction_excess  — amount by which total itemized deductions (DAF + SALT)
+                                    exceed the standard deduction (i.e. the incremental
+                                    itemized deduction benefit). This is subtracted from
+                                    taxable income in bundle years.
     """
+    # QCD (Qualified Charitable Distribution) eligibility age
+    QCD_AGE = 70.5
+    
     try:
         config_mgr = get_config_manager()
         has_daf = config_mgr.get("charitable_giving", "has_daf", False)
@@ -2612,6 +2919,23 @@ def _calculate_daf_for_year(age_primary: int, std_deduction: float) -> Tuple[flo
         daf_start_age = int(config_mgr.get("charitable_giving", "daf_contribution_start_age", 60))
         daf_end_age = int(config_mgr.get("charitable_giving", "daf_contribution_end_age", 75))
         daf_initial = float(config_mgr.get("charitable_giving", "daf_initial_contribution", 0))
+        daf_annual = float(config_mgr.get("charitable_giving", "daf_annual_contribution", 100000))
+        
+        # Get bundle interval from tax_strategy if available, otherwise calculate
+        bundle_interval = config_mgr.get("tax_strategy", "daf_bundle_interval_years", None)
+        if bundle_interval is None:
+            # Calculate bundle interval: floor(std_ded / giving) + 1, capped [2, 5]
+            bundle_interval = max(2, min(int(std_deduction // annual_giving) + 1, 5)) if annual_giving > 0 else 2
+        else:
+            bundle_interval = int(bundle_interval)
+            
+        # Get bundle contribution amount from tax_strategy if available
+        bundle_contribution = config_mgr.get("tax_strategy", "daf_bundle_contribution_amount", None)
+        if bundle_contribution is None:
+            bundle_contribution = daf_annual
+        else:
+            bundle_contribution = float(bundle_contribution)
+            
     except Exception:
         return 0.0, 0.0
 
@@ -2619,30 +2943,60 @@ def _calculate_daf_for_year(age_primary: int, std_deduction: float) -> Tuple[flo
     if not has_daf or annual_giving <= 0:
         return 0.0, 0.0
 
-    # Compute bundle interval: floor(std_ded / giving) + 1, capped [2, 5]
-    bundle_interval = max(2, min(int(std_deduction // annual_giving) + 1, 5))
-    years_into_window = age_primary - daf_start_age
+    # Use eldest person's age for DAF contribution timing
+    eldest_age = max(age_primary, age_spouse) if age_spouse > 0 else age_primary
+    
+    # Stop DAF contributions once eldest reaches QCD eligibility age (70.5)
+    # QCD allows direct charitable distributions from IRA, which is more tax-efficient
+    if eldest_age >= QCD_AGE:
+        logger.debug(f"No DAF contribution: eldest age {eldest_age:.1f} >= QCD age {QCD_AGE}")
+        return 0.0, 0.0
+    
+    # Also respect the configured end age
+    if eldest_age < daf_start_age or eldest_age > daf_end_age:
+        return 0.0, 0.0
+    
+    years_into_window = eldest_age - daf_start_age
 
-    # Outside the DAF contribution age window, or not a bundle year — single guard
-    if not (daf_start_age <= age_primary <= daf_end_age
-            and years_into_window % bundle_interval == 0):
+    # Check if this is a bundle year
+    if years_into_window % bundle_interval != 0:
         return 0.0, 0.0
 
-    bundle_amount = annual_giving * bundle_interval
-
-    # First year of the window: add initial contribution
-    daf_contribution = bundle_amount
+    # First year of the window: use initial contribution
     if years_into_window == 0 and daf_initial > 0:
-        daf_contribution += daf_initial
+        daf_contribution = daf_initial
+        logger.debug(f"DAF initial contribution year (eldest age {eldest_age}): ${daf_contribution:,.0f}")
+    else:
+        # Subsequent bundle years: use configured bundle amount
+        daf_contribution = bundle_contribution
+        logger.debug(f"DAF bundle year (eldest age {eldest_age}): ${daf_contribution:,.0f}")
 
-    # Tax deduction excess: amount above the standard deduction (itemized benefit)
-    daf_tax_excess = max(0.0, daf_contribution - std_deduction)
+    # Check if brokerage has sufficient funds for DAF contribution
+    if daf_contribution > brokerage_balance:
+        logger.warning(
+            f"Insufficient brokerage balance for DAF contribution: "
+            f"${brokerage_balance:,.2f} < ${daf_contribution:,.0f}. "
+            f"Skipping DAF contribution for eldest age {eldest_age}."
+        )
+        return 0.0, 0.0
+
+    # Calculate SALT (State And Local Taxes) deduction, capped at $10,000 per IRS rules
+    salt_deduction = min(10000.0, state_tax + property_tax)
+    
+    # Total itemized deductions = DAF contribution + SALT
+    total_itemized = daf_contribution + salt_deduction
+    
+    # Tax deduction excess: amount by which itemized deductions exceed standard deduction
+    # Only itemize if total itemized deductions exceed the standard deduction
+    daf_tax_excess = max(0.0, total_itemized - std_deduction)
 
     logger.debug(
-        f"DAF bundle year (age {age_primary}): "
+        f"DAF bundle year (eldest age {eldest_age}): "
         f"contribution=${daf_contribution:,.0f}, "
+        f"SALT=${salt_deduction:,.0f} (state=${state_tax:,.0f}, property=${property_tax:,.0f}), "
+        f"total itemized=${total_itemized:,.0f}, "
         f"tax excess above std_ded=${daf_tax_excess:,.0f} "
-        f"(interval={bundle_interval} yrs, bundle=${bundle_amount:,.0f})"
+        f"(interval={bundle_interval} yrs)"
     )
     return daf_contribution, daf_tax_excess
 
@@ -2750,22 +3104,41 @@ class Stage1Accumulation(LifeStage):
         agi = wages - contribution_401k
 
         # -----------------------------------------------------------------------
-        # DAF contribution and tax deduction for this year
+        # Calculate state tax first (needed for SALT deduction in DAF calculation)
         # -----------------------------------------------------------------------
-        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, std_deduction)
+        state_tax, state_details = calculate_state_tax(
+            state_agi=wages,  # Only wages are taxed; retirement income exempt in PA
+            year=year,
+            filing_status=filing_status,
+            retirement_income=0,  # No retirement income during accumulation
+            ss_benefits=0
+        )
+        
+        # Get property tax from config for SALT deduction
+        try:
+            config_mgr = get_config_manager()
+            property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+        except Exception:
+            property_tax = 0.0
 
-        # In a DAF bundle year, the contribution exceeds the standard deduction,
-        # so we itemize instead of taking the standard deduction.  The incremental
-        # tax benefit is the amount above the standard deduction.
-        # taxable_income = agi - max(std_deduction, daf_contribution)
-        effective_deduction = std_deduction + daf_tax_excess  # = daf_contribution when bundling
+        # -----------------------------------------------------------------------
+        # DAF contribution and tax deduction for this year (includes SALT)
+        # -----------------------------------------------------------------------
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary, age_spouse, std_deduction, state_tax, property_tax, balances.taxable
+        )
+
+        # In a DAF bundle year, itemized deductions (DAF + SALT) exceed the standard deduction.
+        # The incremental tax benefit is the amount above the standard deduction.
+        effective_deduction = std_deduction + daf_tax_excess
         taxable_income = agi - effective_deduction
         result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
         logger.debug(f"AGI: ${agi:,.2f}, DAF contrib: ${daf_contribution:,.0f}, "
                      f"effective deduction: ${effective_deduction:,.0f}, "
-                     f"Tax bracket: {max_rate:.1%}, Tax: ${federal_tax:,.2f}")
+                     f"Tax bracket: {max_rate:.1%}, Federal Tax: ${federal_tax:,.2f}, "
+                     f"State Tax: ${state_tax:,.2f}")
         logger.debug(
             f"Stage 1 contributions — Traditional 401k: ${contribution_401k:,.0f} "
             f"({trad_pct:.0%}), Roth: ${contribution_roth:,.0f} ({roth_pct:.0%}), "
@@ -3007,6 +3380,7 @@ class Stage1Accumulation(LifeStage):
             agi=agi,
             magi=magi,
             federal_tax=federal_tax,
+            state_tax=state_tax,
             irmaa_penalty=medical_costs,
             aca_premium=aca_premium,
             balances=new_balances,
@@ -3157,9 +3531,30 @@ class Stage2PrepForRetirement(LifeStage):
         agi = wages if prefer_roth_401k else wages - contribution_401k
 
         # -----------------------------------------------------------------------
-        # DAF contribution and tax deduction for this year (Stage 2)
+        # Calculate state tax first (needed for SALT deduction in DAF calculation)
+        # Note: This is a preliminary calculation; will be recalculated after conversions
         # -----------------------------------------------------------------------
-        daf_contribution, daf_tax_excess = _calculate_daf_for_year(age_primary, std_deduction)
+        state_tax_preliminary, _ = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=0,
+            ss_benefits=ss_benefits
+        )
+        
+        # Get property tax from config for SALT deduction
+        try:
+            config_mgr = get_config_manager()
+            property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+        except Exception:
+            property_tax = 0.0
+
+        # -----------------------------------------------------------------------
+        # DAF contribution and tax deduction for this year (includes SALT)
+        # -----------------------------------------------------------------------
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary, age_spouse, std_deduction, state_tax_preliminary, property_tax, balances.taxable
+        )
         effective_deduction = std_deduction + daf_tax_excess
 
         taxable_income = agi - effective_deduction
@@ -3417,6 +3812,16 @@ class Stage2PrepForRetirement(LifeStage):
         dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
         dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
 
+        # Recalculate state income tax including any Roth conversion
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi + roth_conversion,  # Include conversion in state AGI
+            year=year,
+            filing_status=filing_status,
+            retirement_income=roth_conversion,  # Only conversion is retirement income in Stage 2
+            ss_benefits=ss_benefits
+        )
+        logger.info(f"Year {year}: State tax recalculated with conversion: ${state_tax:,.2f}")
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -3438,6 +3843,7 @@ class Stage2PrepForRetirement(LifeStage):
             irmaa_penalty=medical_costs,
             aca_premium=aca_premium,
             balances=new_balances,
+            state_tax=state_tax,
             payroll_tax=payroll_tax,
             wages_to_trad=0 if prefer_roth_401k else contribution_401k,
             wages_to_roth=(contribution_401k if prefer_roth_401k else 0) + contribution_roth + backdoor_roth_amount,
@@ -3509,6 +3915,11 @@ class Stage3EarlyRetirement(LifeStage):
         std_deduction_df = get_std_deduction(year, filing_status)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
+        # OPTIMIZATION: When wages=0, ensure at least 90% of standard deduction in ordinary income
+        # This can be satisfied by Roth conversions OR traditional distributions
+        # This results in ~0% tax on ordinary income, freeing up 0% LTCG bracket for conversions
+        min_ordinary_income_target = std_deduction * 0.90
+        
         # NEW STRATEGY: Maintain cash buffer using configured target values
         start_year = kwargs.get('start_year', year)
         cash_target, taxable_target = calculate_cash_buffer_targets(expenses)
@@ -3565,6 +3976,50 @@ class Stage3EarlyRetirement(LifeStage):
                max_brokerage_withdrawal=f"${max_brokerage_withdrawal:,.0f}",
                ltcg_harvested=f"${ltcg_harvested:,.0f}",
                brokerage_balance=f"${balances.taxable:,.0f}")
+        # Calculate taxes (preliminary estimate for lookahead)
+        total_income = ltcg_harvested  # Preliminary, before conversion
+        agi_preliminary = total_income
+        taxable_income_preliminary = agi_preliminary - std_deduction
+        result_preliminary = calculate_taxable_income(taxable_income_preliminary, tax_brackets)
+        federal_tax_preliminary = result_preliminary.total_tax
+        cg_tax_preliminary = calculate_cap_gains(taxable_income_preliminary - ltcg_harvested, cg_brackets, ltcg_harvested)
+        total_tax_preliminary = federal_tax_preliminary + cg_tax_preliminary
+        
+        # Calculate ACA premium based on configuration
+        aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
+        
+        # LOOKAHEAD: Calculate anticipated buffer needs before conversion optimization
+        # This ensures we don't over-convert and then need to withdraw from Traditional for buffers
+        anticipated_needs = calculate_anticipated_buffer_needs(
+            balances=balances,
+            expenses=expenses,
+            age_primary=age_primary,
+            federal_tax=total_tax_preliminary,  # Use preliminary tax estimate
+            irmaa_penalty=0.0,
+            aca_premium=aca_premium,
+            medical_costs=0.0
+        )
+        
+        # Adjust available Traditional balance for conversion by subtracting anticipated buffer needs
+        available_for_conversion = max(0, balances.traditional - anticipated_needs['total_traditional_need'])
+        
+        logger.info(f"Year {year}: Lookahead buffer analysis (Stage 3)")
+        logger.info(f"  Traditional balance: ${balances.traditional:,.0f}")
+        logger.info(f"  Anticipated buffer needs: ${anticipated_needs['total_traditional_need']:,.0f}")
+        logger.info(f"    - Trad→Cash: ${anticipated_needs['traditional_to_cash']:,.0f}")
+        logger.info(f"    - Trad→Brok: ${anticipated_needs['traditional_to_brokerage']:,.0f}")
+        logger.info(f"  Available for conversion: ${available_for_conversion:,.0f}")
+        
+        dl.add("roth_conversion", "Lookahead Buffer Analysis",
+               f"Reserved ${anticipated_needs['total_traditional_need']:,.0f} for buffers",
+               "Before optimizing Roth conversions, we anticipate how much Traditional will be needed "
+               "to maintain cash and brokerage buffers. This prevents over-converting and ensures "
+               "consistent year-over-year strategy for the same AGI target.",
+               traditional_balance=f"${balances.traditional:,.0f}",
+               anticipated_trad_to_cash=f"${anticipated_needs['traditional_to_cash']:,.0f}",
+               anticipated_trad_to_brok=f"${anticipated_needs['traditional_to_brokerage']:,.0f}",
+               available_for_conversion=f"${available_for_conversion:,.0f}")
+
 
         # Calculate Roth conversion using BETR algorithm
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
@@ -3573,10 +4028,10 @@ class Stage3EarlyRetirement(LifeStage):
         # Initialize roth_conversion
         roth_conversion = 0
 
-        # Use BETR algorithm to optimize conversion amount
+        # Use BETR algorithm to optimize conversion amount with adjusted Traditional balance
         try:
             optimal_amount, betr_results = optimize_conversion_amount(
-                traditional_ira_balance=balances.traditional,
+                traditional_ira_balance=available_for_conversion,  # Use adjusted balance after buffer needs
                 current_agi=current_income,
                 target_tax_bracket=max_conversion_rate,
                 year=year,
@@ -3636,20 +4091,22 @@ class Stage3EarlyRetirement(LifeStage):
                 target_bracket_upper = float(getUpperIncomeRate(0.12, tax_brackets))
 
             conversion_room = max(0, target_bracket_upper - std_deduction - current_income)
-            roth_conversion = min(conversion_room, balances.traditional)
+            roth_conversion = min(conversion_room, available_for_conversion)  # Use adjusted balance
 
         logger.debug(f"Roth conversion: ${roth_conversion:,.2f}")
 
         # Calculate taxes
+        # Note: AGI calculation happens AFTER rebalance_accounts to include Traditional withdrawals
         total_income = ltcg_harvested + roth_conversion
-        agi = total_income - std_deduction
+        agi_preliminary = total_income  # Preliminary AGI for tax calculation
 
-        # Income tax on conversions
-        result = calculate_taxable_income(agi, tax_brackets)
+        # Calculate taxable income by subtracting standard deduction from preliminary AGI
+        taxable_income = agi_preliminary - std_deduction
+        result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
         # Capital gains tax
-        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        cg_tax = calculate_cap_gains(taxable_income - ltcg_harvested, cg_brackets, ltcg_harvested)
 
         total_tax = federal_tax + cg_tax
 
@@ -3667,9 +4124,43 @@ class Stage3EarlyRetirement(LifeStage):
                age_primary=age_primary,
                age_spouse=age_spouse)
         
+        # Calculate state income tax (needed for DAF SALT deduction calculation)
+        # Use preliminary AGI for state tax calculation
+        preliminary_agi = ltcg_harvested + roth_conversion
+        state_tax, state_details = calculate_state_tax(
+            state_agi=preliminary_agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=roth_conversion,
+            ss_benefits=0
+        )
+        
+        # Get property tax from config for SALT deduction
+        try:
+            property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+        except Exception:
+            property_tax = 0.0
+        
+        # Calculate DAF contribution for this year (BEFORE rebalancing)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary, age_spouse, std_deduction, state_tax, property_tax, balances.taxable
+        )
+        
+        # Subtract DAF contribution from brokerage BEFORE rebalancing
+        balances_for_rebalance = balances
+        if daf_contribution > 0:
+            balances_for_rebalance = PortfolioBalances(
+                cash=balances.cash,
+                taxable=balances.taxable - daf_contribution,
+                traditional=balances.traditional,
+                roth=balances.roth,
+                daf=balances.daf
+            )
+            logger.info(f"Year {year}: Subtracting DAF contribution ${daf_contribution:,.0f} from Brokerage before rebalancing")
+        
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         new_balances, transactions, rebal_dl = rebalance_accounts(
-            balances=balances,
+            balances=balances_for_rebalance,
             expenses=expenses,
             roth_conversion=roth_conversion,
             year=year,
@@ -3681,6 +4172,57 @@ class Stage3EarlyRetirement(LifeStage):
             medical_costs=0.0
         )
         
+        # OPTIMIZATION: Ensure we meet the 90% standard deduction target with ordinary income
+        # Check if Roth conversion + Traditional withdrawals meet the target
+        trad_withdrawal_so_far = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
+        ordinary_income_so_far = roth_conversion + trad_withdrawal_so_far
+        
+        if ordinary_income_so_far < min_ordinary_income_target and balances.traditional > 0:
+            # Need additional Traditional withdrawal to reach target
+            additional_needed = min_ordinary_income_target - ordinary_income_so_far
+            additional_withdrawal = min(additional_needed, new_balances.traditional)
+            
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash + additional_withdrawal,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional - additional_withdrawal,
+                roth=new_balances.roth,
+                daf=new_balances.daf
+            )
+            transactions['traditional_to_cash'] += additional_withdrawal
+            
+            logger.info(f"Year {year}: Added ${additional_withdrawal:,.0f} Traditional withdrawal "
+                       f"to reach 90% std deduction target (${min_ordinary_income_target:,.0f})")
+            
+            dl.add("tax_strategy", "Standard Deduction Optimization (0% Tax)",
+                   f"Added ${additional_withdrawal:,.0f} Traditional withdrawal",
+                   f"Roth conversion (${roth_conversion:,.0f}) + buffer withdrawals (${trad_withdrawal_so_far:,.0f}) "
+                   f"= ${ordinary_income_so_far:,.0f} ordinary income. Added ${additional_withdrawal:,.0f} to reach "
+                   f"90% of standard deduction (${min_ordinary_income_target:,.0f}), resulting in ~0% tax on "
+                   "ordinary income and freeing the 0% LTCG bracket.",
+                   std_deduction=f"${std_deduction:,.0f}",
+                   target_income=f"${min_ordinary_income_target:,.0f}",
+                   roth_conversion=f"${roth_conversion:,.0f}",
+                   buffer_withdrawals=f"${trad_withdrawal_so_far:,.0f}",
+                   additional_withdrawal=f"${additional_withdrawal:,.0f}",
+                   effective_tax_rate="~0%")
+        elif ordinary_income_so_far >= min_ordinary_income_target:
+            logger.info(f"Year {year}: Ordinary income ${ordinary_income_so_far:,.0f} already meets "
+                       f"90% std deduction target (${min_ordinary_income_target:,.0f}) via Roth conversion "
+                       f"and buffer withdrawals")
+            
+            dl.add("tax_strategy", "Standard Deduction Optimization (0% Tax)",
+                   f"Target met via Roth conversion + buffer withdrawals",
+                   f"Roth conversion (${roth_conversion:,.0f}) + buffer withdrawals (${trad_withdrawal_so_far:,.0f}) "
+                   f"= ${ordinary_income_so_far:,.0f}, which meets the 90% standard deduction target "
+                   f"(${min_ordinary_income_target:,.0f}). This results in ~0% tax on ordinary income.",
+                   std_deduction=f"${std_deduction:,.0f}",
+                   target_income=f"${min_ordinary_income_target:,.0f}",
+                   actual_income=f"${ordinary_income_so_far:,.0f}",
+                   roth_conversion=f"${roth_conversion:,.0f}",
+                   buffer_withdrawals=f"${trad_withdrawal_so_far:,.0f}",
+                   effective_tax_rate="~0%")
+        
         # Apply growth rate to remaining balances
         growth_rate = kwargs.get('growth_rate', 1.07)
         new_balances = PortfolioBalances(
@@ -3688,18 +4230,58 @@ class Stage3EarlyRetirement(LifeStage):
             taxable=new_balances.taxable * growth_rate,
             traditional=new_balances.traditional * growth_rate,
             roth=new_balances.roth * growth_rate,
-            daf=new_balances.daf
+            daf=new_balances.daf * growth_rate
         )
         
-        # Calculate MAGI for this year
+        # Calculate AGI and MAGI for this year
+        # AGI includes: LTCG, Roth conversions, AND Traditional withdrawals (buffer + optimization)
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = (0 * TAXABLE_SS_RATE +  # No SS benefits yet
-                trad_withdrawal +
-                roth_conversion +
-                ltcg_harvested)
+        agi = ltcg_harvested + roth_conversion + trad_withdrawal
+        
+        logger.info(f"Year {year} Stage 3 AGI breakdown: LTCG=${ltcg_harvested:,.0f}, "
+                   f"Roth Conv=${roth_conversion:,.0f}, Trad Withdrawal=${trad_withdrawal:,.0f}, "
+                   f"Total AGI=${agi:,.0f}")
+        
+        # MAGI is the same as AGI in Stage 3 (no SS benefits yet)
+        magi = agi
         
         dl.cash_replenishment.extend(rebal_dl.cash_replenishment)
         dl.brokerage_replenishment.extend(rebal_dl.brokerage_replenishment)
+
+        # Calculate state income tax on retirement income (needed for DAF SALT deduction)
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=trad_withdrawal + roth_conversion,
+            ss_benefits=0  # No SS benefits in early retirement
+        )
+        logger.info(f"Year {year}: State tax calculated: ${state_tax:,.2f}")
+        
+        # If DAF contribution made, add to DAF balance and recalculate federal tax with increased deduction
+        if daf_contribution > 0:
+            # Add DAF contribution to DAF balance (already subtracted from brokerage before rebalancing)
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional,
+                roth=new_balances.roth,
+                daf=new_balances.daf + daf_contribution
+            )
+            
+            # Recalculate federal tax with DAF deduction
+            effective_deduction = std_deduction + daf_tax_excess
+            taxable_income_with_daf = agi - effective_deduction
+            result_with_daf = calculate_taxable_income(taxable_income_with_daf, tax_brackets)
+            federal_tax = result_with_daf.total_tax
+            
+            # Recalculate capital gains tax
+            cg_tax = calculate_cap_gains(taxable_income_with_daf - ltcg_harvested, cg_brackets, ltcg_harvested)
+            total_tax = federal_tax + cg_tax
+            
+            logger.info(f"Year {year}: DAF contribution ${daf_contribution:,.0f} from Brokerage")
+            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
+            logger.info(f"Year {year}: Recalculated total tax: ${total_tax:,.2f}")
 
         return YearlyStrategy(
             year=year,
@@ -3714,7 +4296,7 @@ class Stage3EarlyRetirement(LifeStage):
             roth_withdrawal=transactions['roth_to_cash'] + transactions['roth_to_brokerage'],
             roth_conversion=roth_conversion,
             ltcg_harvested=ltcg_harvested,
-            daf_contribution=0,
+            daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
             magi=magi,
@@ -3722,6 +4304,7 @@ class Stage3EarlyRetirement(LifeStage):
             irmaa_penalty=0,
             aca_premium=aca_premium,
             balances=new_balances,
+            state_tax=state_tax,
             # Fund movement tracking
             cash_replenishment=transactions['cash_replenishment'],
             brokerage_replenishment=transactions['brokerage_replenishment'],
@@ -3789,6 +4372,10 @@ class Stage4Medicare(LifeStage):
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
         
+        # OPTIMIZATION: When wages=0, ensure at least 90% of standard deduction in ordinary income
+        # This can be satisfied by Roth conversions OR traditional distributions
+        min_ordinary_income_target = std_deduction * 0.90
+        
         # Calculate IRMAA penalty based on prior year MAGI
         people_on_medicare = sum([age_primary >= MEDICARE_AGE, age_spouse >= MEDICARE_AGE])
         irmaa_penalty = calculate_irmma_penalty(prior_magi, irmaa_brackets, people_on_medicare)
@@ -3852,11 +4439,45 @@ class Stage4Medicare(LifeStage):
         # Initialize roth_conversion and optimal_amount
         roth_conversion = 0
         optimal_amount = 0
+        # Calculate preliminary taxes for lookahead
+        total_income_preliminary = ltcg_harvested
+        agi_preliminary = total_income_preliminary
+        taxable_income_preliminary = agi_preliminary - std_deduction
+        result_preliminary = calculate_taxable_income(taxable_income_preliminary, tax_brackets)
+        federal_tax_preliminary = result_preliminary.total_tax
+        cg_tax_preliminary = calculate_cap_gains(taxable_income_preliminary - ltcg_harvested, cg_brackets, ltcg_harvested)
+        total_tax_preliminary = federal_tax_preliminary + cg_tax_preliminary
         
-        # Use BETR algorithm to optimize conversion
+        # Calculate ACA premium
+        aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
+        
+        # LOOKAHEAD: Calculate anticipated buffer needs before conversion optimization
+        anticipated_needs = calculate_anticipated_buffer_needs(
+            balances=balances,
+            expenses=expenses,
+            age_primary=age_primary,
+            federal_tax=total_tax_preliminary,
+            irmaa_penalty=irmaa_penalty,
+            aca_premium=aca_premium,
+            medical_costs=0.0
+        )
+        
+        # Adjust available Traditional balance for conversion (subtract guaranteed withdrawal)
+        available_for_conversion = max(0, balances.traditional - anticipated_needs['total_traditional_need'])
+        
+        logger.info(f"Year {year}: Lookahead buffer analysis (Stage 4)")
+        logger.info(f"  Traditional balance: ${balances.traditional:,.0f}")
+        logger.info(f"  Anticipated buffer needs: ${anticipated_needs['total_traditional_need']:,.0f}")
+        logger.info(f"    - Trad→Cash: ${anticipated_needs['traditional_to_cash']:,.0f}")
+        logger.info(f"    - Trad→Brok: ${anticipated_needs['traditional_to_brokerage']:,.0f}")
+        logger.info(f"  Available for conversion: ${available_for_conversion:,.0f}")
+        logger.info(f"  IRMAA headroom: ${irmaa_headroom:,.0f}")
+        
+        
+        # Use BETR algorithm to optimize conversion with adjusted Traditional balance
         try:
             optimal_amount, betr_results = optimize_conversion_amount(
-                traditional_ira_balance=balances.traditional,
+                traditional_ira_balance=available_for_conversion,  # Use adjusted balance after buffer needs
                 current_agi=current_income,
                 target_tax_bracket=max_conversion_rate,
                 year=year,
@@ -3918,17 +4539,20 @@ class Stage4Medicare(LifeStage):
             
             tax_headroom = target_bracket_upper - std_deduction - ltcg_harvested
             conversion_room = min(irmaa_headroom, tax_headroom)
-            roth_conversion = min(conversion_room, balances.traditional)
+            roth_conversion = min(conversion_room, available_for_conversion)  # Use adjusted balance
         
         logger.debug(f"Roth conversion: ${roth_conversion:,.2f} (IRMAA headroom: ${irmaa_headroom:,.2f})")
         
         # Calculate taxes
+        # Note: AGI calculation happens AFTER rebalance_accounts to include Traditional withdrawals
         total_income = ltcg_harvested + roth_conversion
-        agi = total_income - std_deduction
+        agi_preliminary = total_income  # Preliminary AGI for tax calculation
         
-        result = calculate_taxable_income(agi, tax_brackets)
+        # Calculate taxable income by subtracting standard deduction from preliminary AGI
+        taxable_income = agi_preliminary - std_deduction
+        result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
-        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        cg_tax = calculate_cap_gains(taxable_income - ltcg_harvested, cg_brackets, ltcg_harvested)
         total_tax = federal_tax + cg_tax
         
         # Calculate ACA premium based on configuration (may still apply if under 65)
@@ -3937,9 +4561,41 @@ class Stage4Medicare(LifeStage):
         # --- Decision log for Stage 4 ---
         dl = DecisionLog()
 
+        # Get property tax from config for SALT deduction
+        try:
+            property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+        except Exception:
+            property_tax = 0.0
+        
+        # Calculate state income tax (needed for DAF SALT deduction calculation)
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi_preliminary,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=roth_conversion,
+            ss_benefits=0
+        )
+        
+        # Calculate DAF contribution for this year (BEFORE rebalancing)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary, age_spouse, std_deduction, state_tax, property_tax, balances.taxable
+        )
+        
+        # Subtract DAF contribution from brokerage BEFORE rebalancing
+        balances_for_rebalance = balances
+        if daf_contribution > 0:
+            balances_for_rebalance = PortfolioBalances(
+                cash=balances.cash,
+                taxable=balances.taxable - daf_contribution,
+                traditional=balances.traditional,
+                roth=balances.roth,
+                daf=balances.daf
+            )
+            logger.info(f"Year {year}: Subtracting DAF contribution ${daf_contribution:,.0f} from Brokerage before rebalancing")
+
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         new_balances, transactions, rebal_dl = rebalance_accounts(
-            balances=balances,
+            balances=balances_for_rebalance,
             expenses=expenses,
             roth_conversion=roth_conversion,
             year=year,
@@ -3951,6 +4607,41 @@ class Stage4Medicare(LifeStage):
             medical_costs=0.0
         )
         
+        # OPTIMIZATION: Ensure we meet the 90% standard deduction target with ordinary income
+        trad_withdrawal_so_far = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
+        ordinary_income_so_far = roth_conversion + trad_withdrawal_so_far
+        
+        if ordinary_income_so_far < min_ordinary_income_target and new_balances.traditional > 0:
+            additional_needed = min_ordinary_income_target - ordinary_income_so_far
+            additional_withdrawal = min(additional_needed, new_balances.traditional)
+            
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash + additional_withdrawal,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional - additional_withdrawal,
+                roth=new_balances.roth,
+                daf=new_balances.daf
+            )
+            transactions['traditional_to_cash'] += additional_withdrawal
+            
+            logger.info(f"Year {year}: Added ${additional_withdrawal:,.0f} Traditional withdrawal to reach 90% std deduction target")
+            
+            dl.add("tax_strategy", "Standard Deduction Optimization (0% Tax)",
+                   f"Added ${additional_withdrawal:,.0f} Traditional withdrawal",
+                   f"Roth conversion + buffer withdrawals totaled ${ordinary_income_so_far:,.0f}. "
+                   f"Added ${additional_withdrawal:,.0f} to reach 90% of standard deduction (${min_ordinary_income_target:,.0f}).",
+                   std_deduction=f"${std_deduction:,.0f}",
+                   target_income=f"${min_ordinary_income_target:,.0f}",
+                   additional_withdrawal=f"${additional_withdrawal:,.0f}")
+        elif ordinary_income_so_far >= min_ordinary_income_target:
+            logger.info(f"Year {year}: Ordinary income ${ordinary_income_so_far:,.0f} already meets target")
+            
+            dl.add("tax_strategy", "Standard Deduction Optimization (0% Tax)",
+                   f"Target met via Roth conversion + buffer withdrawals",
+                   f"Ordinary income of ${ordinary_income_so_far:,.0f} meets the 90% standard deduction target.",
+                   std_deduction=f"${std_deduction:,.0f}",
+                   target_income=f"${min_ordinary_income_target:,.0f}")
+        
         # Apply growth
         growth_rate = kwargs.get('growth_rate', 1.07)
         new_balances = PortfolioBalances(
@@ -3958,15 +4649,16 @@ class Stage4Medicare(LifeStage):
             taxable=new_balances.taxable * growth_rate,
             traditional=new_balances.traditional * growth_rate,
             roth=new_balances.roth * growth_rate,
-            daf=new_balances.daf
+            daf=new_balances.daf * growth_rate
         )
         
-        # Calculate MAGI for this year
+        # Calculate AGI and MAGI for this year
+        # AGI includes: LTCG, Roth conversions, AND Traditional withdrawals (for buffer maintenance)
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = (0 * TAXABLE_SS_RATE +  # No SS benefits yet
-                trad_withdrawal +
-                roth_conversion +
-                ltcg_harvested)
+        agi = ltcg_harvested + roth_conversion + trad_withdrawal
+        
+        # MAGI is the same as AGI in Stage 4 (no SS benefits yet)
+        magi = agi
         
         # IRMAA assessment
         dl.add(
@@ -4039,6 +4731,41 @@ class Stage4Medicare(LifeStage):
         for entry in rebal_dl.all_decisions():
             getattr(dl, _category_for(entry)).append(entry)
 
+        # Calculate state income tax on retirement income (needed for DAF SALT deduction)
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=trad_withdrawal + roth_conversion,
+            ss_benefits=0  # No SS benefits yet in Medicare stage (pre-SS)
+        )
+        logger.info(f"Year {year}: State tax calculated: ${state_tax:,.2f}")
+        
+        # If DAF contribution made, add to DAF balance and recalculate federal tax with increased deduction
+        if daf_contribution > 0:
+            # Add DAF contribution to DAF balance (already subtracted from brokerage before rebalancing)
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional,
+                roth=new_balances.roth,
+                daf=new_balances.daf + daf_contribution
+            )
+            
+            # Recalculate federal tax with DAF deduction
+            effective_deduction = std_deduction + daf_tax_excess
+            taxable_income_with_daf = agi - effective_deduction
+            result_with_daf = calculate_taxable_income(taxable_income_with_daf, tax_brackets)
+            federal_tax = result_with_daf.total_tax
+            
+            # Recalculate capital gains tax
+            cg_tax = calculate_cap_gains(taxable_income_with_daf - ltcg_harvested, cg_brackets, ltcg_harvested)
+            total_tax = federal_tax + cg_tax
+            
+            logger.info(f"Year {year}: DAF contribution ${daf_contribution:,.0f} from Brokerage")
+            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
+            logger.info(f"Year {year}: Recalculated total tax: ${total_tax:,.2f}")
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -4052,7 +4779,7 @@ class Stage4Medicare(LifeStage):
             roth_withdrawal=transactions['roth_to_cash'] + transactions['roth_to_brokerage'],
             roth_conversion=roth_conversion,
             ltcg_harvested=ltcg_harvested,
-            daf_contribution=0,
+            daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
             magi=magi,
@@ -4060,6 +4787,7 @@ class Stage4Medicare(LifeStage):
             irmaa_penalty=irmaa_penalty,
             aca_premium=aca_premium,
             balances=new_balances,
+            state_tax=state_tax,
             # Fund movement tracking
             cash_replenishment=transactions['cash_replenishment'],
             brokerage_replenishment=transactions['brokerage_replenishment'],
@@ -4126,6 +4854,16 @@ class Stage5SocialSecurity(LifeStage):
         std_deduction_df = get_std_deduction(year, filing_status)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
+        
+        # OPTIMIZATION: When wages=0, take at least 90% of standard deduction from Traditional
+        # In Stage 5, we already have SS income, so only add Traditional if needed to reach 90% threshold
+        # Calculate taxable SS first to determine how much Traditional is needed
+        preliminary_taxable_ss = calculate_ss_taxable_amount(
+            ss_benefits=ss_benefits,
+            agi_without_ss=0,  # Preliminary calculation
+            filing_status=filing_status
+        )
+        min_ordinary_income_target = std_deduction * 0.90
         
         # Calculate IRMAA
         people_on_medicare = sum([age_primary >= MEDICARE_AGE, age_spouse >= MEDICARE_AGE])
@@ -4195,7 +4933,7 @@ class Stage5SocialSecurity(LifeStage):
             )
             ltcg_harvested = max_brokerage_withdrawal * BROKERAGE_LTCG_RATIO
         
-        # Calculate Roth conversion room
+        # Calculate Roth conversion room (include guaranteed Traditional withdrawal)
         current_income = taxable_ss + ltcg_harvested
         
         # Check if either person is under Medicare age (ACA subsidy consideration)
@@ -4237,10 +4975,13 @@ class Stage5SocialSecurity(LifeStage):
         roth_conversion = 0
         optimal_amount = 0
         
-        # Use BETR algorithm - SS income is already in current_income
+        # Adjust available Traditional for conversion (subtract guaranteed withdrawal)
+        available_traditional = balances.traditional
+        
+        # Use BETR algorithm - SS income and guaranteed Traditional are already in current_income
         try:
             optimal_amount, betr_results = optimize_conversion_amount(
-                traditional_ira_balance=balances.traditional,
+                traditional_ira_balance=available_traditional,
                 current_agi=current_income,
                 target_tax_bracket=max_conversion_rate,
                 year=year,
@@ -4325,10 +5066,13 @@ class Stage5SocialSecurity(LifeStage):
         # Calculate preliminary tax estimate for rebalancing
         # (will be recalculated after we know actual Traditional withdrawals)
         preliminary_income = taxable_ss + ltcg_harvested + roth_conversion
-        preliminary_agi = preliminary_income - std_deduction
-        preliminary_result = calculate_taxable_income(preliminary_agi, tax_brackets)
+        preliminary_agi = preliminary_income  # AGI is total income before standard deduction
+        
+        # Calculate preliminary taxable income
+        preliminary_taxable_income = preliminary_agi - std_deduction
+        preliminary_result = calculate_taxable_income(preliminary_taxable_income, tax_brackets)
         preliminary_federal_tax = preliminary_result.total_tax
-        preliminary_cg_tax = calculate_cap_gains(preliminary_agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        preliminary_cg_tax = calculate_cap_gains(preliminary_taxable_income - ltcg_harvested, cg_brackets, ltcg_harvested)
         preliminary_total_tax = preliminary_federal_tax + preliminary_cg_tax
         
         # Add SS benefits to cash before rebalancing
@@ -4345,9 +5089,44 @@ class Stage5SocialSecurity(LifeStage):
         # Calculate ACA premium (should be 0 at this stage, but check anyway)
         aca_premium = calculate_aca_premium_for_year(year, age_primary, age_spouse)
         
+        # --- Decision log for Stage 5 ---
+        dl = DecisionLog()
+        
+        # Get property tax from config for SALT deduction
+        try:
+            property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+        except Exception:
+            property_tax = 0.0
+        
+        # Calculate state income tax (needed for DAF SALT deduction calculation)
+        state_tax, state_details = calculate_state_tax(
+            state_agi=preliminary_agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=roth_conversion,
+            ss_benefits=ss_benefits
+        )
+        
+        # Calculate DAF contribution for this year (BEFORE rebalancing)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary, age_spouse, std_deduction, state_tax, property_tax, balances_with_ss.taxable
+        )
+        
+        # Subtract DAF contribution from brokerage BEFORE rebalancing
+        balances_for_rebalance = balances_with_ss
+        if daf_contribution > 0:
+            balances_for_rebalance = PortfolioBalances(
+                cash=balances_with_ss.cash,
+                taxable=balances_with_ss.taxable - daf_contribution,
+                traditional=balances_with_ss.traditional,
+                roth=balances_with_ss.roth,
+                daf=balances_with_ss.daf
+            )
+            logger.info(f"Year {year}: Subtracting DAF contribution ${daf_contribution:,.0f} from Brokerage before rebalancing")
+        
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         new_balances, transactions, rebal_dl = rebalance_accounts(
-            balances=balances_with_ss,
+            balances=balances_for_rebalance,
             expenses=expenses,
             roth_conversion=roth_conversion,
             year=year,
@@ -4359,6 +5138,45 @@ class Stage5SocialSecurity(LifeStage):
             medical_costs=0.0
         )
         
+        # OPTIMIZATION: Ensure we meet the 90% standard deduction target with ordinary income
+        # In Stage 5, we already have taxable SS income, so factor that in
+        trad_withdrawal_so_far = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
+        ordinary_income_so_far = preliminary_taxable_ss + roth_conversion + trad_withdrawal_so_far
+        
+        if ordinary_income_so_far < min_ordinary_income_target and new_balances.traditional > 0:
+            additional_needed = min_ordinary_income_target - ordinary_income_so_far
+            additional_withdrawal = min(additional_needed, new_balances.traditional)
+            
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash + additional_withdrawal,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional - additional_withdrawal,
+                roth=new_balances.roth,
+                daf=new_balances.daf
+            )
+            transactions['traditional_to_cash'] += additional_withdrawal
+            
+            logger.info(f"Year {year}: Added ${additional_withdrawal:,.0f} Traditional withdrawal to reach 90% std deduction target")
+            
+            dl.add("tax_strategy", "Standard Deduction Optimization (0% Tax)",
+                   f"Added ${additional_withdrawal:,.0f} Traditional withdrawal",
+                   f"Taxable SS (${preliminary_taxable_ss:,.0f}) + Roth conversion (${roth_conversion:,.0f}) + "
+                   f"buffer withdrawals (${trad_withdrawal_so_far:,.0f}) = ${ordinary_income_so_far:,.0f}. "
+                   f"Added ${additional_withdrawal:,.0f} to reach 90% of standard deduction (${min_ordinary_income_target:,.0f}).",
+                   std_deduction=f"${std_deduction:,.0f}",
+                   target_income=f"${min_ordinary_income_target:,.0f}",
+                   taxable_ss=f"${preliminary_taxable_ss:,.0f}",
+                   additional_withdrawal=f"${additional_withdrawal:,.0f}")
+        elif ordinary_income_so_far >= min_ordinary_income_target:
+            logger.info(f"Year {year}: Ordinary income ${ordinary_income_so_far:,.0f} already meets target")
+            
+            dl.add("tax_strategy", "Standard Deduction Optimization (0% Tax)",
+                   f"Target met via SS + Roth conversion + buffer withdrawals",
+                   f"Ordinary income of ${ordinary_income_so_far:,.0f} meets the 90% standard deduction target.",
+                   std_deduction=f"${std_deduction:,.0f}",
+                   target_income=f"${min_ordinary_income_target:,.0f}",
+                   taxable_ss=f"${preliminary_taxable_ss:,.0f}")
+        
         # Apply growth
         growth_rate = kwargs.get('growth_rate', 1.07)
         new_balances = PortfolioBalances(
@@ -4366,33 +5184,36 @@ class Stage5SocialSecurity(LifeStage):
             taxable=new_balances.taxable * growth_rate,
             traditional=new_balances.traditional * growth_rate,
             roth=new_balances.roth * growth_rate,
-            daf=new_balances.daf
+            daf=new_balances.daf * growth_rate
         )
         
         # Calculate MAGI and taxes AFTER rebalancing (when we know actual withdrawals)
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
         
-        # Recalculate taxes with actual Traditional withdrawals included
-        total_income = taxable_ss + ltcg_harvested + roth_conversion + trad_withdrawal
-        agi = total_income - std_deduction
+        # Include LTCG from brokerage buffer replenishment (40% of brokerage withdrawals is taxable LTCG)
+        brokerage_withdrawal_ltcg = transactions['brokerage_to_cash'] * BROKERAGE_LTCG_RATIO
+        total_ltcg = ltcg_harvested + brokerage_withdrawal_ltcg
         
-        result = calculate_taxable_income(agi, tax_brackets)
+        # Recalculate taxes with actual Traditional withdrawals and brokerage LTCG included
+        total_income = taxable_ss + total_ltcg + roth_conversion + trad_withdrawal
+        agi = total_income  # AGI is total income before standard deduction
+        
+        # Calculate taxable income by subtracting standard deduction from AGI
+        taxable_income = agi - std_deduction
+        result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
-        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        cg_tax = calculate_cap_gains(taxable_income - total_ltcg, cg_brackets, total_ltcg)
         total_tax = federal_tax + cg_tax
         
         logger.debug(f"Tax calculation: Taxable SS=${taxable_ss:,.0f}, Trad Withdrawal=${trad_withdrawal:,.0f}, "
-                    f"Roth Conv=${roth_conversion:,.0f}, LTCG=${ltcg_harvested:,.0f}, "
+                    f"Roth Conv=${roth_conversion:,.0f}, LTCG=${total_ltcg:,.0f} (harvested=${ltcg_harvested:,.0f}, buffer=${brokerage_withdrawal_ltcg:,.0f}), "
                     f"Total Income=${total_income:,.0f}, AGI=${agi:,.0f}, Fed Tax=${federal_tax:,.0f}")
         
         magi = (taxable_ss +  # Use accurate taxable SS amount
                 trad_withdrawal +
                 roth_conversion +
-                ltcg_harvested)
+                total_ltcg)
         
-        # --- Decision log for Stage 5 ---
-        dl = DecisionLog()
-
         # SS income / taxation
         ss_tax_pct = (taxable_ss / ss_benefits * 100) if ss_benefits > 0 else 0
         dl.add(
@@ -4537,6 +5358,44 @@ class Stage5SocialSecurity(LifeStage):
         for entry in rebal_dl.all_decisions():
             getattr(dl, _category_for(entry)).append(entry)
 
+        # Calculate state income tax on retirement income (needed for DAF SALT deduction)
+        # Note: Pass taxable_ss (not full ss_benefits) to avoid double-exemption
+        # in states that exempt SS. The AGI already includes only taxable_ss,
+        # so the exemption should only remove what was actually included.
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=trad_withdrawal + roth_conversion,
+            ss_benefits=taxable_ss  # Use taxable portion, not full benefits
+        )
+        logger.info(f"Year {year}: State tax calculated: ${state_tax:,.2f}")
+        
+        # If DAF contribution made, add to DAF balance and recalculate federal tax with increased deduction
+        if daf_contribution > 0:
+            # Add DAF contribution to DAF balance (already subtracted from brokerage before rebalancing)
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional,
+                roth=new_balances.roth,
+                daf=new_balances.daf + daf_contribution
+            )
+            
+            # Recalculate federal tax with DAF deduction
+            effective_deduction = std_deduction + daf_tax_excess
+            taxable_income_with_daf = agi - effective_deduction
+            result_with_daf = calculate_taxable_income(taxable_income_with_daf, tax_brackets)
+            federal_tax = result_with_daf.total_tax
+            
+            # Recalculate capital gains tax
+            cg_tax = calculate_cap_gains(taxable_income_with_daf - total_ltcg, cg_brackets, total_ltcg)
+            total_tax = federal_tax + cg_tax
+            
+            logger.info(f"Year {year}: DAF contribution ${daf_contribution:,.0f} from Brokerage")
+            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
+            logger.info(f"Year {year}: Recalculated total tax: ${total_tax:,.2f}")
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -4549,8 +5408,8 @@ class Stage5SocialSecurity(LifeStage):
             taxable_withdrawal=transactions['brokerage_to_cash'],
             roth_withdrawal=transactions['roth_to_cash'] + transactions['roth_to_brokerage'],
             roth_conversion=roth_conversion,
-            ltcg_harvested=ltcg_harvested,
-            daf_contribution=0,
+            ltcg_harvested=total_ltcg,  # Total LTCG including buffer replenishment
+            daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
             magi=magi,
@@ -4558,6 +5417,7 @@ class Stage5SocialSecurity(LifeStage):
             irmaa_penalty=irmaa_penalty,
             aca_premium=aca_premium,
             balances=new_balances,
+            state_tax=state_tax,
             # Fund movement tracking
             cash_replenishment=transactions['cash_replenishment'],
             brokerage_replenishment=transactions['brokerage_replenishment'],
@@ -4618,6 +5478,11 @@ class Stage6RMD(LifeStage):
         std_deduction_df = get_std_deduction(year, filing_status)
         irmaa_brackets = get_medicare_costs(year)
         std_deduction = std_deduction_df.iloc[0]['deduction']
+        
+        # NOTE: Stage 6 (RMD) does not need guaranteed Traditional withdrawal optimization
+        # because RMDs are mandatory distributions that already provide ordinary income.
+        # The RMD amount typically exceeds 90% of the standard deduction, so the
+        # 0% tax optimization is not applicable in this stage.
         
         # Calculate RMD
         rmd_rate = get_rmd_value(age_primary)
@@ -4720,10 +5585,14 @@ class Stage6RMD(LifeStage):
         logger.debug(f"Roth conversion: ${roth_conversion:,.2f} (limited by RMD)")
         
         # Calculate taxes
-        agi = total_income - std_deduction
-        result = calculate_taxable_income(agi, tax_brackets)
+        agi = total_income  # AGI is total income before standard deduction
+        
+        # Calculate taxable income by subtracting standard deduction from AGI
+        taxable_income = agi - std_deduction
+        result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
-        cg_tax = calculate_cap_gains(agi - ltcg_harvested, cg_brackets, ltcg_harvested)
+        # Note: This early calculation uses only ltcg_harvested; will be recalculated after rebalancing with total_ltcg
+        cg_tax = calculate_cap_gains(taxable_income - ltcg_harvested, cg_brackets, ltcg_harvested)
         total_tax = federal_tax + cg_tax
         
         # Add SS benefits to cash before rebalancing
@@ -4737,10 +5606,42 @@ class Stage6RMD(LifeStage):
         
         logger.info(f"Year {year}: Added SS benefits ${ss_benefits:,.2f} to cash")
         
+        # Get property tax from config for SALT deduction
+        try:
+            property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+        except Exception:
+            property_tax = 0.0
+        
+        # Calculate state income tax (needed for DAF SALT deduction calculation)
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=rmd_amount + roth_conversion,
+            ss_benefits=ss_benefits
+        )
+        
+        # Calculate DAF contribution for this year (BEFORE rebalancing)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary, age_spouse, std_deduction, state_tax, property_tax, balances_with_ss.taxable
+        )
+        
+        # Subtract DAF contribution from brokerage BEFORE rebalancing
+        balances_for_rebalance = balances_with_ss
+        if daf_contribution > 0:
+            balances_for_rebalance = PortfolioBalances(
+                cash=balances_with_ss.cash,
+                taxable=balances_with_ss.taxable - daf_contribution,
+                traditional=balances_with_ss.traditional,
+                roth=balances_with_ss.roth,
+                daf=balances_with_ss.daf
+            )
+            logger.info(f"Year {year}: Subtracting DAF contribution ${daf_contribution:,.0f} from Brokerage before rebalancing")
+        
         # Execute account rebalancing (includes Roth conversion and buffer maintenance)
         # Note: RMD is handled separately as it's mandatory
         new_balances, transactions, rebal_dl = rebalance_accounts(
-            balances=balances_with_ss,
+            balances=balances_for_rebalance,
             expenses=expenses,
             roth_conversion=roth_conversion,
             year=year,
@@ -4770,15 +5671,24 @@ class Stage6RMD(LifeStage):
             taxable=new_balances.taxable * growth_rate,
             traditional=new_balances.traditional * growth_rate,
             roth=new_balances.roth * growth_rate,
-            daf=new_balances.daf
+            daf=new_balances.daf * growth_rate
         )
         
-        # Calculate MAGI for this year
+        # Calculate AGI and MAGI for this year
+        # AGI includes: Taxable SS, RMD, Traditional withdrawals (buffer), Roth conversions, and LTCG
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage'] + rmd_amount
-        magi = (ss_benefits * TAXABLE_SS_RATE +
-                trad_withdrawal +
-                roth_conversion +
-                ltcg_harvested)
+        
+        # Include LTCG from brokerage buffer replenishment (40% of brokerage withdrawals is taxable LTCG)
+        brokerage_withdrawal_ltcg = transactions['brokerage_to_cash'] * BROKERAGE_LTCG_RATIO
+        total_ltcg = ltcg_harvested + brokerage_withdrawal_ltcg
+        
+        agi = (ss_benefits * TAXABLE_SS_RATE +
+               trad_withdrawal +
+               roth_conversion +
+               total_ltcg)
+        
+        # MAGI is the same as AGI in Stage 6
+        magi = agi
         
         # --- Decision log for Stage 6 ---
         dl = DecisionLog()
@@ -4865,6 +5775,44 @@ class Stage6RMD(LifeStage):
         for entry in rebal_dl.all_decisions():
             getattr(dl, _category_for(entry)).append(entry)
 
+        # Calculate state income tax on retirement income (needed for DAF SALT deduction)
+        # Note: Pass taxable_ss (not full ss_benefits) to avoid double-exemption
+        # in states that exempt SS. The AGI already includes only taxable_ss,
+        # so the exemption should only remove what was actually included.
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=trad_withdrawal + roth_conversion,
+            ss_benefits=taxable_ss  # Use taxable portion, not full benefits
+        )
+        logger.info(f"Year {year}: State tax calculated: ${state_tax:,.2f}")
+        
+        # If DAF contribution made, add to DAF balance and recalculate federal tax with increased deduction
+        if daf_contribution > 0:
+            # Add DAF contribution to DAF balance (already subtracted from brokerage before rebalancing)
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional,
+                roth=new_balances.roth,
+                daf=new_balances.daf + daf_contribution
+            )
+            
+            # Recalculate federal tax with DAF deduction
+            effective_deduction = std_deduction + daf_tax_excess
+            taxable_income_with_daf = agi - effective_deduction
+            result_with_daf = calculate_taxable_income(taxable_income_with_daf, tax_brackets)
+            federal_tax = result_with_daf.total_tax
+            
+            # Recalculate capital gains tax
+            cg_tax = calculate_cap_gains(taxable_income_with_daf - total_ltcg, cg_brackets, total_ltcg)
+            total_tax = federal_tax + cg_tax
+            
+            logger.info(f"Year {year}: DAF contribution ${daf_contribution:,.0f} from Brokerage")
+            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
+            logger.info(f"Year {year}: Recalculated total tax: ${total_tax:,.2f}")
+
         return YearlyStrategy(
             year=year,
             age_primary=age_primary,
@@ -4877,8 +5825,8 @@ class Stage6RMD(LifeStage):
             taxable_withdrawal=transactions['brokerage_to_cash'],
             roth_withdrawal=transactions['roth_to_cash'] + transactions['roth_to_brokerage'],
             roth_conversion=roth_conversion,
-            ltcg_harvested=ltcg_harvested,
-            daf_contribution=0,
+            ltcg_harvested=total_ltcg,  # Total LTCG including buffer replenishment
+            daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
             magi=magi,
@@ -4886,11 +5834,12 @@ class Stage6RMD(LifeStage):
             irmaa_penalty=medical_costs,
             aca_premium=aca_premium,
             balances=new_balances,
+            state_tax=state_tax,
             # Fund movement tracking
             cash_replenishment=transactions['cash_replenishment'],
             brokerage_replenishment=transactions['brokerage_replenishment'],
             traditional_to_cash=transactions['traditional_to_cash'],
-            traditional_to_brokerage=transactions['traditional_to_brokerage'] + rmd_amount,
+            traditional_to_brokerage=transactions['traditional_to_brokerage'],  # RMD tracked separately in rmd_amount field
             brokerage_to_cash=transactions['brokerage_to_cash'],
             roth_to_cash=transactions['roth_to_cash'],
             roth_to_brokerage=transactions['roth_to_brokerage'],
@@ -5245,6 +6194,7 @@ class WithdrawalStrategyEngine:
         """Convert list of YearlyStrategy objects to DataFrame with account movements"""
         data = []
         for s in strategies:
+            logger.info(f"Converting YearlyStrategy State tax {s.state_tax} to DataFrame")
             data.append({
                 'Year': s.year,
                 'Age': f"{s.age_primary}/{s.age_spouse}",
@@ -5263,6 +6213,7 @@ class WithdrawalStrategyEngine:
                 'AGI': s.agi,
                 'MAGI': s.magi,
                 'Federal Tax': s.federal_tax,
+                'State Tax': s.state_tax,
                 'Cash Balance': s.balances.cash,
                 # Additional withdrawal details
                 'RMD': s.rmd_amount,

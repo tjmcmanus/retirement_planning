@@ -927,12 +927,8 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 st.subheader("📋 Year-by-Year Details")
                 display_df_a = accum_strategy_df.copy()
                 
-                # Add state tax column (placeholder - would need actual calculation)
-                if 'Federal Tax' in display_df_a.columns and 'State Tax' not in display_df_a.columns:
-                    # Estimate state tax as percentage of federal (simplified)
-                    state_rates = {'CA': 0.093, 'NY': 0.0685, 'TX': 0.0, 'FL': 0.0}
-                    state_rate = state_rates.get(accum_state, 0.05)
-                    display_df_a['State Tax'] = display_df_a['AGI'] * state_rate if 'AGI' in display_df_a.columns else 0
+                # State tax is now calculated in the strategy engine (strategy.py)
+                # No need to add placeholder - it's already in the dataframe
                 
                 display_cols_a = [
                     'Year', 'Age', 'Stage',
@@ -1613,11 +1609,8 @@ else:
             display_df_w['Cash Start'] = display_df_w['Cash Balance'].shift(1)
             display_df_w.loc[display_df_w.index[0], 'Cash Start'] = actual_cash_start
             
-            # Add state tax column
-            if 'Federal Tax' in display_df_w.columns and 'State Tax' not in display_df_w.columns:
-                state_rates = {'CA': 0.093, 'NY': 0.0685, 'TX': 0.0, 'FL': 0.0}
-                state_rate = state_rates.get(state, 0.05)
-                display_df_w['State Tax'] = display_df_w['AGI'] * state_rate if 'AGI' in display_df_w.columns else 0
+            # State tax is now calculated in the strategy engine (strategy.py)
+            # No need to add placeholder - it's already in the dataframe
 
             display_cols_w = [
                 'Year', 'Age', 'Stage', 'Cash Start',
