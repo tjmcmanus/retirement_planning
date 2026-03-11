@@ -277,19 +277,95 @@ with tab2:
     st.header("Financial Assumptions")
     st.markdown("Set your expected expenses and investment return assumptions.")
     
+    # Expected Annual Expenses Breakdown
+    st.subheader("Expected Annual Expenses")
+    st.markdown("Your annual expenses are calculated from the detailed breakdown in the **💳 Expenses** tab.")
+    
+    # Calculate living expenses total
+    living_expenses_dict = config_mgr.get("expenses", "living_expenses", {})
+    total_living = sum([
+        living_expenses_dict.get("property_tax", 0),
+        living_expenses_dict.get("homeowners_insurance", 0),
+        living_expenses_dict.get("auto_insurance", 0),
+        living_expenses_dict.get("food_groceries", 0),
+        living_expenses_dict.get("utilities_phone", 0),
+        living_expenses_dict.get("utilities_internet", 0),
+        living_expenses_dict.get("utilities_cable", 0),
+        living_expenses_dict.get("utilities_electric", 0),
+        living_expenses_dict.get("utilities_gas", 0),
+        living_expenses_dict.get("utilities_water", 0),
+        living_expenses_dict.get("gifts_donations", 0),
+        living_expenses_dict.get("other_living", 0)
+    ])
+    
+    # Calculate entertainment expenses total
+    entertainment_dict = config_mgr.get("expenses", "entertainment_expenses", {})
+    total_entertainment = sum([
+        entertainment_dict.get("travel_vacations", 0),
+        entertainment_dict.get("dining_out", 0),
+        entertainment_dict.get("clothing", 0),
+        entertainment_dict.get("hobbies", 0),
+        entertainment_dict.get("entertainment_other", 0)
+    ])
+    
+    # Calculate big ticket items summary
+    big_ticket_items = config_mgr.get("expenses", "big_ticket_items", [])
+    if not isinstance(big_ticket_items, list):
+        big_ticket_items = []
+    
+    big_ticket_summary = []
+    for item in big_ticket_items:
+        if isinstance(item, dict) and item.get("name") and item.get("amount", 0) > 0:
+            big_ticket_summary.append(f"{item['name']}: ${item['amount']:,.0f} every {item.get('frequency_years', 10)} years")
+    
+    # Calculate total
+    total_annual_expenses = total_living + total_entertainment
+    
+    # Display breakdown in columns
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            "Living Expenses",
+            f"${total_living:,.0f}",
+            help="Ongoing expenses that don't go away in retirement (property tax, insurance, utilities, food, etc.)"
+        )
+    
+    with col2:
+        st.metric(
+            "Entertainment Expenses",
+            f"${total_entertainment:,.0f}",
+            help="Lifestyle expenses that may decline with age (travel, dining out, hobbies, etc.)"
+        )
+    
+    with col3:
+        st.metric(
+            "Total Annual Expenses",
+            f"${total_annual_expenses:,.0f}",
+            help="Sum of living and entertainment expenses (excludes big ticket items)"
+        )
+    
+    # Show big ticket items if any exist
+    if big_ticket_summary:
+        st.markdown("---")
+        st.markdown("**Big Ticket Items** (periodic major expenses):")
+        for item_desc in big_ticket_summary:
+            st.caption(f"• {item_desc}")
+        st.caption("*Big ticket items are handled separately in the strategy engine based on their frequency and timing.*")
+    else:
+        st.info("💡 No big ticket items configured. Add them in the **💳 Expenses** tab if you have periodic major expenses (cars, home renovations, etc.).")
+    
+    st.markdown("---")
+    st.caption("📝 To modify these values, go to the **💳 Expenses** tab and update the detailed breakdown.")
+    
+    # Store the calculated total in session state for compatibility
+    st.session_state["expected_annual_expenses"] = total_annual_expenses
+    
+    st.markdown("---")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        expected_annual_expenses = st.number_input(
-            "Expected Annual Expenses ($)",
-            min_value=0,
-            max_value=1000000,
-            value=config_mgr.get("financial_assumptions", "expected_annual_expenses", 50000),
-            step=1000,
-            help="Your estimated annual living expenses in retirement",
-            key="expected_annual_expenses"
-        )
-        
         expense_inflation_rate = st.number_input(
             "Expense Inflation Rate (%)",
             min_value=0.0,
@@ -392,7 +468,7 @@ with tab2:
     
     col_calc1, col_calc2 = st.columns(2)
     with col_calc1:
-        cash_reserve = expected_annual_expenses * years_of_expenses_in_cash
+        cash_reserve = st.session_state.get("expected_annual_expenses", 0) * years_of_expenses_in_cash
         st.metric("Recommended Cash Reserve", f"${cash_reserve:,.0f}")
     
     with col_calc2:
