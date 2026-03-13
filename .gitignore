@@ -1,30 +1,177 @@
-.DS_Store
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Environment variables and secrets
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
-.env.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Brokerage connection credentials database
-data/credentials.db
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# Retirement Planning App - Personal Configuration
-# Contains personal information like names, birth dates, and financial data
-retirement_config.json
+# Rope project settings
+.ropeproject
 
-# Estate planning data - Contains sensitive personal/legal info (names, beneficiaries, healthcare directives)
-estate_planning_data.json
+# mkdocs documentation
+/site
 
-# Runtime-generated timestamped backup files (only portfolio_data_truth.csv should be tracked)
-portfolio_data_truth_????????_??????.csv
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# Runtime-generated portfolio display cache (rebuilt automatically on startup)
-portfolio_display_cache.parquet
+# Pyre type checker
+.pyre/
 
-# Runtime-generated net worth history cache (rebuilt automatically on startup)
-networth_cache.parquet
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Jekyll
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+vendor/
+
+# Bundler
+Gemfile.lock
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Personal/Sensitive Data
 portfolio_data_truth.csv
+retirement_config.json
+estate_planning_data.json
+*.parquet
+
+# Backup files
+*_backup_*.csv
+*_pre_*.csv
+*.bak
+
+# Temporary files
+*.tmp
+*.temp
+~*
