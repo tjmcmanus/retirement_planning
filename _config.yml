@@ -1,7 +1,7 @@
 # Site settings
 title: Financial Planner Documentation
 description: Comprehensive retirement and financial planning application with advanced tax optimization, portfolio management, and Monte Carlo simulation
-baseurl: "" # the subpath of your site, e.g. /blog
+baseurl: "/retirement_planning" # the subpath of your site, e.g. /blog
 url: "" # the base hostname & protocol for your site
 
 # Build settings
