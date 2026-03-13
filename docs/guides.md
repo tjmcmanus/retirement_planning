@@ -10,12 +10,12 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 ## 📚 Guide Categories
 
 ### Getting Started Guides
-- [Portfolio Management Guide](guides/portfolio-management.md)
+- [Portfolio Data Entry Guide](../PORTFOLIO_DATA_ENTRY_GUIDE.md)
+- [Portfolio Analytics Guide](../PORTFOLIO_ANALYTICS_GUIDE.md)
+- [Portfolio Rebalancing Guide](../PORTFOLIO_REBALANCING_GUIDE.md)
 - [Brokerage Connections Guide](guides/brokerage-connections.md) ⭐ NEW
-- [Tax Optimization Guide](guides/tax-optimization.md)
-- [Withdrawal Strategies Guide](guides/withdrawal-strategies.md)
-- [Healthcare Planning Guide](guides/healthcare-planning.md)
-- [Social Security Guide](guides/social-security.md)
+- [Withdrawal Strategies Guide](../STRATEGY_README.md)
+- [Social Security Guide](../SSI_INTEGRATION_GUIDE.md)
 
 ### Advanced Guides
 - [BETR Roth Conversion](advanced/betr-guide.md)
@@ -54,11 +54,11 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 ### Portfolio Management
 
 **Essential Tasks:**
-1. [Adding a New Account](guides/portfolio-management.md#adding-accounts)
-2. [Updating Account Balances](guides/portfolio-management.md#updating-balances)
+1. [Adding a New Account](../PORTFOLIO_DATA_ENTRY_GUIDE.md#first-time-setup)
+2. [Updating Account Balances](../PORTFOLIO_DATA_ENTRY_GUIDE.md#monthly-update-workflow)
 3. [Connecting Brokerage Accounts](guides/brokerage-connections.md) ⭐ NEW
-4. [Rebalancing Your Portfolio](guides/portfolio-management.md#rebalancing)
-5. [Tracking Performance](guides/portfolio-management.md#performance-tracking)
+4. [Rebalancing Your Portfolio](../PORTFOLIO_REBALANCING_GUIDE.md)
+5. [Tracking Performance](../PORTFOLIO_ANALYTICS_GUIDE.md)
 
 **Key Features:**
 - Interactive holdings editor
