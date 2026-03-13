@@ -454,4 +454,4 @@ A: Your manually entered data remains intact. You can continue using the applica
 
 ---
 
-[← Back to Guides](../guides.md) | [Next: Portfolio Management →](portfolio-management.md)
+[← Back to Guides](../guides.md) | [Next: Portfolio Analytics →](../../PORTFOLIO_ANALYTICS_GUIDE.md)
