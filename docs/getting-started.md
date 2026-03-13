@@ -242,10 +242,9 @@ streamlit run planning_app.py --server.port 8502
 
 To quickly explore the application with sample data:
 
-1. Copy the sample files:
+1. Copy the sample file:
 ```bash
 cp portfolio_data_truth.sample.csv portfolio_data_truth.csv
-cp financial_data_sample.csv financial_data.csv
 ```
 
 2. Run the application:

@@ -1,0 +1,34 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+/* Full-width header customization */
+.inner {
+  max-width: 100% !important;
+  width: 100% !important;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+header .inner {
+  text-align: center;
+}
+
+header h1 {
+  text-align: center;
+  width: 100%;
+}
+
+header h2 {
+  text-align: center;
+  width: 100%;
+}
+
+/* Ensure content area also uses full width */
+#content-wrapper .inner {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+// Made with Bob
