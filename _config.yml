@@ -39,7 +39,6 @@ exclude:
 include:
   - README.md
   - "*.md"
-  - assets
 
 # Plugins
 plugins:
