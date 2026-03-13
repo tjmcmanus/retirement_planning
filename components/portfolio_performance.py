@@ -174,21 +174,25 @@ def render_performance_tab(
             )
             
             # Convert PerformanceMetrics to dict for easier access
+            # Handle None values from analytics_result
+            alpha_val = getattr(analytics_result, 'alpha', None)
+            beta_val = getattr(analytics_result, 'beta', None)
+            
             analytics = {
-                'time_weighted_return': analytics_result.time_weighted_return,
-                'money_weighted_return': analytics_result.money_weighted_return,
-                'sharpe_ratio': analytics_result.sharpe_ratio,
-                'sortino_ratio': analytics_result.sortino_ratio,
-                'max_drawdown': analytics_result.max_drawdown_pct / 100,
-                'volatility': analytics_result.volatility,
-                'alpha': analytics_result.alpha if hasattr(analytics_result, 'alpha') else 0.0,
-                'beta': analytics_result.beta if hasattr(analytics_result, 'beta') else 1.0,
+                'time_weighted_return': analytics_result.time_weighted_return or 0.0,
+                'money_weighted_return': analytics_result.money_weighted_return or 0.0,
+                'sharpe_ratio': analytics_result.sharpe_ratio or 0.0,
+                'sortino_ratio': analytics_result.sortino_ratio or 0.0,
+                'max_drawdown': (analytics_result.max_drawdown_pct or 0.0) / 100,
+                'volatility': analytics_result.volatility or 0.0,
+                'alpha': alpha_val if alpha_val is not None else 0.0,
+                'beta': beta_val if beta_val is not None else 1.0,
                 'benchmark_returns': getattr(analytics_result, 'benchmark_returns', []),
                 'drawdown_info': {
-                    'max_drawdown': analytics_result.max_drawdown_pct / 100,
+                    'max_drawdown': (analytics_result.max_drawdown_pct or 0.0) / 100,
                     'max_drawdown_start': analytics_result.max_drawdown_start,
                     'max_drawdown_end': analytics_result.max_drawdown_end,
-                    'current_drawdown': analytics_result.current_drawdown_pct / 100,
+                    'current_drawdown': (analytics_result.current_drawdown_pct or 0.0) / 100,
                     'recovery_months': analytics_result.recovery_days // 30 if analytics_result.recovery_days else 0,
                 },
                 'drawdowns': [],  # TODO: Add drawdown series
@@ -293,7 +297,60 @@ def render_performance_tab(
     # Get benchmark data
     benchmark_returns = analytics.get('benchmark_returns', [])
     
-    if benchmark_returns and len(benchmark_returns) == len(analysis_data):
+    # Debug info
+    if not benchmark_returns:
+        st.warning(
+            f"⚠️ Benchmark data not available for comparison. "
+            f"This may be due to: (1) Network connectivity issues, (2) Invalid ticker symbol, "
+            f"or (3) Insufficient historical data for {benchmark_ticker}. "
+            f"Try selecting a different benchmark or check your internet connection."
+        )
+        # Show portfolio-only chart
+        fig_perf = go.Figure()
+        fig_perf.add_trace(go.Scatter(
+            x=analysis_data.index,
+            y=analysis_data['total'],
+            mode='lines',
+            name='Your Portfolio',
+            line=dict(color='#4c78a8', width=2),
+            hovertemplate='%{x|%b %Y}<br>Portfolio: $%{y:,.0f}<extra></extra>',
+        ))
+        fig_perf.update_layout(
+            xaxis_title='Date',
+            yaxis_title='Portfolio Value ($)',
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(t=40, l=10, r=10, b=10),
+            yaxis=dict(tickformat='$,.0f'),
+            hovermode='x unified',
+        )
+        st.plotly_chart(fig_perf, use_container_width=True)
+    elif len(benchmark_returns) != len(analysis_data):
+        st.warning(
+            f"⚠️ Benchmark data length mismatch. Portfolio has {len(analysis_data)} periods "
+            f"but benchmark has {len(benchmark_returns)} periods. Showing portfolio only."
+        )
+        # Show portfolio-only chart
+        fig_perf = go.Figure()
+        fig_perf.add_trace(go.Scatter(
+            x=analysis_data.index,
+            y=analysis_data['total'],
+            mode='lines',
+            name='Your Portfolio',
+            line=dict(color='#4c78a8', width=2),
+            hovertemplate='%{x|%b %Y}<br>Portfolio: $%{y:,.0f}<extra></extra>',
+        ))
+        fig_perf.update_layout(
+            xaxis_title='Date',
+            yaxis_title='Portfolio Value ($)',
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(t=40, l=10, r=10, b=10),
+            yaxis=dict(tickformat='$,.0f'),
+            hovermode='x unified',
+        )
+        st.plotly_chart(fig_perf, use_container_width=True)
+    else:
         # Calculate benchmark cumulative values
         start_value = float(analysis_data['total'].iloc[0])  # type: ignore[union-attr]
         benchmark_values = [start_value]
@@ -354,8 +411,6 @@ def render_performance_tab(
         )
         
         st.plotly_chart(fig_perf, use_container_width=True)
-    else:
-        st.warning("⚠️ Benchmark data not available for comparison")
     
     st.markdown("---")
     

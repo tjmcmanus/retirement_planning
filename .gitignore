@@ -5,6 +5,12 @@ __pycache__/
 *.pyd
 .Python
 
+# Environment variables and secrets
+.env
+.env.local
+
+# Brokerage connection credentials database
+data/credentials.db
 
 # Retirement Planning App - Personal Configuration
 # Contains personal information like names, birth dates, and financial data
@@ -21,3 +27,4 @@ portfolio_display_cache.parquet
 
 # Runtime-generated net worth history cache (rebuilt automatically on startup)
 networth_cache.parquet
+portfolio_data_truth.csv

@@ -1599,7 +1599,11 @@ else:
             display_df_w = strategy_df_w.copy()
 
             try:
-                _, summary_df_w = get_networth_by_month(curr_month, curr_year)
+                # Use the latest available portfolio data, not current month
+                # (current month may not have data yet)
+                from load_data import get_latest_portfolio_month_year
+                latest_month, latest_year = get_latest_portfolio_month_year()
+                _, summary_df_w = get_networth_by_month(latest_month, latest_year)
                 actual_cash_start = float(
                     summary_df_w[summary_df_w['account_type'] == 'Savings']['market_value'].sum()
                 ) if not summary_df_w.empty else display_df_w.loc[display_df_w.index[0], 'Cash Balance']

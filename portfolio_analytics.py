@@ -63,6 +63,7 @@ class PerformanceMetrics:
     benchmark_return: Optional[float] = None
     alpha: Optional[float] = None  # Excess return vs benchmark
     beta: Optional[float] = None  # Sensitivity to benchmark
+    benchmark_returns: Optional[list[float]] = None  # List of benchmark returns for charting
     
     # Period info
     start_date: Optional[datetime] = None
@@ -602,6 +603,7 @@ def fetch_benchmark_data(
 ) -> pd.Series:
     """
     Fetch benchmark price data from Yahoo Finance.
+    Returns timezone-naive data to match portfolio data.
     
     Args:
         benchmark_symbol: Ticker symbol (e.g., '^GSPC' for S&P 500)
@@ -609,7 +611,7 @@ def fetch_benchmark_data(
         end_date: End date for data
     
     Returns:
-        Series of adjusted close prices indexed by date
+        Series of adjusted close prices indexed by date (timezone-naive)
     """
     try:
         ticker = yf.Ticker(benchmark_symbol)
@@ -619,7 +621,12 @@ def fetch_benchmark_data(
             logger.warning(f"No benchmark data found for {benchmark_symbol}")
             return pd.Series(dtype=float)
         
-        return pd.Series(hist['Close'])
+        # Convert to timezone-naive to match portfolio data
+        result = pd.Series(hist['Close'])
+        if result.index.tz is not None:
+            result.index = result.index.tz_localize(None)
+        
+        return result
     
     except Exception as e:
         logger.error(f"Failed to fetch benchmark data for {benchmark_symbol}: {e}")
@@ -765,6 +772,7 @@ def calculate_portfolio_analytics(
     benchmark_return = None
     alpha = None
     beta = None
+    benchmark_returns_list = []
     
     try:
         start_dt = pd.Timestamp(start_date)
@@ -772,6 +780,9 @@ def calculate_portfolio_analytics(
         benchmark_data = fetch_benchmark_data(benchmark_symbol, start_dt, end_dt)
         if not benchmark_data.empty:
             benchmark_returns = benchmark_data.pct_change().dropna()
+            
+            # Store returns as list for charting
+            benchmark_returns_list = benchmark_returns.tolist()
             
             # Calculate benchmark return
             benchmark_return = calculate_time_weighted_return(
@@ -804,6 +815,7 @@ def calculate_portfolio_analytics(
         benchmark_return=benchmark_return,
         alpha=alpha,
         beta=beta,
+        benchmark_returns=benchmark_returns_list,
         start_date=pd.Timestamp(start_date),
         end_date=pd.Timestamp(end_date),
         num_periods=len(portfolio_values),

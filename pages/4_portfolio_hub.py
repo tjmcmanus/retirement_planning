@@ -43,6 +43,11 @@ try:
 except ImportError:
     render_optimization_tab = None
 
+try:
+    from components.portfolio_connections import render_connections_tab
+except ImportError:
+    render_connections_tab = None
+
 # ---------------------------------------------------------------------------
 # Page Configuration
 # ---------------------------------------------------------------------------
@@ -157,7 +162,7 @@ with holdings_tab:
 # ---------------------------------------------------------------------------
 with performance_tab:
     if render_performance_tab is not None:
-        render_performance_tab(networth, portdf, curr_month, curr_year)
+        render_performance_tab(portdf, networth, curr_month, curr_year)
     else:
         # Temporary fallback until component is created
         st.info("📈 Performance Analytics component is being integrated. Coming soon!")
@@ -215,57 +220,46 @@ with optimization_tab:
         st.markdown("- **Advanced Strategies Page:** Capital Loss Harvesting (multi-year modeling)")
 
 # ---------------------------------------------------------------------------
-# TAB 5: CONNECTIONS (Phase 2)
+# TAB 5: CONNECTIONS
 # ---------------------------------------------------------------------------
 with connections_tab:
-    st.markdown("## 🔗 Brokerage Connections")
-    st.caption("Automatic portfolio synchronization with your brokerage accounts")
-    
-    st.info("🚀 **Coming in Phase 2** (4 weeks)")
-    
-    st.markdown("### Supported Brokerages")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**Via Plaid Integration:**")
-        st.markdown("- ✅ Vanguard")
-        st.markdown("- ✅ Fidelity")
-        st.markdown("- ✅ Fidelity NetBenefits")
-        st.markdown("- ✅ Schwab")
-        st.markdown("- ✅ 12,000+ other institutions")
-    
-    with col2:
-        st.markdown("**Direct API Integration:**")
-        st.markdown("- ✅ Schwab (Premium)")
-        st.markdown("- 🔄 Real-time updates")
-        st.markdown("- 🔄 Trade execution")
-        st.markdown("- 🔄 Best-in-class experience")
-    
-    st.markdown("---")
-    st.markdown("### Features Coming Soon")
-    st.markdown("- **Automatic Sync:** Daily/weekly portfolio updates")
-    st.markdown("- **Transaction Import:** Automatic categorization and reconciliation")
-    st.markdown("- **Real-Time Balances:** Always up-to-date portfolio values")
-    st.markdown("- **Secure Authentication:** OAuth 2.0, read-only access, encrypted storage")
-    st.markdown("- **One-Click Rebalancing:** Execute trades directly from recommendations")
-    
-    st.markdown("---")
-    st.markdown("### Benefits")
-    benefit_col1, benefit_col2, benefit_col3 = st.columns(3)
-    with benefit_col1:
-        st.metric("Time Saved", "90%", help="Eliminate manual data entry")
-    with benefit_col2:
-        st.metric("Accuracy", "99.9%", help="Automatic sync accuracy")
-    with benefit_col3:
-        st.metric("Cost", "$1/month", help="Per user ongoing cost")
-    
-    st.markdown("---")
-    st.markdown("### Security & Privacy")
-    st.markdown("- 🔒 **OAuth 2.0 Authentication** — Industry-standard secure login")
-    st.markdown("- 🔒 **Read-Only Access** — We never have permission to trade")
-    st.markdown("- 🔒 **Encrypted Storage** — AES-256 encryption for all credentials")
-    st.markdown("- 🔒 **Easy Disconnect** — Remove access anytime with one click")
-    st.markdown("- 🔒 **GDPR/CCPA Compliant** — Your data, your control")
+    if render_connections_tab is not None:
+        render_connections_tab(portdf, curr_month, curr_year)
+    else:
+        # Fallback to Phase 2 placeholder
+        st.markdown("## 🔗 Brokerage Connections")
+        st.caption("Automatic portfolio synchronization with your brokerage accounts")
+        
+        st.info("🚀 **SnapTrade Integration Available** — See setup instructions below")
+        
+        st.markdown("### Supported Brokerages")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Via SnapTrade:**")
+            st.markdown("- ✅ Vanguard")
+            st.markdown("- ✅ Fidelity")
+            st.markdown("- ✅ Schwab")
+            st.markdown("- ✅ TD Ameritrade")
+            st.markdown("- ✅ E*TRADE")
+            st.markdown("- ✅ 12,000+ other institutions")
+        
+        with col2:
+            st.markdown("**Features:**")
+            st.markdown("- 🔄 Automatic sync")
+            st.markdown("- 🔄 Real-time balances")
+            st.markdown("- 🔄 Secure OAuth 2.0")
+            st.markdown("- 🔄 Encrypted storage")
+        
+        st.markdown("---")
+        st.markdown("### Setup Required")
+        st.markdown("To enable brokerage connections:")
+        st.markdown("1. Install dependencies: `pip install snaptrade-python cryptography python-dotenv`")
+        st.markdown("2. Get SnapTrade API credentials from [snaptrade.com](https://snaptrade.com)")
+        st.markdown("3. Configure `.env` file with credentials")
+        st.markdown("4. Restart application")
+        st.markdown("")
+        st.markdown("See `SNAPTRADE_INTEGRATION_PLAN.md` for detailed setup instructions.")
 
 # ---------------------------------------------------------------------------
 # Auto-rerun while background rebuilds are in flight
