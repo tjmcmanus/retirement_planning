@@ -11,6 +11,7 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 
 ### Getting Started Guides
 - [Portfolio Management Guide](guides/portfolio-management.md)
+- [Brokerage Connections Guide](guides/brokerage-connections.md) ⭐ NEW
 - [Tax Optimization Guide](guides/tax-optimization.md)
 - [Withdrawal Strategies Guide](guides/withdrawal-strategies.md)
 - [Healthcare Planning Guide](guides/healthcare-planning.md)
@@ -30,16 +31,38 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 
 ## Quick Reference Guides
 
+### Brokerage Connections (NEW - March 2026)
+
+**Essential Tasks:**
+1. [Setting Up SnapTrade](guides/brokerage-connections.md#setup)
+2. [Connecting Your First Account](guides/brokerage-connections.md#connecting)
+3. [Syncing Portfolio Data](guides/brokerage-connections.md#syncing)
+4. [Managing Connections](guides/brokerage-connections.md#managing)
+
+**Key Features:**
+- Automatic portfolio synchronization
+- OAuth 2.0 secure authentication
+- Support for 12,000+ institutions
+- Encrypted credential storage
+- One-click account updates
+
+**Quick Links:**
+- [SnapTrade Quick Start Guide](../SNAPTRADE_QUICKSTART.md)
+- [Implementation Summary](../SNAPTRADE_IMPLEMENTATION_SUMMARY.md)
+- [Integration Plan](../SNAPTRADE_INTEGRATION_PLAN.md)
+
 ### Portfolio Management
 
 **Essential Tasks:**
 1. [Adding a New Account](guides/portfolio-management.md#adding-accounts)
 2. [Updating Account Balances](guides/portfolio-management.md#updating-balances)
-3. [Rebalancing Your Portfolio](guides/portfolio-management.md#rebalancing)
-4. [Tracking Performance](guides/portfolio-management.md#performance-tracking)
+3. [Connecting Brokerage Accounts](guides/brokerage-connections.md) ⭐ NEW
+4. [Rebalancing Your Portfolio](guides/portfolio-management.md#rebalancing)
+5. [Tracking Performance](guides/portfolio-management.md#performance-tracking)
 
 **Key Features:**
 - Interactive holdings editor
+- Automatic brokerage sync ⭐ NEW
 - Real-time validation
 - Performance analytics
 - Tax-efficient rebalancing
@@ -103,6 +126,34 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 - Windfall provisions
 
 ## Step-by-Step Tutorials
+
+### Tutorial 0: Connecting Your Brokerage Accounts (NEW)
+
+**Duration:** 10 minutes
+
+1. **Sign Up for SnapTrade**
+   - Visit [snaptrade.com](https://snaptrade.com)
+   - Create account (free tier: 5 connections)
+   - Get API credentials
+
+2. **Configure Application**
+   - Generate encryption key
+   - Add credentials to `.env` file
+   - Restart application
+
+3. **Connect First Account**
+   - Navigate to Portfolio Hub → Connections
+   - Click "Connect Account"
+   - Complete OAuth authentication
+   - Verify connection
+
+4. **Sync Portfolio Data**
+   - Click "Sync Now"
+   - Review synced holdings
+   - Merge with existing portfolio
+   - Verify data accuracy
+
+**See:** [Complete SnapTrade Setup Guide](../SNAPTRADE_QUICKSTART.md)
 
 ### Tutorial 1: Setting Up Your First Plan
 
@@ -335,6 +386,8 @@ Explore pre-configured scenarios:
 ### Documentation
 - [Complete Solution Guide](../COMPLETE_SOLUTION_GUIDE.md)
 - [Configuration Guide](../CONFIG_GUIDE.md)
+- [SnapTrade Quick Start](../SNAPTRADE_QUICKSTART.md) ⭐ NEW
+- [SnapTrade Implementation Summary](../SNAPTRADE_IMPLEMENTATION_SUMMARY.md) ⭐ NEW
 - [Income & Expense Guide](../INCOME_EXPENSE_GUIDE.md)
 - [Portfolio Data Entry Guide](../PORTFOLIO_DATA_ENTRY_GUIDE.md)
 

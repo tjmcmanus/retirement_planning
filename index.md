@@ -18,6 +18,7 @@ A comprehensive retirement and financial planning application with advanced tax 
 
 ### 💼 Portfolio Hub (Redesigned March 2026)
 Professional-grade portfolio management with:
+- **Brokerage Connections** - Automatic sync via SnapTrade API ⭐ NEW
 - Real-time holdings tracking and management
 - Performance analytics with risk metrics
 - Tax-efficient rebalancing suggestions
@@ -58,8 +59,20 @@ Professional-grade portfolio management with:
 
 ## 🆕 Recent Updates (March 2026)
 
+### SnapTrade Brokerage Integration ⭐ NEW
+Automatic portfolio synchronization with secure brokerage connections:
+- **12,000+ Institutions** - Schwab, Fidelity, Vanguard, and more
+- **OAuth 2.0 Security** - Bank-level authentication
+- **One-Click Sync** - Automatic portfolio updates
+- **Encrypted Storage** - AES-256 credential encryption
+- **Read-Only Access** - View-only permissions for safety
+- **Free Tier Available** - Up to 5 connections at no cost
+
+[Setup Guide](SNAPTRADE_QUICKSTART.md) | [Implementation Details](SNAPTRADE_IMPLEMENTATION_SUMMARY.md)
+
 ### Portfolio Hub Redesign
 Complete overhaul with professional analytics dashboard featuring:
+- **Brokerage Connections Tab** - Automatic sync via SnapTrade ⭐ NEW
 - Interactive holdings editor with real-time validation
 - Performance metrics (Sharpe ratio, max drawdown, volatility)
 - Asset allocation visualization
@@ -135,7 +148,8 @@ Streamlined interface for individual planning with:
 - **Frontend**: Streamlit (Python web framework)
 - **Data Processing**: Pandas, NumPy
 - **Visualization**: Plotly, Matplotlib
-- **Financial Data**: yfinance, SnapTrade API
+- **Financial Data**: yfinance, SnapTrade API ⭐ NEW
+- **Security**: Cryptography (Fernet/AES-256) ⭐ NEW
 - **Testing**: pytest
 - **Configuration**: YAML, JSON
 
