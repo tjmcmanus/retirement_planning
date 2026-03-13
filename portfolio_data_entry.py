@@ -25,14 +25,16 @@ logger = logging.getLogger(__name__)
 
 # Constants
 PORTFOLIO_TRUTH_FILE = 'portfolio_data_truth.csv'
-VALID_ACCOUNT_TYPES = ['Cash', 'Brokerage', 'Traditional', 'Roth']
+VALID_ACCOUNT_TYPES = ['Checking','Savings', 'Brokerage', 'Traditional', 'Roth']
 VALID_ACCOUNT_OWNERS = ['Joint', 'Primary', 'Spouse']
 VALID_SECTORS = [
     'MF:Cash',
+    'MF:Bonds',
     'Stock/ETF',
     'MF:Large-Cap',
     'MF:Mid-Cap',
     'MF:Small-Cap',
+    'MF:Total-Stock-Market',
     'MF:Reit',
     'MF:Global',
     'MF:Asia',
@@ -55,6 +57,7 @@ VALID_SECTORS = [
 def validate_ticker_symbol(symbol: str) -> Tuple[bool, str, str, str]:
     """
     Validate a ticker symbol by looking it up in Yahoo Finance.
+    For mutual funds (5-letter tickers), uses 'category' field as sector.
     
     Args:
         symbol: Ticker symbol to validate (e.g., 'AAPL', 'GOOGL')
@@ -63,28 +66,61 @@ def validate_ticker_symbol(symbol: str) -> Tuple[bool, str, str, str]:
         Tuple of (is_valid, name, sector, error_message)
         - is_valid: True if symbol exists and can be validated
         - name: Company/security name from Yahoo Finance
-        - sector: Sector from Yahoo Finance (or empty string)
+        - sector: Sector from Yahoo Finance (or category for mutual funds)
         - error_message: Error description if validation fails
     """
     # Special handling for cash
     if symbol.upper() in ['MF:CASH', 'CASH']:
+        logger.info(f"Validating cash symbol: {symbol}")
         return True, 'Money Market', 'MF:Cash', ''
     
     try:
+        logger.info(f"Validating ticker symbol: {symbol}")
         ticker = yf.Ticker(symbol)
         info = ticker.info
         
         # Check if we got valid data
         if not info or 'symbol' not in info:
+            logger.warning(f"Symbol '{symbol}' not found in Yahoo Finance")
             return False, '', '', f"Symbol '{symbol}' not found in Yahoo Finance"
         
-        # Extract name and sector
+        # Extract name
         name = info.get('shortName', info.get('longName', symbol))
-        sector = info.get('sector', '')
+        logger.info(f"Found ticker {symbol}: {name}")
         
-        # If no sector, try to get it from other fields
+        # Determine sector based on ticker type
+        sector = ''
+        
+        # For mutual funds (5-letter alphabetic tickers), use 'category' field
+        # Note: yfinance uses 'category' not 'categoryName'
+        if len(symbol) == 5 and symbol.isalpha():
+            category = info.get('category', '')
+            if category:
+                sector = category
+                logger.info(f"Mutual fund {symbol} - using category: {sector}")
+            else:
+                logger.info(f"Mutual fund {symbol} - no category found, trying fallbacks")
+        
+        # For stocks/ETFs or if category not found, use sector
         if not sector:
-            sector = info.get('category', info.get('quoteType', ''))
+            sector = info.get('sector', '')
+            if sector:
+                logger.info(f"Stock/ETF {symbol} - using sector: {sector}")
+        
+        # Fallback to category if not already used
+        if not sector:
+            sector = info.get('category', '')
+            if sector:
+                logger.info(f"{symbol} - using category fallback: {sector}")
+        
+        # Last resort: quoteType
+        if not sector:
+            sector = info.get('quoteType', '')
+            if sector:
+                logger.info(f"{symbol} - using quoteType fallback: {sector}")
+        
+        if not sector:
+            logger.warning(f"{symbol} - no sector/category information found")
         
         return True, name, sector, ''
         
@@ -106,7 +142,7 @@ def validate_portfolio_entry(row: pd.Series) -> Tuple[bool, str]:
     errors = []
     
     # Check required fields
-    required_fields = ['month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'qty', 'purchase_price']
+    required_fields = ['month', 'year', 'account_name', 'account_type', 'symbol', 'qty', 'purchase_price']
     for field in required_fields:
         if field not in row or bool(pd.isna(row[field])) or str(row[field]).strip() == '':
             errors.append(f"Missing required field: {field}")
@@ -134,9 +170,11 @@ def validate_portfolio_entry(row: pd.Series) -> Tuple[bool, str]:
     if row['account_type'] not in VALID_ACCOUNT_TYPES:
         errors.append(f"Invalid account_type: {row['account_type']}. Must be one of {VALID_ACCOUNT_TYPES}")
     
-    # Validate owner
-    if row['owner'] not in VALID_ACCOUNT_OWNERS:
-        errors.append(f"Invalid owner: {row['owner']}. Must be one of {VALID_ACCOUNT_OWNERS}")
+    # Validate owner (if provided)
+    owner_value = row.get('owner')
+    if owner_value is not None and not pd.isna(owner_value) and str(owner_value).strip() != '':
+        if owner_value not in VALID_ACCOUNT_OWNERS:
+            errors.append(f"Invalid owner: {owner_value}. Must be one of {VALID_ACCOUNT_OWNERS}")
     
     # Validate qty (must be positive number)
     try:
@@ -205,7 +243,7 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
     """
     try:
         # Ensure required columns are present
-        required_columns = ['month', 'year', 'account_name', 'account_type', 'symbol', 'name', 'sector', 'qty', 'purchase_price']
+        required_columns = ['month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date']
         
         # Check for missing columns
         missing_cols = [col for col in required_columns if col not in new_data.columns]
@@ -220,6 +258,12 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
         new_data['year'] = new_data['year'].astype(int)
         new_data['qty'] = new_data['qty'].astype(float)
         new_data['purchase_price'] = new_data['purchase_price'].astype(float)
+        
+        # Convert purchase_date to string format (YYYY-MM-DD) if it's a datetime
+        if 'purchase_date' in new_data.columns:
+            new_data['purchase_date'] = pd.to_datetime(new_data['purchase_date'], errors='coerce').dt.strftime('%Y-%m-%d')
+            # Replace NaT with empty string
+            new_data['purchase_date'] = new_data['purchase_date'].fillna('')
         
         if append:
             # Load existing data

@@ -33,8 +33,19 @@ def get_current_price(symbol):
     # For cash holdings, return 1.0 (no price lookup needed)
     if symbol == "MF:CASH":
         return 1.0
+    
     ticker = yf.Ticker(symbol)
-    todays_data = ticker.history(period='4d').tail(1)
+    
+    # Mutual funds (5-letter tickers) need longer period for price data
+    # They update less frequently than stocks
+    if len(symbol) == 5 and symbol.isalpha():
+        period = '5d'  # Use 5 days for mutual funds
+    else:
+        period = '4d'  # Use 4 days for stocks/ETFs
+    
+    todays_data = ticker.history(period=period).tail(1)
+    if todays_data.empty:
+        return 0.0  # Return 0 if no price data available
     return todays_data['Close'].iloc[0]
 
 #@st.cache_data()
@@ -62,32 +73,79 @@ def get_ticker_name(symbol, month=None, year=None):
     # For cash holdings, return "Cash"
     if symbol == "MF:CASH":
         return "Cash"
-    #df = getPortfolioData(month=month, year=year)
-    #ticker_name = df.loc[df['symbol'] == symbol, 'name'].iloc[0]
+    
     ticker = yf.Ticker(symbol)
-    return ticker.info['shortName']
-    #return ticker_name
+    try:
+        short_name = ticker.info.get('shortName', symbol)
+        
+        # For mutual funds (typically 5-letter tickers), append category
+        # Note: yfinance uses 'category' not 'categoryName'
+        if len(symbol) == 5 and symbol.isalpha():
+            category = ticker.info.get('category')
+            if category:
+                return f"{short_name} ({category})"
+        
+        return short_name
+    except Exception:
+        # Fallback to symbol if info fetch fails
+        return symbol
 
 
 def get_sector(symbol, month=None, year=None):
     #print(f"get sector {symbol}")
-    # For cash holdings, return "Cash"
+    # For cash holdings, return "MF:Cash"
     if symbol == "MF:CASH":
-        return "Cash"
+        return "MF:Cash"
     
+    # Check if sector is specified in CSV first
     df = getPortfolioData(month=month, year=year)
-    if df.loc[df['symbol'] == symbol, 'sector'].iloc[0].startswith("MF:"):
-       sector_in = df.loc[df['symbol'] == symbol, 'sector'].iloc[0]
-       before, separator, after = sector_in.partition(':')
-       sector= after.strip()
-      # print(f"Sector is (else) : {sector}")
-       
-    else:
+    csv_sector = df.loc[df['symbol'] == symbol, 'sector'].iloc[0]
+    
+    # If CSV has a valid sector value (including MF: prefixed), use it
+    # This preserves user overrides and MF: categories like MF:Bonds, MF:Global
+    # Skip "MUTUALFUND" and "nan" as these need to be looked up
+    if isinstance(csv_sector, str) and csv_sector and csv_sector not in ['MUTUALFUND', 'nan', 'Cash']:
+        return csv_sector
+    
+    # Special handling for "Cash" in CSV - convert to MF:Cash for consistency
+    if isinstance(csv_sector, str) and csv_sector == 'Cash':
+        return 'MF:Cash'
+    
+    # For mutual funds (5-letter tickers), try to get category from yfinance
+    # and prefix it with MF: for consistency
+    if len(symbol) == 5 and symbol.isalpha():
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            category = info.get('category', '')
+            
+            # Try category first (for mutual funds)
+            if category and category not in ['MUTUALFUND', '']:
+                return f"MF:{category}"
+            
+            # Fallback to categoryName if available
+            category_name = info.get('categoryName', '')
+            if category_name:
+                return f"MF:{category_name}"
+                
+        except Exception as e:
+            pass  # Fall through to check stocks/ETFs
+    
+    # For stocks/ETFs, get sector from yfinance
+    try:
         ticker = yf.Ticker(symbol)
         sector = ticker.info.get('sector')
-        #print(f"Sector is (if) : {sector}")
-       
-    return sector
+        if sector:
+            return sector
+    except Exception:
+        pass
+    
+    # Final fallback - if CSV had MUTUALFUND but we couldn't get better data, return it
+    if isinstance(csv_sector, str) and csv_sector == 'MUTUALFUND':
+        return 'MF:Unknown'
+    
+    # Fallback - return "Unknown" for missing data
+    return "Unknown"
 
 def calculate_current_value(symbol, month=None, year=None):
     current_value = get_qty(symbol, month=month, year=year) * get_current_price(symbol)

@@ -36,11 +36,17 @@ from portfolio_data_entry import (
     validate_portfolio_entry,
     save_portfolio_data,
 )
+from portfolio_market_indicators import (
+    calculate_security_indicator,
+    get_portfolio_indicators,
+    SecurityMarketCondition,
+)
 
 
 def get_current_price(symbol: str) -> float:
     """
     Fetch current price for a ticker symbol.
+    Mutual funds need longer period as they update less frequently.
     
     Args:
         symbol: Ticker symbol (e.g., 'AAPL', 'GOOGL')
@@ -53,12 +59,63 @@ def get_current_price(symbol: str) -> float:
     
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period='1d')
+        
+        # Mutual funds (5-letter tickers) need longer period
+        if len(symbol) == 5 and symbol.isalpha():
+            period = '5d'
+        else:
+            period = '1d'
+        
+        hist = ticker.history(period=period)
         if not hist.empty:
             return float(hist['Close'].iloc[-1])
         return 0.0
     except Exception:
         return 0.0
+
+
+def get_sector_from_yfinance(symbol: str) -> str:
+    """
+    Fetch sector information from Yahoo Finance.
+    For mutual funds (5-letter tickers), uses 'category' field.
+    For stocks/ETFs, uses 'sector' field.
+    
+    Args:
+        symbol: Ticker symbol
+    
+    Returns:
+        Sector name or empty string if not found
+    """
+    if symbol.upper() in ['MF:CASH', 'CASH']:
+        return 'Cash'
+    
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        
+        # For mutual funds (5-letter alphabetic tickers), use 'category' field
+        # Note: yfinance uses 'category' not 'categoryName' for mutual funds
+        if len(symbol) == 5 and symbol.isalpha():
+            category = info.get('category', '')
+            if category:
+                return category
+        
+        # For stocks/ETFs, use sector
+        sector = info.get('sector', '')
+        if sector:
+            return sector
+        
+        # Fallback to category if sector not found
+        category = info.get('category', '')
+        if category:
+            return category
+        
+        # Last resort: use quoteType
+        quote_type = info.get('quoteType', '')
+        return quote_type if quote_type else ''
+        
+    except Exception as e:
+        return ''
 
 
 def create_empty_row(month: int, year: int) -> dict:
@@ -289,13 +346,79 @@ def render_holdings_tab(
     st.markdown("---")
     
     # ========================================================================
-    # DATA EDITOR
+    # MARKET INDICATORS
     # ========================================================================
-    st.markdown("#### 📊 Holdings Data")
+    st.markdown("#### 📊 Holdings Data with Market Indicators")
     
     if st.session_state.holdings_data.empty:
         st.info("No holdings for this month. Click '➕ Add Row' or '📋 Copy Previous' to get started.")
         return
+    
+    # Initialize previous symbols tracking in session state
+    if 'previous_symbols' not in st.session_state:
+        # On first load, initialize with current symbols to avoid treating everything as "changed"
+        st.session_state.previous_symbols = {
+            idx: row['symbol'] for idx, row in st.session_state.holdings_data.iterrows()
+        }
+    
+    # Calculate market indicators for all unique symbols
+    with st.spinner("📈 Calculating market indicators..."):
+        unique_symbols = st.session_state.holdings_data['symbol'].unique().tolist()
+        indicators = get_portfolio_indicators(unique_symbols)
+    
+    # Identify which symbols actually changed (user edited the symbol column)
+    changed_symbols = set()
+    for idx, row in st.session_state.holdings_data.iterrows():
+        prev_symbol = st.session_state.previous_symbols.get(idx, '')
+        curr_symbol = str(row['symbol']) if 'symbol' in row else ''
+        if prev_symbol and prev_symbol != curr_symbol:
+            changed_symbols.add(idx)
+    
+    # Only fetch sectors for symbols that changed or are empty
+    sector_cache = {}
+    if changed_symbols:
+        with st.spinner("🔍 Fetching sector data for updated symbols..."):
+            for idx in changed_symbols:
+                symbol = st.session_state.holdings_data.loc[idx, 'symbol']
+                sector_cache[symbol] = get_sector_from_yfinance(symbol)
+    
+    # Add market indicator column and conditionally update sectors in display data
+    display_data = st.session_state.holdings_data.copy().reset_index(drop=True)
+    
+    def get_indicator_display(symbol: str) -> str:
+        """Get display string for market indicator."""
+        ind = indicators.get(symbol)
+        if ind is not None:
+            return ind.emoji + " " + ind.condition.value.replace('_', ' ').title()
+        return "❓ Unknown"
+    
+    def get_sector_display(row, row_idx: int) -> str:
+        """Get sector, using Yahoo Finance lookup ONLY if symbol changed."""
+        current_sector = str(row['sector']).strip()
+        symbol = str(row['symbol']).strip()
+        
+        # Special case: symbols starting with a number are MF:Cash
+        if symbol and symbol[0].isdigit():
+            return 'MF:Cash'
+        
+        # If sector already exists in data, preserve it (don't overwrite)
+        if current_sector and current_sector != 'nan':
+            return current_sector
+        
+        # Only auto-update sector if this row's symbol was changed by user
+        if row_idx in changed_symbols:
+            yf_sector = sector_cache.get(symbol, '')
+            if yf_sector:
+                return yf_sector
+        
+        # Return current sector (even if empty) - don't auto-fill on page load
+        return current_sector if current_sector != 'nan' else ''
+    
+    display_data['Market Indicator'] = display_data['symbol'].apply(get_indicator_display)
+    display_data['sector'] = display_data.apply(lambda row: get_sector_display(row, row.name), axis=1)
+    
+    # Update previous symbols tracking for next render
+    st.session_state.previous_symbols = {idx: row['symbol'] for idx, row in display_data.iterrows()}
     
     # Configure column types for data editor
     column_config = {
@@ -362,17 +485,36 @@ def render_holdings_tab(
             help='Date of purchase',
             format='YYYY-MM-DD',
         ),
+        'Market Indicator': st.column_config.TextColumn(
+            'Market Indicator',
+            help='Market condition based on 10-week and 50-week moving averages',
+            disabled=True,  # Read-only column
+        ),
     }
     
-    # Display editable dataframe
+    # Calculate dynamic height based on dataset size
+    # Base height for header + controls, plus ~35px per row
+    # Min height: 300px, Max height: 800px for usability
+    num_rows = len(display_data)
+    row_height = 35  # Approximate height per row in pixels
+    header_height = 100  # Height for header and controls
+    calculated_height = header_height + (num_rows * row_height)
+    dynamic_height = max(300, min(calculated_height, 800))
+    
+    # Display editable dataframe with market indicators
     edited_data = st.data_editor(
-        st.session_state.holdings_data,
+        display_data,
         column_config=column_config,
         num_rows="dynamic",  # Allow adding/deleting rows
         use_container_width=True,
+        height=dynamic_height,
         hide_index=True,
         key="holdings_editor",
     )
+    
+    # Remove the Market Indicator column before saving (it's calculated, not stored)
+    if 'Market Indicator' in edited_data.columns:
+        edited_data = edited_data.drop(columns=['Market Indicator'])
     
     # Track if data was modified
     if not edited_data.equals(st.session_state.holdings_data):
@@ -523,7 +665,52 @@ def render_holdings_tab(
             st.markdown("**By Account Type:**")
             for acc_type, count in by_type.items():
                 st.markdown(f"- {acc_type}: {count} holdings")
+            
+            # Market indicator summary
+            st.markdown("---")
+            st.markdown("**Market Indicators:**")
+            indicator_counts = {}
+            for symbol in st.session_state.holdings_data['symbol'].unique():
+                ind = indicators.get(symbol)
+                if ind is not None:
+                    condition = ind.condition.value
+                    indicator_counts[condition] = indicator_counts.get(condition, 0) + 1
+            
+            for condition, count in sorted(indicator_counts.items()):
+                emoji_map = {
+                    'strong_buy': '🚀',
+                    'buy': '📈',
+                    'hold': '➖',
+                    'caution': '⚠️',
+                    'sell': '📉',
+                    'unknown': '❓'
+                }
+                emoji = emoji_map.get(condition, '❓')
+                st.markdown(f"- {emoji} {condition.replace('_', ' ').title()}: {count} securities")
         else:
             st.info("No data to summarize")
+    
+    with st.expander("📈 Market Indicator Details", expanded=False):
+        st.caption("Detailed market analysis for each security")
+        
+        if not st.session_state.holdings_data.empty:
+            for symbol in st.session_state.holdings_data['symbol'].unique():
+                ind = indicators.get(symbol)
+                if ind is not None:
+                    with st.container():
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            st.markdown(f"### {ind.emoji} **{symbol}**")
+                        with col2:
+                            st.markdown(f"**{ind.recommendation}**")
+                            st.caption(
+                                f"Price: ${ind.current_price:.2f} | "
+                                f"10-Week MA: ${ind.short_ma:.2f} ({ind.short_trend}) | "
+                                f"50-Week MA: ${ind.long_ma:.2f} ({ind.long_trend}) | "
+                                f"Confidence: {ind.confidence:.0%}"
+                            )
+                        st.markdown("---")
+        else:
+            st.info("No holdings to analyze")
 
 # Made with Bob

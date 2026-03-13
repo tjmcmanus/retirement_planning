@@ -56,16 +56,18 @@ def render_optimization_tab(
     st.markdown("### ⚖️ Portfolio Optimization")
     st.caption("Rebalancing, tax harvesting, and charitable giving optimization")
     
-    # Create expandable sections for each optimization strategy
-    rebalance_expander = st.expander("⚖️ Portfolio Rebalancing", expanded=True)
-    harvest_expander = st.expander("🌾 Tax Loss/Gain Harvesting", expanded=False)
-    daf_expander = st.expander("🏦 DAF Bundling Analysis", expanded=False)
-    withdrawal_expander = st.expander("💰 Withdrawal Planning", expanded=False)
+    # Create tabs for each optimization strategy
+    rebalance_tab, harvest_tab, daf_tab, withdrawal_tab = st.tabs([
+        "⚖️ Rebalancing",
+        "🌾 Tax Harvesting",
+        "🏦 DAF Bundling",
+        "💰 Withdrawals"
+    ])
     
     # ========================================================================
-    # REBALANCING SECTION
+    # REBALANCING TAB
     # ========================================================================
-    with rebalance_expander:
+    with rebalance_tab:
         st.markdown("#### ⚖️ Portfolio Rebalancing")
         st.caption(
             "Calculates your current Cash / Bonds / Stocks allocation and flags drift from targets. "
@@ -270,9 +272,9 @@ def render_optimization_tab(
                 st.error(f"⚠️ Error computing rebalancing plan: {e}")
     
     # ========================================================================
-    # TAX HARVESTING SECTION
+    # TAX HARVESTING TAB
     # ========================================================================
-    with harvest_expander:
+    with harvest_tab:
         st.markdown("#### 🌾 Tax Loss & Gain Harvesting")
         st.caption(
             "Analyzes your **Brokerage (taxable) account** holdings to identify opportunities to "
@@ -524,9 +526,9 @@ def render_optimization_tab(
             st.error(f"⚠️ Error analyzing tax harvesting opportunities: {e}")
     
     # ========================================================================
-    # DAF BUNDLING SECTION
+    # DAF BUNDLING TAB
     # ========================================================================
-    with daf_expander:
+    with daf_tab:
         st.markdown("#### 🏦 Donor Advised Fund (DAF) Bundling")
         st.caption(
             "Identifies long-term appreciated securities in your brokerage account that are ideal "
@@ -702,9 +704,9 @@ def render_optimization_tab(
             st.info("💡 Ensure you have brokerage holdings with long-term gains to analyze DAF opportunities.")
     
     # ========================================================================
-    # WITHDRAWAL PLANNING SECTION
+    # WITHDRAWAL PLANNING TAB
     # ========================================================================
-    with withdrawal_expander:
+    with withdrawal_tab:
         st.markdown("#### 💰 Withdrawal Planning")
         st.caption("Plan tax-efficient withdrawals from your portfolio")
         
