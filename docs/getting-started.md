@@ -77,11 +77,26 @@ Copy the sample configuration:
 cp .env.example .env
 ```
 
-Edit `.env` to add your API keys (optional):
-```
+Edit `.env` to add your API keys (optional for SnapTrade integration):
+```bash
+# SnapTrade API Credentials (optional - for brokerage connections)
 SNAPTRADE_CLIENT_ID=your_client_id_here
 SNAPTRADE_CONSUMER_KEY=your_consumer_key_here
+
+# Encryption Key (generate with command below)
+ENCRYPTION_KEY=your_encryption_key_here
+
+# Optional: Pre-registered user credentials
+SNAPTRADE_USER_ID=your_user_id
+SNAPTRADE_USER_SECRET=your_user_secret
 ```
+
+**Generate Encryption Key:**
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+**Note:** SnapTrade integration is optional. The application works fully without it, but connecting your brokerage accounts enables automatic portfolio synchronization.
 
 ## Configuration
 
@@ -205,6 +220,7 @@ streamlit run planning_app.py --server.port 8502
 
 ## First-Time Setup Checklist
 
+### Required Steps
 - [ ] Python 3.9+ installed
 - [ ] Virtual environment created and activated
 - [ ] Dependencies installed (`pip install -r requirements.txt`)
@@ -213,6 +229,14 @@ streamlit run planning_app.py --server.port 8502
 - [ ] Application launches successfully
 - [ ] Configuration page accessible
 - [ ] Dashboard displays data correctly
+
+### Optional: SnapTrade Integration
+- [ ] SnapTrade account created at [snaptrade.com](https://snaptrade.com)
+- [ ] API credentials obtained (Client ID, Consumer Key)
+- [ ] Encryption key generated
+- [ ] `.env` file configured with SnapTrade credentials
+- [ ] Brokerage account(s) connected via Portfolio Hub → Connections tab
+- [ ] Initial portfolio sync completed
 
 ## Quick Start with Sample Data
 
@@ -279,6 +303,40 @@ source .venv/bin/activate  # macOS/Linux
 - Ensure no extra commas or quotes
 - Verify numeric values don't have currency symbols
 - Use UTF-8 encoding
+
+### SnapTrade Connection Issues
+
+**Problem:** "Encryption key not found"
+
+**Solution:**
+```bash
+# Generate a new encryption key
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Add to .env file as ENCRYPTION_KEY=<generated_key>
+```
+
+**Problem:** "SnapTrade credentials not found"
+
+**Solution:**
+- Verify `SNAPTRADE_CLIENT_ID` and `SNAPTRADE_CONSUMER_KEY` are in `.env`
+- Check credentials are correct in SnapTrade dashboard
+- Ensure `.env` file is in project root directory
+
+**Problem:** "Failed to generate auth link"
+
+**Solution:**
+- Verify API credentials are correct
+- Check SnapTrade API status
+- For personal API keys, you may need to delete and re-register user
+- Try the "Reset & Reconnect" option in the UI
+
+**Problem:** "No holdings found to sync"
+
+**Solution:**
+- Verify brokerage account has holdings
+- Complete OAuth authentication flow
+- Check account connection status
+- Try disconnecting and reconnecting account
 
 ## Next Steps
 
