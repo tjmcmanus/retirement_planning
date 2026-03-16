@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
         "expected_rate_of_return": 6.0,
         "years_of_expenses_in_cash": 4,
         "accumulation_cash_buffer_months": 6,
+        "brokerage_rebalance_trigger_multiplier": 1.0,  # Multiplier of cash target to trigger brokerage replenishment (1.0 = same as cash target)
     },
     "income": {
         "person1_annual_wages": 0,  # Annual wages/salary for person 1

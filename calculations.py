@@ -304,6 +304,45 @@ def getUpperIncomeRate(taxrate, year_tax_brackets_df):
     logger.debug(f"Upper limit for rate {rate_to_query:.2%}: ${uppervalue:,.2f}")
     
     return uppervalue
+def getNextHigherTaxRate(current_rate, year_tax_brackets_df):
+    """
+    Get the next higher tax rate from the current rate.
+    
+    Args:
+        current_rate: Current tax rate (can be string or numeric)
+        year_tax_brackets_df: DataFrame containing tax bracket information with 'rate' column
+        
+    Returns:
+        float: Next higher tax rate, or current rate if already at highest bracket
+        
+    Raises:
+        ValueError: If the current tax rate is not found in the brackets
+    """
+    rate_to_query = float(current_rate)
+    
+    logger.debug(f"Finding next higher tax rate above: {rate_to_query:.2%}")
+    
+    # Use numpy isclose for floating-point comparison to handle precision issues
+    mask = np.isclose(year_tax_brackets_df['rate'], rate_to_query, rtol=1e-9, atol=1e-9)
+    
+    if not mask.any():
+        logger.warning(f"Tax rate {rate_to_query:.2%} not found in brackets")
+        raise ValueError(f"Tax rate {rate_to_query} not found in tax brackets")
+    
+    # Get all rates higher than current rate
+    higher_rates = year_tax_brackets_df[year_tax_brackets_df['rate'] > rate_to_query]['rate']
+    
+    if higher_rates.empty:
+        # Already at highest bracket, return current rate
+        logger.debug(f"Already at highest bracket: {rate_to_query:.2%}")
+        return rate_to_query
+    
+    # Return the next higher rate (minimum of all higher rates)
+    next_rate = float(higher_rates.min())
+    logger.debug(f"Next higher tax rate: {next_rate:.2%}")
+    
+    return next_rate
+
        
 def calc_atm_phase_out(total_income, cap_gains, deduction, phase_out, exception_rate):
     """
