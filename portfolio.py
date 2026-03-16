@@ -7,8 +7,11 @@ import pandas as pd
 import streamlit as st
 import os
 import threading as _threading
+import logging
 from datetime import datetime
 from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Portfolio disk-cache constants
@@ -34,19 +37,25 @@ def get_current_price(symbol):
     if symbol == "MF:CASH":
         return 1.0
     
-    ticker = yf.Ticker(symbol)
-    
-    # Mutual funds (5-letter tickers) need longer period for price data
-    # They update less frequently than stocks
-    if len(symbol) == 5 and symbol.isalpha():
-        period = '5d'  # Use 5 days for mutual funds
-    else:
-        period = '4d'  # Use 4 days for stocks/ETFs
-    
-    todays_data = ticker.history(period=period).tail(1)
-    if todays_data.empty:
-        return 0.0  # Return 0 if no price data available
-    return todays_data['Close'].iloc[0]
+    try:
+        ticker = yf.Ticker(symbol)
+        
+        # Mutual funds (5-letter tickers) need longer period for price data
+        # They update less frequently than stocks
+        if len(symbol) == 5 and symbol.isalpha():
+            period = '5d'  # Use 5 days for mutual funds
+        else:
+            period = '4d'  # Use 4 days for stocks/ETFs
+        
+        todays_data = ticker.history(period=period).tail(1)
+        if todays_data.empty:
+            logger.warning(f"No price data available for {symbol}, treating as cash (MF:CASH)")
+            return 1.0  # Treat as cash if no price data available
+        return todays_data['Close'].iloc[0]
+    except Exception as e:
+        # Catch HTTP 404 errors and other exceptions for invalid symbols
+        logger.warning(f"Error fetching price for {symbol}: {e}. Treating as cash (MF:CASH)")
+        return 1.0  # Treat invalid symbols as cash
 
 #@st.cache_data()
 def get_qty(symbol, month=None, year=None):

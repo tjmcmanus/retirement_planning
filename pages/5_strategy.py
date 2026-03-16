@@ -132,15 +132,23 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
         person1_retirement_age = 67
         person2_retirement_age = 62
     
-    # Identify key events
+    # Identify key events (limit to first 15 years)
     events = []
     person1_ss_started = False
     person2_ss_started = False
     person1_medicare_added = False
     person2_medicare_added = False
     
+    # Get the starting year and limit timeline to 15 years
+    start_year = int(strategy_df.iloc[0]['Year'])
+    timeline_limit_year = start_year + 15
+    
     for idx, row in strategy_df.iterrows():
         year = int(row['Year'])
+        
+        # Skip events beyond 15 years
+        if year > timeline_limit_year:
+            break
         age_str = row.get('Age', '')
         
         # Parse individual ages from "age1/age2" format
@@ -408,7 +416,7 @@ def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int)
         if 'RMD' in row and row['RMD'] > 0:
             if month_num in [3, 6, 9, 12]:  # Quarterly RMD distributions
                 quarterly_rmd = row['RMD'] / 4
-                actions.append("📊 RMD Distribution (Trad→Cash)")
+                actions.append("📊 RMD Distribution (Trad→Brokerage)")
                 amounts.append(f"${quarterly_rmd:,.0f}")
         
         # Traditional IRA withdrawals (monthly for living expenses)
@@ -788,6 +796,822 @@ def _render_sankey_diagram(sources: list, targets: list, values: list, title: st
 
 
 # ---------------------------------------------------------------------------
+# Tax Analytics Helper Functions
+# ---------------------------------------------------------------------------
+
+def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
+    """
+    Extract and calculate all tax metrics from strategy DataFrame.
+    
+    Args:
+        strategy_df: Strategy DataFrame with financial projections
+        phase: "accumulation" or "withdrawal"
+    
+    Returns:
+        Dictionary with calculated tax metrics and insights
+    """
+    if strategy_df.empty:
+        return {}
+    
+    # Calculate total income by source
+    income_sources = {}
+    if phase == "accumulation":
+        if 'Wages' in strategy_df.columns:
+            income_sources['Wages'] = strategy_df['Wages'].sum()
+    else:  # withdrawal
+        if 'Wages' in strategy_df.columns:
+            income_sources['Wages'] = strategy_df['Wages'].sum()
+        if 'SS Benefits' in strategy_df.columns:
+            income_sources['Social Security'] = strategy_df['SS Benefits'].sum()
+        if 'Trad→\nCash' in strategy_df.columns:
+            income_sources['Traditional Withdrawals'] = strategy_df['Trad→\nCash'].sum()
+        if 'Roth→\nCash' in strategy_df.columns:
+            income_sources['Roth Withdrawals'] = strategy_df['Roth→\nCash'].sum()
+        if 'Brok→\nCash' in strategy_df.columns:
+            income_sources['Brokerage Withdrawals'] = strategy_df['Brok→\nCash'].sum()
+        if 'RMD' in strategy_df.columns:
+            income_sources['RMDs'] = strategy_df['RMD'].sum()
+    
+    # Roth conversions (not spendable income but important for tax planning)
+    roth_conversion_col = 'Trad→\nRoth' if 'Trad→\nRoth' in strategy_df.columns else 'Roth Conversion'
+    if roth_conversion_col in strategy_df.columns:
+        income_sources['Roth Conversions'] = strategy_df[roth_conversion_col].sum()
+    
+    # Calculate total taxes by type
+    tax_breakdown = {}
+    if 'Federal Tax' in strategy_df.columns:
+        tax_breakdown['Federal Income Tax'] = strategy_df['Federal Tax'].sum()
+    if 'State Tax' in strategy_df.columns:
+        tax_breakdown['State Income Tax'] = strategy_df['State Tax'].sum()
+    if 'IRMAA Penalty' in strategy_df.columns:
+        tax_breakdown['IRMAA Penalties'] = strategy_df['IRMAA Penalty'].sum()
+    if 'Wages→\nPayroll' in strategy_df.columns:
+        tax_breakdown['Payroll Taxes (FICA)'] = strategy_df['Wages→\nPayroll'].sum()
+    
+    # Calculate Long-Term Capital Gains Tax
+    # LTCG is taxed at 0%, 15%, or 20% depending on income
+    # Now uses actual LTCG amounts from cost basis tracking
+    if 'LTCG Harvested' in strategy_df.columns:
+        total_ltcg = strategy_df['LTCG Harvested'].sum()
+        # Calculate LTCG tax using actual LTCG amounts (not 60/40 assumption)
+        estimated_ltcg_tax = 0
+        for idx, row in strategy_df.iterrows():
+            ltcg = row.get('LTCG Harvested', 0)
+            agi = row.get('AGI', 0)
+            # Simplified LTCG tax calculation
+            # 0% up to ~$89k (MFJ), 15% up to ~$553k, 20% above
+            if agi < 89075:
+                ltcg_tax = 0  # 0% bracket
+            elif agi < 553850:
+                ltcg_tax = ltcg * 0.15  # 15% bracket
+            else:
+                ltcg_tax = ltcg * 0.20  # 20% bracket
+            estimated_ltcg_tax += ltcg_tax
+        
+        if estimated_ltcg_tax > 0:
+            tax_breakdown['Long-Term Capital Gains Tax'] = estimated_ltcg_tax
+    
+    # Add cost basis insights if available
+    cost_basis_insights = {}
+    if 'Basis Returned' in strategy_df.columns:
+        total_basis_returned = strategy_df['Basis Returned'].sum()
+        if total_basis_returned > 0:
+            cost_basis_insights['total_basis_returned'] = total_basis_returned
+    
+    if 'Brokerage LTCG Ratio' in strategy_df.columns:
+        # Calculate average LTCG ratio (weighted by withdrawals)
+        ltcg_ratios = strategy_df[strategy_df['Brokerage LTCG Ratio'] > 0]['Brokerage LTCG Ratio']
+        if not ltcg_ratios.empty:
+            cost_basis_insights['avg_ltcg_ratio'] = ltcg_ratios.mean()
+            cost_basis_insights['min_ltcg_ratio'] = ltcg_ratios.min()
+            cost_basis_insights['max_ltcg_ratio'] = ltcg_ratios.max()
+    
+    # Calculate NIIT if available (Net Investment Income Tax)
+    # NIIT is 3.8% on investment income above thresholds ($250k MFJ)
+    if 'LTCG Harvested' in strategy_df.columns and 'MAGI' in strategy_df.columns:
+        niit_threshold = 250000  # MFJ threshold
+        total_niit = 0
+        for idx, row in strategy_df.iterrows():
+            magi = row.get('MAGI', 0)
+            ltcg = row.get('LTCG Harvested', 0)
+            if magi > niit_threshold:
+                # NIIT applies to lesser of: NII or (MAGI - threshold)
+                excess_magi = magi - niit_threshold
+                niit_base = min(ltcg, excess_magi)
+                total_niit += niit_base * 0.038
+        
+        if total_niit > 0:
+            tax_breakdown['Net Investment Income Tax (NIIT)'] = total_niit
+    
+    # Calculate effective tax rates
+    total_income = sum(v for k, v in income_sources.items() if k != 'Roth Conversions')
+    total_taxes = sum(tax_breakdown.values())
+    avg_effective_rate = (total_taxes / total_income * 100) if total_income > 0 else 0
+    
+    # Calculate marginal rates using actual tax bracket data from CSV files
+    marginal_rates = []
+    effective_rates = []
+    
+    # Import tax bracket loading function
+    from load_data import get_income_tax_brackets
+    from config import get_config_manager
+    
+    # Get filing status from config
+    config_mgr = get_config_manager()
+    filing_status = config_mgr.get("tax_info", "filing_status", "married_filing_jointly")
+    
+    for idx, row in strategy_df.iterrows():
+        year = row.get('Year', 2026)
+        year_income = 0
+        year_taxes = 0
+        
+        # Calculate year income
+        if phase == "accumulation":
+            year_income = row.get('Wages', 0)
+        else:
+            year_income = (row.get('Wages', 0) + row.get('SS Benefits', 0) +
+                          row.get('Trad→\nCash', 0) + row.get('Brok→\nCash', 0))
+        
+        # Calculate year taxes (include all tax-like costs)
+        year_taxes = (row.get('Federal Tax', 0) +
+                     row.get('State Tax', 0) +
+                     row.get('IRMAA Penalty', 0) +
+                     row.get('ACA Premium', 0))
+        
+        # Effective rate for this year (total taxes and fees / income)
+        eff_rate = (year_taxes / year_income * 100) if year_income > 0 else 0
+        effective_rates.append(eff_rate)
+        
+        # Marginal rate calculation using actual tax brackets from CSV
+        agi = row.get('AGI', 0)
+        marg_rate = 0
+        
+        try:
+            # Load tax brackets for this year
+            tax_brackets_df = get_income_tax_brackets(year)
+            
+            # Filter for the correct filing status
+            brackets = tax_brackets_df[tax_brackets_df['filing_status'] == filing_status]
+            
+            if not brackets.empty:
+                # Find the bracket that contains this AGI
+                # Sort by lower bound to ensure we check in order
+                brackets = brackets.sort_values('lower')
+                
+                for _, bracket in brackets.iterrows():
+                    if bracket['lower'] <= agi <= bracket['upper']:
+                        marg_rate = bracket['rate'] * 100  # Convert to percentage
+                        break
+                
+                # If AGI exceeds all brackets, use the highest rate
+                if marg_rate == 0 and agi > 0:
+                    marg_rate = brackets['rate'].max() * 100
+            else:
+                # Fallback if no brackets found for filing status
+                marg_rate = 0
+                
+        except Exception as e:
+            # Fallback to 0 if there's any error loading brackets
+            st.warning(f"Could not load tax brackets for year {year}: {e}")
+            marg_rate = 0
+        
+        marginal_rates.append(marg_rate)
+    
+    # Add rates to dataframe for charting
+    strategy_df_copy = strategy_df.copy()
+    strategy_df_copy['Marginal Rate'] = marginal_rates
+    strategy_df_copy['Effective Rate'] = effective_rates
+    
+    # Generate tax optimization insights
+    insights = generate_tax_insights(strategy_df, phase)
+    
+    return {
+        'income_sources': income_sources,
+        'tax_breakdown': tax_breakdown,
+        'total_income': total_income,
+        'total_taxes': total_taxes,
+        'avg_effective_rate': avg_effective_rate,
+        'strategy_df_with_rates': strategy_df_copy,
+        'insights': insights,
+        'cost_basis_insights': cost_basis_insights
+    }
+
+
+def generate_tax_insights(strategy_df: pd.DataFrame, phase: str) -> list:
+    """
+    Analyze strategy and generate actionable tax insights.
+    
+    Args:
+        strategy_df: Strategy DataFrame
+        phase: "accumulation" or "withdrawal"
+    
+    Returns:
+        List of insight strings
+    """
+    insights = []
+    
+    if strategy_df.empty:
+        return insights
+    
+    # Check for high effective tax rate years
+    for idx, row in strategy_df.iterrows():
+        year = row.get('Year', 0)
+        federal_tax = row.get('Federal Tax', 0)
+        agi = row.get('AGI', 0)
+        
+        if agi > 0:
+            eff_rate = (federal_tax / agi * 100)
+            if eff_rate > 25:
+                insights.append(f"⚠️ **Year {year}**: High effective tax rate ({eff_rate:.1f}%). Consider tax-loss harvesting or timing income.")
+    
+    # Check for IRMAA penalties
+    if 'IRMAA Penalty' in strategy_df.columns:
+        irmaa_years = strategy_df[strategy_df['IRMAA Penalty'] > 0]
+        if not irmaa_years.empty:
+            total_irmaa = irmaa_years['IRMAA Penalty'].sum()
+            insights.append(f"💊 **IRMAA Impact**: ${total_irmaa:,.0f} in Medicare surcharges over {len(irmaa_years)} years. Consider managing MAGI to avoid IRMAA brackets.")
+    
+    # Check for Roth conversion opportunities
+    roth_conv_col = 'Trad→\nRoth' if 'Trad→\nRoth' in strategy_df.columns else 'Roth Conversion'
+    if roth_conv_col in strategy_df.columns:
+        low_income_years = strategy_df[strategy_df['AGI'] < 100000]
+        if not low_income_years.empty and low_income_years[roth_conv_col].sum() < 50000:
+            insights.append(f"💡 **Roth Opportunity**: {len(low_income_years)} years with AGI < $100k. Consider increasing Roth conversions in these low-tax years.")
+    
+    # Check for state tax burden
+    if 'State Tax' in strategy_df.columns:
+        total_state = strategy_df['State Tax'].sum()
+        total_federal = strategy_df['Federal Tax'].sum() if 'Federal Tax' in strategy_df.columns else 0
+        if total_state > 0 and total_federal > 0:
+            state_pct = (total_state / (total_state + total_federal) * 100)
+            if state_pct > 15:
+                insights.append(f"🏛️ **State Tax Burden**: State taxes are {state_pct:.1f}% of total tax burden (${total_state:,.0f}). Consider state tax planning strategies.")
+    
+    # Check for tax bracket optimization
+    if 'AGI' in strategy_df.columns:
+        # Check if AGI is consistently near bracket thresholds
+        bracket_thresholds = [89075, 190750, 364200]  # MFJ 2024 thresholds
+        for threshold in bracket_thresholds:
+            near_threshold = strategy_df[(strategy_df['AGI'] > threshold - 10000) & (strategy_df['AGI'] < threshold + 10000)]
+            if not near_threshold.empty:
+                insights.append(f"📊 **Bracket Management**: {len(near_threshold)} years near ${threshold:,.0f} bracket threshold. Small adjustments could optimize tax burden.")
+    
+    # Check for LTCG harvesting opportunities
+    if 'LTCG Harvested' in strategy_df.columns and 'AGI' in strategy_df.columns:
+        # Find years with low AGI where more LTCG could be harvested at 0%
+        ltcg_0_percent_threshold = 89075  # MFJ 2024 threshold for 0% LTCG
+        low_agi_years = strategy_df[strategy_df['AGI'] < ltcg_0_percent_threshold]
+        if not low_agi_years.empty:
+            total_ltcg_harvested = low_agi_years['LTCG Harvested'].sum()
+            avg_agi = low_agi_years['AGI'].mean()
+            if total_ltcg_harvested > 0:
+                insights.append(f"💎 **LTCG Harvesting**: {len(low_agi_years)} years with AGI < ${ltcg_0_percent_threshold:,.0f} (0% LTCG bracket). Total LTCG harvested: ${total_ltcg_harvested:,.0f} at 0% tax rate. Excellent tax-free gains!")
+            else:
+                insights.append(f"💎 **LTCG Opportunity**: {len(low_agi_years)} years with low AGI (avg ${avg_agi:,.0f}). Consider harvesting long-term capital gains at 0% tax rate in these years.")
+    
+    return insights
+
+
+def render_tax_overview(tax_data: dict) -> None:
+    """Render tax overview with key metrics and summary charts."""
+    st.markdown("### 📊 Tax Overview")
+    st.caption("Comprehensive tax analysis across your financial strategy")
+    
+    # Metric cards
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Total Taxes Paid",
+            f"${tax_data['total_taxes']:,.0f}",
+            help="Sum of all federal, state, and other taxes over planning period"
+        )
+    
+    with col2:
+        st.metric(
+            "Average Effective Rate",
+            f"{tax_data['avg_effective_rate']:.1f}%",
+            help="Total taxes divided by total income"
+        )
+    
+    with col3:
+        total_irmaa = tax_data['tax_breakdown'].get('IRMAA Penalties', 0)
+        st.metric(
+            "IRMAA Penalties",
+            f"${total_irmaa:,.0f}",
+            help="Total Medicare surcharges due to high income"
+        )
+    
+    with col4:
+        # Tax efficiency score (lower is better)
+        tax_efficiency = 100 - min(tax_data['avg_effective_rate'], 100)
+        st.metric(
+            "Tax Efficiency Score",
+            f"{tax_efficiency:.0f}/100",
+            help="Higher score = more tax-efficient strategy"
+        )
+    
+    st.markdown("---")
+    
+    # Combined tax burden visualization
+    st.markdown("#### Tax Burden Over Time")
+    
+    df = tax_data['strategy_df_with_rates']
+    
+    fig = go.Figure()
+    
+    # Add stacked bars for different tax types
+    if 'Federal Tax' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['Federal Tax'],
+            name='Federal Tax',
+            marker_color='#ff4b4b',
+            hovertemplate='Year %{x}<br>Federal: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    if 'State Tax' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['State Tax'],
+            name='State Tax',
+            marker_color='#ffa500',
+            hovertemplate='Year %{x}<br>State: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    if 'IRMAA Penalty' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['IRMAA Penalty'],
+            name='IRMAA',
+            marker_color='#AA96DA',
+            hovertemplate='Year %{x}<br>IRMAA: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    if 'Wages→\nPayroll' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['Wages→\nPayroll'],
+            name='Payroll (FICA)',
+            marker_color='#4c78a8',
+            hovertemplate='Year %{x}<br>Payroll: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    # Add LTCG tax if available
+    if 'LTCG Harvested' in df.columns:
+        ltcg_tax_by_year = []
+        for idx, row in df.iterrows():
+            ltcg = row.get('LTCG Harvested', 0)
+            agi = row.get('AGI', 0)
+            if agi < 89075:
+                ltcg_tax = 0
+            elif agi < 553850:
+                ltcg_tax = ltcg * 0.15
+            else:
+                ltcg_tax = ltcg * 0.20
+            ltcg_tax_by_year.append(ltcg_tax)
+        
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=ltcg_tax_by_year,
+            name='Capital Gains Tax',
+            marker_color='#F38181',
+            hovertemplate='Year %{x}<br>Cap Gains: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    fig.update_layout(
+        barmode='stack',
+        title='Annual Tax Burden by Type',
+        xaxis_title='Year',
+        yaxis_title='Tax Amount ($)',
+        hovermode='x unified',
+        height=400,
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Display cost basis insights if available
+    cost_basis_insights = tax_data.get('cost_basis_insights', {})
+    if cost_basis_insights:
+        st.markdown("---")
+        st.markdown("#### 📊 Cost Basis Tracking Insights")
+        st.caption("Actual cost basis tracking replaces the traditional 60/40 LTCG assumption")
+        
+        cb_col1, cb_col2, cb_col3 = st.columns(3)
+        
+        with cb_col1:
+            total_basis = cost_basis_insights.get('total_basis_returned', 0)
+            if total_basis > 0:
+                st.metric(
+                    "Total Basis Returned",
+                    f"${total_basis:,.0f}",
+                    help="Tax-free return of original investment cost basis from brokerage withdrawals"
+                )
+        
+        with cb_col2:
+            avg_ltcg_ratio = cost_basis_insights.get('avg_ltcg_ratio', 0)
+            if avg_ltcg_ratio > 0:
+                st.metric(
+                    "Avg LTCG Ratio",
+                    f"{avg_ltcg_ratio*100:.1f}%",
+                    help="Average percentage of brokerage withdrawals that are taxable long-term capital gains"
+                )
+        
+        with cb_col3:
+            min_ltcg = cost_basis_insights.get('min_ltcg_ratio', 0)
+            max_ltcg = cost_basis_insights.get('max_ltcg_ratio', 0)
+            if min_ltcg > 0 or max_ltcg > 0:
+                st.metric(
+                    "LTCG Ratio Range",
+                    f"{min_ltcg*100:.1f}% - {max_ltcg*100:.1f}%",
+                    help="Range of LTCG ratios across all years with brokerage withdrawals"
+                )
+        
+        if avg_ltcg_ratio > 0:
+            # Compare to 60/40 assumption
+            assumed_ltcg = 0.40
+            difference = (avg_ltcg_ratio - assumed_ltcg) * 100
+            if abs(difference) > 5:
+                comparison_text = "higher" if difference > 0 else "lower"
+                st.info(
+                    f"💡 **Cost Basis Insight**: Your actual LTCG ratio ({avg_ltcg_ratio*100:.1f}%) is "
+                    f"{abs(difference):.1f}% {comparison_text} than the traditional 60/40 assumption (40% LTCG). "
+                    f"This {'increases' if difference > 0 else 'reduces'} your actual tax burden on brokerage withdrawals."
+                )
+
+
+def render_income_sources_chart(tax_data: dict, phase: str) -> None:
+    """Render detailed income sources breakdown."""
+    st.markdown("### 💵 Income Sources")
+    st.caption("Breakdown of all income sources over the planning period")
+    
+    df = tax_data['strategy_df_with_rates']
+    
+    # Create stacked bar chart
+    fig = go.Figure()
+    
+    if phase == "accumulation":
+        if 'Wages' in df.columns:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['Wages'],
+                name='Wages',
+                marker_color='#21c354',
+                hovertemplate='Year %{x}<br>Wages: $%{y:,.0f}<extra></extra>'
+            ))
+    else:  # withdrawal
+        if 'Wages' in df.columns and df['Wages'].sum() > 0:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['Wages'],
+                name='Wages',
+                marker_color='#21c354',
+                hovertemplate='Year %{x}<br>Wages: $%{y:,.0f}<extra></extra>'
+            ))
+        
+        if 'SS Benefits' in df.columns:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['SS Benefits'],
+                name='Social Security',
+                marker_color='#95E1D3',
+                hovertemplate='Year %{x}<br>SS: $%{y:,.0f}<extra></extra>'
+            ))
+        
+        if 'Trad→\nCash' in df.columns:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['Trad→\nCash'],
+                name='Traditional Withdrawals',
+                marker_color='#ff4b4b',
+                hovertemplate='Year %{x}<br>Traditional: $%{y:,.0f}<extra></extra>'
+            ))
+        
+        if 'Roth→\nCash' in df.columns:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['Roth→\nCash'],
+                name='Roth Withdrawals',
+                marker_color='#AA96DA',
+                hovertemplate='Year %{x}<br>Roth: $%{y:,.0f}<extra></extra>'
+            ))
+        
+        if 'Brok→\nCash' in df.columns:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['Brok→\nCash'],
+                name='Brokerage Withdrawals',
+                marker_color='#ffa500',
+                hovertemplate='Year %{x}<br>Brokerage: $%{y:,.0f}<extra></extra>'
+            ))
+        
+        if 'RMD' in df.columns:
+            fig.add_trace(go.Bar(
+                x=df['Year'],
+                y=df['RMD'],
+                name='RMDs',
+                marker_color='#FF6B9D',
+                hovertemplate='Year %{x}<br>RMD: $%{y:,.0f}<extra></extra>'
+            ))
+    
+    fig.update_layout(
+        barmode='stack',
+        title='Annual Income by Source',
+        xaxis_title='Year',
+        yaxis_title='Income Amount ($)',
+        hovermode='x unified',
+        height=450,
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Income composition pie chart
+    st.markdown("#### Average Income Composition")
+    income_sources = tax_data['income_sources']
+    # Exclude Roth conversions from income composition
+    income_for_pie = {k: v for k, v in income_sources.items() if k != 'Roth Conversions' and v > 0}
+    
+    if income_for_pie:
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=list(income_for_pie.keys()),
+            values=list(income_for_pie.values()),
+            hole=0.3,
+            marker=dict(colors=['#21c354', '#95E1D3', '#ff4b4b', '#AA96DA', '#ffa500', '#FF6B9D']),
+            hovertemplate='%{label}<br>$%{value:,.0f}<br>%{percent}<extra></extra>'
+        )])
+        
+        fig_pie.update_layout(
+            title='Income Source Distribution',
+            height=350
+        )
+        
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+
+def render_tax_breakdown_chart(tax_data: dict) -> None:
+    """Render detailed tax breakdown."""
+    st.markdown("### 💰 Tax Breakdown")
+    st.caption("Detailed breakdown of all tax types over the planning period")
+    
+    df = tax_data['strategy_df_with_rates']
+    
+    # Stacked bar chart (same as overview but larger)
+    fig = go.Figure()
+    
+    if 'Federal Tax' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['Federal Tax'],
+            name='Federal Income Tax',
+            marker_color='#ff4b4b',
+            hovertemplate='Year %{x}<br>Federal: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    if 'State Tax' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['State Tax'],
+            name='State Income Tax',
+            marker_color='#ffa500',
+            hovertemplate='Year %{x}<br>State: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    if 'IRMAA Penalty' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['IRMAA Penalty'],
+            name='IRMAA (Medicare Surcharges)',
+            marker_color='#AA96DA',
+            hovertemplate='Year %{x}<br>IRMAA: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    if 'Wages→\nPayroll' in df.columns:
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=df['Wages→\nPayroll'],
+            name='Payroll Taxes (FICA)',
+            marker_color='#4c78a8',
+            hovertemplate='Year %{x}<br>Payroll: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    # Add LTCG tax if available
+    if 'LTCG Harvested' in df.columns:
+        ltcg_tax_by_year = []
+        for idx, row in df.iterrows():
+            ltcg = row.get('LTCG Harvested', 0)
+            agi = row.get('AGI', 0)
+            if agi < 89075:
+                ltcg_tax = 0
+            elif agi < 553850:
+                ltcg_tax = ltcg * 0.15
+            else:
+                ltcg_tax = ltcg * 0.20
+            ltcg_tax_by_year.append(ltcg_tax)
+        
+        fig.add_trace(go.Bar(
+            x=df['Year'],
+            y=ltcg_tax_by_year,
+            name='Capital Gains Tax',
+            marker_color='#F38181',
+            hovertemplate='Year %{x}<br>Cap Gains: $%{y:,.0f}<extra></extra>'
+        ))
+    
+    fig.update_layout(
+        barmode='stack',
+        title='Annual Tax Burden by Type',
+        xaxis_title='Year',
+        yaxis_title='Tax Amount ($)',
+        hovermode='x unified',
+        height=500,
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Tax composition pie chart
+    st.markdown("#### Tax Type Distribution")
+    tax_breakdown = tax_data['tax_breakdown']
+    
+    if tax_breakdown:
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=list(tax_breakdown.keys()),
+            values=list(tax_breakdown.values()),
+            hole=0.3,
+            marker=dict(colors=['#ff4b4b', '#ffa500', '#AA96DA', '#4c78a8', '#F38181']),
+            hovertemplate='%{label}<br>$%{value:,.0f}<br>%{percent}<extra></extra>'
+        )])
+        
+        fig_pie.update_layout(
+            title='Total Tax Distribution',
+            height=350
+        )
+        
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+
+def render_tax_rates_chart(tax_data: dict) -> None:
+    """Render marginal and effective tax rate analysis."""
+    st.markdown("### 📈 Tax Rates Over Time")
+    st.caption("Marginal and effective tax rates throughout your financial strategy")
+    
+    df = tax_data['strategy_df_with_rates']
+    
+    # Dual-axis line chart
+    fig = go.Figure()
+    
+    # Marginal rate
+    fig.add_trace(go.Scatter(
+        x=df['Year'],
+        y=df['Marginal Rate'],
+        name='Marginal Tax Rate',
+        mode='lines+markers',
+        line=dict(color='#ff4b4b', width=3),
+        marker=dict(size=8),
+        hovertemplate='Year %{x}<br>Marginal: %{y:.1f}%<extra></extra>'
+    ))
+    
+    # Effective rate
+    fig.add_trace(go.Scatter(
+        x=df['Year'],
+        y=df['Effective Rate'],
+        name='Effective Tax Rate',
+        mode='lines+markers',
+        line=dict(color='#4c78a8', width=3),
+        marker=dict(size=8),
+        hovertemplate='Year %{x}<br>Effective: %{y:.1f}%<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title='Marginal vs Effective Tax Rates',
+        xaxis_title='Year',
+        yaxis_title='Tax Rate (%)',
+        hovermode='x unified',
+        height=450,
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Rate comparison table
+    st.markdown("#### Year-by-Year Rate Comparison")
+    
+    rate_df = df[['Year', 'Age', 'AGI', 'MAGI', 'Marginal Rate', 'Effective Rate']].copy()
+    
+    # Format for display
+    rate_df['AGI'] = rate_df['AGI'].apply(lambda x: f"${x:,.0f}")
+    rate_df['MAGI'] = rate_df['MAGI'].apply(lambda x: f"${x:,.0f}")
+    rate_df['Marginal Rate'] = rate_df['Marginal Rate'].apply(lambda x: f"{x:.1f}%")
+    rate_df['Effective Rate'] = rate_df['Effective Rate'].apply(lambda x: f"{x:.1f}%")
+    
+    st.dataframe(
+        rate_df,
+        column_config={
+            "Year": st.column_config.NumberColumn("Year", format="%d"),
+            "Age": st.column_config.TextColumn("Age"),
+            "AGI": st.column_config.TextColumn("AGI", help="Adjusted Gross Income (before itemized deductions)"),
+            "MAGI": st.column_config.TextColumn("MAGI", help="Modified AGI used for IRMAA and ACA calculations"),
+            "Marginal Rate": st.column_config.TextColumn("Marginal Rate"),
+            "Effective Rate": st.column_config.TextColumn("Effective Rate"),
+        },
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+def render_tax_table(tax_data: dict, phase: str) -> None:
+    """Render comprehensive year-by-year tax table."""
+    st.markdown("### 📋 Year-by-Year Tax Details")
+    st.caption("Complete tax data for every year in your strategy")
+    
+    df = tax_data['strategy_df_with_rates'].copy()
+    
+    # Select columns based on phase
+    if phase == "accumulation":
+        display_cols = [
+            'Year', 'Age', 'Wages', 'Wages→\nPayroll',
+            'AGI', 'Federal Tax', 'State Tax',
+            'Marginal Rate', 'Effective Rate'
+        ]
+    else:  # withdrawal
+        display_cols = [
+            'Year', 'Age', 'Wages', 'SS Benefits', 'RMD', 'Trad→\nCash', 'Trad→\nBrok',
+            'LTCG Harvested', 'Trad→\nRoth', 'AGI',
+            'Federal Tax', 'State Tax', 'IRMAA Penalty', 'Marginal Rate', 'Effective Rate'
+        ]
+    
+    # Filter to available columns
+    available_cols = [c for c in display_cols if c in df.columns]
+    display_df = df[available_cols].copy()
+    
+    # Format numeric columns
+    for col in available_cols:
+        if col not in ['Year', 'Age', 'Marginal Rate', 'Effective Rate']:
+            display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
+        elif col in ['Marginal Rate', 'Effective Rate']:
+            display_df[col] = display_df[col].apply(lambda x: f"{x:.1f}%")
+    
+    # Export button
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        # Convert to CSV for download
+        csv = df.to_csv(index=False)
+        st.download_button(
+            label="📥 Export to CSV",
+            data=csv,
+            file_name=f"tax_analytics_{phase}.csv",
+            mime="text/csv",
+            help="Download complete tax data as CSV file"
+        )
+    
+    # Add column configuration with helpful tooltips
+    column_config = {
+        "Year": st.column_config.NumberColumn("Year", format="%d"),
+        "Age": st.column_config.TextColumn("Age"),
+        "Wages": st.column_config.TextColumn("Wages", help="W-2 wages (included in AGI)"),
+        "SS Benefits": st.column_config.TextColumn("SS Benefits", help="Social Security benefits (partially taxable, included in AGI)"),
+        "RMD": st.column_config.TextColumn("RMD", help="Required Minimum Distribution from Traditional IRA/401k (included in AGI)"),
+        "Trad→\nCash": st.column_config.TextColumn("Trad→Cash", help="Traditional IRA/401k withdrawal to cash (included in AGI)"),
+        "Trad→\nBrok": st.column_config.TextColumn("Trad→Brok", help="Traditional IRA/401k withdrawal to replenish brokerage (included in AGI)"),
+        "LTCG Harvested": st.column_config.TextColumn("LTCG", help="Long-term capital gains from brokerage (taxable portion, included in AGI)"),
+        "Trad→\nRoth": st.column_config.TextColumn("Roth Conversion", help="Traditional IRA/401k converted to Roth (included in AGI)"),
+        "AGI": st.column_config.TextColumn("AGI", help="Adjusted Gross Income = Wages + SS (taxable) + RMD + Trad withdrawals + LTCG + Roth conversions"),
+        "Federal Tax": st.column_config.TextColumn("Federal Tax"),
+        "State Tax": st.column_config.TextColumn("State Tax"),
+        "IRMAA Penalty": st.column_config.TextColumn("IRMAA", help="Medicare surcharge based on MAGI from 2 years ago"),
+        "Marginal Rate": st.column_config.TextColumn("Marginal Rate", help="Highest tax bracket that applies to your income"),
+        "Effective Rate": st.column_config.TextColumn("Effective Rate", help="Total tax burden as % of income (includes Federal + State + IRMAA + ACA)"),
+        "Wages→\nPayroll": st.column_config.TextColumn("Payroll Tax", help="FICA + Medicare + State payroll taxes"),
+    }
+    
+    st.dataframe(
+        display_df,
+        column_config=column_config,
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+def render_tax_insights(tax_data: dict) -> None:
+    """Render tax optimization insights."""
+    insights = tax_data.get('insights', [])
+    
+    if insights:
+        st.markdown("### 💡 Tax Optimization Insights")
+        st.caption("Actionable recommendations to optimize your tax strategy")
+        
+        for insight in insights:
+            st.info(insight)
+    else:
+        st.success("✅ Your tax strategy appears well-optimized! No major concerns identified.")
+
+
+# ---------------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------------
 (
@@ -856,9 +1680,9 @@ else:
     
 st.markdown("---")
 
-# Create tabs with new monthly calendar view and bucket strategy
-long_term_tab, monthly_tab, balances_tab, charts_tab, bucket_tab = st.tabs(
-    ["📋 Long-Term Plan", "📅 Monthly Calendar", "💰 Account Balances", "📊 Visualizations", "🪣 Bucket Strategy"]
+# Create tabs with new monthly calendar view, bucket strategy, and tax analytics
+long_term_tab, monthly_tab, balances_tab, charts_tab, bucket_tab, tax_tab = st.tabs(
+    ["📋 Long-Term Plan", "📅 Monthly Calendar", "💰 Account Balances", "📊 Visualizations", "🪣 Bucket Strategy", "💰 Tax Analytics"]
 )
 
 # ---------------------------------------------------------------------------
@@ -955,7 +1779,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                     "Cash→\nBrok":    st.column_config.TextColumn("Cash→Brok"),
                     "Expenses":       st.column_config.TextColumn("Expenses"),
                     "Healthcare Cost":st.column_config.TextColumn("Healthcare"),
-                    "AGI":            st.column_config.TextColumn("AGI"),
+                    "AGI":            st.column_config.TextColumn("AGI", help="Adjusted Gross Income (after 401k contributions, before itemized deductions)"),
                     "Federal Tax":    st.column_config.TextColumn("Fed Tax"),
                     "State Tax":      st.column_config.TextColumn("State Tax", help=f"Estimated {accum_state} state income tax"),
                     "Cash Balance":   st.column_config.TextColumn("Cash End"),
@@ -1473,6 +2297,38 @@ if phase == "📈 Accumulation (Pre-Retirement)":
             except Exception as e:
                 st.error(f"Error analyzing bucket strategy: {e}")
                 st.info("Please ensure bucket strategy is properly configured.")
+        
+        with tax_tab:
+            st.subheader("💰 Tax Analytics")
+            st.markdown("Comprehensive tax analysis for your accumulation strategy")
+            
+            # Prepare tax data
+            tax_data = prepare_tax_analytics_data(accum_strategy_df, "accumulation")
+            
+            if tax_data:
+                # Create sub-tabs for different views
+                tax_overview_tab, tax_income_tab, tax_breakdown_tab, tax_rates_tab, tax_table_tab = st.tabs([
+                    "📊 Overview", "💵 Income Sources", "💰 Tax Breakdown", "📈 Tax Rates", "📋 Detailed Table"
+                ])
+                
+                with tax_overview_tab:
+                    render_tax_overview(tax_data)
+                    st.markdown("---")
+                    render_tax_insights(tax_data)
+                
+                with tax_income_tab:
+                    render_income_sources_chart(tax_data, "accumulation")
+                
+                with tax_breakdown_tab:
+                    render_tax_breakdown_chart(tax_data)
+                
+                with tax_rates_tab:
+                    render_tax_rates_chart(tax_data)
+                
+                with tax_table_tab:
+                    render_tax_table(tax_data, "accumulation")
+            else:
+                st.info("No tax data available for analysis.")
 
     except Exception as e:
         st.error(f"Error calculating accumulation strategy: {e}")
@@ -1596,6 +2452,21 @@ else:
             
             # Enhanced table with state taxes
             st.subheader("📋 Year-by-Year Details")
+            
+            # Add info box about DAF and AGI/MAGI if DAF contributions are present
+            if 'DAF Contribution' in strategy_df_w.columns and strategy_df_w['DAF Contribution'].sum() > 0:
+                st.info(
+                    "ℹ️ **Understanding AGI/MAGI in DAF Contribution Years**\n\n"
+                    "You'll notice AGI and MAGI appear higher in years with DAF (Donor-Advised Fund) contributions. "
+                    "This is **correct** per IRS rules:\n\n"
+                    "- **DAF contributions are itemized deductions** that reduce your taxable income and tax bill\n"
+                    "- **They do NOT reduce AGI or MAGI** (which are calculated before itemized deductions)\n"
+                    "- **MAGI affects IRMAA** (Medicare surcharges) with a 2-year lookback, so higher MAGI in DAF years "
+                    "will increase Medicare costs 2 years later\n"
+                    "- **The tax benefit is real** — you'll see lower Federal Tax in DAF years despite higher AGI\n\n"
+                    "💡 This is why strategic timing of DAF contributions matters for IRMAA planning!"
+                )
+            
             display_df_w = strategy_df_w.copy()
 
             try:
@@ -1645,9 +2516,9 @@ else:
                 "Roth→\nCash":      st.column_config.TextColumn("Roth→Cash"),
                 "Expenses":         st.column_config.TextColumn("Expenses"),
                 "Healthcare Cost":  st.column_config.TextColumn("Healthcare"),
-                "DAF Contribution": st.column_config.TextColumn("DAF"),
-                "AGI":              st.column_config.TextColumn("AGI"),
-                "MAGI":             st.column_config.TextColumn("MAGI"),
+                "DAF Contribution": st.column_config.TextColumn("DAF", help="Donor-Advised Fund contribution (itemized deduction)"),
+                "AGI":              st.column_config.TextColumn("AGI", help="Adjusted Gross Income (before itemized deductions like DAF). DAF contributions reduce taxable income but not AGI per IRS rules."),
+                "MAGI":             st.column_config.TextColumn("MAGI", help="Modified AGI used for IRMAA (2-year lookback) and ACA calculations. Higher in DAF years because charitable contributions don't reduce MAGI."),
                 "Federal Tax":      st.column_config.TextColumn("Fed Tax"),
                 "State Tax":        st.column_config.TextColumn("State Tax", help=f"Estimated {state} state income tax"),
                 "Cash Balance":     st.column_config.TextColumn("Cash End"),
@@ -2030,6 +2901,38 @@ else:
             except Exception as e:
                 st.error(f"Error analyzing bucket strategy: {e}")
                 st.info("Please ensure bucket strategy is properly configured.")
+        
+        with tax_tab:
+            st.subheader("💰 Tax Analytics")
+            st.markdown("Comprehensive tax analysis for your withdrawal strategy")
+            
+            # Prepare tax data
+            tax_data = prepare_tax_analytics_data(strategy_df_w, "withdrawal")
+            
+            if tax_data:
+                # Create sub-tabs for different views
+                tax_overview_tab, tax_income_tab, tax_breakdown_tab, tax_rates_tab, tax_table_tab = st.tabs([
+                    "📊 Overview", "💵 Income Sources", "💰 Tax Breakdown", "📈 Tax Rates", "📋 Detailed Table"
+                ])
+                
+                with tax_overview_tab:
+                    render_tax_overview(tax_data)
+                    st.markdown("---")
+                    render_tax_insights(tax_data)
+                
+                with tax_income_tab:
+                    render_income_sources_chart(tax_data, "withdrawal")
+                
+                with tax_breakdown_tab:
+                    render_tax_breakdown_chart(tax_data)
+                
+                with tax_rates_tab:
+                    render_tax_rates_chart(tax_data)
+                
+                with tax_table_tab:
+                    render_tax_table(tax_data, "withdrawal")
+            else:
+                st.info("No tax data available for analysis.")
 
     except Exception as e:
         st.error(f"Error calculating withdrawal strategy: {e}")

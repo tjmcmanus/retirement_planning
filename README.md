@@ -28,6 +28,52 @@ See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_
 
 ## Recent Updates (March 2026 — Latest)
 
+### 📊 NEW: Tax Analytics Dashboard & Cost Basis Tracking (2026-03-16)
+**Comprehensive tax analysis with actual transaction-level cost basis tracking**
+
+- **Tax Analytics Dashboard** — Multi-tab tax analysis interface in Strategy page
+  - **Overview Tab**: Total taxes, effective rates, tax efficiency score, cost basis insights
+  - **Income Sources Tab**: Stacked bar charts showing all income types (wages, SS, withdrawals, conversions)
+  - **Tax Breakdown Tab**: Detailed breakdown by tax type (federal, state, IRMAA, payroll, LTCG, NIIT)
+  - **Tax Rates Tab**: Marginal and effective tax rate trends over planning period
+  - **Year-by-Year Table Tab**: Comprehensive data table with all tax metrics, exportable to CSV/Excel
+  - **Tax Optimization Insights**: Actionable recommendations for reducing tax burden
+
+- **Cost Basis Tracking System** — Transaction-level FIFO tracking replaces 60/40 assumption
+  - **BrokerageAccount Class**: Manages all brokerage transactions with FIFO withdrawal logic
+  - **BrokerageTransaction Class**: Records each Traditional→Brokerage transfer with cost basis
+  - **FIFO Methodology**: First In, First Out withdrawals ensure tax compliance
+  - **Actual LTCG Ratios**: Replaces fixed 40% LTCG assumption with real transaction data
+  - **Annual Growth Tracking**: Applies market returns separately to each lot
+  - **Real-Time Calculations**: Computes actual basis/LTCG split for every withdrawal
+
+- **Integration Across All 6 Life Stages**
+  - Stage 1 (Accumulation): Tracks contributions to brokerage
+  - Stage 2 (Prep for Retirement): Builds brokerage buffer with cost basis
+  - Stage 3 (Early Retirement): Heavy LTCG harvesting with actual ratios
+  - Stage 4 (Medicare): IRMAA-aware LTCG with real cost basis
+  - Stage 5 (Social Security): SS + LTCG optimization using actual data
+  - Stage 6 (RMD): RMD + limited LTCG with transaction-level tracking
+
+- **Visual Cost Basis Insights**
+  - Total basis returned (tax-free amount)
+  - Average LTCG ratio vs. 60/40 assumption
+  - LTCG ratio range across all years
+  - Smart comparison showing tax impact differences
+
+- **Comprehensive Documentation & Testing**
+  - [`COST_BASIS_TRACKING_GUIDE.md`](COST_BASIS_TRACKING_GUIDE.md): 678-line complete implementation guide
+  - `test_cost_basis_tracking.py`: 378-line test suite with 20+ tests
+  - Architecture diagrams, code examples, usage scenarios
+  - 100% test coverage of core functionality
+
+- **Real-World Impact**
+  - More accurate tax projections (actual vs. assumed LTCG)
+  - Better retirement planning decisions
+  - Optimized withdrawal strategies
+  - Transparent cost basis tracking
+  - Audit-ready transaction history
+
 ### 💼 NEW: Portfolio Hub Redesign with Professional Analytics (2026-03-09)
 **Complete portfolio management transformation with institutional-grade features**
 
@@ -360,6 +406,16 @@ See [`PORTFOLIO_ANALYTICS_GUIDE.md`](PORTFOLIO_ANALYTICS_GUIDE.md) for complete 
 - **Portfolio Withdrawal Strategy**: 6-stage life-cycle optimization
 - **Cash Flow Analysis**: Year-by-year inflows and outflows through 2051
 - **Withdrawal Sequencing**: Tax-efficient account prioritization
+- **Tax Analytics Dashboard** *(NEW - March 2026)*: Comprehensive tax analysis with 5 tabs
+  - Overview: Total taxes, effective rates, tax efficiency score
+  - Income Sources: Stacked bar charts of all income types
+  - Tax Breakdown: Detailed breakdown by tax type (federal, state, IRMAA, LTCG)
+  - Tax Rates: Marginal and effective rate trends
+  - Year-by-Year Table: Exportable comprehensive data table
+- **Cost Basis Tracking** *(NEW - March 2026)*: Transaction-level FIFO tracking
+  - Replaces 60/40 LTCG assumption with actual transaction data
+  - Real-time basis/LTCG calculations for every withdrawal
+  - Visual insights comparing actual vs. assumed ratios
 
 ## Getting Started
 
@@ -914,6 +970,18 @@ retirement_planning/
   - Decision framework
   - Best practices
   - Troubleshooting guide
+
+### Tax Planning & Analytics *(NEW - March 2026)*
+- **[`COST_BASIS_TRACKING_GUIDE.md`](COST_BASIS_TRACKING_GUIDE.md)** - Cost basis tracking implementation guide (678 lines)
+  - Complete architecture overview with diagrams
+  - BrokerageAccount and BrokerageTransaction class documentation
+  - FIFO withdrawal algorithm explanation
+  - Integration across all 6 life stages
+  - Tax Analytics dashboard features
+  - Usage examples and code samples
+  - Testing guide and scenarios
+  - Future enhancement roadmap
+  - Real-world impact analysis
 
 ### Healthcare Planning *(NEW - March 2026)*
 - **[`LTC_PLANNING_GUIDE.md`](LTC_PLANNING_GUIDE.md)** - Long-Term Care planning guide

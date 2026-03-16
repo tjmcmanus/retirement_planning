@@ -395,6 +395,29 @@ with tab2:
             help="How many years of expenses to keep in cash/safe assets (retirement phase)",
             key="years_of_expenses_in_cash"
         )
+        
+        brokerage_rebalance_trigger_multiplier = st.number_input(
+            "Taxable Account Buffer Multiplier",
+            min_value=0.5,
+            max_value=5.0,
+            value=float(config_mgr.get("financial_assumptions", "brokerage_rebalance_trigger_multiplier", 1.0)),
+            step=0.5,
+            help=(
+                "Multiplier for taxable/brokerage account buffer target. "
+                "The base target is 1 year of expenses. "
+                "Example: 2.0 = maintain 2 years of expenses in taxable account. "
+                "Higher values = more conservative buffer, triggers replenishment earlier."
+            ),
+            key="brokerage_rebalance_trigger_multiplier"
+        )
+        
+        # Show the dollar equivalent
+        if total_annual_expenses > 0:
+            taxable_target = total_annual_expenses * brokerage_rebalance_trigger_multiplier
+            st.caption(
+                f"≈ ${taxable_target:,.0f} taxable account trigger level "
+                f"({brokerage_rebalance_trigger_multiplier:.1f}x × ${total_annual_expenses:,.0f} expenses)"
+            )
 
         accumulation_cash_buffer_months = st.slider(
             "Accumulation Phase: Cash Buffer (months of wages)",
@@ -4866,6 +4889,7 @@ with tab10:
                 "expense_inflation_rate": expense_inflation_rate,
                 "expected_rate_of_return": expected_rate_of_return,
                 "years_of_expenses_in_cash": years_of_expenses_in_cash,
+                "brokerage_rebalance_trigger_multiplier": brokerage_rebalance_trigger_multiplier,
                 "accumulation_cash_buffer_months": accumulation_cash_buffer_months,
             })
             

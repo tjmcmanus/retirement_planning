@@ -30,14 +30,14 @@ Added `validate_fund_conservation()` method to verify all fund movements balance
 - Maintains 2-year cash buffer target
 - Priority sequence:
   1. Brokerage → Cash (tax-free)
-  2. Traditional → Cash (ordinary income tax, max 10% per year)
-  3. Roth → Cash (emergency only, max 5% per year, age 59.5+)
+  2. Traditional → Cash (ordinary income tax, max 20% per year)
+  3. Roth → Cash (emergency only, max 10% per year, age 59.5+)
 
 #### `replenish_brokerage_buffer()`
-- Maintains 3-year brokerage buffer target
+- Maintains brokerage buffer target (configurable via trigger multiplier)
 - Priority sequence:
-  1. Traditional → Brokerage (ordinary income tax, max 15% per year)
-  2. Roth → Brokerage (emergency only, max 5% per year, age 59.5+)
+  1. Traditional → Brokerage (ordinary income tax, max 30% per year)
+  2. Roth → Brokerage (intentionally omitted to avoid LTCG on future Cash transfers)
 
 #### `execute_roth_conversion()`
 - Executes actual fund transfer from Traditional to Roth
@@ -101,7 +101,7 @@ Added `validate_fund_conservation()` method to verify all fund movements balance
 ### Emergency Protocols
 - Roth distributions only when other accounts depleted
 - Age 59.5+ requirement for qualified distributions
-- Conservative limits (5% max per year)
+- Conservative limits (10% max per year for emergency Roth distributions)
 - Warning logs for emergency distributions
 
 ## Testing Requirements
