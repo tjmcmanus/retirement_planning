@@ -3586,8 +3586,9 @@ class Stage1Accumulation(LifeStage):
 
         # -----------------------------------------------------------------------
         # Calculate AGI: gross wages minus pre-tax 401k contribution
+        # Note: Roth conversions will be added to AGI later after they are calculated
         # -----------------------------------------------------------------------
-        agi = wages - contribution_401k
+        agi_before_conversion = wages - contribution_401k
 
         # -----------------------------------------------------------------------
         # Calculate state tax first (needed for SALT deduction in DAF calculation)
@@ -3617,7 +3618,7 @@ class Stage1Accumulation(LifeStage):
         # In a DAF bundle year, itemized deductions (DAF + SALT) exceed the standard deduction.
         # The incremental tax benefit is the amount above the standard deduction.
         effective_deduction = std_deduction + daf_tax_excess
-        taxable_income = agi - effective_deduction
+        taxable_income = agi_before_conversion - effective_deduction
         result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
@@ -3645,7 +3646,7 @@ class Stage1Accumulation(LifeStage):
                trad_401k=f"${contribution_401k:,.0f}",
                roth=f"${contribution_roth:,.0f}",
                brokerage=f"${contribution_brok:,.0f}",
-               agi=f"${agi:,.0f}",
+               agi=f"${agi_before_conversion:,.0f}",
                bracket=f"{max_rate:.1%}")
 
         roth_conversion = 0
@@ -3658,7 +3659,7 @@ class Stage1Accumulation(LifeStage):
                 )
 
                 # Calculate conversion room in current bracket
-                current_income = agi
+                current_income = agi_before_conversion
                 conversion_room = max(0, target_bracket_upper - current_income - std_deduction)
 
                 if conversion_room > 10000:  # Only convert if meaningful room
@@ -3729,7 +3730,7 @@ class Stage1Accumulation(LifeStage):
 
         # Calculate tax on conversion if any
         if roth_conversion > 0:
-            total_income = agi + roth_conversion
+            total_income = agi_before_conversion + roth_conversion
             taxable_income_with_conversion = total_income - effective_deduction
             result = calculate_taxable_income(taxable_income_with_conversion, tax_brackets)
             federal_tax = result.total_tax
@@ -3820,13 +3821,14 @@ class Stage1Accumulation(LifeStage):
             brokerage_account=kwargs.get('brokerage_account'),
         )
         
-        # Calculate MAGI for this year
-        # agi = wages - contribution_401k (pre-tax); include it so IRMAA lookback history
-        # is correct for workers who reach Medicare within 2 years of their last working year.
+        # Calculate final AGI and MAGI for this year
+        # AGI = wages - contribution_401k (pre-tax) + Roth conversions + Traditional withdrawals
+        # MAGI = AGI (same for most purposes; used for IRMAA lookback)
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = (agi +              # Wages minus pre-tax 401k contributions
-                trad_withdrawal +  # Traditional distributions from rebalance_accounts()
-                roth_conversion)   # Roth conversion income
+        agi = (agi_before_conversion +  # Wages minus pre-tax 401k contributions
+               trad_withdrawal +         # Traditional distributions from rebalance_accounts()
+               roth_conversion)          # Roth conversion income
+        magi = agi  # For Stage 1, AGI and MAGI are the same
         
         # Record Cash→Roth and Cash→Brokerage contribution decisions
         dl.add("contribution_decisions", "Cash → Roth Contribution",
@@ -3859,6 +3861,9 @@ class Stage1Accumulation(LifeStage):
             basis_returned = 0.0
             brokerage_ltcg_ratio = BROKERAGE_LTCG_RATIO
             brokerage_basis_ratio = BROKERAGE_COST_BASIS_RATIO
+        
+        # DEBUG: Print AGI values before returning
+        logger.info(f"Stage1 Year {year}: AGI=${agi:,.0f}, MAGI=${magi:,.0f}, Roth Conv=${roth_conversion:,.0f}")
         
         return YearlyStrategy(
             year=year,
@@ -4030,14 +4035,15 @@ class Stage2PrepForRetirement(LifeStage):
 
         # Roth 401k contributions are after-tax and do NOT reduce AGI.
         # Traditional 401k contributions are pre-tax and DO reduce AGI.
-        agi = wages if prefer_roth_401k else wages - contribution_401k
+        # Note: Roth conversions will be added to AGI later after they are calculated
+        agi_before_conversion = wages if prefer_roth_401k else wages - contribution_401k
 
         # -----------------------------------------------------------------------
         # Calculate state tax first (needed for SALT deduction in DAF calculation)
         # Note: This is a preliminary calculation; will be recalculated after conversions
         # -----------------------------------------------------------------------
         state_tax_preliminary, _ = calculate_state_tax(
-            state_agi=agi,
+            state_agi=agi_before_conversion,
             year=year,
             filing_status=filing_status,
             retirement_income=0,
@@ -4059,11 +4065,11 @@ class Stage2PrepForRetirement(LifeStage):
         )
         effective_deduction = std_deduction + daf_tax_excess
 
-        taxable_income = agi - effective_deduction
+        taxable_income = agi_before_conversion - effective_deduction
         result = calculate_taxable_income(taxable_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
-        logger.debug(f"Stage 2 Prep: AGI=${agi:,.2f}, DAF contrib=${daf_contribution:,.0f}, "
+        logger.debug(f"Stage 2 Prep: AGI=${agi_before_conversion:,.2f}, DAF contrib=${daf_contribution:,.0f}, "
                      f"effective deduction=${effective_deduction:,.0f}, "
                      f"bracket={max_rate:.1%}, tax=${federal_tax:,.2f}")
 
@@ -4106,24 +4112,24 @@ class Stage2PrepForRetirement(LifeStage):
         # -----------------------------------------------------------------------
         # ROTH_IRA_INCOME_LIMIT and IRA_CONTRIBUTION_LIMIT are module-level constants
         backdoor_roth_amount = 0.0
-        if agi > ROTH_IRA_INCOME_LIMIT:
+        if agi_before_conversion > ROTH_IRA_INCOME_LIMIT:
             backdoor_roth_amount = IRA_CONTRIBUTION_LIMIT
-            logger.info(f"Year {year}: AGI ${agi:,.0f} exceeds Roth IRA limit — "
+            logger.info(f"Year {year}: AGI ${agi_before_conversion:,.0f} exceeds Roth IRA limit — "
                         f"executing backdoor Roth ${backdoor_roth_amount:,.0f}")
             dl.add("contribution_decisions", "Backdoor Roth IRA",
                    f"Execute ${backdoor_roth_amount:,.0f} backdoor Roth",
-                   f"AGI (${agi:,.0f}) exceeds the direct Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}). "
+                   f"AGI (${agi_before_conversion:,.0f}) exceeds the direct Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}). "
                    "Executing backdoor Roth: contribute to empty Traditional IRA then immediately convert, "
                    "achieving Roth tax treatment without the income restriction.",
-                   agi=f"${agi:,.0f}",
+                   agi=f"${agi_before_conversion:,.0f}",
                    income_limit=f"${ROTH_IRA_INCOME_LIMIT:,.0f}",
                    amount=f"${backdoor_roth_amount:,.0f}")
         else:
             dl.add("contribution_decisions", "Backdoor Roth IRA",
                    "Direct Roth IRA contribution eligible",
-                   f"AGI (${agi:,.0f}) is below the Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}); "
+                   f"AGI (${agi_before_conversion:,.0f}) is below the Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}); "
                    "backdoor Roth not needed.",
-                   agi=f"${agi:,.0f}")
+                   agi=f"${agi_before_conversion:,.0f}")
 
         # -----------------------------------------------------------------------
         # Decision 4: BETR-validated Roth conversion
@@ -4135,7 +4141,7 @@ class Stage2PrepForRetirement(LifeStage):
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
                     max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
-                current_income = agi
+                current_income = agi_before_conversion
                 conversion_room = max(0, target_bracket_upper - current_income - std_deduction)
 
                 if conversion_room > 10_000:
@@ -4199,7 +4205,7 @@ class Stage2PrepForRetirement(LifeStage):
 
         # Recalculate tax including any conversion
         if roth_conversion > 0:
-            total_income = agi + roth_conversion
+            total_income = agi_before_conversion + roth_conversion
             taxable_with_conv = total_income - effective_deduction
             result = calculate_taxable_income(taxable_with_conv, tax_brackets)
             federal_tax = result.total_tax
@@ -4293,7 +4299,9 @@ class Stage2PrepForRetirement(LifeStage):
         )
 
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        magi = agi + trad_withdrawal + roth_conversion  # agi includes wages net of 401k deduction; no SS
+        # Calculate final AGI including Roth conversions
+        agi = agi_before_conversion + trad_withdrawal + roth_conversion
+        magi = agi  # For Stage 2, AGI and MAGI are the same
 
         # Record Cash→Roth and Cash→Brokerage contribution decisions for Stage 2
         # In Stage 2, the contribution_401k may go to Roth 401k (prefer_roth_401k)

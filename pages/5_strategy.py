@@ -922,28 +922,57 @@ def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
     
     for idx, row in strategy_df.iterrows():
         year = row.get('Year', 2026)
-        year_income = 0
-        year_taxes = 0
         
-        # Calculate year income
-        if phase == "accumulation":
-            year_income = row.get('Wages', 0)
-        else:
-            year_income = (row.get('Wages', 0) + row.get('SS Benefits', 0) +
-                          row.get('Trad→\nCash', 0) + row.get('Brok→\nCash', 0))
+        # Calculate taxable income FIRST (needed for both marginal and effective rates)
+        # IMPORTANT: Marginal rate is based on TAXABLE INCOME, not AGI
+        # Taxable Income includes:
+        # - Roth Conversions (fully taxable)
+        # - Wages (after 401k contributions)
+        # - Traditional IRA withdrawals (fully taxable)
+        # - RMDs (fully taxable)
+        # - LTCG from brokerage (taxable gains only)
+        # - Roth conversions (fully taxable)
+        # - Taxable portion of Social Security
+        # - Less: DAF contributions (deductible)
+        # - Less: Standard deduction
         
-        # Calculate year taxes (include all tax-like costs)
+        # The simplest and most accurate approach is to use AGI directly
+        # AGI already includes all income sources (wages, conversions, withdrawals, etc.)
+        agi = row.get('AGI', 0)
+        daf = row.get('DAF Contribution', 0)
+        
+        # Get standard deduction for this year
+        from load_data import get_std_deduction
+        try:
+            std_ded_df = get_std_deduction(year, filing_status)
+            if not std_ded_df.empty:
+                std_ded = float(std_ded_df['deduction'].iloc[0])
+            else:
+                std_ded = 24800  # Fallback
+        except:
+            # Fallback to approximate standard deduction for MFJ
+            std_ded = 24800  # Approximate for married filing jointly
+        
+        # Taxable Income = AGI - Standard Deduction - DAF (if itemizing)
+        # Note: DAF only provides benefit if itemized deductions exceed standard deduction
+        # For simplicity, subtract both (this may slightly overstate the deduction benefit)
+        taxable_income = agi - std_ded - daf
+        
+        # Ensure taxable income is not negative
+        taxable_income = max(0, taxable_income)
+        
+        # Calculate year taxes (actual taxes + IRMAA surcharges)
+        # IRMAA is effectively a tax on high income, so include it in effective rate
+        # Do NOT include ACA premiums as those are insurance costs, not taxes
         year_taxes = (row.get('Federal Tax', 0) +
                      row.get('State Tax', 0) +
-                     row.get('IRMAA Penalty', 0) +
-                     row.get('ACA Premium', 0))
+                     row.get('IRMAA Penalty', 0))
         
-        # Effective rate for this year (total taxes and fees / income)
-        eff_rate = (year_taxes / year_income * 100) if year_income > 0 else 0
+        # Effective rate for this year = (taxes + IRMAA) / taxable income
+        eff_rate = (year_taxes / taxable_income * 100) if taxable_income > 0 else 0
         effective_rates.append(eff_rate)
         
         # Marginal rate calculation using actual tax brackets from CSV
-        agi = row.get('AGI', 0)
         marg_rate = 0
         
         try:
@@ -954,17 +983,17 @@ def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
             brackets = tax_brackets_df[tax_brackets_df['filing_status'] == filing_status]
             
             if not brackets.empty:
-                # Find the bracket that contains this AGI
+                # Find the bracket that contains this taxable income
                 # Sort by lower bound to ensure we check in order
                 brackets = brackets.sort_values('lower')
                 
                 for _, bracket in brackets.iterrows():
-                    if bracket['lower'] <= agi <= bracket['upper']:
+                    if bracket['lower'] <= taxable_income <= bracket['upper']:
                         marg_rate = bracket['rate'] * 100  # Convert to percentage
                         break
                 
-                # If AGI exceeds all brackets, use the highest rate
-                if marg_rate == 0 and agi > 0:
+                # If taxable income exceeds all brackets, use the highest rate
+                if marg_rate == 0 and taxable_income > 0:
                     marg_rate = brackets['rate'].max() * 100
             else:
                 # Fallback if no brackets found for filing status
@@ -1498,29 +1527,243 @@ def render_tax_rates_chart(tax_data: dict) -> None:
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Rate comparison table
-    st.markdown("#### Year-by-Year Rate Comparison")
+    # Interactive Annual Tax Analysis
+    st.markdown("#### 🔍 Annual Tax Analysis")
+    st.caption("Select a year to see detailed tax breakdown and explanation")
     
-    rate_df = df[['Year', 'Age', 'AGI', 'MAGI', 'Marginal Rate', 'Effective Rate']].copy()
+    # Year selector
+    years = df['Year'].tolist()
+    selected_year = st.selectbox(
+        "Select Year",
+        years,
+        index=0,
+        key="tax_analysis_year_selector"
+    )
     
-    # Format for display
-    rate_df['AGI'] = rate_df['AGI'].apply(lambda x: f"${x:,.0f}")
-    rate_df['MAGI'] = rate_df['MAGI'].apply(lambda x: f"${x:,.0f}")
-    rate_df['Marginal Rate'] = rate_df['Marginal Rate'].apply(lambda x: f"{x:.1f}%")
-    rate_df['Effective Rate'] = rate_df['Effective Rate'].apply(lambda x: f"{x:.1f}%")
+    # Get data for selected year
+    year_data = df[df['Year'] == selected_year].iloc[0]
     
-    st.dataframe(
-        rate_df,
-        column_config={
-            "Year": st.column_config.NumberColumn("Year", format="%d"),
-            "Age": st.column_config.TextColumn("Age"),
-            "AGI": st.column_config.TextColumn("AGI", help="Adjusted Gross Income (before itemized deductions)"),
-            "MAGI": st.column_config.TextColumn("MAGI", help="Modified AGI used for IRMAA and ACA calculations"),
-            "Marginal Rate": st.column_config.TextColumn("Marginal Rate"),
-            "Effective Rate": st.column_config.TextColumn("Effective Rate"),
-        },
-        hide_index=True,
-        use_container_width=True
+    # Display key metrics in columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Age",
+            year_data['Age'],
+            help="Your age(s) in this year"
+        )
+    
+    with col2:
+        marginal_rate = year_data['Marginal Rate']
+        st.metric(
+            "Marginal Rate",
+            f"{marginal_rate:.1f}%",
+            help="Tax rate on your last dollar of income"
+        )
+    
+    with col3:
+        effective_rate = year_data['Effective Rate']
+        st.metric(
+            "Effective Rate",
+            f"{effective_rate:.1f}%",
+            help="Average tax rate across all income"
+        )
+    
+    with col4:
+        rate_diff = marginal_rate - effective_rate
+        st.metric(
+            "Rate Difference",
+            f"{rate_diff:.1f}pp",
+            help="Marginal minus Effective rate (percentage points)"
+        )
+    
+    # Detailed analysis
+    st.markdown("##### 📊 Tax Breakdown")
+    
+    # Get income and tax details
+    roth_conv = year_data.get('Roth Conversion', 0)
+    trad_withdrawal = year_data.get('Traditional Withdrawal', 0)
+    ltcg = year_data.get('LTCG Harvested', 0)
+    ss_benefits = year_data.get('SS Benefits', 0)
+    rmd = year_data.get('RMD', 0)
+    daf = year_data.get('DAF Contribution', 0)
+    
+    fed_tax = year_data.get('Federal Tax', 0)
+    state_tax = year_data.get('State Tax', 0)
+    irmaa = year_data.get('IRMAA Penalty', 0)
+    
+    # Calculate taxable income (same logic as in prepare_tax_analytics_data)
+    trad_income = max(trad_withdrawal, rmd)
+    taxable_ss = ss_benefits * 0.85 if ss_benefits > 0 else 0
+    
+    # Get actual standard deduction from CSV for this year
+    from load_data import get_std_deduction
+    from config import get_config_manager
+    
+    config_mgr = get_config_manager()
+    filing_status = config_mgr.get("tax_info", "filing_status", "married_filing_jointly")
+    
+    try:
+        std_ded_df = get_std_deduction(selected_year, filing_status)
+        if not std_ded_df.empty:
+            std_ded = float(std_ded_df['deduction'].iloc[0])
+        else:
+            std_ded = 33500  # Fallback for MFJ
+    except:
+        std_ded = 33500  # Fallback for MFJ
+    
+    # Get property tax from config
+    try:
+        property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+    except:
+        property_tax = 0.0
+    
+    # Calculate itemized deductions (DAF + SALT)
+    # SALT = State Tax + Property Tax, capped at $10,000
+    salt_deduction = min(10000.0, state_tax + property_tax)
+    total_itemized = daf + salt_deduction
+    
+    # Determine actual deduction used
+    # If itemized > standard, use itemized; otherwise use standard
+    if total_itemized > std_ded:
+        actual_deduction = total_itemized
+        using_itemized = True
+        itemized_benefit = total_itemized - std_ded
+    else:
+        actual_deduction = std_ded
+        using_itemized = False
+        itemized_benefit = 0
+    
+    # Calculate taxable income: AGI - deduction
+    # Use AGI from the data (which includes wages, conversions, withdrawals, etc.)
+    agi = year_data.get('AGI', 0)
+    taxable_income = max(0, agi - actual_deduction)
+    
+    # Income sources
+    income_col1, income_col2 = st.columns(2)
+    
+    with income_col1:
+        st.markdown("**Income Sources:**")
+        
+        # Get wages from year data
+        wages = year_data.get('Wages', 0)
+        if wages > 0:
+            st.write(f"• Wages (after 401k): ${wages:,.0f}")
+        
+        if roth_conv > 0:
+            st.write(f"• Roth Conversion: ${roth_conv:,.0f}")
+        if trad_income > 0:
+            st.write(f"• Traditional/RMD: ${trad_income:,.0f}")
+        if ltcg > 0:
+            st.write(f"• Long-Term Cap Gains: ${ltcg:,.0f}")
+        if ss_benefits > 0:
+            st.write(f"• Social Security: ${ss_benefits:,.0f}")
+            st.write(f"  (85% taxable: ${taxable_ss:,.0f})")
+        
+        # Show total AGI
+        st.write(f"• **Total AGI: ${agi:,.0f}**")
+    
+    with income_col2:
+        st.markdown("**Deductions & Taxes:**")
+        if using_itemized:
+            st.write(f"• **Itemized Deductions: ${actual_deduction:,.0f}**")
+            if daf > 0:
+                st.write(f"  - DAF: ${daf:,.0f}")
+            st.write(f"  - SALT (State+Property, capped): ${salt_deduction:,.0f}")
+            st.write(f"  - Benefit over standard: ${itemized_benefit:,.0f}")
+        else:
+            st.write(f"• **Standard Deduction: ${std_ded:,.0f}**")
+            if daf > 0 or salt_deduction > 0:
+                st.write(f"  (Itemized ${total_itemized:,.0f} < Standard)")
+        st.write(f"• **Taxable Income: ${taxable_income:,.0f}**")
+        st.write(f"• Federal Tax: ${fed_tax:,.0f}")
+        st.write(f"• State Tax: ${state_tax:,.0f}")
+        if irmaa > 0:
+            st.write(f"• IRMAA: ${irmaa:,.0f}")
+    
+    # Explanation
+    st.markdown("##### 💡 Why These Rates?")
+    
+    # Get actual tax brackets for this year from CSV
+    from load_data import get_income_tax_brackets
+    try:
+        brackets_df = get_income_tax_brackets(selected_year)
+        brackets = brackets_df[brackets_df['filing_status'] == filing_status].sort_values('lower')
+        
+        # Find the bracket that contains this taxable income
+        bracket = "10%"
+        bracket_floor = 0
+        bracket_desc = "$0 - $24,800"
+        
+        for _, row in brackets.iterrows():
+            lower = float(row['lower'])
+            upper = float(row['upper'])
+            rate = float(row['rate'])
+            
+            if taxable_income >= lower:
+                bracket = f"{rate*100:.1f}%"
+                bracket_floor = lower
+                if upper == float('inf'):
+                    bracket_desc = f"${lower:,.0f}+"
+                else:
+                    bracket_desc = f"${lower:,.0f} - ${upper:,.0f}"
+    except Exception as e:
+        # Fallback to 2026 brackets if CSV load fails
+        if taxable_income > 768700:
+            bracket = "37%"
+            bracket_floor = 768700
+            bracket_desc = "$768,700+"
+        elif taxable_income > 512450:
+            bracket = "35%"
+            bracket_floor = 512450
+            bracket_desc = "$512,450 - $768,700"
+        elif taxable_income > 403550:
+            bracket = "32%"
+            bracket_floor = 403550
+            bracket_desc = "$403,550 - $512,450"
+        elif taxable_income > 211400:
+            bracket = "24%"
+            bracket_floor = 211400
+            bracket_desc = "$211,400 - $403,550"
+        elif taxable_income > 100800:
+            bracket = "22%"
+            bracket_floor = 100800
+            bracket_desc = "$100,800 - $211,400"
+        elif taxable_income > 24800:
+            bracket = "12%"
+            bracket_floor = 24800
+            bracket_desc = "$24,800 - $100,800"
+        else:
+            bracket = "10%"
+            bracket_floor = 0
+            bracket_desc = "$0 - $24,800"
+    
+    # Format numbers for display
+    taxable_income_fmt = f"${taxable_income:,.0f}"
+    into_bracket_fmt = f"${taxable_income - bracket_floor:,.0f}"
+    bracket_floor_fmt = f"${bracket_floor:,.0f}"
+    total_taxes_fmt = f"${fed_tax + state_tax + irmaa:,.0f}"
+    
+    # Build marginal rate explanation
+    marginal_pct = f"{marginal_rate:.1f}%"
+    
+    st.info(
+        f"**Marginal Rate ({marginal_pct}):** "
+        f"Your taxable income of {taxable_income_fmt} "
+        f"places you in the **{bracket} bracket** ({bracket_desc}). "
+        f"You are {into_bracket_fmt} into this bracket. "
+        f"This means your next dollar of income would be taxed at {bracket}."
+    )
+    
+    # Build effective rate explanation
+    effective_pct = f"{effective_rate:.1f}%"
+    
+    st.success(
+        f"**Effective Rate ({effective_pct}):** "
+        f"This is your average tax rate. "
+        f"It's lower than your marginal rate because of progressive taxation - "
+        f"the first {bracket_floor_fmt} of income is taxed at lower rates. "
+        f"Total taxes ({total_taxes_fmt}) ÷ Taxable Income ({taxable_income_fmt}) = {effective_pct}."
     )
 
 
