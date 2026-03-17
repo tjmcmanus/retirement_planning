@@ -4859,14 +4859,14 @@ with tab10:
         if st.button("💾 Save All Changes", type="primary", width='stretch'):
             # Update all configuration values
             config_mgr.update_section("personal_info", {
-                "is_single_person": is_single_person,
-                "person1_name": person1_name,
-                "person1_birth_date": person1_birth_date.strftime("%Y-%m-%d"),
-                "person1_retirement_age": person1_retirement_age,
-                "person2_name": person2_name,
-                "person2_birth_date": person2_birth_date.strftime("%Y-%m-%d"),
-                "person2_retirement_age": person2_retirement_age,
-                "retirement_state": retirement_state,
+                "is_single_person": st.session_state.get("is_single_person", is_single_person),
+                "person1_name": st.session_state.get("person1_name", person1_name),
+                "person1_birth_date": st.session_state.get("person1_birth_date", person1_birth_date).strftime("%Y-%m-%d"),
+                "person1_retirement_age": st.session_state.get("person1_retirement_age", person1_retirement_age),
+                "person2_name": st.session_state.get("person2_name", person2_name),
+                "person2_birth_date": st.session_state.get("person2_birth_date", person2_birth_date).strftime("%Y-%m-%d"),
+                "person2_retirement_age": st.session_state.get("person2_retirement_age", person2_retirement_age),
+                "retirement_state": st.session_state.get("retirement_state", retirement_state),
                 "children": _valid_children,
             })
             
