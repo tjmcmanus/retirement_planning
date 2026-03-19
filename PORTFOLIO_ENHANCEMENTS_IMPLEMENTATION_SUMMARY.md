@@ -155,7 +155,56 @@ map_tab, details_tab, harvest_tab, rebalance_tab, daf_tab, performance_tab = st.
 
 ---
 
-## 🔄 Phase 2: Advanced Portfolio Features (Not Yet Started)
+## ✅ Phase 2: Advanced Portfolio Features (COMPLETED - March 2026)
+
+### Dynamic Security Selection for Withdrawals ✅
+**Status:** Fully implemented and integrated
+
+**Implementation:**
+- [`security_selection.py`](security_selection.py) - 1,089 lines: Multi-factor scoring engine
+- [`security_selection_integration.py`](security_selection_integration.py) - 509 lines: Integration layer
+- [`strategy.py`](strategy.py) - Integrated at withdrawal decision points
+- [`monitor_tax_savings.py`](monitor_tax_savings.py) - 349 lines: Tax savings tracker
+
+**Features:**
+- Multi-factor scoring (tax efficiency, liquidity, balance, performance, diversification)
+- Automated security selection during withdrawals
+- Tax-loss harvesting prioritization
+- Wash sale rule compliance
+- Integration with all 6 life stages
+
+**Testing:**
+- `test_security_selection.py` - 738 lines, 50+ tests
+- `test_security_selection_integration.py` - 534 lines, 10 tests
+- All tests passing ✅
+
+### Factor-Based Portfolio Analysis ✅
+**Status:** Fully implemented with UI integration
+
+**Implementation:**
+- [`portfolio_factors.py`](portfolio_factors.py) - 1,250+ lines: Factor analysis engine
+- [`components/portfolio_factor_analysis.py`](components/portfolio_factor_analysis.py) - 450 lines: UI component
+- [`pages/4_portfolio_hub.py`](pages/4_portfolio_hub.py) - Tab 5: Factor Analysis
+
+**Features:**
+- Four investment factors: Value, Growth, Momentum, Quality (0-100 scoring)
+- Portfolio-level aggregation weighted by market value
+- Style classification (Value/Growth/Blend/Quality/Momentum/Balanced)
+- Visual analytics (radar chart, factor tilts, top holdings)
+- SQLite caching with 24-hour TTL
+- Yahoo Finance integration
+
+**Testing:**
+- `test_portfolio_factors.py` - 430+ lines, 22 tests
+- All tests passing ✅
+
+**Documentation:**
+- [`PORTFOLIO_FACTOR_ANALYSIS_GUIDE.md`](PORTFOLIO_FACTOR_ANALYSIS_GUIDE.md) - 449-line user guide
+- [`ADVANCED_PORTFOLIO_FEATURES_COMPLETE.md`](ADVANCED_PORTFOLIO_FEATURES_COMPLETE.md) - Implementation summary
+
+---
+
+## 🔄 Phase 3: Additional Portfolio Features (Not Yet Started)
 
 ### Real-Time Portfolio Editing
 **Goal:** Allow users to add/edit holdings directly in the UI

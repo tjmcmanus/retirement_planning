@@ -6,12 +6,15 @@ A comprehensive Streamlit-based financial planning application for tax optimizat
 
 This application helps users plan their retirement by:
 - **6-Stage Life-Cycle Strategy**: Comprehensive planning from accumulation through RMD phase, including a dedicated pre-retirement prep stage
+- **Estate Planning**: Complete toolkit for wills, trusts, beneficiaries, and document tracking
 - **Roth Conversion Optimization**: Intelligent conversions to minimize lifetime tax burden
-- **Tax Projection**: Multi-year federal and state tax calculations
-- **Portfolio Management**: Real-time tracking with Yahoo Finance integration
+- **Tax Projection**: Multi-year federal and state tax calculations with administrative data management
+- **Portfolio Management**: Real-time tracking with Yahoo Finance integration and professional analytics
 - **Social Security Modeling**: Benefits optimization based on claiming age
 - **IRMAA Management**: Medicare surcharge optimization with 2-year lookback
 - **ACA Subsidy Optimization**: Healthcare cost management for early retirees
+- **Long-Term Care Planning**: State-specific cost projections and Medicaid analysis
+- **HSA Integration**: Triple tax advantage optimization with contribution and withdrawal strategies
 - **Net Worth Tracking**: Comprehensive account monitoring across all types
 - **Charitable Planning**: Donor Advised Fund (DAF) contribution strategies
 - **RMD Compliance**: Automatic Required Minimum Distribution calculations
@@ -27,6 +30,131 @@ Advanced Roth conversion analysis based on Vanguard research:
 See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_conversion.py`](betr_roth_conversion.py) for implementation.
 
 ## Recent Updates (March 2026 — Latest)
+
+### 🐛 FIXED: Federal Tax Calculation in RMD Lookback Optimization (2026-03-18)
+**Corrected tax calculations for years 2027-2029 in Strategy display**
+
+The RMD lookback optimization was incorrectly recalculating federal taxes after adjusting Roth conversion amounts, resulting in inflated tax values in the Strategy display.
+
+**Issues Fixed:**
+1. **Double-taxing LTCG**: The optimization was applying ordinary income tax rates to the entire taxable income (including LTCG), then adding capital gains tax on top, effectively double-taxing the LTCG portion
+2. **Missing DAF deductions**: Donor-Advised Fund contributions were not being accounted for when recalculating taxes
+
+**Solution:**
+- Modified tax recalculation in [`strategy.py`](strategy.py:1030-1070) to properly separate ordinary income from LTCG
+- Added DAF deduction handling in the optimization path
+- Now uses ordinary income as the base for LTCG bracket calculations (matching the main calculation logic)
+
+**Test Results:**
+| Year | Before Fix | After Fix | Expected | Status |
+|------|-----------|-----------|----------|--------|
+| 2027 | $208,392  | $100,305  | $100,670 | ✓ Fixed |
+| 2028 | $140,603  | $100,626  | $101,043 | ✓ Fixed |
+| 2029 | $171,049  | $103,068  | $103,259 | ✓ Fixed |
+
+**Documentation:**
+- [Federal Tax Fix Details](FEDERAL_TAX_FIX_2027_2029.md) - Complete analysis and fix documentation
+- Test script: [`test_federal_tax_fix.py`](test_federal_tax_fix.py) - Verification test
+
+**Impact:** Strategy display now shows accurate federal tax calculations for all years, particularly in early retirement years (2027-2029) where RMD lookback optimization is most active.
+
+### 🎯 NEW: Advanced Portfolio Features (2026-03-17)
+**Intelligent portfolio optimization with multi-factor analysis**
+
+#### Feature 1: Dynamic Security Selection for Withdrawals
+Automated tax-efficient security selection when liquidating portfolio holdings:
+- **Multi-Factor Scoring System**: Evaluates each holding across 5 dimensions
+  - Tax efficiency (40% weight): LTCG vs STCG, holding period, cost basis
+  - Liquidity (20% weight): Trading volume, bid-ask spread
+  - Portfolio balance (15% weight): Maintains target allocation
+  - Performance (15% weight): Recent returns and momentum
+  - Diversification (10% weight): Sector concentration impact
+- **Smart Liquidation Logic**: Automatically selects optimal securities to sell
+  - Prioritizes tax-loss harvesting opportunities
+  - Avoids wash sales with 30-day lookback
+  - Maintains portfolio diversification
+  - Considers rebalancing needs
+- **Integration with Withdrawal Strategy**: Seamlessly works with all 6 life stages
+  - Stage 3 (Early Retirement): Optimizes LTCG harvesting
+  - Stage 4 (Medicare): IRMAA-aware security selection
+  - Stage 5 (Social Security): Balances SS taxation with withdrawals
+  - Stage 6 (RMD): Coordinates with required distributions
+- **Tax Savings Tracking**: Monitor cumulative tax savings over time
+- **Graceful Fallback**: Continues with proportional withdrawals if scoring fails
+
+#### Feature 2: Factor-Based Portfolio Analysis
+Deep investment style insights through multi-factor analysis:
+- **Four Investment Factors** (0-100 scoring scale)
+  - **Value Factor (30%)**: P/E ratio, P/B ratio - identifies undervalued stocks
+  - **Growth Factor (25%)**: Earnings growth, revenue growth - measures expansion potential
+  - **Momentum Factor (25%)**: 6-month returns, relative strength - analyzes trends
+  - **Quality Factor (25%)**: ROE, profit margins - evaluates financial health
+- **Portfolio-Level Aggregation**: Market-value weighted factor exposures
+- **Style Classification**: Automatic identification of investment style
+  - Value, Growth, Blend, Quality, Momentum, or Balanced
+  - Primary and secondary style with purity percentage
+- **Visual Analytics**
+  - Radar chart: 360° view of factor exposures
+  - Factor tilts: Over/under-weighting vs neutral (50)
+  - Top holdings: Best performers in each factor
+  - Detailed table: Complete scores with progress bars
+- **Performance Optimization**
+  - SQLite caching with 24-hour TTL
+  - Yahoo Finance integration for real-time data
+  - Batch processing for multiple holdings
+  - LRU eviction for memory management
+
+**Implementation:**
+- [`security_selection.py`](security_selection.py) - 1,089 lines: Core scoring engine
+- [`security_selection_integration.py`](security_selection_integration.py) - 509 lines: Integration layer
+- [`portfolio_factors.py`](portfolio_factors.py) - 1,250+ lines: Factor analysis engine
+- [`components/portfolio_factor_analysis.py`](components/portfolio_factor_analysis.py) - 450 lines: UI component
+- [`monitor_tax_savings.py`](monitor_tax_savings.py) - 349 lines: Tax savings tracker
+- Integrated into [`strategy.py`](strategy.py) at withdrawal decision points
+- Factor Analysis tab in Portfolio Hub (Tab 5)
+
+**Testing:**
+- `test_security_selection.py` - 738 lines, 50+ unit tests
+- `test_security_selection_integration.py` - 534 lines, 10 integration tests
+- `test_portfolio_factors.py` - 430+ lines, 22 comprehensive tests
+- All tests passing ✅
+
+**Documentation:**
+- [Portfolio Factor Analysis Guide](PORTFOLIO_FACTOR_ANALYSIS_GUIDE.md) - 449 lines: Complete user guide
+- [Portfolio Rebalancing Guide](PORTFOLIO_REBALANCING_GUIDE.md) - Integration with rebalancing
+
+**Key Benefits:**
+- **Tax Savings**: Intelligent security selection minimizes tax burden
+- **Portfolio Insights**: Understand investment style and factor exposures
+- **Risk Management**: Monitor factor concentration and style drift
+- **Rebalancing Support**: Factor analysis informs rebalancing decisions
+- **Performance Attribution**: Identify which factors drive returns
+
+
+### ⚖️ NEW: Estate Planning Module & Tax Data Admin (2026-03-17)
+**Complete estate planning toolkit and administrative tax data management**
+
+- **Estate Planning Page** (`pages/1_estate_planning.py`) — Comprehensive 7-tab interface
+  - **Situation Assessment**: Family & beneficiary analysis, estate size evaluation, business ownership
+  - **Legal Documents**: Will, trusts, powers of attorney, healthcare directives with completion tracking
+  - **Financial & Accounts**: Beneficiary designations, account titling, life insurance, retirement accounts
+  - **Personal & Property**: Digital assets, personal property, real estate, business interests
+  - **Document Locations**: Centralized tracker with secure storage recommendations
+  - **Review Schedule**: Automated reminders for life events and annual reviews
+  - **Overall Progress**: Visual progress tracking across all categories
+  - **Configuration Integration**: Syncs with children tracking and property management
+  - **Data Persistence**: JSON-based storage with automatic backups
+
+- **Tax Data Admin Page** (`pages/9_admin_tax_data.py`) — Administrative interface for IRS data
+  - **8 Tax Tables**: Standard deduction, income brackets, capital gains, IRA limits, IRMAA, RMD, SS, AMT
+  - **User-Friendly Updates**: Edit CSV files with annual IRS cost-of-living adjustments
+  - **Data Validation**: Schema validation, required columns, numeric field checks
+  - **Backup Management**: Automatic timestamped backups before changes
+  - **Bulk Operations**: Add/delete rows, import/export CSV data
+  - **Real-time Preview**: View changes before saving
+  - **IRS Verification**: Links to official publications for data accuracy
+
+- **Impact**: Complete estate planning workflow, simplified tax data maintenance, improved data integrity
 
 ### 📊 NEW: Tax Analytics Dashboard & Cost Basis Tracking (2026-03-16)
 **Comprehensive tax analysis with actual transaction-level cost basis tracking**
@@ -308,8 +436,20 @@ Comprehensive validation in [`test_strategy.py`](test_strategy.py):
 
 ## Features
 
-### 0. Configuration Page (⚙️)
-**NEW: Centralized configuration management**
+### 0. Estate Planning Page (⚖️)
+**NEW: Comprehensive estate planning toolkit (March 2026)**
+- **Situation Assessment**: Family & beneficiary analysis, estate size evaluation, business ownership considerations
+- **Legal Documents Checklist**: Will, trusts, powers of attorney, healthcare directives with completion tracking
+- **Financial & Accounts**: Beneficiary designations, account titling, life insurance, retirement accounts
+- **Personal & Property**: Digital assets, personal property, real estate, business interests
+- **Document Locations**: Centralized tracker for all estate documents with secure storage recommendations
+- **Review Schedule**: Automated reminders for periodic estate plan reviews (life events, annual reviews)
+- **Overall Progress**: Visual progress tracking across all estate planning categories
+
+See [`pages/1_estate_planning.py`](pages/1_estate_planning.py) for implementation details.
+
+### 1. Configuration Page (⚙️)
+**Centralized configuration management**
 - **Personal Information**: Names, birth dates, retirement ages with automatic age calculation
 - **Financial Assumptions**: Expenses, inflation, returns, cash reserves
 - **Healthcare Settings**: ACA insurance premiums, Medicare start age
@@ -328,14 +468,14 @@ Comprehensive validation in [`test_strategy.py`](test_strategy.py):
 
 See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md), [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING_GUIDE.md), and [`HSA_INTEGRATION_GUIDE.md`](HSA_INTEGRATION_GUIDE.md) for detailed instructions.
 
-### 1. Dashboard Tab
+### 2. Dashboard Tab
 - **Net Worth Tracking**: Monitor cash, brokerage, traditional IRA, and Roth IRA accounts
 - **Visual Analytics**: Interactive charts showing account balances over time
 - **Asset Allocation**: Pie charts and treemaps for portfolio visualization
 - **Monthly Change Tracking**: Delta metrics for all account types
 - **Account Mix Breakdown**: Detailed treemap visualization of account distribution
 
-### 2. Advanced Strategies Tab (🎯)
+### 3. Advanced Strategies Tab (🎯)
 **NEW: 8 specialized planning tools for complex retirement scenarios**
 - **Tax Planner**: Single-year tax projection with Roth conversions, DAF contributions, and IRMAA optimization
 - **Multi-Year Tax Planning**: Rolling 5-year tax window with capital loss harvesting integration
@@ -354,8 +494,20 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md), [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING
   - Common mistakes and action checklist
   - Official resources and SHIP counseling information
 
-### 4. Portfolio Hub Tab 💼 *(REDESIGNED - March 2026)*
-**Unified portfolio management interface with 5 integrated tabs**
+### 4. Tax Data Admin Page (🔧)
+**NEW: Administrative interface for IRS tax data management (March 2026)**
+- **Tax Data Updates**: User-friendly interface to update CSV files with annual IRS adjustments
+- **8 Tax Tables**: Standard deduction, income tax brackets, capital gains, IRA limits, IRMAA, RMD, Social Security, AMT
+- **Data Validation**: Schema validation, required columns, numeric field checks
+- **Backup Management**: Automatic timestamped backups before any changes
+- **Bulk Operations**: Add/delete rows, import/export CSV data
+- **Real-time Preview**: View changes before saving
+- **IRS Verification**: Links to official IRS publications for data verification
+
+See [`pages/9_admin_tax_data.py`](pages/9_admin_tax_data.py) for implementation details.
+
+### 5. Portfolio Hub Tab 💼 *(REDESIGNED - March 2026)*
+**Unified portfolio management interface with 6 integrated tabs**
 
 #### Tab 1: Overview
 - **Portfolio Summary**: Total value, cost basis, gains/losses, and returns
@@ -388,7 +540,18 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md), [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING
 - **DAF Bundling**: Charitable giving optimization, appreciated securities analysis, tax savings calculator
 - **Withdrawal Planning**: Tax-efficient sequence recommendations, quick calculator
 
-#### Tab 5: Connections *(FUTURE)*
+#### Tab 5: Factor Analysis *(NEW - March 2026)*
+- **Multi-Factor Scoring**: Value, Growth, Momentum, Quality analysis for every holding
+- **Portfolio-Level Exposure**: Aggregated factor scores weighted by market value
+- **Style Classification**: Automatic identification of portfolio style (Value/Growth/Blend/Quality/Momentum/Balanced)
+- **Factor Tilts**: Visual analysis of over/under-weighting relative to neutral (50)
+- **Top Holdings by Factor**: Identify best performers in each factor category
+- **Detailed Holdings Table**: Complete factor scores with visual progress bars
+- **Radar Chart**: 360° view of portfolio factor exposures
+- **SQLite Caching**: 24-hour data cache for fast analysis
+- **Yahoo Finance Integration**: Real-time fundamental data for factor calculations
+
+#### Tab 6: Connections *(FUTURE)*
 - **Brokerage Integration**: Direct account connections (Schwab, Fidelity, Vanguard)
 - **Automatic Sync**: Real-time balance updates
 - **Transaction Import**: Automated data entry
@@ -396,7 +559,7 @@ See [`CONFIG_GUIDE.md`](CONFIG_GUIDE.md), [`LTC_PLANNING_GUIDE.md`](LTC_PLANNING
 
 See [`PORTFOLIO_ANALYTICS_GUIDE.md`](PORTFOLIO_ANALYTICS_GUIDE.md) for complete analytics documentation and [`INTEGRATION_TEST_GUIDE.md`](INTEGRATION_TEST_GUIDE.md) for testing details.
 
-### 5. Strategy Tab
+### 6. Strategy Tab
 - **Accumulation Phase**: Year-by-year projection during working years (Stage 1 & 2)
 - **Withdrawal Phase**: Distribution planning from retirement through RMD stage
 - **Long-term Projections**: Model retirement through 2051
@@ -1530,35 +1693,36 @@ For issues or questions:
   - IRMAA 2-year lookback with MAGI projections
   - Returns detailed DataFrame with cost breakdowns
 
-**🔄 Still Pending:**
-- **Long-Term Care Planning**
-  - Nursing home cost projections by state
-  - Home health care expense modeling
-  - Medicaid spend-down strategies
-  - Self-insurance vs. LTC insurance analysis
-- **HSA Integration**
-  - Health Savings Account contribution tracking
-  - HSA investment growth projections
-  - HSA withdrawal strategies in retirement
-  - Triple tax advantage optimization
+**✅ FULLY IMPLEMENTED (March 2026) - See Recent Updates section above**
 
 #### 5. Estate Planning Module
-**Priority: Medium - Important for wealth transfer**
-- **Estate Tax Calculations**
-  - Federal estate tax projections
+**Status: ✅ IMPLEMENTED (March 2026)**
+
+**✅ Implemented:**
+- **Estate Planning Page** (`pages/1_estate_planning.py`) — Complete 7-tab interface
+  - Situation assessment with family & beneficiary analysis
+  - Legal documents checklist (will, trusts, POA, healthcare directives)
+  - Financial & accounts tracking (beneficiaries, titling, insurance)
+  - Personal & property inventory (digital assets, real estate, business)
+  - Document location tracker with secure storage recommendations
+  - Review schedule with automated reminders
+  - Overall progress visualization across all categories
+- **Configuration Integration** — Children tracking, property management
+- **Data Persistence** — JSON-based storage with automatic backups
+
+**🔄 Still Pending:**
+- **Advanced Estate Tax Calculations**
+  - Federal estate tax projections with TCJA sunset modeling
   - State estate/inheritance tax calculations
-  - Lifetime gift tax tracking
-  - Generation-skipping transfer tax (GSTT)
-- **Beneficiary Optimization**
-  - IRA beneficiary designation strategies
+  - Generation-skipping transfer tax (GSTT) analysis
+- **Advanced Beneficiary Optimization**
   - Stretch IRA calculations (SECURE Act 2.0 compliant)
-  - Trust beneficiary modeling
-  - Spousal rollover vs. inherited IRA analysis
-- **Charitable Giving**
+  - Trust beneficiary modeling with tax implications
+  - Spousal rollover vs. inherited IRA detailed analysis
+- **Advanced Charitable Giving**
   - Charitable Remainder Trust (CRT) modeling
   - Charitable Lead Trust (CLT) calculations
-  - Private foundation vs. DAF comparison
-  - Legacy giving impact analysis
+  - Private foundation vs. DAF detailed comparison
 
 #### 6. Portfolio Management Enhancements
 **Status: ✅ PARTIALLY IMPLEMENTED (February 2026)**
@@ -1575,17 +1739,9 @@ For issues or questions:
   - Wash sale rule compliance checking
   - Integration with rebalancing strategies
 
+**✅ FULLY IMPLEMENTED (March 2026) - See Recent Updates section above**
+
 **🔄 Still Pending:**
-- **Advanced Portfolio Features**
-  - Real-time portfolio editing interface
-  - Dynamic security selection for withdrawals (which specific holdings to liquidate)
-  - Factor-based portfolio analysis
-- **Performance Analytics**
-  - Time-weighted vs. money-weighted returns
-  - Benchmark comparison (S&P 500, custom indices)
-  - Risk-adjusted return metrics (Sharpe, Sortino ratios)
-  - Drawdown analysis and recovery periods
-  - Contribution vs. growth attribution
 - **Integration Enhancements**
   - Direct brokerage account integration (Schwab, Fidelity, Vanguard APIs)
   - Automatic transaction import

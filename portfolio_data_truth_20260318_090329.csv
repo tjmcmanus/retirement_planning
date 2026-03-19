@@ -1,0 +1,129 @@
+month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,purchase_date
+11,2025,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,95050.0,1.0,2023-01-01
+11,2025,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,1250.0,120.0,2021-06-15
+11,2025,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
+11,2025,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,1250.0,95.0,2021-09-20
+11,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,54200.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,2022-04-01
+11,2025,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,2020-11-05
+11,2025,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,400.0,62.5,2019-08-14
+11,2025,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,60.0,450.0,2023-01-20
+11,2025,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,2022-07-11
+11,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,2023-02-28
+11,2025,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
+11,2025,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
+11,2025,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
+11,2025,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
+12,2025,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,86250.0,1.0,2023-01-01
+12,2025,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2200.0,120.0,2021-06-15
+12,2025,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
+12,2025,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,2250.0,95.0,2021-09-20
+12,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,55000.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,2022-04-01
+12,2025,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,2020-11-05
+12,2025,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,400.0,62.5,2019-08-14
+12,2025,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,60.0,450.0,2023-01-20
+12,2025,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,2022-07-11
+12,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,2023-02-28
+12,2025,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
+12,2025,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
+12,2025,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
+12,2025,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
+1,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Spouse,0769,MIP II CL 3,MF:Cash,554427.38,1.0,
+1,2026,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
+1,2026,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0,2021-06-15
+1,2026,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
+1,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0,2021-09-20
+1,2026,IBM 401(K) PLAN,Traditional,Primary,FPBFX,Fidelity Pacific-Basin Fund,MF:Global,24927.559,41.14,
+1,2026,IBM 401(K) PLAN,Traditional,Primary,PRRSX,PIMCO Funds Real Estate Return Strategy Fund Class Institutional,MF:Reit,34224.815,26.84,
+1,2026,IBM 401(K) PLAN,Traditional,Primary,VPCCX,Vanguard PRIMECAP Core Fund Investor,MF:Large-Cap,25650.831,40.6,
+1,2026,IBM 401(K) PLAN,Traditional,Primary,VUSUX,Vanguard Long-Term Treasury Fund Admiral,MF:Bonds,118500.284,7.9,
+1,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,2022-04-01
+1,2026,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
+1,2026,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,2019-08-14
+1,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,160.0,450.0,2023-01-20
+1,2026,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,2022-07-11
+1,2026,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,2023-02-28
+1,2026,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
+1,2026,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
+1,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
+1,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
+2,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Spouse,0769,MIP II CL 3,MF:Cash,554477.38,1.0,
+2,2026,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
+2,2026,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0,2021-06-15
+2,2026,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
+2,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0,2021-09-20
+2,2026,IBM 401(K) PLAN,Traditional,Primary,FPBFX,Fidelity Pacific-Basin Fund,MF:Global,24957.559,41.14,
+2,2026,IBM 401(K) PLAN,Traditional,Primary,PRRSX,PIMCO Funds Real Estate Return Strategy Fund Class Institutional,MF:Reit,34254.815,26.84,
+2,2026,IBM 401(K) PLAN,Traditional,Primary,VPCCX,Vanguard PRIMECAP Core Fund Investor,MF:Large-Cap,25670.831,40.6,
+2,2026,IBM 401(K) PLAN,Traditional,Primary,VUSUX,Vanguard Long-Term Treasury Fund Admiral,MF:Bonds,118550.284,7.9,
+2,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,175.0,140.0,2022-04-01
+2,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,2025-09-15
+2,2026,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
+2,2026,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,2019-08-14
+2,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,160.0,450.0,2023-01-20
+2,2026,Schwab,Traditional,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,2023-01-01
+2,2026,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,150.0,600.0,2022-07-11
+2,2026,Schwab,Roth,Joint,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,2025-11-03
+2,2026,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
+2,2026,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
+2,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
+2,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
+2,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA,Technology,180.0,500.0,2023-02-28
+3,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Spouse,0769,MIP II CL 3,MF:Cash,554477.38,1.0,
+3,2026,Fidelity,Traditional,Spouse,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
+3,2026,Fidelity,Traditional,Spouse,VEXAX,Vanguard Extended Market Index Admiral,MF:Global,2250.0,120.0,2021-06-15
+3,2026,Fidelity,Traditional,Spouse,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap,900.0,450.0,2020-03-10
+3,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap,3250.0,95.0,2021-09-20
+3,2026,IBM 401(K) PLAN,Traditional,Primary,FPBFX,Fidelity Pacific-Basin Fund,MF:Global,24097.559,42.14,
+3,2026,IBM 401(K) PLAN,Traditional,Primary,PRRSX,PIMCO Funds Real Estate Return Strategy Fund Class Institutional,MF:Reit,34324.815,28.84,
+3,2026,IBM 401(K) PLAN,Traditional,Primary,VPCCX,Vanguard PRIMECAP Core Fund Investor,MF:Large-Cap,25730.831,38.6,
+3,2026,IBM 401(K) PLAN,Traditional,Primary,VUSUX,Vanguard Long-Term Treasury Fund Admiral,MF:Bonds,118610.284,7.95,
+3,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
+3,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Communication Services,175.0,140.0,2022-04-01
+3,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,2025-09-15
+3,2026,Schwab,Brokerage,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
+3,2026,Schwab,Brokerage,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,2019-08-14
+3,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Communication Services,160.0,450.0,2023-01-20
+3,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,2023-01-01
+3,2026,Schwab,Roth,Spouse,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
+3,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
+3,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,150.0,600.0,2022-07-11
+3,2026,Schwab,Roth,Primary,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,2025-11-03
+3,2026,Schwab,Roth,Spouse,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
+3,2026,Schwab,Roth,Spouse,T,AT&T,Communication Services,800.0,20.0,2020-05-30
+3,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Consumer Cyclical,100.0,250.0,2022-11-01
+3,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
+3,2026,Schwab-5553,Brokerage,Self,BTQ,,Stock,2572.0,6.3334992224,
+3,2026,Schwab-5553,Brokerage,Self,SOFI,,Stock,700.0,27.3052,
+3,2026,Schwab-5553,Brokerage,Self,SOFI  260402C00020000,SOFI TECHNOLOGIES INC 04/02/2026 $20 Call,Option,-7.0,0.233357142857,
+3,2026,Schwab-5553,Brokerage,Self,WAST,,Stock,100000.0,0.0440695,
+3,2026,Schwab-5553,Brokerage,Self,XERS,,Stock,4250.0,2.4192,
+3,2026,Schwab-6471,Brokerage,Self,BETR,,Stock,1050.0,33.5214285714,
+3,2026,Schwab-6471,Brokerage,Self,OPEN,,Stock,7000.0,5.8787428571,
+3,2026,Schwab-6471,Brokerage,Self,OPENL,,Stock,133.0,1.19,
+3,2026,Schwab-6471,Brokerage,Self,OPENW,,Stock,133.0,1.8602255639,
+3,2026,Schwab-6471,Brokerage,Self,OPENZ,,Stock,133.0,0.959924812,
+3,2026,Schwab-6471,Brokerage,Self,SEI,,Stock,200.0,48.4524,
+3,2026,Schwab-6471,Brokerage,Self,SOFI,,Stock,1454.0,26.7940921596,
+3,2026,Schwab-6471,Brokerage,Self,VKTX,,Stock,2000.0,33.6445,
+3,2026,Schwab-6471,Brokerage,Self,WAST,,Stock,200000.0,0.14316125,
+3,2026,Schwab-6471,Brokerage,Self,XERS,,Stock,12677.0,8.2141815887,
+3,2026,Schwab-8457,Brokerage,Self,AMZN,,Stock,1000.0,12.4865,
+3,2026,Schwab-8457,Brokerage,Self,COP,,Stock,386.725,91.32194712,
+3,2026,Schwab-8457,Brokerage,Self,JNJ,,Stock,192.2271,187.757449391891,
+3,2026,Schwab-8457,Brokerage,Self,KMB,,Stock,353.4353,99.9991511884,
+3,2026,Schwab-8457,Brokerage,Self,MDT,,Stock,400.0,90.15,
+3,2026,Schwab-8457,Brokerage,Self,MSFT,,Stock,480.03,58.727412870029,
+3,2026,Schwab-8457,Brokerage,Self,VPV,Invesco PA Value Muni Income Trust,Fund,5770.9856,9.6194123236,
+3,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA,Technology,180.0,500.0,2023-02-28

@@ -112,6 +112,17 @@ def fetch_security_data(symbol: str, weeks: int) -> Optional[pd.DataFrame]:
     if symbol.upper() in ['MF:CASH', 'CASH']:
         return None
     
+    # Skip options contracts - they don't have meaningful historical price data
+    # Options are derivatives and their pricing is complex (not suitable for MA analysis)
+    try:
+        from portfolio_data_entry import is_option_symbol
+        is_option, underlying, option_type = is_option_symbol(symbol)
+        if is_option:
+            logger.info(f"Skipping market indicator calculation for options contract: {symbol}")
+            return None
+    except Exception:
+        pass  # If import fails, continue with normal processing
+    
     try:
         days = int(weeks * 7 * 1.2)  # 20% buffer
         end_date = datetime.now()

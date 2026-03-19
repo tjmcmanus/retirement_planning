@@ -37,6 +37,16 @@ def get_current_price(symbol):
     if symbol == "MF:CASH":
         return 1.0
     
+    # Check if this is an options contract
+    from portfolio_data_entry import is_option_symbol
+    is_option, underlying, option_type = is_option_symbol(symbol)
+    
+    if is_option:
+        # Options contracts don't have reliable price data in yfinance
+        # Return 0.0 to indicate manual price entry is needed
+        logger.info(f"Options contract detected: {symbol}. Manual price entry required.")
+        return 0.0
+    
     try:
         ticker = yf.Ticker(symbol)
         

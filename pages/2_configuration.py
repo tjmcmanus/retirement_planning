@@ -23,7 +23,7 @@ from portfolio_data_entry import (
     start_from_scratch,
     revert_to_last_backup,
     VALID_ACCOUNT_TYPES,
-    VALID_ACCOUNT_OWNERS,
+    get_valid_account_owners,
     VALID_SECTORS,
 )
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
@@ -3660,16 +3660,85 @@ with tab5:
     st.markdown("Configure Roth conversion and tax planning parameters.")
     
     st.subheader("Roth Conversions")
-    st.info("ℹ️ Roth conversions are now automatically optimized using the BETR (Better Efficient Tax Rate) algorithm based on your maximum tax rate preference.")
+    st.info("ℹ️ Roth conversions are now automatically optimized using the BETR (Better Efficient Tax Rate) algorithm based on your maximum tax rate preferences per life stage.")
 
+    # Global default (for backward compatibility)
     max_roth_conversion_tax_rate = st.number_input(
-        "Maximum Tax Rate for Conversions (%)",
+        "Global Maximum Tax Rate for Conversions (%) - Legacy",
         min_value=0,
         max_value=37,
         value=int(config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)),
-        help="Maximum marginal tax rate you're willing to pay for Roth conversions",
+        help="Global default maximum marginal tax rate (used if stage-specific rates not configured)",
         key="max_roth_conversion_tax_rate"
     )
+    
+    st.markdown("---")
+    st.markdown("#### 🎯 Stage-Specific Conversion Rate Limits")
+    st.caption("Set different maximum tax rates for Roth conversions at each life stage for optimal tax planning")
+    
+    # Create columns for stage-specific rates
+    stage_col1, stage_col2 = st.columns(2)
+    
+    with stage_col1:
+        st.markdown("**Early Career & Accumulation**")
+        stage_1_rate = st.number_input(
+            "Stage 1: Accumulation (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_1_max_conversion_rate", 32)),
+            help="Employed, earning wages, building retirement accounts",
+            key="stage_1_conversion_rate"
+        )
+        
+        stage_2_rate = st.number_input(
+            "Stage 2: Prep for Retirement (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_2_max_conversion_rate", 24)),
+            help="Employed, within 10 years of retirement, optimizing Roth/Traditional balance",
+            key="stage_2_conversion_rate"
+        )
+        
+        stage_3_rate = st.number_input(
+            "Stage 3: Early Retirement (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_3_max_conversion_rate", 12)),
+            help="Pre-Medicare, pre-SS, pre-RMD - prime conversion years with low income",
+            key="stage_3_conversion_rate"
+        )
+    
+    with stage_col2:
+        st.markdown("**Retirement Stages**")
+        stage_4_rate = st.number_input(
+            "Stage 4: Medicare Stage (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_4_max_conversion_rate", 12)),
+            help="IRMAA optimization with Medicare, pre-SS, pre-RMD",
+            key="stage_4_conversion_rate"
+        )
+        
+        stage_5_rate = st.number_input(
+            "Stage 5: Social Security Stage (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_5_max_conversion_rate", 22)),
+            help="SS benefits + Medicare, pre-RMD - balance conversions with SS income",
+            key="stage_5_conversion_rate"
+        )
+        
+        stage_6_rate = st.number_input(
+            "Stage 6: RMD Stage (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_6_max_conversion_rate", 10)),
+            help="Required Minimum Distributions - limited conversion capacity",
+            key="stage_6_conversion_rate"
+        )
+    
+    st.markdown("---")
+    st.caption("💡 **Strategy Tip**: Lower rates in early retirement (Stages 3-4) maximize conversions when income is low. Higher rates in accumulation (Stage 1) allow conversions while earning. Stage 5-6 rates balance conversions with SS/RMD income.")
 
     
     # Charitable Giving Section
@@ -4098,19 +4167,32 @@ with tab6:
     st.subheader("📋 Account Configuration")
     st.markdown("Define your investment accounts. These will be available when entering portfolio holdings.")
     
+    # Get person names for owner dropdown
+    owner_options = ['Joint', 'Primary', 'Spouse']
+    if person1_name and person1_name.strip():
+        owner_options = ['Joint', person1_name]
+        if not is_single_person and person2_name and person2_name.strip():
+            owner_options.append(person2_name)
+    
     # Initialize session state for accounts
     if 'accounts_list' not in st.session_state:
         # Try to load from config or use defaults
+        default_owner = owner_options[0] if owner_options else 'Joint'
         st.session_state['accounts_list'] = config_mgr.get("portfolio_accounts", "accounts", [
-            {"account_name": "Schwab", "account_type": "Roth"},
-            {"account_name": "Fidelity", "account_type": "Traditional"},
-            {"account_name": "Vanguard", "account_type": "Brokerage"}
+            {"account_name": "Schwab", "account_type": "Roth", "owner": default_owner},
+            {"account_name": "Fidelity", "account_type": "Traditional", "owner": default_owner},
+            {"account_name": "Vanguard", "account_type": "Brokerage", "owner": default_owner}
         ])
+    
+    # Ensure all accounts have owner field (for backward compatibility)
+    for account in st.session_state['accounts_list']:
+        if 'owner' not in account:
+            account['owner'] = owner_options[0] if owner_options else 'Joint'
     
     # Display accounts in a data editor
     accounts_df = pd.DataFrame(st.session_state['accounts_list'])
     if accounts_df.empty:
-        accounts_df = pd.DataFrame(columns=pd.Index(['account_name', 'account_type']))
+        accounts_df = pd.DataFrame(columns=pd.Index(['account_name', 'account_type', 'owner']))
     
     col_acc1, col_acc2, col_acc3 = st.columns([2, 1, 1])
     
@@ -4119,9 +4201,11 @@ with tab6:
     
     with col_acc2:
         if st.button("➕ Add Account", width='stretch', key="add_account_btn"):
+            default_owner = owner_options[0] if owner_options else 'Joint'
             new_account = pd.DataFrame({
                 'account_name': ['New Account'],
-                'account_type': ['Brokerage']
+                'account_type': ['Brokerage'],
+                'owner': [default_owner]
             })
             accounts_df = pd.concat([accounts_df, new_account], ignore_index=True)
             st.session_state['accounts_list'] = accounts_df.to_dict('records')
@@ -4140,7 +4224,9 @@ with tab6:
     # Configure column settings for accounts editor
     accounts_column_config = {
         'account_name': st.column_config.TextColumn('Account Name', required=True, help="Name of your investment account"),
-        'account_type': st.column_config.SelectboxColumn('Account Type', options=VALID_ACCOUNT_TYPES, required=True, help="Type of account")
+        'account_type': st.column_config.SelectboxColumn('Account Type', options=VALID_ACCOUNT_TYPES, required=True, help="Type of account"),
+        'owner': st.column_config.SelectboxColumn('Owner', options=owner_options, required=True,
+                                                   help=f"Account owner: Joint (both), {person1_name if person1_name else 'Primary'}, or {person2_name if person2_name and not is_single_person else 'Spouse'}")
     }
     
     # Display editable accounts dataframe
@@ -4269,32 +4355,82 @@ with tab6:
 
     with col5:
         if st.button("🔍 Validate & Lookup Tickers", use_container_width=True,
-                     help="Validates all ticker symbols against Yahoo Finance and auto-fills Name and Sector"):
-            current_df = st.session_state['portfolio_df']
-            non_empty = current_df[current_df['symbol'].str.strip() != ''].copy()
-            if non_empty.empty:
-                st.warning("No entries to validate. Add rows with ticker symbols first.")
+                     help="Validates ticker symbols, auto-fills Name/Sector, and maps Account Type/Owner from Your Accounts configuration"):
+            current_df = st.session_state['portfolio_df'].copy()
+            
+            if current_df.empty:
+                st.warning("No entries to process. Add rows first.")
             else:
+                # Build account lookup from configured accounts
+                account_lookup = {}
+                for account in st.session_state.get('accounts_list', []):
+                    acc_name = account.get('account_name', '')
+                    if acc_name:
+                        account_lookup[acc_name] = {
+                            'account_type': account.get('account_type', 'Brokerage'),
+                            'owner': account.get('owner', 'Joint')
+                        }
+                
                 validation_results = []
-                with st.spinner("Validating ticker symbols with Yahoo Finance..."):
-                    for idx, row in non_empty.iterrows():
-                        symbol = str(row['symbol']).strip().upper()
-                        is_valid, name, sector, error = validate_ticker_symbol(symbol)
-                        if is_valid:
-                            non_empty.at[idx, 'name'] = name
-                            non_empty.at[idx, 'sector'] = sector
-                            validation_results.append({'Symbol': symbol, 'Status': '✅ Valid', 'Name': name, 'Sector': sector})
+                accounts_mapped = 0
+                tickers_validated = 0
+                
+                with st.spinner("Validating ticker symbols and mapping accounts..."):
+                    for idx, row in current_df.iterrows():
+                        symbol = str(row.get('symbol', '')).strip().upper()
+                        account_name = str(row.get('account_name', '')).strip()
+                        
+                        # Validate ticker only if symbol is not empty
+                        status_parts = []
+                        if symbol:
+                            is_valid, name, sector, error = validate_ticker_symbol(symbol)
+                            if is_valid:
+                                current_df.at[idx, 'name'] = name
+                                current_df.at[idx, 'sector'] = sector
+                                status_parts.append('✅ Valid')
+                                tickers_validated += 1
+                            else:
+                                status_parts.append('❌ Invalid')
+                        
+                        # Map account configuration if account_name matches (regardless of symbol)
+                        if account_name and account_name in account_lookup:
+                            config = account_lookup[account_name]
+                            current_df.at[idx, 'account_type'] = config['account_type']
+                            current_df.at[idx, 'owner'] = config['owner']
+                            accounts_mapped += 1
+                            status_parts.append('🔗 Mapped')
+                        
+                        # Only add to results if there was something to do
+                        if symbol or (account_name and account_name in account_lookup):
+                            validation_results.append({
+                                'Symbol': symbol if symbol else '(no symbol)',
+                                'Account': account_name,
+                                'Status': ' + '.join(status_parts) if status_parts else 'No action',
+                                'Name': current_df.at[idx, 'name'] if symbol else '',
+                                'Sector': current_df.at[idx, 'sector'] if symbol else ''
+                            })
+                
+                # Replace the entire dataframe
+                st.session_state['portfolio_df'] = current_df
+                
+                # Show results
+                if validation_results:
+                    results_df = pd.DataFrame(validation_results)
+                    invalid_count = sum(1 for r in validation_results if '❌' in r['Status'])
+                
+                    if tickers_validated > 0:
+                        if invalid_count == 0:
+                            st.success(f"✅ All {tickers_validated} ticker symbols validated successfully!")
                         else:
-                            validation_results.append({'Symbol': symbol, 'Status': '❌ Invalid', 'Name': '', 'Sector': error})
-                # Merge validated rows back into full dataframe
-                st.session_state['portfolio_df'].update(non_empty)
-                results_df = pd.DataFrame(validation_results)
-                invalid_count = sum(1 for r in validation_results if '❌' in r['Status'])
-                if invalid_count == 0:
-                    st.success(f"✅ All {len(validation_results)} ticker symbols validated successfully!")
+                            st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
+                    
+                    if accounts_mapped > 0:
+                        st.success(f"🔗 Mapped {accounts_mapped} holdings to configured accounts (account_type and owner updated)")
+                    
+                    st.dataframe(results_df, width='stretch', hide_index=True)
                 else:
-                    st.error(f"❌ {invalid_count} invalid ticker symbol(s). Please correct them before saving.")
-                st.dataframe(results_df, width='stretch', hide_index=True)
+                    st.info("No tickers to validate or accounts to map")
+                
                 st.rerun()
 
     with col6:
@@ -4353,8 +4489,8 @@ with tab6:
         'year': st.column_config.NumberColumn('Year', min_value=2000, max_value=2100, step=1, required=True),
         'account_name': st.column_config.TextColumn('Account Name', required=True),
         'account_type': st.column_config.SelectboxColumn('Account Type', options=VALID_ACCOUNT_TYPES, required=True),
-        'owner': st.column_config.SelectboxColumn('Owner', options=VALID_ACCOUNT_OWNERS, required=True,
-                                                   help="Joint (both spouses), Primary (person 1), or Spouse (person 2)"),
+        'owner': st.column_config.SelectboxColumn('Owner', options=get_valid_account_owners(), required=True,
+                                                   help="Account owner from Personal Info configuration"),
         'symbol': st.column_config.TextColumn('Symbol', required=True),
         'name': st.column_config.TextColumn('Name', required=True),
         'sector': st.column_config.SelectboxColumn('Sector', options=VALID_SECTORS, required=True),
@@ -4966,6 +5102,12 @@ with tab10:
             
             config_mgr.update_section("tax_strategy", {
                 "max_roth_conversion_tax_rate": max_roth_conversion_tax_rate,
+                "stage_1_max_conversion_rate": stage_1_rate,
+                "stage_2_max_conversion_rate": stage_2_rate,
+                "stage_3_max_conversion_rate": stage_3_rate,
+                "stage_4_max_conversion_rate": stage_4_rate,
+                "stage_5_max_conversion_rate": stage_5_rate,
+                "stage_6_max_conversion_rate": stage_6_rate,
             })
             
             config_mgr.update_section("charitable_giving", {

@@ -26,11 +26,47 @@ logger = logging.getLogger(__name__)
 # Constants
 PORTFOLIO_TRUTH_FILE = 'portfolio_data_truth.csv'
 VALID_ACCOUNT_TYPES = ['Checking','Savings', 'Brokerage', 'Traditional', 'Roth']
+
+def get_valid_account_owners():
+    """
+    Get valid account owners from Personal Info configuration.
+    Returns list of valid owner names: ['Joint', 'Person1Name', 'Person2Name']
+    Falls back to ['Joint', 'Primary', 'Spouse'] if config not available.
+    """
+    try:
+        from config import get_config_manager
+        config_mgr = get_config_manager()
+        
+        person1_name = config_mgr.get("personal_info", "person1_name", "")
+        person2_name = config_mgr.get("personal_info", "person2_name", "")
+        is_single = config_mgr.get("personal_info", "is_single_person", False)
+        
+        owners = ['Joint']
+        if person1_name and person1_name.strip():
+            owners.append(person1_name.strip())
+        else:
+            owners.append('Primary')
+        
+        if not is_single:
+            if person2_name and person2_name.strip():
+                owners.append(person2_name.strip())
+            else:
+                owners.append('Spouse')
+        
+        return owners
+    except Exception:
+        # Fallback to defaults if config not available
+        return ['Joint', 'Primary', 'Spouse']
+
+# Keep for backward compatibility, but use get_valid_account_owners() for validation
 VALID_ACCOUNT_OWNERS = ['Joint', 'Primary', 'Spouse']
+
 VALID_SECTORS = [
     'MF:Cash',
     'MF:Bonds',
     'Stock/ETF',
+    'Options:Call',
+    'Options:Put',
     'MF:Large-Cap',
     'MF:Mid-Cap',
     'MF:Small-Cap',
@@ -54,25 +90,82 @@ VALID_SECTORS = [
     'Consumer Cyclical'
 ]
 
+def is_option_symbol(symbol: str) -> Tuple[bool, str, str]:
+    """
+    Detect if a symbol is an options contract and parse its components.
+    
+    Options symbols follow OCC format: TICKER[spaces]YYMMDD[C/P]STRIKE
+    Example: SOFI  260402C00020000 = SOFI Call expiring 2026-04-02 at strike $20.00
+    
+    Args:
+        symbol: Ticker symbol to check
+        
+    Returns:
+        Tuple of (is_option, underlying_ticker, option_type)
+        - is_option: True if this is an options contract
+        - underlying_ticker: The underlying stock symbol (e.g., 'SOFI')
+        - option_type: 'Call' or 'Put' or empty string
+    """
+    if not symbol or len(symbol) < 15:
+        return False, '', ''
+    
+    # Options symbols typically have spaces and end with C or P followed by strike price
+    # Format: TICKER[spaces]YYMMDDCSTRIKE or TICKER[spaces]YYMMDDPSTRIKE
+    # The 'C' or 'P' appears after the 6-digit date
+    
+    # Look for the pattern: 6 digits followed by C or P
+    import re
+    # Match: any chars, then 6 digits, then C or P, then 8 digits (strike price)
+    pattern = r'^([A-Z]+)\s+(\d{6})([CP])(\d{8})$'
+    match = re.match(pattern, symbol.strip())
+    
+    if match:
+        underlying = match.group(1)
+        option_type = 'Call' if match.group(3) == 'C' else 'Put'
+        return True, underlying, option_type
+    
+    return False, '', ''
+
 def validate_ticker_symbol(symbol: str) -> Tuple[bool, str, str, str]:
     """
     Validate a ticker symbol by looking it up in Yahoo Finance.
     For mutual funds (5-letter tickers), uses 'category' field as sector.
+    For options contracts, parses OCC format and validates underlying.
     
     Args:
-        symbol: Ticker symbol to validate (e.g., 'AAPL', 'GOOGL')
+        symbol: Ticker symbol to validate (e.g., 'AAPL', 'GOOGL', 'SOFI  260402C00020000')
     
     Returns:
         Tuple of (is_valid, name, sector, error_message)
         - is_valid: True if symbol exists and can be validated
         - name: Company/security name from Yahoo Finance
-        - sector: Sector from Yahoo Finance (or category for mutual funds)
+        - sector: Sector from Yahoo Finance (or category for mutual funds, or Options:Call/Put)
         - error_message: Error description if validation fails
     """
     # Special handling for cash
     if symbol.upper() in ['MF:CASH', 'CASH']:
         logger.info(f"Validating cash symbol: {symbol}")
         return True, 'Money Market', 'MF:Cash', ''
+    
+    # Check if this is an options contract
+    is_option, underlying, option_type = is_option_symbol(symbol)
+    if is_option:
+        logger.info(f"Detected options contract: {symbol} -> {underlying} {option_type}")
+        # Validate the underlying ticker
+        try:
+            ticker = yf.Ticker(underlying)
+            info = ticker.info
+            if not info or 'symbol' not in info:
+                return False, '', '', f"Underlying symbol '{underlying}' not found for option"
+            
+            underlying_name = info.get('shortName', info.get('longName', underlying))
+            option_name = f"{underlying_name} {option_type} Option"
+            option_sector = f"Options:{option_type}"
+            logger.info(f"Validated option: {option_name} -> {option_sector}")
+            return True, option_name, option_sector, ''
+        except Exception as e:
+            logger.error(f"Error validating option underlying {underlying}: {e}")
+            return False, '', '', f"Error validating option underlying: {str(e)}"
     
     try:
         logger.info(f"Validating ticker symbol: {symbol}")
@@ -173,14 +266,27 @@ def validate_portfolio_entry(row: pd.Series) -> Tuple[bool, str]:
     # Validate owner (if provided)
     owner_value = row.get('owner')
     if owner_value is not None and not pd.isna(owner_value) and str(owner_value).strip() != '':
-        if owner_value not in VALID_ACCOUNT_OWNERS:
-            errors.append(f"Invalid owner: {owner_value}. Must be one of {VALID_ACCOUNT_OWNERS}")
+        valid_owners = get_valid_account_owners()
+        if owner_value not in valid_owners:
+            errors.append(f"Invalid owner: {owner_value}. Must be one of {valid_owners}")
     
-    # Validate qty (must be positive number)
+    # Validate qty (must be non-zero number, can be negative for options)
     try:
         qty = float(row['qty'])
-        if qty <= 0:
-            errors.append(f"Quantity must be positive, got {qty}")
+        if qty == 0:
+            errors.append(f"Quantity cannot be zero")
+        
+        # Check if this is an options contract
+        symbol = str(row.get('symbol', '')).strip()
+        is_option, _, _ = is_option_symbol(symbol)
+        
+        # For non-options, quantity must be positive
+        if not is_option and qty < 0:
+            errors.append(f"Quantity must be positive for non-option securities, got {qty}")
+        
+        # For options, negative quantity is allowed (covered calls, cash-secured puts)
+        # Positive = long position, Negative = short position
+        
     except (ValueError, TypeError):
         errors.append(f"Invalid quantity value: {row['qty']}")
     
