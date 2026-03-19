@@ -1,6 +1,6 @@
-# Retirement Portfolio Withdrawal Strategy - 6 Stages of Life
+# Retirement Portfolio Withdrawal Strategy - 7 Stages of Life
 
-A comprehensive Python module for calculating optimal retirement withdrawal strategies across 6 distinct life stages, with tax optimization, Roth conversions, IRMAA management, and ACA subsidy considerations.
+A comprehensive Python module for calculating optimal retirement withdrawal strategies across 7 distinct life stages, with tax optimization, Roth conversions, IRMAA management, ACA subsidy considerations, and surviving spouse planning.
 
 ## Overview
 
@@ -12,6 +12,7 @@ This module implements a sophisticated withdrawal strategy that adapts to differ
 4. **Stage 4: Medicare** - On Medicare, optimizing for IRMAA while continuing conversions
 5. **Stage 5: Social Security** - Collecting SS + Medicare, balancing taxation
 6. **Stage 6: RMD** - Managing Required Minimum Distributions with full retirement income
+7. **Stage 7: Surviving Spouse** - Single filer status with survivor benefits and conservative tax planning
 
 ## Key Features
 

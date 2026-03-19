@@ -26,6 +26,10 @@ DEFAULT_CONFIG = {
         "retirement_state": "FL",  # State for retirement (affects state tax calculations)
         # List of children: each entry is {"name": str, "birth_date": "YYYY-MM-DD"}
         "children": [],
+        # Stage 7: Surviving Spouse configuration
+        "surviving_spouse_mode": False,  # True if planning for surviving spouse scenario
+        "decedent_person": None,  # "person1" or "person2" - which person is deceased
+        "date_of_death": None,  # "YYYY-MM-DD" - date of death for tax and benefit calculations
     },
     "financial_assumptions": {
         "expected_annual_expenses": 50000,
@@ -113,12 +117,14 @@ DEFAULT_CONFIG = {
         # Stage 4: Medicare Stage (IRMAA optimization)
         # Stage 5: Social Security Stage (SS benefits + Medicare, pre-RMD)
         # Stage 6: RMD Stage (Required Minimum Distributions)
+        # Stage 7: Surviving Spouse (Single filer, survivor benefits)
         "stage_1_max_conversion_rate": 32,  # Accumulation
         "stage_2_max_conversion_rate": 24,  # Prep for Retirement
         "stage_3_max_conversion_rate": 12,  # Early Retirement
         "stage_4_max_conversion_rate": 12,  # Medicare Stage
         "stage_5_max_conversion_rate": 22,  # Social Security Stage
         "stage_6_max_conversion_rate": 10,  # RMD Stage
+        "stage_7_max_conversion_rate": 15,  # Surviving Spouse Stage
     },
     "charitable_giving": {
         "annual_charitable_giving": 0,

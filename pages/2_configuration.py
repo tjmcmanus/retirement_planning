@@ -191,6 +191,154 @@ with tab1:
     )
     
     st.info(f"Selected state: {retirement_state} - State tax calculations will be applied based on this selection.")
+    # -----------------------------------------------------------------------
+    # Stage 7: Surviving Spouse Configuration
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("💔 Stage 7: Surviving Spouse Planning")
+    
+    # Only show if not in single person mode
+    if not is_single_person:
+        surviving_spouse_mode = st.checkbox(
+            "Planning for surviving spouse scenario (Stage 7)",
+            value=config_mgr.get("personal_info", "surviving_spouse_mode", False),
+            help="Check this if you are planning for a scenario where one spouse has passed away. This activates Stage 7 planning with single filer tax status and survivor benefits.",
+            key="surviving_spouse_mode"
+        )
+        
+        if surviving_spouse_mode:
+            st.info("🔔 **Stage 7 Mode Active**: Planning will account for single filer tax status, survivor Social Security benefits, and estate transition considerations.")
+            
+            col_dec1, col_dec2 = st.columns(2)
+            
+            with col_dec1:
+                # Select which person is deceased
+                decedent_options = ["person1", "person2"]
+                decedent_labels = [
+                    f"{person1_name or 'Person 1'} (Primary)",
+                    f"{person2_name or 'Person 2'} (Spouse/Partner)"
+                ]
+                
+                current_decedent = config_mgr.get("personal_info", "decedent_person", None)
+                try:
+                    decedent_index = decedent_options.index(current_decedent) if current_decedent else 0
+                except (ValueError, TypeError):
+                    decedent_index = 0
+                
+                decedent_person = st.selectbox(
+                    "Decedent (Deceased Person)",
+                    options=decedent_options,
+                    format_func=lambda x: decedent_labels[decedent_options.index(x)],
+                    index=decedent_index,
+                    help="Select which person has passed away",
+                    key="decedent_person"
+                )
+                
+                # Determine survivor name
+                if decedent_person == "person1":
+                    survivor_name = person2_name or "Person 2"
+                    decedent_name = person1_name or "Person 1"
+                else:
+                    survivor_name = person1_name or "Person 1"
+                    decedent_name = person2_name or "Person 2"
+                
+                st.caption(f"**Survivor**: {survivor_name}")
+            
+            with col_dec2:
+                # Date of death
+                current_dod = config_mgr.get("personal_info", "date_of_death", None)
+                if current_dod:
+                    try:
+                        dod_value = datetime.strptime(current_dod, "%Y-%m-%d")
+                    except ValueError:
+                        dod_value = datetime.now()
+                else:
+                    dod_value = datetime.now()
+                
+                date_of_death = st.date_input(
+                    "Date of Death",
+                    value=dod_value,
+                    help="Date when the decedent passed away. Used for tax filing status changes and benefit calculations.",
+                    key="date_of_death"
+                )
+                
+                # Calculate year of death for display
+                year_of_death = date_of_death.year
+                st.caption(f"**Year of Death**: {year_of_death}")
+                st.caption(f"**Tax Status**: MFJ in {year_of_death}, Single from {year_of_death + 1} onward")
+            
+            # Stage 7 To-Do Checklist
+            st.markdown("---")
+            st.markdown("### 📋 Surviving Spouse Transition Checklist")
+            st.markdown(f"**Important tasks for {survivor_name} after the loss of {decedent_name}:**")
+            
+            # Create checklist in an expander for better organization
+            with st.expander("📝 View Complete Checklist", expanded=True):
+                st.markdown("""
+                #### Immediate Actions (First 30 Days)
+                - ☐ Obtain multiple certified copies of death certificate (10-15 copies)
+                - ☐ Contact Social Security Administration to report death and apply for survivor benefits
+                - ☐ Notify Medicare and update coverage if applicable
+                - ☐ Contact life insurance companies to file claims
+                - ☐ Notify employer(s) and apply for any death benefits
+                
+                #### Financial Account Updates (30-90 Days)
+                - ☐ Update beneficiary designations on all accounts
+                - ☐ Retitle joint accounts to survivor's name only
+                - ☐ Roll over inherited retirement accounts (IRA, 401k) within 60 days if needed
+                - ☐ Review and update RMD requirements for inherited accounts
+                - ☐ Consolidate accounts where appropriate
+                - ☐ Update bank account signatories and access
+                
+                #### Tax and Legal (Within 1 Year)
+                - ☐ File final joint tax return for year of death (MFJ status)
+                - ☐ Update tax filing status to Single for subsequent years
+                - ☐ Review and update estate planning documents (will, trust, POA)
+                - ☐ Consult with estate attorney about probate if needed
+                - ☐ File estate tax return if estate exceeds exemption threshold
+                
+                #### Benefits Optimization
+                - ☐ **Social Security**: Survivor receives higher of own benefit or 100% of deceased spouse's benefit
+                - ☐ **Medicare**: Continue own Medicare coverage (Part B premium based on survivor's income)
+                - ☐ Review pension survivor benefits if applicable
+                - ☐ Update health insurance coverage if needed
+                
+                #### Long-Term Planning (Ongoing)
+                - ☐ Review and adjust investment strategy for single person household
+                - ☐ Update budget for single person expenses
+                - ☐ Review IRMAA thresholds (single filer has lower thresholds than MFJ)
+                - ☐ Optimize Roth conversions with new single filer tax brackets
+                - ☐ Consider downsizing or relocating if appropriate
+                - ☐ Update emergency contacts and healthcare proxies
+                
+                #### Professional Guidance
+                - ☐ Consult with financial advisor to review overall plan
+                - ☐ Meet with tax professional for tax planning
+                - ☐ Consider grief counseling or support groups
+                """)
+            
+            st.warning(
+                f"⚠️ **Important**: Stage 7 planning assumes {survivor_name} will file as Single starting in "
+                f"{year_of_death + 1}. Single filer tax brackets are less favorable than Married Filing Jointly, "
+                f"which may impact Roth conversion strategies and IRMAA thresholds."
+            )
+            
+            st.info(
+                f"💡 **Survivor Benefits**: {survivor_name} will receive the higher of their own Social Security "
+                f"benefit or 100% of {decedent_name}'s benefit (not both). Medicare coverage continues based on "
+                f"{survivor_name}'s own enrollment."
+            )
+        else:
+            # Set default values when not in surviving spouse mode
+            decedent_person = None
+            date_of_death = None
+    else:
+        # Single person mode - hide surviving spouse options
+        st.info("👤 Surviving spouse planning is not applicable in single person mode.")
+        surviving_spouse_mode = False
+        decedent_person = None
+        date_of_death = None
+
 
     # -----------------------------------------------------------------------
     # Children
@@ -3736,9 +3884,18 @@ with tab5:
             help="Required Minimum Distributions - limited conversion capacity",
             key="stage_6_conversion_rate"
         )
+        
+        stage_7_rate = st.number_input(
+            "Stage 7: Surviving Spouse (%)",
+            min_value=0,
+            max_value=37,
+            value=int(config_mgr.get("tax_strategy", "stage_7_max_conversion_rate", 15)),
+            help="Single filer status with survivor benefits - conservative conversions due to less favorable tax brackets",
+            key="stage_7_conversion_rate"
+        )
     
     st.markdown("---")
-    st.caption("💡 **Strategy Tip**: Lower rates in early retirement (Stages 3-4) maximize conversions when income is low. Higher rates in accumulation (Stage 1) allow conversions while earning. Stage 5-6 rates balance conversions with SS/RMD income.")
+    st.caption("💡 **Strategy Tip**: Lower rates in early retirement (Stages 3-4) maximize conversions when income is low. Higher rates in accumulation (Stage 1) allow conversions while earning. Stage 5-6 rates balance conversions with SS/RMD income. Stage 7 uses conservative rates due to single filer tax brackets.")
 
     
     # Charitable Giving Section
@@ -5004,6 +5161,9 @@ with tab10:
                 "person2_retirement_age": st.session_state.get("person2_retirement_age", person2_retirement_age),
                 "retirement_state": st.session_state.get("retirement_state", retirement_state),
                 "children": _valid_children,
+                "surviving_spouse_mode": st.session_state.get("surviving_spouse_mode", False),
+                "decedent_person": st.session_state.get("decedent_person", None),
+                "date_of_death": st.session_state.get("date_of_death").strftime("%Y-%m-%d") if st.session_state.get("date_of_death") and hasattr(st.session_state.get("date_of_death"), 'strftime') else None,
             })
             
             # Calculate total annual expenses from detailed breakdown
@@ -5108,6 +5268,7 @@ with tab10:
                 "stage_4_max_conversion_rate": stage_4_rate,
                 "stage_5_max_conversion_rate": stage_5_rate,
                 "stage_6_max_conversion_rate": stage_6_rate,
+                "stage_7_max_conversion_rate": stage_7_rate,
             })
             
             config_mgr.update_section("charitable_giving", {
