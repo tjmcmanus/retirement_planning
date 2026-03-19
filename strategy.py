@@ -3644,6 +3644,7 @@ def get_stage_specific_conversion_rate(stage_name: str) -> float:
         "Stage 4: Medicare": "stage_4_max_conversion_rate",
         "Stage 5: Social Security": "stage_5_max_conversion_rate",
         "Stage 6: RMD": "stage_6_max_conversion_rate",
+        "Stage 7: Surviving Spouse": "stage_7_max_conversion_rate",
     }
     
     # Get stage-specific rate, fall back to global default
@@ -6854,6 +6855,329 @@ class Stage6RMD(LifeStage):
         )
 
 
+class Stage7SurvivingSpouse(LifeStage):
+    """
+    Stage 7: Surviving Spouse
+    
+    Applies when one spouse has passed away and the survivor continues planning.
+    
+    Key characteristics:
+    - Single filer tax status (less favorable brackets than MFJ)
+    - Survivor receives higher of own SS benefit or 100% of deceased spouse's benefit
+    - Survivor maintains own Medicare coverage
+    - More conservative Roth conversion strategy due to single filer brackets
+    - Inherited IRA RMDs follow beneficiary rules
+    - Focus on tax-efficient withdrawal with higher tax burden
+    """
+
+    def __init__(self):
+        super().__init__(
+            "Stage 7: Surviving Spouse",
+            "Single filer with survivor benefits - managing transition after spouse's death"
+        )
+    
+    def applies(self, age_primary: int, age_spouse: int, year: int,
+                has_wages: bool, has_ss: bool) -> bool:
+        """
+        Applies when surviving_spouse_mode is enabled and year >= year of death
+        
+        This stage takes precedence over all other stages when activated.
+        """
+        config_mgr = get_config_manager()
+        surviving_spouse_mode = config_mgr.get("personal_info", "surviving_spouse_mode", False)
+        
+        if not surviving_spouse_mode:
+            return False
+        
+        # Check if we're past the date of death
+        date_of_death = config_mgr.get("personal_info", "date_of_death", None)
+        if not date_of_death:
+            return False
+        
+        try:
+            year_of_death = int(date_of_death.split('-')[0])
+            # Stage 7 applies starting the year AFTER death (year of death uses MFJ)
+            return year > year_of_death
+        except (ValueError, AttributeError):
+            return False
+    
+    def calculate_strategy(self, year: int, balances: PortfolioBalances,
+                          expenses: float, ss_benefits: float = 0,
+                          prior_magi: float = 0, **kwargs) -> YearlyStrategy:
+        """
+        Calculate surviving spouse strategy
+        
+        Similar to Stage 6 (RMD) but with:
+        - Single filer tax status
+        - Survivor Social Security benefits (higher of two)
+        - More conservative Roth conversions
+        
+        Args:
+            year: Current year
+            balances: Current portfolio balances
+            expenses: Annual expenses
+            ss_benefits: Annual SS benefits (survivor benefit - higher of two)
+            prior_magi: MAGI from 2 years prior (for IRMAA)
+        """
+        logger.debug(f"Stage 7 (Surviving Spouse) calculation for year {year}")
+        
+        age_primary = kwargs.get('age_primary', 0)
+        age_spouse = kwargs.get('age_spouse', 0)
+        
+        # Determine survivor's age (the one who is still alive)
+        config_mgr = get_config_manager()
+        decedent_person = config_mgr.get("personal_info", "decedent_person", "person1")
+        survivor_age = age_spouse if decedent_person == "person1" else age_primary
+        
+        # Get tax data - IMPORTANT: Use Single filing status for Stage 7
+        filing_status = "Single"  # Override to Single for surviving spouse
+        tax_brackets = get_income_tax_brackets(year)
+        cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
+        std_deduction_df = get_std_deduction(year, filing_status)
+        irmaa_brackets = get_medicare_costs(year)
+        std_deduction = std_deduction_df.iloc[0]['deduction']
+        
+        logger.info(f"Stage 7: Using Single filing status (survivor age: {survivor_age})")
+        
+        # Calculate RMD if applicable
+        rmd_rate = get_rmd_value(survivor_age)
+        rmd_amount = 0
+        if rmd_rate > 0 and balances.traditional > 0:
+            rmd_amount = balances.traditional / rmd_rate
+        
+        logger.debug(f"RMD amount: ${rmd_amount:,.2f} (rate: {rmd_rate})")
+        
+        # Calculate healthcare costs (survivor's Medicare only)
+        try:
+            # For Stage 7, only one person on Medicare
+            healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
+                age_primary=survivor_age,
+                age_spouse=0,  # No spouse
+                magi_two_years_ago=prior_magi,
+                year=year,
+                filing_status=filing_status,
+                has_medigap=True
+            )
+            medical_costs = healthcare_breakdown.medicare
+            aca_premium = healthcare_breakdown.pre_medicare + healthcare_breakdown.preretirement_working
+            irmaa_penalty = healthcare_breakdown.medicare_detail.get('irmaa_penalty', 0.0)
+            
+            if medical_costs > 0:
+                logger.info(f"Stage 7: Medicare costs=${medical_costs:,.2f} (IRMAA=${irmaa_penalty:,.2f})")
+        except Exception as e:
+            logger.warning(f"Could not calculate healthcare costs for Stage 7: {e}")
+            medical_costs = 0.0
+            aca_premium = 0.0
+            irmaa_penalty = 0.0
+        
+        # Calculate cash buffer target
+        start_year = kwargs.get('start_year', year)
+        cash_target, taxable_target = calculate_cash_buffer_targets(expenses)
+        cash_need, taxable_need = calculate_buffer_ramp_up(
+            year, start_year, cash_target, taxable_target,
+            balances.cash, balances.taxable
+        )
+        total_buffer_need = cash_need + taxable_need
+        
+        logger.debug(f"Cash target: ${cash_target:,.2f} (need ${cash_need:,.2f}), "
+                    f"Taxable target: ${taxable_target:,.2f} (need ${taxable_need:,.2f})")
+        
+        # Taxable SS (survivor receives higher benefit)
+        taxable_ss = ss_benefits * TAXABLE_SS_RATE
+        
+        # Total income includes RMD (if required)
+        total_income = taxable_ss + rmd_amount
+        
+        # Calculate if additional withdrawals needed
+        withdrawal_need = max(0, expenses + irmaa_penalty - ss_benefits - rmd_amount)
+        
+        # Harvest LTCG if beneficial (up to 15% bracket for Stage 7)
+        ltcg_harvested = 0
+        total_ltcg = 0
+        
+        if balances.taxable > 0:
+            # Calculate current AGI
+            agi_before_ltcg = taxable_ss + rmd_amount
+            
+            # Find 15% bracket limit (more conservative for single filer)
+            bracket_15_limit = 0
+            for _, row in tax_brackets.iterrows():
+                if row['rate'] == 15:
+                    bracket_15_limit = row['max']
+                    break
+            
+            if bracket_15_limit > 0:
+                room_to_15 = max(0, bracket_15_limit - agi_before_ltcg)
+                if room_to_15 > 1000:  # Only harvest if meaningful room
+                    ltcg_harvested = min(room_to_15, balances.taxable * 0.10)  # Conservative 10% harvest
+                    total_ltcg = ltcg_harvested
+                    logger.info(f"Stage 7: Harvested ${ltcg_harvested:,.2f} LTCG (room to 15%: ${room_to_15:,.2f})")
+        
+        # Calculate AGI
+        agi = taxable_ss + rmd_amount + total_ltcg
+        
+        # Roth conversion - very conservative for Stage 7 due to single filer brackets
+        stage_max_conversion_rate = config_mgr.get("tax_strategy", "stage_7_max_conversion_rate", 15) / 100.0
+        
+        # Find the target bracket
+        target_bracket_max = 0
+        for _, row in tax_brackets.iterrows():
+            if row['rate'] <= stage_max_conversion_rate * 100:
+                target_bracket_max = row['max']
+        
+        # Calculate conversion room
+        conversion_room = max(0, target_bracket_max - agi)
+        
+        # Be conservative - only use 50% of available room for Stage 7
+        roth_conversion = 0
+        if conversion_room > 1000 and balances.traditional > rmd_amount:
+            roth_conversion = min(
+                conversion_room * 0.5,  # Only 50% of room
+                balances.traditional - rmd_amount  # Don't convert more than available
+            )
+            logger.info(f"Stage 7: Roth conversion ${roth_conversion:,.2f} (conservative, 50% of ${conversion_room:,.2f} room)")
+        
+        # Update AGI with conversion
+        agi += roth_conversion
+        
+        # Traditional withdrawal to cover expenses
+        trad_withdrawal = max(0, withdrawal_need)
+        agi += trad_withdrawal
+        
+        # Calculate taxes
+        taxable_income = agi - std_deduction
+        result = calculate_taxable_income(taxable_income, tax_brackets)
+        federal_tax = result.total_tax
+        
+        # Capital gains tax
+        cg_tax = calculate_cap_gains(taxable_income - total_ltcg, cg_brackets, total_ltcg)
+        
+        # State tax
+        state_tax, state_details = calculate_state_tax(
+            state_agi=agi,
+            year=year,
+            filing_status=filing_status,
+            retirement_income=trad_withdrawal + roth_conversion,
+            ss_benefits=taxable_ss
+        )
+        
+        # DAF contribution (if applicable)
+        daf_contribution, daf_tax_excess = _calculate_daf_for_year(
+            age_primary=survivor_age,
+            age_spouse=0,  # No spouse
+            std_deduction=std_deduction,
+            state_tax=state_tax,
+            property_tax=0,  # Would need to get from config
+            brokerage_balance=balances.taxable
+        )
+        
+        # Recalculate taxes if DAF contribution made
+        if daf_contribution > 0:
+            effective_deduction = std_deduction + daf_tax_excess
+            taxable_income_with_daf = agi - effective_deduction
+            result_with_daf = calculate_taxable_income(taxable_income_with_daf, tax_brackets)
+            federal_tax = result_with_daf.total_tax
+            cg_tax = calculate_cap_gains(taxable_income_with_daf - total_ltcg, cg_brackets, total_ltcg)
+        
+        # Roth withdrawal if needed
+        roth_withdrawal = max(0, withdrawal_need - trad_withdrawal)
+        
+        # Create decision log
+        dl = DecisionLog()
+        
+        dl.add(
+            "stage_info",
+            "Life Stage",
+            "Stage 7: Surviving Spouse",
+            f"Single filer status with survivor benefits. More conservative tax planning due to less favorable single filer brackets. "
+            f"Survivor age: {survivor_age}",
+            filing_status="Single",
+            survivor_age=survivor_age
+        )
+        
+        dl.add(
+            "ss_decisions",
+            "Social Security Income",
+            f"${ss_benefits:,.0f}/yr (${taxable_ss:,.0f} taxable) - Survivor Benefit",
+            f"Survivor receives the higher of their own benefit or 100% of deceased spouse's benefit. "
+            f"Up to {TAXABLE_SS_RATE:.0%} is taxable.",
+            ss_benefits=f"${ss_benefits:,.0f}",
+            taxable_ss=f"${taxable_ss:,.0f}"
+        )
+        
+        if rmd_amount > 0:
+            dl.add(
+                "rmd_decisions",
+                "Required Minimum Distribution",
+                f"${rmd_amount:,.0f} from Traditional IRA",
+                f"RMD required at age {survivor_age} (rate: {rmd_rate:.2f})",
+                rmd_amount=f"${rmd_amount:,.0f}",
+                rmd_rate=f"{rmd_rate:.2f}"
+            )
+        
+        if roth_conversion > 0:
+            dl.add(
+                "roth_conversion",
+                "Roth Conversion",
+                f"Convert ${roth_conversion:,.0f} (conservative for single filer)",
+                f"Stage 7 uses conservative conversions (50% of available room) due to less favorable single filer tax brackets. "
+                f"Target rate: {stage_max_conversion_rate:.0%}",
+                conversion_room=f"${conversion_room:,.0f}",
+                conversion_executed=f"${roth_conversion:,.0f}",
+                target_rate=f"{stage_max_conversion_rate:.0%}"
+            )
+        
+        if ltcg_harvested > 0:
+            dl.add(
+                "ltcg_decisions",
+                "LTCG Harvest",
+                f"Harvested ${ltcg_harvested:,.0f} from brokerage",
+                "Conservative LTCG harvest up to 15% bracket for single filer",
+                ltcg_harvested=f"${ltcg_harvested:,.0f}"
+            )
+        
+        # Calculate new balances
+        new_balances = PortfolioBalances(
+            cash=balances.cash - expenses - federal_tax - cg_tax - state_tax - irmaa_penalty + ss_benefits + rmd_amount - daf_contribution,
+            taxable=balances.taxable - ltcg_harvested - daf_contribution,
+            traditional=balances.traditional - rmd_amount - roth_conversion - trad_withdrawal,
+            roth=balances.roth + roth_conversion - roth_withdrawal,
+            daf=balances.daf + daf_contribution
+        )
+        
+        # Rebalance accounts
+        rebal_dl, new_balances = rebalance_accounts(
+            new_balances, cash_target, taxable_target, year, self.name
+        )
+        
+        # Merge rebalancing decisions
+        for entry in rebal_dl.all_decisions():
+            getattr(dl, _category_for(entry)).append(entry)
+        
+        return YearlyStrategy(
+            year=year,
+            stage=self.name,
+            expenses=expenses,
+            ss_benefits=ss_benefits,
+            trad_withdrawal=trad_withdrawal,
+            roth_withdrawal=roth_withdrawal,
+            roth_conversion=roth_conversion,
+            taxable_withdrawal=0,
+            ltcg_harvested=ltcg_harvested,
+            federal_tax=federal_tax,
+            state_tax=state_tax,
+            agi=agi,
+            balances=new_balances,
+            irmaa_penalty=irmaa_penalty,
+            aca_premium=aca_premium,
+            medical_costs=medical_costs,
+            decision_log=dl,
+            filing_status=filing_status,
+            rmd_amount=rmd_amount,
+            daf_contribution=daf_contribution
+        )
+
+
 class WithdrawalStrategyEngine:
     """
     Main engine for calculating withdrawal strategy across all life stages.
@@ -6864,6 +7188,7 @@ class WithdrawalStrategyEngine:
     
     def __init__(self):
         self.stages = [
+            Stage7SurvivingSpouse(),  # Check Stage 7 first - it takes precedence when active
             Stage1Accumulation(),
             Stage2PrepForRetirement(),
             Stage3EarlyRetirement(),
@@ -6872,7 +7197,7 @@ class WithdrawalStrategyEngine:
             Stage6RMD()
         ]
         self.brokerage_account: Optional[BrokerageAccount] = None
-        logger.info("Withdrawal Strategy Engine initialized with 6 life stages")
+        logger.info("Withdrawal Strategy Engine initialized with 7 life stages")
     
     def determine_stage(self, age_primary: int, age_spouse: int, year: int,
                        has_wages: bool, has_ss: bool) -> LifeStage:

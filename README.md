@@ -1,11 +1,11 @@
 # Financial Planner
 
-A comprehensive Streamlit-based financial planning application for tax optimization, portfolio management, and long-term financial projections with a sophisticated 6-stage life-cycle withdrawal strategy engine.
+A comprehensive Streamlit-based financial planning application for tax optimization, portfolio management, and long-term financial projections with a sophisticated 7-stage life-cycle withdrawal strategy engine.
 
 ## Overview
 
 This application helps users plan their retirement by:
-- **6-Stage Life-Cycle Strategy**: Comprehensive planning from accumulation through RMD phase, including a dedicated pre-retirement prep stage
+- **7-Stage Life-Cycle Strategy**: Comprehensive planning from accumulation through RMD phase and surviving spouse scenarios
 - **Estate Planning**: Complete toolkit for wills, trusts, beneficiaries, and document tracking
 - **Roth Conversion Optimization**: Intelligent conversions to minimize lifetime tax burden
 - **Tax Projection**: Multi-year federal and state tax calculations with administrative data management
@@ -30,6 +30,46 @@ Advanced Roth conversion analysis based on Vanguard research:
 See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_conversion.py`](betr_roth_conversion.py) for implementation.
 
 ## Recent Updates (March 2026 — Latest)
+
+### 🆕 NEW: Stage 7 - Surviving Spouse Planning (2026-03-19)
+**Complete life stage for planning after loss of spouse**
+
+Comprehensive planning support for surviving spouses with proper tax treatment and benefit optimization:
+
+**Key Features:**
+- **Automatic Tax Status Management**: MFJ in year of death, Single thereafter (IRS-compliant)
+- **Survivor Benefit Optimization**: Automatically receives higher of two Social Security benefits
+- **Conservative Strategy**: 50% conversion room usage due to less favorable single filer brackets
+- **Single Person Healthcare**: Medicare and IRMAA calculations for one person
+- **Comprehensive Transition Checklist**: 30+ actionable items organized by timeframe
+  - Immediate actions (0-30 days)
+  - Financial account updates (30-90 days)
+  - Tax and legal (within 1 year)
+  - Benefits optimization
+  - Long-term planning
+
+**Configuration:**
+- Enable in Configuration → Personal Info → "Stage 7: Surviving Spouse Planning"
+- Select decedent (Person 1 or Person 2)
+- Enter date of death
+- Optionally adjust Stage 7 conversion rate (default: 15%)
+
+**Tax Treatment (IRS-Compliant):**
+- **Year of Death**: Uses Married Filing Jointly (MFJ) status with full tax benefits
+- **Year After Death**: Switches to Single filer status automatically
+- **Impact**: ~40-50% higher tax burden due to narrower brackets and lower deductions
+
+**Documentation:**
+- [Stage 7 User Guide](STAGE7_SURVIVING_SPOUSE_GUIDE.md) - Complete 497-line guide with examples
+- [Test Suite](test_stage7_surviving_spouse.py) - 8 comprehensive test cases
+- Implementation: [`strategy.py`](strategy.py:6858-7177) - Stage7SurvivingSpouse class
+
+**Integration:**
+- Works with all existing features (portfolio, rebalancing, IRMAA, etc.)
+- Takes precedence over other stages when active
+- Maintains cost basis tracking and decision logging
+- Compatible with Monte Carlo simulations
+
 
 ### 🐛 FIXED: Federal Tax Calculation in RMD Lookback Optimization (2026-03-18)
 **Corrected tax calculations for years 2027-2029 in Strategy display**
