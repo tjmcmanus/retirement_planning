@@ -105,7 +105,20 @@ DEFAULT_CONFIG = {
         "person2_medicare_start_age": 65,
     },
     "tax_strategy": {
-        "max_roth_conversion_tax_rate": 12,
+        "max_roth_conversion_tax_rate": 12,  # Global default (used if stage-specific not set)
+        # Stage-specific Roth conversion tax rate limits (%)
+        # Stage 1: Accumulation (Employed, earning wages)
+        # Stage 2: Prep for Retirement (Employed, within 10 years of retirement)
+        # Stage 3: Early Retirement (Pre-Medicare, pre-SS, pre-RMD)
+        # Stage 4: Medicare Stage (IRMAA optimization)
+        # Stage 5: Social Security Stage (SS benefits + Medicare, pre-RMD)
+        # Stage 6: RMD Stage (Required Minimum Distributions)
+        "stage_1_max_conversion_rate": 32,  # Accumulation
+        "stage_2_max_conversion_rate": 24,  # Prep for Retirement
+        "stage_3_max_conversion_rate": 12,  # Early Retirement
+        "stage_4_max_conversion_rate": 12,  # Medicare Stage
+        "stage_5_max_conversion_rate": 22,  # Social Security Stage
+        "stage_6_max_conversion_rate": 10,  # RMD Stage
     },
     "charitable_giving": {
         "annual_charitable_giving": 0,

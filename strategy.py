@@ -15,12 +15,13 @@ Key Features:
 - Tax-efficient withdrawal sequencing across all life stages
 - IRMAA threshold management with 2-year lookback
 - ACA subsidy optimization for early retirees
+- Dynamic Security Selection for intelligent withdrawal decisions
 
 Based on Vanguard Research: "A 'BETR' approach to Roth conversions" (July 2025)
 
 Author: IBM Bob
-Date: 2026-02-24
-Version: 2.0 - BETR Integration
+Date: 2026-03-17
+Version: 2.1 - Dynamic Security Selection Integration
 """
 
 import functools
@@ -34,6 +35,39 @@ from datetime import datetime
 from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, cast, TypedDict
 from dataclasses import dataclass, field, asdict, replace
 from enum import Enum
+
+# Dynamic Security Selection Integration
+# Note: Import is deferred to avoid circular dependency
+SMART_SELECTION_AVAILABLE = False
+withdraw_from_brokerage_smart = None
+should_use_smart_selection = None
+format_liquidation_summary_for_log = None
+DEFAULT_TARGET_ALLOCATION = {'Cash': 10.0, 'Bonds': 30.0, 'Stocks': 60.0}
+
+def _init_smart_selection():
+    """Initialize smart selection module (deferred import to avoid circular dependency)."""
+    global SMART_SELECTION_AVAILABLE, withdraw_from_brokerage_smart
+    global should_use_smart_selection, format_liquidation_summary_for_log, DEFAULT_TARGET_ALLOCATION
+    
+    if SMART_SELECTION_AVAILABLE:
+        return  # Already initialized
+    
+    try:
+        from security_selection_integration import (
+            withdraw_from_brokerage_smart as _withdraw,
+            should_use_smart_selection as _should_use,
+            format_liquidation_summary_for_log as _format,
+            DEFAULT_TARGET_ALLOCATION as _default_alloc,
+        )
+        withdraw_from_brokerage_smart = _withdraw
+        should_use_smart_selection = _should_use
+        format_liquidation_summary_for_log = _format
+        DEFAULT_TARGET_ALLOCATION = _default_alloc
+        SMART_SELECTION_AVAILABLE = True
+        logger.info("Smart security selection enabled")
+    except ImportError as e:
+        logger.warning(f"Security selection module not available: {e}, using FIFO fallback")
+        SMART_SELECTION_AVAILABLE = False
 
 from load_data import (
     get_income_tax_brackets,
@@ -1003,14 +1037,38 @@ def optimize_rmd_lookback(strategies: list,
                             std_deduction = std_deduction_df.iloc[0]['deduction']
                             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year_strategy.year))
                             
-                            # Recalculate federal tax
-                            taxable_income = year_strategy.agi - std_deduction
-                            result = calculate_taxable_income(taxable_income, tax_brackets)
+                            # CRITICAL: Account for DAF deduction if present
+                            # DAF contribution creates additional itemized deduction above standard deduction
+                            daf_tax_excess = 0
+                            if year_strategy.daf_contribution > 0:
+                                # Get property tax for SALT calculation
+                                try:
+                                    property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
+                                except Exception:
+                                    property_tax = 0.0
+                                
+                                # Calculate SALT cap (state tax + property tax, capped at $10,000)
+                                salt_deduction = min(year_strategy.state_tax + property_tax, 10000)
+                                
+                                # Total itemized deductions = SALT + DAF contribution
+                                itemized_deduction = salt_deduction + year_strategy.daf_contribution
+                                
+                                # DAF tax excess = amount by which itemized exceeds standard
+                                daf_tax_excess = max(0, itemized_deduction - std_deduction)
+                            
+                            effective_deduction = std_deduction + daf_tax_excess
+                            
+                            # Recalculate federal tax - MUST separate ordinary income from LTCG
+                            taxable_income = year_strategy.agi - effective_deduction
+                            
+                            # CRITICAL: Ordinary income excludes LTCG (which is taxed separately)
+                            ordinary_income = taxable_income - year_strategy.ltcg_harvested
+                            result = calculate_taxable_income(ordinary_income, tax_brackets)
                             federal_tax = result.total_tax
                             
-                            # Recalculate capital gains tax (if any LTCG)
+                            # Recalculate capital gains tax (use ordinary income as base for LTCG brackets)
                             cg_tax = calculate_cap_gains(
-                                taxable_income - year_strategy.ltcg_harvested,
+                                ordinary_income,
                                 cg_brackets,
                                 year_strategy.ltcg_harvested
                             )
@@ -2549,13 +2607,18 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                           age_primary: int,
                           year: int,
                           cash_target_override: Optional[float] = None,
-                          brokerage_account: Optional[BrokerageAccount] = None) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
+                          brokerage_account: Optional[BrokerageAccount] = None,
+                          portfolio_df: Optional[pd.DataFrame] = None,
+                          target_allocation: Optional[Dict[str, float]] = None,
+                          current_agi: float = 0,
+                          filing_status: str = 'single',
+                          recent_sales: Optional[List[Dict]] = None) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
     """
     Replenish cash buffer to target based on configured years of expenses.
 
     Implements tax-efficient cash buffer maintenance by transferring funds
     from other accounts in priority order:
-    1. Brokerage → Cash (60% tax-free return of basis, 40% LTCG)
+    1. Brokerage → Cash (with smart security selection when available)
     2. Roth → Cash (tax-free if qualified, avoids LTCG from Brokerage→Cash)
     3. Traditional → Cash (ordinary income tax, last resort)
     4. Emergency Roth → Cash (if still short after Traditional)
@@ -2568,6 +2631,12 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         cash_target_override: If provided, use this value as the cash target
             instead of the expenses-based retirement target.  Used during the
             accumulation phase where the target is wages-based.
+        brokerage_account: Optional BrokerageAccount for cost basis tracking
+        portfolio_df: Optional portfolio DataFrame for smart security selection
+        target_allocation: Target allocation dict for smart selection
+        current_agi: Current AGI for tax rate determination
+        filing_status: Tax filing status
+        recent_sales: Recent sales for wash sale detection
 
     Returns:
         Tuple of (updated_balances, transaction_log, decision_log)
@@ -2633,24 +2702,46 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         )
         transactions['brokerage_to_cash'] = transfer
         
-        # Calculate LTCG from brokerage withdrawal
+        # Calculate LTCG from brokerage withdrawal using smart selection if available
         if brokerage_account is not None and transfer > 0:
             try:
-                basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
-                transactions['brokerage_ltcg'] = ltcg_realized
-                logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash: "
-                           f"${basis_returned:,.0f} basis (tax-free), ${ltcg_realized:,.0f} LTCG (taxable)")
+                # Try smart selection first if available
+                if SMART_SELECTION_AVAILABLE and should_use_smart_selection(portfolio_df, 'Brokerage'):
+                    basis_returned, ltcg_realized, plan = withdraw_from_brokerage_smart(
+                        amount=transfer,
+                        brokerage_account=brokerage_account,
+                        portfolio_df=portfolio_df,
+                        year=year,
+                        target_allocation=target_allocation or DEFAULT_TARGET_ALLOCATION,
+                        current_agi=current_agi,
+                        filing_status=filing_status,
+                        recent_sales=recent_sales or [],
+                    )
+                    transactions['brokerage_ltcg'] = ltcg_realized
+                    
+                    if plan:
+                        logger.info(f"  Smart selection: ${transfer:,.0f} from Brokerage to Cash")
+                        logger.info(f"    Basis: ${basis_returned:,.0f}, LTCG: ${ltcg_realized:,.0f}")
+                        logger.info(f"    Securities: {len(plan.securities)}, Tax: ${plan.estimated_tax:,.0f}")
+                    else:
+                        logger.info(f"  FIFO: ${transfer:,.0f} from Brokerage to Cash: "
+                                   f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
+                else:
+                    # Fallback to FIFO
+                    basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
+                    transactions['brokerage_ltcg'] = ltcg_realized
+                    logger.info(f"  FIFO: ${transfer:,.0f} from Brokerage to Cash: "
+                               f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
             except Exception as e:
-                logger.warning(f"  Error calculating LTCG from brokerage withdrawal: {e}")
-                # Fallback to default ratio
+                logger.warning(f"  Error in withdrawal: {e}, using estimated LTCG")
                 transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
                 logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash "
-                           f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG using default ratio)")
+                           f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG)")
         else:
             # No brokerage account tracking, use default ratio
             transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
             logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash "
-                       f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG using default ratio)")
+                       f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG)")
         
         cash_deficit -= transfer
         dl.add("cash_replenishment", "Brokerage → Cash",
@@ -3046,7 +3137,12 @@ def rebalance_accounts(balances: PortfolioBalances,
                       aca_premium: float = 0.0,
                       medical_costs: float = 0.0,
                       cash_target_override: Optional[float] = None,
-                      brokerage_account: Optional[BrokerageAccount] = None) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
+                      brokerage_account: Optional[BrokerageAccount] = None,
+                      portfolio_df: Optional[pd.DataFrame] = None,
+                      target_allocation: Optional[Dict[str, float]] = None,
+                      current_agi: float = 0,
+                      filing_status: str = 'single',
+                      recent_sales: Optional[List[Dict]] = None) -> Tuple[PortfolioBalances, Dict[str, float], DecisionLog]:
     """
     Execute all account rebalancing operations for a given year
     
@@ -3056,6 +3152,7 @@ def rebalance_accounts(balances: PortfolioBalances,
     3. Brokerage buffer maintenance (3-year target)
     4. Roth conversion execution
     5. Fund movement tracking
+    6. Dynamic security selection for intelligent withdrawals (when portfolio data available)
     
     Args:
         balances: Current portfolio balances
@@ -3071,6 +3168,11 @@ def rebalance_accounts(balances: PortfolioBalances,
         cash_target_override: If provided, pass to replenish_cash_buffer as the
             cash target (used during accumulation for wages-based buffer).
         brokerage_account: Optional BrokerageAccount for cost basis tracking
+        portfolio_df: Optional portfolio DataFrame for smart security selection
+        target_allocation: Target allocation dict for rebalancing {'Cash': 10, 'Bonds': 30, 'Stocks': 60}
+        current_agi: Current AGI for tax rate determination in smart selection
+        filing_status: Tax filing status for smart selection
+        recent_sales: Recent sales for wash sale detection in smart selection
     
     Returns:
         Tuple of (updated_balances, transaction_log, decision_log)
@@ -3165,15 +3267,50 @@ def rebalance_accounts(balances: PortfolioBalances,
             )
             transactions['brokerage_to_cash'] = transfer
             
-            # Calculate LTCG from brokerage withdrawal
+            # Calculate LTCG from brokerage withdrawal using smart selection if available
             if brokerage_account is not None and transfer > 0:
                 try:
-                    basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
-                    transactions['brokerage_ltcg'] = ltcg_realized
-                    logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash: "
-                               f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
+                    # Try smart selection first if available
+                    _init_smart_selection()
+                    if (SMART_SELECTION_AVAILABLE and should_use_smart_selection is not None
+                        and should_use_smart_selection(portfolio_df, 'Brokerage')):
+                        if withdraw_from_brokerage_smart is not None:
+                            basis_returned, ltcg_realized, plan = withdraw_from_brokerage_smart(
+                                amount=transfer,
+                                brokerage_account=brokerage_account,
+                                portfolio_df=portfolio_df,
+                                year=year,
+                                target_allocation=target_allocation or DEFAULT_TARGET_ALLOCATION,
+                                current_agi=current_agi,
+                                filing_status=filing_status,
+                                recent_sales=recent_sales or [],
+                            )
+                            transactions['brokerage_ltcg'] = ltcg_realized
+                            
+                            if plan:
+                                logger.info(f"  Smart selection used for ${transfer:,.0f} withdrawal:")
+                                logger.info(f"    Securities: {len(plan.securities)}")
+                                logger.info(f"    Basis: ${basis_returned:,.0f}, LTCG: ${ltcg_realized:,.0f}")
+                                logger.info(f"    Tax impact: ${plan.estimated_tax:,.0f}")
+                                logger.info(f"    Drift improvement: {plan.drift_improvement:+.2f}%")
+                                
+                                if format_liquidation_summary_for_log is not None:
+                                    dl.add("brokerage_withdrawal", "Smart Security Selection",
+                                           f"Withdrew ${transfer:,.0f} using intelligent selection",
+                                           format_liquidation_summary_for_log(plan))
+                            else:
+                                logger.info(f"  FIFO fallback used: ${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
+                        else:
+                            # Fallback to FIFO
+                            basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
+                    else:
+                        # Fallback to FIFO
+                        basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
+                        transactions['brokerage_ltcg'] = ltcg_realized
+                        logger.info(f"  FIFO withdrawal: ${transfer:,.0f} from Brokerage to Cash: "
+                                   f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
                 except Exception as e:
-                    logger.warning(f"  Error calculating LTCG: {e}")
+                    logger.warning(f"  Error in withdrawal: {e}, using estimated LTCG")
                     transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
                     logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash "
                                f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG)")
@@ -3487,6 +3624,40 @@ def _calculate_daf_for_year(age_primary: int, age_spouse: int, std_deduction: fl
     return daf_contribution, daf_tax_excess
 
 
+def get_stage_specific_conversion_rate(stage_name: str) -> float:
+    """
+    Get the stage-specific maximum Roth conversion tax rate from configuration.
+    
+    Args:
+        stage_name: The life stage name (e.g., "Stage 1: Accumulation")
+    
+    Returns:
+        Maximum conversion rate as a decimal (e.g., 0.12 for 12%)
+    """
+    config_mgr = get_config_manager()
+    
+    # Map stage names to configuration keys
+    stage_config_map = {
+        "Stage 1: Accumulation": "stage_1_max_conversion_rate",
+        "Stage 2: Prep for Retirement": "stage_2_max_conversion_rate",
+        "Stage 3: Early Retirement": "stage_3_max_conversion_rate",
+        "Stage 4: Medicare": "stage_4_max_conversion_rate",
+        "Stage 5: Social Security": "stage_5_max_conversion_rate",
+        "Stage 6: RMD": "stage_6_max_conversion_rate",
+    }
+    
+    # Get stage-specific rate, fall back to global default
+    config_key = stage_config_map.get(stage_name)
+    if config_key:
+        rate_pct = config_mgr.get("tax_strategy", config_key, None)
+        if rate_pct is not None:
+            return float(rate_pct) / 100.0
+    
+    # Fall back to global default
+    global_rate = config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)
+    return float(global_rate) / 100.0
+
+
 class Stage1Accumulation(LifeStage):
     """
     Stage 1: Accumulation Phase
@@ -3649,13 +3820,16 @@ class Stage1Accumulation(LifeStage):
                agi=f"${agi_before_conversion:,.0f}",
                bracket=f"{max_rate:.1%}")
 
+        # Get stage-specific conversion rate
+        stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+        
         roth_conversion = 0
-        if balances.traditional > 0 and max_rate <= max_conversion_rate:
+        if balances.traditional > 0 and max_rate <= stage_max_conversion_rate:
             try:
                 # Use BETR to determine optimal conversion amount
                 # During accumulation, we want to reduce future RMDs
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, pd.DataFrame(tax_brackets)
+                    stage_max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
 
                 # Calculate conversion room in current bracket
@@ -3668,7 +3842,7 @@ class Stage1Accumulation(LifeStage):
                         # Use BETR to validate conversion is beneficial
                         betr_inputs = BETRInputs(
                             current_marginal_rate=max_rate,
-                            expected_future_rate=max_conversion_rate,  # Assume higher rate in retirement
+                            expected_future_rate=stage_max_conversion_rate,  # Assume higher rate in retirement
                             conversion_amount=proposed_conversion,
                             traditional_ira_balance=balances.traditional,
                             pay_from_taxable=True,
@@ -3691,7 +3865,7 @@ class Stage1Accumulation(LifeStage):
                                    "than paying it on RMDs later.",
                                    betr=f"{betr_results.betr:.2%}",
                                    current_rate=f"{max_rate:.1%}",
-                                   expected_future_rate=f"{max_conversion_rate:.1%}",
+                                   expected_future_rate=f"{stage_max_conversion_rate:.1%}",
                                    conversion_room=f"${conversion_room:,.0f}",
                                    proposed=f"${proposed_conversion:,.0f}")
                         else:
@@ -3723,10 +3897,10 @@ class Stage1Accumulation(LifeStage):
             else:
                 dl.add("roth_conversion", "BETR Conversion (Stage 1)",
                        "No conversion — bracket too high",
-                       f"Current marginal rate ({max_rate:.1%}) exceeds the max conversion rate "
-                       f"({max_conversion_rate:.1%}); converting now would cost more than deferring.",
+                       f"Current marginal rate ({max_rate:.1%}) exceeds the Stage 1 max conversion rate "
+                       f"({stage_max_conversion_rate:.1%}); converting now would cost more than deferring.",
                        current_rate=f"{max_rate:.1%}",
-                       max_conversion_rate=f"{max_conversion_rate:.1%}")
+                       stage_max_rate=f"{stage_max_conversion_rate:.1%}")
 
         # Calculate tax on conversion if any
         if roth_conversion > 0:
@@ -4006,6 +4180,7 @@ class Stage2PrepForRetirement(LifeStage):
         config_mgr = get_config_manager()
         filing_status = config_mgr.get_filing_status()
         tax_brackets = get_income_tax_brackets(year)
+        cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
         std_deduction_df = get_std_deduction(year, filing_status)
         std_deduction = std_deduction_df.iloc[0]['deduction']
 
@@ -4135,11 +4310,14 @@ class Stage2PrepForRetirement(LifeStage):
         # Decision 4: BETR-validated Roth conversion
         # Only convert if in a favorable bracket AND Traditional is large
         # -----------------------------------------------------------------------
+        # Get stage-specific conversion rate
+        stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+        
         roth_conversion = 0.0
-        if balances.traditional > 0 and max_rate <= max_conversion_rate:
+        if balances.traditional > 0 and max_rate <= stage_max_conversion_rate:
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, pd.DataFrame(tax_brackets)
+                    stage_max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
                 current_income = agi_before_conversion
                 conversion_room = max(0, target_bracket_upper - current_income - std_deduction)
@@ -4149,7 +4327,7 @@ class Stage2PrepForRetirement(LifeStage):
                     if proposed_conversion > 1_000:
                         betr_inputs = BETRInputs(
                             current_marginal_rate=max_rate,
-                            expected_future_rate=max_conversion_rate,
+                            expected_future_rate=stage_max_conversion_rate,
                             conversion_amount=proposed_conversion,
                             traditional_ira_balance=balances.traditional,
                             pay_from_taxable=True,
@@ -4169,7 +4347,7 @@ class Stage2PrepForRetirement(LifeStage):
                                    "on RMDs later. Capped at 10% of Traditional balance.",
                                    betr=f"{betr_results.betr:.2%}",
                                    current_rate=f"{max_rate:.1%}",
-                                   expected_future_rate=f"{max_conversion_rate:.1%}",
+                                   expected_future_rate=f"{stage_max_conversion_rate:.1%}",
                                    conversion_room=f"${conversion_room:,.0f}")
                         else:
                             logger.debug(f"BETR {betr_results.betr:.2%} — conversion not recommended")
@@ -4299,9 +4477,34 @@ class Stage2PrepForRetirement(LifeStage):
         )
 
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
-        # Calculate final AGI including Roth conversions
-        agi = agi_before_conversion + trad_withdrawal + roth_conversion
+        # Get LTCG from brokerage withdrawals (if any)
+        brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
+        
+        # Calculate final AGI including Roth conversions and LTCG
+        agi = agi_before_conversion + trad_withdrawal + roth_conversion + brokerage_ltcg
         magi = agi  # For Stage 2, AGI and MAGI are the same
+        
+        # ALWAYS recalculate federal tax after rebalancing to properly separate ordinary income from LTCG
+        # Ordinary income (wages - 401k + conversions + trad withdrawals)
+        ordinary_income = agi_before_conversion + trad_withdrawal + roth_conversion
+        taxable_ordinary = ordinary_income - effective_deduction
+        
+        # Calculate ordinary income tax
+        result = calculate_taxable_income(taxable_ordinary, tax_brackets)
+        federal_tax_ordinary = result.total_tax
+        
+        # Calculate capital gains tax (LTCG stacks on top of ordinary income)
+        cg_tax = calculate_cap_gains(taxable_ordinary, cg_brackets, brokerage_ltcg)
+        
+        # Total federal tax
+        federal_tax = federal_tax_ordinary + cg_tax
+        
+        if brokerage_ltcg > 0:
+            logger.info(f"Year {year} Stage 2: Tax with LTCG separation: "
+                       f"Ordinary=${federal_tax_ordinary:,.0f}, CG=${cg_tax:,.0f}, "
+                       f"Total=${federal_tax:,.0f}, LTCG=${brokerage_ltcg:,.0f}")
+        else:
+            logger.debug(f"Year {year} Stage 2: Tax (no LTCG): ${federal_tax:,.0f}")
 
         # Record Cash→Roth and Cash→Brokerage contribution decisions for Stage 2
         # In Stage 2, the contribution_401k may go to Roth 401k (prefer_roth_401k)
@@ -4356,7 +4559,7 @@ class Stage2PrepForRetirement(LifeStage):
             taxable_withdrawal=0,
             roth_withdrawal=0,
             roth_conversion=roth_conversion,
-            ltcg_harvested=0,
+            ltcg_harvested=brokerage_ltcg,
             daf_contribution=daf_contribution,
             expenses=expenses,
             agi=agi,
@@ -4524,6 +4727,9 @@ class Stage3EarlyRetirement(LifeStage):
         current_income = ltcg_harvested + anticipated_needs['traditional_to_cash'] + anticipated_needs['traditional_to_brokerage'] + anticipated_needs['estimated_ltcg']
 
         # Initialize roth_conversion
+        # Get stage-specific conversion rate
+        stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+        
         roth_conversion = 0
 
         # Use BETR algorithm to optimize conversion amount with adjusted Traditional balance
@@ -4531,7 +4737,7 @@ class Stage3EarlyRetirement(LifeStage):
             optimal_amount, betr_results = optimize_conversion_amount(
                 traditional_ira_balance=available_for_conversion,  # Use adjusted balance after buffer needs
                 current_agi=current_income,
-                target_tax_bracket=max_conversion_rate,
+                target_tax_bracket=stage_max_conversion_rate,
                 year=year,
                 pay_from_taxable=True,
                 taxable_account_balance=balances.taxable,
@@ -4547,7 +4753,7 @@ class Stage3EarlyRetirement(LifeStage):
                        "BETR optimizer found no room to convert within the target bracket after "
                        "accounting for LTCG income.",
                        current_income=f"${current_income:,.0f}",
-                       target_bracket=f"{max_conversion_rate:.1%}")
+                       target_bracket=f"{stage_max_conversion_rate:.1%}")
             else:
                 if betr_results.conversion_recommended:
                     roth_conversion = optimal_amount
@@ -4560,7 +4766,7 @@ class Stage3EarlyRetirement(LifeStage):
                            "Traditional withdrawals or RMDs later.",
                            betr=f"{betr_results.betr:.2%}",
                            current_income=f"${current_income:,.0f}",
-                           target_bracket=f"{max_conversion_rate:.1%}",
+                           target_bracket=f"{stage_max_conversion_rate:.1%}",
                            optimal_amount=f"${optimal_amount:,.0f}")
                 else:
                     roth_conversion = 0
@@ -4582,7 +4788,7 @@ class Stage3EarlyRetirement(LifeStage):
             # Fallback to original method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, pd.DataFrame(tax_brackets)
+                    stage_max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
             except ValueError:
                 target_bracket_rate = 0.12
@@ -4652,9 +4858,10 @@ class Stage3EarlyRetirement(LifeStage):
                        enhanced_conversion=f"${roth_conversion:,.0f}")
         
         # Calculate taxes AFTER DAF optimization, using DAF deduction if present
-        # Note: AGI calculation happens AFTER rebalance_accounts to include Traditional withdrawals
-        total_income = ltcg_harvested + roth_conversion
-        agi_preliminary = total_income  # Preliminary AGI for tax calculation
+        # Use ESTIMATED LTCG from anticipated buffer needs for preliminary tax calculation
+        estimated_ltcg = anticipated_needs.get('estimated_ltcg', 0.0)
+        total_income_preliminary = ltcg_harvested + estimated_ltcg + roth_conversion
+        agi_preliminary = total_income_preliminary  # Preliminary AGI for tax calculation
 
         # Use DAF deduction if present, otherwise use standard deduction
         if daf_contribution > 0:
@@ -4667,16 +4874,19 @@ class Stage3EarlyRetirement(LifeStage):
         # Calculate taxable income by subtracting deduction from preliminary AGI
         taxable_income = agi_preliminary - effective_deduction
         # Calculate ordinary income tax (exclude LTCG from ordinary tax calculation)
-        ordinary_income = taxable_income - ltcg_harvested
+        total_ltcg_preliminary = ltcg_harvested + estimated_ltcg
+        ordinary_income = taxable_income - total_ltcg_preliminary
         result = calculate_taxable_income(ordinary_income, tax_brackets)
         federal_tax, max_rate, upper_max = result.total_tax, result.max_rate, result.upper_max
 
         # Capital gains tax (use ordinary income as the base for LTCG brackets)
-        cg_tax = calculate_cap_gains(ordinary_income, cg_brackets, ltcg_harvested)
+        cg_tax = calculate_cap_gains(ordinary_income, cg_brackets, total_ltcg_preliminary)
 
         total_tax = federal_tax + cg_tax
 
-        logger.debug(f"Total tax: ${total_tax:,.2f} (income: ${federal_tax:,.2f}, CG: ${cg_tax:,.2f})")
+        logger.info(f"Year {year} Stage 3: Preliminary tax with estimated LTCG: "
+                   f"Ordinary=${federal_tax:,.0f}, CG=${cg_tax:,.0f}, Total=${total_tax:,.2f}, "
+                   f"Estimated LTCG=${estimated_ltcg:,.0f}")
         
         # Subtract DAF contribution from brokerage BEFORE rebalancing
         balances_for_rebalance = balances
@@ -5041,6 +5251,9 @@ class Stage4Medicare(LifeStage):
         # - Estimated LTCG from brokerage withdrawals will also increase AGI
         current_income = ltcg_harvested + anticipated_needs['traditional_to_cash'] + anticipated_needs['traditional_to_brokerage'] + anticipated_needs['estimated_ltcg']
         
+        # Get stage-specific conversion rate
+        stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+        
         # Use BETR algorithm to optimize conversion with adjusted Traditional balance
         # Expected future rate should be higher due to RMDs + SS income pushing into higher brackets
         # Look up the next higher tax bracket to account for:
@@ -5049,16 +5262,16 @@ class Stage4Medicare(LifeStage):
         # - Potential tax rate increases
         try:
             tax_brackets_df = get_income_tax_brackets(year)
-            expected_future_rate = getNextHigherTaxRate(max_conversion_rate, tax_brackets_df)
+            expected_future_rate = getNextHigherTaxRate(stage_max_conversion_rate, tax_brackets_df)
         except (ValueError, Exception) as e:
             logger.warning(f"Could not determine next tax bracket, using current rate: {e}")
-            expected_future_rate = max_conversion_rate
+            expected_future_rate = stage_max_conversion_rate
         
         try:
             optimal_amount, betr_results = optimize_conversion_amount(
                 traditional_ira_balance=available_for_conversion,  # Use adjusted balance after buffer needs
                 current_agi=current_income,
-                target_tax_bracket=max_conversion_rate,
+                target_tax_bracket=stage_max_conversion_rate,
                 year=year,
                 pay_from_taxable=True,
                 taxable_account_balance=balances.taxable,
@@ -5080,7 +5293,7 @@ class Stage4Medicare(LifeStage):
                     # Recalculate BETR with reduced amount
                     if irmaa_safe_amount > 0:
                         reduced_inputs = BETRInputs(
-                            current_marginal_rate=max_conversion_rate,
+                            current_marginal_rate=stage_max_conversion_rate,
                             expected_future_rate=0.24,
                             conversion_amount=irmaa_safe_amount,
                             traditional_ira_balance=balances.traditional,
@@ -5111,7 +5324,7 @@ class Stage4Medicare(LifeStage):
             # Fallback to original IRMAA-aware method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, pd.DataFrame(tax_brackets)
+                    stage_max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
             except ValueError:
                 target_bracket_rate = 0.12
@@ -5621,8 +5834,9 @@ class Stage5SocialSecurity(LifeStage):
             aca_headroom = max(0, aca_subsidy_threshold - projected_magi)
             logger.debug(f"ACA headroom: ${aca_headroom:,.0f} (projected MAGI: ${projected_magi:,.0f})")
         
-        # Calculate Roth conversion using BETR algorithm with SS income
-        max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
+        # Get stage-specific conversion rate
+        stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+        max_conversion_rate = kwargs.get('max_conversion_rate', stage_max_conversion_rate)
         
         # Initialize roth_conversion and optimal_amount
         roth_conversion = 0
@@ -5648,7 +5862,7 @@ class Stage5SocialSecurity(LifeStage):
             optimal_amount, betr_results = optimize_conversion_amount(
                 traditional_ira_balance=available_for_conversion,
                 current_agi=current_income,
-                target_tax_bracket=max_conversion_rate,
+                target_tax_bracket=stage_max_conversion_rate,
                 year=year,
                 pay_from_taxable=True,
                 taxable_account_balance=balances.taxable,
@@ -5683,7 +5897,7 @@ class Stage5SocialSecurity(LifeStage):
                 if max_safe_conversion > 0 and max_safe_conversion < optimal_amount:
                     # Verify reduced amount is still beneficial
                     reduced_inputs = BETRInputs(
-                        current_marginal_rate=max_conversion_rate,
+                        current_marginal_rate=stage_max_conversion_rate,
                         expected_future_rate=0.24,
                         conversion_amount=max_safe_conversion,
                         traditional_ira_balance=balances.traditional,
@@ -5716,7 +5930,7 @@ class Stage5SocialSecurity(LifeStage):
             # Fallback to original method
             try:
                 target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                    max_conversion_rate, pd.DataFrame(tax_brackets)
+                    stage_max_conversion_rate, pd.DataFrame(tax_brackets)
                 )
             except ValueError:
                 target_bracket_rate = 0.22
@@ -6327,12 +6541,15 @@ class Stage6RMD(LifeStage):
                 
                 total_income += ltcg_harvested
         
+        # Get stage-specific conversion rate
+        stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+        max_conversion_rate = kwargs.get('max_conversion_rate', stage_max_conversion_rate)
+        
         # Limited Roth conversion opportunity (if RMD doesn't fill bracket)
         roth_conversion = 0
-        max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
         try:
             target_bracket_rate, target_bracket_upper = get_target_conversion_bracket(
-                max_conversion_rate, pd.DataFrame(tax_brackets)
+                stage_max_conversion_rate, pd.DataFrame(tax_brackets)
             )
             conversion_room = max(0, target_bracket_upper - total_income - std_deduction)
             

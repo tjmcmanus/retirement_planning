@@ -32,6 +32,7 @@ from portfolio_data_entry import (
     VALID_ACCOUNT_TYPES,
     VALID_ACCOUNT_OWNERS,
     VALID_SECTORS,
+    get_valid_account_owners,
     validate_ticker_symbol,
     validate_portfolio_entry,
     save_portfolio_data,
@@ -47,15 +48,25 @@ def get_current_price(symbol: str) -> float:
     """
     Fetch current price for a ticker symbol.
     Mutual funds need longer period as they update less frequently.
+    Options contracts return 0.0 (manual entry required).
     
     Args:
-        symbol: Ticker symbol (e.g., 'AAPL', 'GOOGL')
+        symbol: Ticker symbol (e.g., 'AAPL', 'GOOGL', 'SOFI  260402C00020000')
     
     Returns:
-        Current price, or 1.0 for cash/money market
+        Current price, or 1.0 for cash/money market, or 0.0 for options
     """
     if symbol.upper() in ['MF:CASH', 'CASH']:
         return 1.0
+    
+    # Check if this is an options contract
+    from portfolio_data_entry import is_option_symbol
+    is_option, underlying, option_type = is_option_symbol(symbol)
+    
+    if is_option:
+        # Options contracts don't have reliable price data in yfinance
+        # Return 0.0 to indicate manual price entry is needed
+        return 0.0
     
     try:
         ticker = yf.Ticker(symbol)
@@ -79,6 +90,7 @@ def get_sector_from_yfinance(symbol: str) -> str:
     Fetch sector information from Yahoo Finance.
     For mutual funds (5-letter tickers), uses 'category' field.
     For stocks/ETFs, uses 'sector' field.
+    For options contracts, returns 'Options:Call' or 'Options:Put'.
     
     Args:
         symbol: Ticker symbol
@@ -88,6 +100,13 @@ def get_sector_from_yfinance(symbol: str) -> str:
     """
     if symbol.upper() in ['MF:CASH', 'CASH']:
         return 'Cash'
+    
+    # Check if this is an options contract
+    from portfolio_data_entry import is_option_symbol
+    is_option, underlying, option_type = is_option_symbol(symbol)
+    
+    if is_option:
+        return f'Options:{option_type}'
     
     try:
         ticker = yf.Ticker(symbol)
@@ -182,7 +201,12 @@ def load_portfolio_data(month: int, year: int) -> DataFrame:
     ]
     for col in required_cols:
         if col not in filtered.columns:
-            filtered[col] = '' if col in ['account_name', 'symbol', 'name', 'sector', 'purchase_date'] else 0
+            filtered[col] = '' if col in ['account_name', 'symbol', 'name', 'sector', 'purchase_date', 'owner'] else 0
+    
+    # Fill missing owner values with 'Joint' as default
+    if 'owner' in filtered.columns:
+        filtered['owner'] = filtered['owner'].fillna('Joint')
+        filtered.loc[filtered['owner'].astype(str).str.strip() == '', 'owner'] = 'Joint'
     
     # Convert purchase_date to datetime for compatibility with DateColumn
     if 'purchase_date' in filtered.columns and not filtered.empty:
@@ -451,7 +475,7 @@ def render_holdings_tab(
         'owner': st.column_config.SelectboxColumn(
             'Owner',
             help='Account owner',
-            options=VALID_ACCOUNT_OWNERS,
+            options=get_valid_account_owners(),
         ),
         'symbol': st.column_config.TextColumn(
             'Symbol',
@@ -470,8 +494,7 @@ def render_holdings_tab(
         ),
         'qty': st.column_config.NumberColumn(
             'Quantity',
-            help='Number of shares/units',
-            min_value=0.0,
+            help='Number of shares/units (negative for short options positions)',
             format='%.4f',
         ),
         'purchase_price': st.column_config.NumberColumn(

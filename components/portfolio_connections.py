@@ -50,6 +50,33 @@ def render_connections_tab(portdf: pd.DataFrame, curr_month: int, curr_year: int
     st.markdown("## 🔗 Brokerage Connections")
     st.caption("Automatic portfolio synchronization with your brokerage accounts")
     
+    # Create tabs for different connection types
+    tab1, tab2 = st.tabs(["📊 SnapTrade (Multi-Brokerage)", "🏦 Schwab Direct"])
+    
+    with tab1:
+        st.markdown("### Multi-Brokerage Integration via SnapTrade")
+        st.caption("Connect to 12,000+ institutions including Schwab, Fidelity, Vanguard, and more")
+        
+        if not CONNECTIONS_AVAILABLE:
+            _render_setup_instructions()
+        else:
+            _render_snaptrade_connections(portdf, curr_month, curr_year)
+    
+    with tab2:
+        # Import and render Schwab Direct section
+        try:
+            from components.schwab_ui import render_schwab_direct_section
+            render_schwab_direct_section(portdf, curr_month, curr_year)
+        except ImportError as e:
+            st.error(f"Schwab Direct UI not available: {e}")
+    
+    # Show features and benefits
+    st.markdown("---")
+    _render_features_section()
+
+
+def _render_snaptrade_connections(portdf: pd.DataFrame, curr_month: int, curr_year: int) -> None:
+    """Render SnapTrade connections section."""
     if not CONNECTIONS_AVAILABLE:
         _render_setup_instructions()
         return
@@ -96,10 +123,6 @@ def render_connections_tab(portdf: pd.DataFrame, curr_month: int, curr_year: int
             _render_connected_accounts(connections, connector, cred_manager, curr_month, curr_year)
         else:
             _render_connect_new_account(connector, cred_manager)
-    
-    # Show features and benefits
-    st.markdown("---")
-    _render_features_section()
 
 
 def _render_setup_instructions() -> None:
@@ -453,8 +476,12 @@ def _merge_synced_holdings(synced_df: pd.DataFrame, month: int, year: int) -> No
     try:
         # Use the connector's merge logic
         if 'snaptrade_connector' in st.session_state:
-            logger.info("Using connector merge logic")
+            logger.info("Using SnapTrade connector merge logic")
             connector = st.session_state.snaptrade_connector
+            merged_df = connector.merge_holdings_to_portfolio(synced_df, portfolio_file)
+        elif 'schwab_connector' in st.session_state:
+            logger.info("Using Schwab connector merge logic")
+            connector = st.session_state.schwab_connector
             merged_df = connector.merge_holdings_to_portfolio(synced_df, portfolio_file)
         else:
             logger.warning("Connector not available, using fallback merge")

@@ -57,6 +57,55 @@ def render_summary_cards(strategy_df: pd.DataFrame, phase: str) -> None:
     if strategy_df.empty:
         return
     
+    # Calculate Roth conversion metrics
+    roth_conv_col = 'Trad→\nRoth' if 'Trad→\nRoth' in strategy_df.columns else 'Roth Conversion'
+    total_roth_conversions = strategy_df[roth_conv_col].sum() if roth_conv_col in strategy_df.columns else 0
+    
+    # Calculate taxes paid on Roth conversions (estimated)
+    # This is an approximation: we estimate the marginal tax on conversions
+    conversion_taxes = 0
+    if total_roth_conversions > 0 and 'Federal Tax' in strategy_df.columns and 'AGI' in strategy_df.columns:
+        # For each year with conversions, estimate the tax attributable to the conversion
+        for idx, row in strategy_df.iterrows():
+            conversion_amt = row.get(roth_conv_col, 0)
+            if conversion_amt > 0:
+                # Estimate marginal rate from the year's data
+                agi = row.get('AGI', 0)
+                fed_tax = row.get('Federal Tax', 0)
+                state_tax = row.get('State Tax', 0)
+                
+                # Approximate marginal rate (this is a simplification)
+                # In reality, the conversion fills specific brackets
+                if agi > 0:
+                    effective_rate = (fed_tax + state_tax) / agi
+                    # Marginal rate is typically higher than effective rate
+                    # Use a conservative estimate: effective_rate * 1.3
+                    estimated_marginal = min(effective_rate * 1.3, 0.37)  # Cap at 37% federal max
+                    conversion_taxes += conversion_amt * estimated_marginal
+    
+    # Calculate tax-adjusted ending assets
+    final_portfolio = strategy_df['Total Portfolio'].iloc[-1] if 'Total Portfolio' in strategy_df.columns else 0
+    tax_adjusted_ending = final_portfolio + conversion_taxes  # Add back taxes paid on conversions
+    
+    # Calculate additional metrics
+    total_taxes = strategy_df['Federal Tax'].sum() if 'Federal Tax' in strategy_df.columns else 0
+    if 'State Tax' in strategy_df.columns:
+        total_taxes += strategy_df['State Tax'].sum()
+    
+    total_rmd = strategy_df['RMD'].sum() if 'RMD' in strategy_df.columns else 0
+    total_irmaa = strategy_df['IRMAA Penalty'].sum() if 'IRMAA Penalty' in strategy_df.columns else 0
+    
+    # Calculate total spend (taxes + expenses + healthcare costs)
+    total_spend = total_taxes
+    if 'Expenses' in strategy_df.columns:
+        total_spend += strategy_df['Expenses'].sum()
+    if 'Healthcare Cost' in strategy_df.columns:
+        total_spend += strategy_df['Healthcare Cost'].sum()
+    elif 'IRMAA Penalty' in strategy_df.columns and 'ACA Premium' in strategy_df.columns:
+        # If Healthcare Cost not available, sum components
+        total_spend += strategy_df['IRMAA Penalty'].sum() + strategy_df['ACA Premium'].sum()
+    
+    # First row of cards
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -76,35 +125,85 @@ def render_summary_cards(strategy_df: pd.DataFrame, phase: str) -> None:
                 help="Total retirement account contributions over planning period"
             )
         else:
-            total_withdrawals = strategy_df['Trad→\nCash'].sum() if 'Trad→\nCash' in strategy_df.columns else 0
+            # Show Roth conversions for withdrawal phase
             st.metric(
-                "Total Withdrawals",
-                f"${total_withdrawals:,.0f}",
-                help="Total withdrawals from retirement accounts"
+                "Total Roth Conversions",
+                f"${total_roth_conversions:,.0f}",
+                help="Total amount converted from Traditional to Roth IRA over planning period"
             )
     
     with col3:
-        total_taxes = strategy_df['Federal Tax'].sum() if 'Federal Tax' in strategy_df.columns else 0
-        if 'State Tax' in strategy_df.columns:
-            total_taxes += strategy_df['State Tax'].sum()
-        st.metric(
-            "Total Taxes",
-            f"${total_taxes:,.0f}",
-            help="Total federal and state taxes over planning period"
-        )
+        if phase == "withdrawal" and total_roth_conversions > 0:
+            # Show conversion taxes for withdrawal phase
+            st.metric(
+                "Conversion Taxes Paid",
+                f"${conversion_taxes:,.0f}",
+                help="Estimated taxes paid on Roth conversions (reduces current assets but creates tax-free growth)"
+            )
+        else:
+            total_taxes = strategy_df['Federal Tax'].sum() if 'Federal Tax' in strategy_df.columns else 0
+            if 'State Tax' in strategy_df.columns:
+                total_taxes += strategy_df['State Tax'].sum()
+            st.metric(
+                "Total Taxes",
+                f"${total_taxes:,.0f}",
+                help="Total federal and state taxes over planning period"
+            )
     
     with col4:
         if 'Total Portfolio' in strategy_df.columns:
-            final_portfolio = strategy_df['Total Portfolio'].iloc[-1]
-            initial_portfolio = strategy_df['Total Portfolio'].iloc[0]
-            growth = final_portfolio - initial_portfolio
-            growth_pct = (growth / initial_portfolio * 100) if initial_portfolio > 0 else 0
-            st.metric(
-                "Portfolio Growth",
-                f"${growth:,.0f}",
-                f"{growth_pct:+.1f}%",
-                help="Net portfolio growth over planning period"
-            )
+            if phase == "withdrawal" and total_roth_conversions > 0:
+                # Show tax-adjusted ending assets
+                st.metric(
+                    "Tax-Adjusted Ending Assets",
+                    f"${tax_adjusted_ending:,.0f}",
+                    help=f"Ending portfolio (${final_portfolio:,.0f}) + conversion taxes paid (${conversion_taxes:,.0f}). "
+                         "This shows the true economic value by adding back taxes that created tax-free Roth growth."
+                )
+            else:
+                # Show portfolio growth for accumulation or withdrawal without conversions
+                final_portfolio = strategy_df['Total Portfolio'].iloc[-1]
+                initial_portfolio = strategy_df['Total Portfolio'].iloc[0]
+                growth = final_portfolio - initial_portfolio
+                growth_pct = (growth / initial_portfolio * 100) if initial_portfolio > 0 else 0
+                st.metric(
+                    "Portfolio Growth",
+                    f"${growth:,.0f}",
+                    f"{growth_pct:+.1f}%",
+                    help="Net portfolio growth over planning period"
+                )
+    
+    # Second row of cards (additional metrics)
+    st.markdown("")  # Add spacing
+    col5, col6, col7, col8 = st.columns(4)
+    
+    with col5:
+        st.metric(
+            "Total Taxes Paid",
+            f"${total_taxes:,.0f}",
+            help="Total federal and state income taxes over planning period"
+        )
+    
+    with col6:
+        st.metric(
+            "Total RMDs",
+            f"${total_rmd:,.0f}",
+            help="Total Required Minimum Distributions from Traditional IRA/401k"
+        )
+    
+    with col7:
+        st.metric(
+            "Total IRMAA",
+            f"${total_irmaa:,.0f}",
+            help="Total Medicare Income-Related Monthly Adjustment Amount surcharges"
+        )
+    
+    with col8:
+        st.metric(
+            "Total Spend",
+            f"${total_spend:,.0f}",
+            help="Total spending: taxes + expenses + healthcare costs over planning period"
+        )
 
 
 def render_timeline_view(strategy_df: pd.DataFrame) -> None:
@@ -2698,17 +2797,17 @@ else:
             
             # Add info box about DAF and AGI/MAGI if DAF contributions are present
             if 'DAF Contribution' in strategy_df_w.columns and strategy_df_w['DAF Contribution'].sum() > 0:
-                st.info(
-                    "ℹ️ **Understanding AGI/MAGI in DAF Contribution Years**\n\n"
-                    "You'll notice AGI and MAGI appear higher in years with DAF (Donor-Advised Fund) contributions. "
-                    "This is **correct** per IRS rules:\n\n"
-                    "- **DAF contributions are itemized deductions** that reduce your taxable income and tax bill\n"
-                    "- **They do NOT reduce AGI or MAGI** (which are calculated before itemized deductions)\n"
-                    "- **MAGI affects IRMAA** (Medicare surcharges) with a 2-year lookback, so higher MAGI in DAF years "
-                    "will increase Medicare costs 2 years later\n"
-                    "- **The tax benefit is real** — you'll see lower Federal Tax in DAF years despite higher AGI\n\n"
-                    "💡 This is why strategic timing of DAF contributions matters for IRMAA planning!"
-                )
+                with st.expander("ℹ️ Understanding AGI/MAGI in DAF Contribution Years", expanded=False):
+                    st.markdown(
+                        "You'll notice AGI and MAGI appear higher in years with DAF (Donor-Advised Fund) contributions. "
+                        "This is **correct** per IRS rules:\n\n"
+                        "- **DAF contributions are itemized deductions** that reduce your taxable income and tax bill\n"
+                        "- **They do NOT reduce AGI or MAGI** (which are calculated before itemized deductions)\n"
+                        "- **MAGI affects IRMAA** (Medicare surcharges) with a 2-year lookback, so higher MAGI in DAF years "
+                        "will increase Medicare costs 2 years later\n"
+                        "- **The tax benefit is real** — you'll see lower Federal Tax in DAF years despite higher AGI\n\n"
+                        "💡 This is why strategic timing of DAF contributions matters for IRMAA planning!"
+                    )
             
             display_df_w = strategy_df_w.copy()
 

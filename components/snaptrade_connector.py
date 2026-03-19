@@ -564,6 +564,17 @@ class SnapTradeConnector:
                         account_type_raw = meta_type
                 account_type = self._map_account_type(account_type_raw)
             
+            # Look up account configuration for owner and type override
+            try:
+                from components.schwab_data_transformer import get_account_config
+                account_config = get_account_config(str(account_name))
+                # Use config values if available, otherwise use detected values
+                account_type = account_config.get('account_type', account_type)
+                owner = account_config.get('owner', 'Joint')
+            except Exception as e:
+                logger.warning(f"Could not load account config for {account_name}: {e}")
+                owner = 'Joint'  # Default fallback
+            
             # Determine sector based on symbol type
             sector = ''
             if isinstance(symbol_type, dict):
@@ -577,7 +588,7 @@ class SnapTradeConnector:
                 'year': int(year),
                 'account_name': str(account_name) if account_name else 'Unknown',
                 'account_type': str(account_type) if account_type else 'Brokerage',
-                'owner': 'Joint',  # Default, user can edit
+                'owner': str(owner) if owner else 'Joint',  # From account config lookup
                 'symbol': str(raw_symbol) if raw_symbol else '',
                 'name': str(fund_name) if fund_name else '',
                 'sector': str(sector) if sector else '',
@@ -663,12 +674,26 @@ class SnapTradeConnector:
                 updated_rows.append(synced_row.to_dict())
             elif len(matching_rows) == 1:
                 existing_row = matching_rows.iloc[0]
+                
+                # Check if we should update purchase_date
+                synced_has_date = pd.notna(synced_row.get('purchase_date')) and synced_row.get('purchase_date') != ''
+                existing_has_date = pd.notna(existing_row.get('purchase_date')) and existing_row.get('purchase_date') != ''
+                should_update_date = synced_has_date and not existing_has_date
+                
                 # Check if quantity differs
-                if abs(existing_row['qty'] - synced_row['qty']) > 0.01:
+                qty_differs = abs(existing_row['qty'] - synced_row['qty']) > 0.01
+                
+                if qty_differs:
                     logger.info(f"✓ Updating {synced_row['symbol']}: qty {existing_row['qty']} -> {synced_row['qty']}")
                     updated_rows.append(synced_row.to_dict())
+                elif should_update_date:
+                    # Quantity same but we have a new purchase date - merge them
+                    logger.info(f"✓ Enriching {synced_row['symbol']} with purchase_date: {synced_row['purchase_date']}")
+                    merged_row = existing_row.to_dict()
+                    merged_row['purchase_date'] = synced_row['purchase_date']
+                    updated_rows.append(merged_row)
                 else:
-                    # No change - keep existing
+                    # No changes needed - keep existing
                     logger.info(f"= Keeping existing {synced_row['symbol']}: qty unchanged at {existing_row['qty']}")
                     updated_rows.append(existing_row.to_dict())
                 
@@ -703,6 +728,16 @@ class SnapTradeConnector:
         # Reorder columns if all expected columns exist
         if all(col in result_df.columns for col in expected_columns):
             result_df = result_df[expected_columns]
+        
+        # Normalize purchase_date to YYYY-MM-DD format (no time component)
+        if 'purchase_date' in result_df.columns:
+            # Convert to datetime first, then to date-only string
+            result_df['purchase_date'] = pd.to_datetime(result_df['purchase_date'], errors='coerce')
+            # Convert to string in YYYY-MM-DD format, handling NaT as empty string
+            result_df['purchase_date'] = result_df['purchase_date'].apply(
+                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''
+            )
+            logger.info("Normalized purchase_date to YYYY-MM-DD format")
         
         # Sort by year, month, account_name, symbol
         result_df = result_df.sort_values(['year', 'month', 'account_name', 'symbol'])
@@ -793,6 +828,108 @@ class SnapTradeConnector:
                 'accounts': [],
                 'error': str(e)
             }
+    
+    def get_transactions(
+        self,
+        user_id: str = "default",
+        user_secret: Optional[str] = None,
+        account_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> list[dict]:
+        """
+        Get transaction history for user's accounts.
+        
+        Args:
+            user_id: User identifier
+            user_secret: User secret (from env if not provided)
+            account_id: Specific account ID (optional, gets all if not provided)
+            start_date: Start date in YYYY-MM-DD format (default: 1 year ago)
+            end_date: End date in YYYY-MM-DD format (default: today)
+        
+        Returns:
+            List of transaction dictionaries
+        """
+        try:
+            # Get userSecret if not provided
+            if not user_secret:
+                import os
+                user_secret = os.getenv("SNAPTRADE_USER_SECRET")
+            
+            if not user_secret:
+                raise ValueError("userSecret is required but not provided")
+            
+            # Set default date range (1 year)
+            from datetime import timedelta
+            if not end_date:
+                end_date = datetime.now().strftime("%Y-%m-%d")
+            if not start_date:
+                start = datetime.now() - timedelta(days=365)
+                start_date = start.strftime("%Y-%m-%d")
+            
+            logger.info(f"Fetching transactions from {start_date} to {end_date}")
+            
+            # Get accounts if account_id not specified
+            accounts_to_process = []
+            if account_id:
+                accounts_to_process = [{'id': account_id}]
+            else:
+                accounts = self.get_accounts(user_id, user_secret)
+                accounts_to_process = accounts
+            
+            all_transactions = []
+            
+            for account in accounts_to_process:
+                acc_id = account.get('id')
+                if not acc_id:
+                    continue
+                
+                try:
+                    # Fetch activities (transactions) from SnapTrade
+                    activities = self.client.account_information.get_account_activities(
+                        user_id=user_id,
+                        user_secret=user_secret,
+                        account_id=acc_id,
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                    
+                    # Extract activities list
+                    activities_list = []
+                    if hasattr(activities, 'body'):
+                        activities_list = activities.body if isinstance(activities.body, list) else []
+                    elif isinstance(activities, list):
+                        activities_list = activities
+                    
+                    logger.info(f"Retrieved {len(activities_list)} transactions for account {acc_id}")
+                    
+                    # Transform each activity
+                    for activity in activities_list:
+                        # Convert to dict
+                        if hasattr(activity, '__dict__'):
+                            activity_dict = self._convert_to_dict(activity)
+                        elif isinstance(activity, dict):
+                            activity_dict = activity
+                        else:
+                            continue
+                        
+                        # Add account info
+                        activity_dict['account_id'] = acc_id
+                        activity_dict['account_name'] = account.get('name', 'Unknown')
+                        activity_dict['account_type'] = account.get('type', 'Unknown')
+                        
+                        all_transactions.append(activity_dict)
+                
+                except Exception as e:
+                    logger.error(f"Failed to get transactions for account {acc_id}: {e}")
+                    continue
+            
+            logger.info(f"Retrieved {len(all_transactions)} total transactions")
+            return all_transactions
+        
+        except Exception as e:
+            logger.error(f"Failed to get transactions: {e}", exc_info=True)
+            return []
 
 
 def create_snaptrade_connector(

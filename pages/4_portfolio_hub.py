@@ -48,6 +48,28 @@ try:
 except ImportError:
     render_connections_tab = None
 
+try:
+    from components.portfolio_factor_analysis import render_factor_analysis_tab
+except ImportError:
+    render_factor_analysis_tab = None
+
+try:
+    from components.transaction_history_ui import (
+        render_transaction_history_tab,
+        render_cost_basis_tab,
+        render_capital_gains_tab
+    )
+    from components.transaction_importer import create_transaction_importer
+    from components.transaction_storage import create_transaction_storage
+    TRANSACTION_FEATURES_AVAILABLE = True
+except ImportError:
+    render_transaction_history_tab = None
+    render_cost_basis_tab = None
+    render_capital_gains_tab = None
+    create_transaction_importer = None
+    create_transaction_storage = None
+    TRANSACTION_FEATURES_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Page Configuration
 # ---------------------------------------------------------------------------
@@ -109,12 +131,16 @@ else:
 # ---------------------------------------------------------------------------
 # Create Tab Structure
 # ---------------------------------------------------------------------------
-overview_tab, holdings_tab, performance_tab, optimization_tab, connections_tab = st.tabs([
+overview_tab, holdings_tab, performance_tab, optimization_tab, factor_tab, connections_tab, transactions_tab, cost_basis_tab, cap_gains_tab = st.tabs([
     "📊 Overview",
     "📝 Holdings",
     "📈 Performance & Analytics",
     "⚖️ Optimization",
-    "🔗 Connections"
+    "🎯 Factor Analysis",
+    "🔗 Connections",
+    "💳 Transactions",
+    "💰 Cost Basis",
+    "📈 Capital Gains"
 ])
 
 # ---------------------------------------------------------------------------
@@ -220,7 +246,53 @@ with optimization_tab:
         st.markdown("- **Advanced Strategies Page:** Capital Loss Harvesting (multi-year modeling)")
 
 # ---------------------------------------------------------------------------
-# TAB 5: CONNECTIONS
+# TAB 5: FACTOR ANALYSIS
+# ---------------------------------------------------------------------------
+with factor_tab:
+    if render_factor_analysis_tab is not None:
+        render_factor_analysis_tab(portdf, curr_month, curr_year)
+    else:
+        # Temporary fallback
+        st.info("🎯 Factor Analysis component is being integrated. Coming soon!")
+        st.markdown("**This tab will include:**")
+        st.markdown("- **Factor Exposure Radar:** Visual representation of Value, Growth, Momentum, Quality")
+        st.markdown("- **Style Classification:** Determine portfolio style (Value/Growth/Blend/Quality/Momentum)")
+        st.markdown("- **Factor Tilts:** Compare portfolio vs benchmark (S&P 500)")
+        st.markdown("- **Top Holdings by Factor:** See which holdings drive each factor exposure")
+        st.markdown("- **Holdings Detail Table:** Factor scores for each security")
+        
+        st.markdown("---")
+        st.markdown("### Factor Analysis Module Status")
+        st.success("✅ portfolio_factors.py module is complete and ready for integration!")
+        st.markdown("**Available Analysis:**")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.markdown("**💰 Value:**")
+            st.markdown("- P/E Ratio")
+            st.markdown("- P/B Ratio")
+            st.markdown("- P/S Ratio")
+            st.markdown("- Dividend Yield")
+        with col2:
+            st.markdown("**🚀 Growth:**")
+            st.markdown("- Earnings Growth")
+            st.markdown("- Revenue Growth")
+            st.markdown("- EPS Growth")
+        with col3:
+            st.markdown("**📈 Momentum:**")
+            st.markdown("- 1M Return")
+            st.markdown("- 3M Return")
+            st.markdown("- 6M Return")
+            st.markdown("- 12M Return")
+        with col4:
+            st.markdown("**⭐ Quality:**")
+            st.markdown("- ROE")
+            st.markdown("- ROA")
+            st.markdown("- Debt/Equity")
+            st.markdown("- Current Ratio")
+            st.markdown("- Profit Margin")
+
+# ---------------------------------------------------------------------------
+# TAB 6: CONNECTIONS
 # ---------------------------------------------------------------------------
 with connections_tab:
     if render_connections_tab is not None:
@@ -272,5 +344,158 @@ auto_rerun_if_rebuilding()
 st.markdown("---")
 st.caption("💼 Portfolio Hub — Unified portfolio management for retirement planning")
 st.caption("Phase 1: UX Consolidation + Performance Analytics | Phase 2: Brokerage Integration | Phase 3: Advanced Features")
+
+# Made with Bob
+
+# ---------------------------------------------------------------------------
+# TAB 7: TRANSACTIONS
+# ---------------------------------------------------------------------------
+with transactions_tab:
+    if TRANSACTION_FEATURES_AVAILABLE and render_transaction_history_tab is not None:
+        # Initialize transaction components
+        if 'transaction_importer' not in st.session_state:
+            try:
+                if 'snaptrade_connector' in st.session_state:
+                    st.session_state.transaction_importer = create_transaction_importer(
+                        st.session_state.snaptrade_connector
+                    )
+                    st.session_state.transaction_storage = create_transaction_storage()
+                else:
+                    st.warning("⚠️ SnapTrade connector not initialized. Please connect your brokerage account in the Connections tab first.")
+                    st.stop()
+            except Exception as e:
+                st.error(f"Failed to initialize transaction components: {e}")
+                st.stop()
+        
+        # Render transaction history tab
+        # Get user_id from environment if available, otherwise use "default"
+        import os
+        env_user_id = os.getenv("SNAPTRADE_USER_ID", "default")
+        
+        render_transaction_history_tab(
+            connector=st.session_state.get('snaptrade_connector'),
+            transaction_importer=st.session_state.get('transaction_importer'),
+            transaction_storage=st.session_state.get('transaction_storage'),
+            user_id=env_user_id
+        )
+    else:
+        st.markdown("## 💳 Transaction History")
+        st.caption("Import and analyze your investment transactions")
+        
+        st.info("🚀 **Transaction Import Feature Available** — Connect your brokerage account to get started")
+        
+        st.markdown("### Features")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Transaction Import:**")
+            st.markdown("- ✅ Automatic import from SnapTrade")
+            st.markdown("- ✅ All transaction types (buy, sell, dividend, etc.)")
+            st.markdown("- ✅ Customizable date ranges")
+            st.markdown("- ✅ Multi-account support")
+        
+        with col2:
+            st.markdown("**Analysis & Reporting:**")
+            st.markdown("- ✅ Transaction history viewing")
+            st.markdown("- ✅ Filtering and search")
+            st.markdown("- ✅ Interactive visualizations")
+            st.markdown("- ✅ Export to CSV/Excel")
+        
+        st.markdown("---")
+        st.markdown("### Getting Started")
+        st.markdown("1. Go to the **🔗 Connections** tab")
+        st.markdown("2. Connect your brokerage account via SnapTrade")
+        st.markdown("3. Return here to import your transaction history")
+
+# ---------------------------------------------------------------------------
+# TAB 8: COST BASIS
+# ---------------------------------------------------------------------------
+with cost_basis_tab:
+    if TRANSACTION_FEATURES_AVAILABLE and render_cost_basis_tab is not None:
+        # Ensure transaction storage is initialized
+        if 'transaction_storage' not in st.session_state:
+            st.session_state.transaction_storage = create_transaction_storage()
+        
+        # Render cost basis tab
+        render_cost_basis_tab(
+            transaction_storage=st.session_state.transaction_storage,
+            user_id="default"
+        )
+    else:
+        st.markdown("## 💰 Cost Basis Tracking")
+        st.caption("Track cost basis and tax lots for accurate tax reporting")
+        
+        st.info("🚀 **Cost Basis Tracking Available** — Import transactions to get started")
+        
+        st.markdown("### Features")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Cost Basis Calculation:**")
+            st.markdown("- ✅ FIFO (First In, First Out)")
+            st.markdown("- ✅ LIFO (Last In, First Out)")
+            st.markdown("- ✅ Average Cost method")
+            st.markdown("- ✅ Tax lot tracking")
+        
+        with col2:
+            st.markdown("**Reporting:**")
+            st.markdown("- ✅ Cost basis by symbol")
+            st.markdown("- ✅ Detailed tax lot view")
+            st.markdown("- ✅ Remaining quantity tracking")
+            st.markdown("- ✅ Average cost calculation")
+        
+        st.markdown("---")
+        st.markdown("### Getting Started")
+        st.markdown("1. Import your transaction history in the **💳 Transactions** tab")
+        st.markdown("2. Cost basis will be automatically calculated")
+        st.markdown("3. View detailed tax lots and cost basis here")
+
+# ---------------------------------------------------------------------------
+# TAB 9: CAPITAL GAINS
+# ---------------------------------------------------------------------------
+with cap_gains_tab:
+    if TRANSACTION_FEATURES_AVAILABLE and render_capital_gains_tab is not None:
+        # Ensure transaction storage is initialized
+        if 'transaction_storage' not in st.session_state:
+            st.session_state.transaction_storage = create_transaction_storage()
+        
+        # Render capital gains tab
+        render_capital_gains_tab(
+            transaction_storage=st.session_state.transaction_storage,
+            user_id="default"
+        )
+    else:
+        st.markdown("## 📈 Capital Gains & Losses")
+        st.caption("Track realized capital gains and losses for tax reporting")
+        
+        st.info("🚀 **Capital Gains Reporting Available** — Import transactions to get started")
+        
+        st.markdown("### Features")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Tax Reporting:**")
+            st.markdown("- ✅ Capital gains by tax year")
+            st.markdown("- ✅ Short-term vs long-term")
+            st.markdown("- ✅ Account-level breakdown")
+            st.markdown("- ✅ Symbol-level detail")
+        
+        with col2:
+            st.markdown("**Export:**")
+            st.markdown("- ✅ CSV export for tax software")
+            st.markdown("- ✅ Detailed transaction records")
+            st.markdown("- ✅ Cost basis documentation")
+            st.markdown("- ✅ Holding period tracking")
+        
+        st.markdown("---")
+        st.markdown("### Getting Started")
+        st.markdown("1. Import your transaction history in the **💳 Transactions** tab")
+        st.markdown("2. Capital gains will be automatically calculated")
+        st.markdown("3. Select tax year and export for filing")
+
+# ---------------------------------------------------------------------------
+# Auto-rerun if portfolio is still building
+# ---------------------------------------------------------------------------
+auto_rerun_if_rebuilding()
 
 # Made with Bob

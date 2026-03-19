@@ -273,17 +273,29 @@ def render_portfolio_overview(
     # ========================================================================
     st.markdown('<h4 style="text-align:center;">Detailed Portfolio Breakdown</h4>', unsafe_allow_html=True)
     if len(portdf_no_totals) > 0:
-        _cv = portdf_no_totals['Current value']
-        _midpoint = np.average(_cv, weights=_cv) if _cv.sum() != 0 else 0
-        portfolio_by_sector = px.treemap(
-            portdf_no_totals, path=['Tax Type', 'Sector', 'Ticker'],
-            values='Current value', color='Current value',
-            color_continuous_scale=COLOR_SCALE, color_continuous_midpoint=_midpoint, title="",
-        )
-        portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
-        portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
-        portfolio_by_sector.update_layout(margin=dict(t=50, l=25, r=25, b=25))
-        st.plotly_chart(portfolio_by_sector, use_container_width=True)
+        # Filter out holdings with zero or negative current value (e.g., options with no price data)
+        # Treemap requires positive values to display properly
+        portdf_for_treemap = portdf_no_totals[portdf_no_totals['Current value'] > 0].copy()
+        
+        if len(portdf_for_treemap) > 0:
+            _cv = portdf_for_treemap['Current value']
+            _midpoint = np.average(_cv, weights=_cv) if _cv.sum() != 0 else 0
+            portfolio_by_sector = px.treemap(
+                portdf_for_treemap, path=['Tax Type', 'Sector', 'Ticker'],
+                values='Current value', color='Current value',
+                color_continuous_scale=COLOR_SCALE, color_continuous_midpoint=_midpoint, title="",
+            )
+            portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
+            portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
+            portfolio_by_sector.update_layout(margin=dict(t=50, l=25, r=25, b=25))
+            st.plotly_chart(portfolio_by_sector, use_container_width=True)
+            
+            # Show info if some holdings were excluded
+            excluded_count = len(portdf_no_totals) - len(portdf_for_treemap)
+            if excluded_count > 0:
+                st.caption(f"ℹ️ {excluded_count} holding(s) with zero/negative value excluded from chart (e.g., options requiring manual price entry)")
+        else:
+            st.info("📊 No holdings with positive value to display. Options contracts require manual price entry in the purchase_price field.")
     else:
         st.info("📊 No holdings to display")
     
