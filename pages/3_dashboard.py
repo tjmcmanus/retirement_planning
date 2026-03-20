@@ -103,6 +103,14 @@ _last_bench   = _bench_vals[-1]
 _vs_bench     = _current_nw - _last_bench
 _vs_bench_pct = (_vs_bench / _last_bench * 100) if _last_bench else 0.0
 
+# Import market stress indicator
+try:
+    from components.market_stress_indicator import render_stress_indicator_card
+    STRESS_INDICATOR_AVAILABLE = True
+except ImportError:
+    render_stress_indicator_card = None  # type: ignore[assignment]
+    STRESS_INDICATOR_AVAILABLE = False
+    
 # ---------------------------------------------------------------------------
 # ROW 0 — KPI Metric Cards
 # ---------------------------------------------------------------------------
@@ -154,267 +162,584 @@ with kpi5:
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# Long-Term Market Forecast
+# Market Forecast Section with Tabs
 # ---------------------------------------------------------------------------
-st.markdown("### 📈 Long-Term Market Forecast")
+st.markdown("### 📈 Market Forecast")
 st.caption(
-    "Strategic market outlook based on 8-month and 18-month exponential moving averages of the S&P 500 (SPY). "
-    "This long-term perspective helps inform major portfolio decisions and risk management."
+    "Comprehensive market analysis across multiple timeframes to inform strategic and tactical decisions."
 )
 
-try:
-    from market_trend_longterm import (
-        get_longterm_market_condition,
-        get_market_cycle_phase,
-        get_strategic_allocation_adjustment,
-        LongTermMarketCondition,
-        LongTermMarketTrendConfig
+# Create tabs for different forecast timeframes
+tab_longterm, tab_intermediate, tab_shortterm, tab_stress = st.tabs([
+    "📊 Long-Term",
+    "📈 Intermediate-Term",
+    "📡 Short-Term",
+    "🌡️ Market Stress"
+])
+
+# ========================================================================
+# TAB 1: LONG-TERM MARKET FORECAST (8-month / 18-month EMAs)
+# ========================================================================
+with tab_longterm:
+    st.caption(
+        "Strategic market outlook based on 8-month and 18-month exponential moving averages of the S&P 500 (SPY). "
+        "This long-term perspective helps inform major portfolio decisions and risk management."
     )
     
-    # Get long-term market condition
-    lt_config = LongTermMarketTrendConfig()
-    lt_condition, lt_ema_data = get_longterm_market_condition(lt_config, use_cache=True)
-    
-    if lt_condition != LongTermMarketCondition.UNKNOWN and lt_ema_data:
-        # Display market condition with color coding
-        condition_colors = {
-            LongTermMarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
-            LongTermMarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
-            LongTermMarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
-            LongTermMarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
-        }
-        
-        icon, color, label = condition_colors.get(
-            lt_condition, ("⚪", "#808080", "Unknown")
+    try:
+        from market_trend_longterm import (
+            get_longterm_market_condition,
+            get_market_cycle_phase,
+            get_strategic_allocation_adjustment,
+            LongTermMarketCondition,
+            LongTermMarketTrendConfig
         )
         
-        # Market condition summary
-        lt_col1, lt_col2, lt_col3, lt_col4 = st.columns(4)
+        # Get long-term market condition
+        lt_config = LongTermMarketTrendConfig()
+        lt_condition, lt_ema_data = get_longterm_market_condition(lt_config, use_cache=True)
         
-        with lt_col1:
-            st.markdown(f"**Market Condition**")
-            st.markdown(f"<h3 style='color: {color}; margin: 0;'>{icon} {label}</h3>", unsafe_allow_html=True)
-        
-        with lt_col2:
-            cycle_phase = get_market_cycle_phase(lt_ema_data)
-            st.metric(
-                "Market Cycle Phase",
-                cycle_phase,
-                help="Current phase of the market cycle based on trend duration and direction"
-            )
-        
-        with lt_col3:
-            allocation_adj = get_strategic_allocation_adjustment(lt_condition, lt_config)
-            st.metric(
-                "Strategic Adjustment",
-                f"{allocation_adj:+.1f}%",
-                delta=f"Stock allocation",
-                delta_color="normal" if allocation_adj >= 0 else "inverse",
-                help="Suggested adjustment to stock allocation based on current market condition"
-            )
-        
-        with lt_col4:
-            st.metric(
-                "Confidence Score",
-                f"{lt_ema_data.confidence * 100:.0f}%",
-                help="Confidence in the current market condition assessment (0-100%)"
-            )
-        
-        # Detailed metrics in expander
-        with st.expander("📊 Detailed Market Analysis", expanded=False):
-            detail_col1, detail_col2, detail_col3 = st.columns(3)
+        if lt_condition != LongTermMarketCondition.UNKNOWN and lt_ema_data:
+            # Display market condition with color coding
+            condition_colors = {
+                LongTermMarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
+                LongTermMarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
+                LongTermMarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
+                LongTermMarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+            }
             
-            with detail_col1:
-                st.markdown("**Current Prices & EMAs**")
-                st.write(f"SPY Price: ${lt_ema_data.current_price:.2f}")
-                st.write(f"8-Month EMA: ${lt_ema_data.short_ema:.2f}")
-                st.write(f"18-Month EMA: ${lt_ema_data.long_ema:.2f}")
-                st.write(f"Price vs 8-Month: {lt_ema_data.price_vs_short_ema:+.2f}%")
-                st.write(f"Price vs 18-Month: {lt_ema_data.price_vs_long_ema:+.2f}%")
+            icon, color, label = condition_colors.get(
+                lt_condition, ("⚪", "#808080", "Unknown")
+            )
             
-            with detail_col2:
-                st.markdown("**Trend Analysis**")
-                st.write(f"8-Month Trend: {lt_ema_data.short_trend.value.title()}")
-                st.write(f"18-Month Trend: {lt_ema_data.long_trend.value.title()}")
-                st.write(f"8-Month Slope: {lt_ema_data.short_slope:+.2f}% per month")
-                st.write(f"18-Month Slope: {lt_ema_data.long_slope:+.2f}% per month")
-                st.write(f"Months in Trend: {lt_ema_data.months_in_trend}")
+            # Market condition summary
+            lt_col1, lt_col2, lt_col3, lt_col4 = st.columns(4)
             
-            with detail_col3:
-                st.markdown("**Strategic Guidance**")
+            with lt_col1:
+                st.markdown(f"Market Condition")
+                st.markdown(f"<h3 style='color: {color}; margin: 0;'>{icon} {label}</h3>", unsafe_allow_html=True)
+            
+            with lt_col2:
+                cycle_phase = get_market_cycle_phase(lt_ema_data)
+                st.metric(
+                    "Market Cycle Phase",
+                    cycle_phase,
+                    help="Current phase of the market cycle based on trend duration and direction"
+                )
+            
+            with lt_col3:
+                allocation_adj = get_strategic_allocation_adjustment(lt_condition, lt_config)
+                st.metric(
+                    "Strategic Adjustment",
+                    f"{allocation_adj:+.1f}%",
+                    delta=f"Stock allocation",
+                    delta_color="normal" if allocation_adj >= 0 else "inverse",
+                    help="Suggested adjustment to stock allocation based on current market condition"
+                )
+            
+            with lt_col4:
+                st.metric(
+                    "Confidence Score",
+                    f"{lt_ema_data.confidence * 100:.0f}%",
+                    help="Confidence in the current market condition assessment (0-100%)"
+                )
+            
+            # Detailed metrics in expander
+            with st.expander("📊 Detailed Market Analysis", expanded=False):
+                detail_col1, detail_col2, detail_col3 = st.columns(3)
                 
-                if lt_condition == LongTermMarketCondition.BULL:
-                    st.success(
-                        "✅ **Bull Market**: Both short and long-term trends are positive. "
-                        "Maintain normal risk allocation. Consider rebalancing if overweight."
-                    )
-                elif lt_condition == LongTermMarketCondition.WARNING_NEGATIVE:
-                    st.warning(
-                        "⚠️ **Early Warning**: Short-term trend turning negative while long-term remains positive. "
-                        "Consider reducing risk exposure. Monitor closely for further deterioration."
-                    )
-                elif lt_condition == LongTermMarketCondition.WARNING_POSITIVE:
-                    st.info(
-                        "ℹ️ **Recovery Attempt**: Short-term trend turning positive while long-term remains negative. "
-                        "Cautious optimism warranted. Wait for confirmation before increasing risk."
-                    )
-                elif lt_condition == LongTermMarketCondition.BEAR:
-                    st.error(
-                        "🔴 **Bear Market**: Both trends are negative. "
-                        "Reduce risk exposure. Focus on capital preservation and quality holdings."
-                    )
+                with detail_col1:
+                    st.markdown("**Current Prices & EMAs**")
+                    st.write(f"SPY Price: ${lt_ema_data.current_price:.2f}")
+                    st.write(f"8-Month EMA: ${lt_ema_data.short_ema:.2f}")
+                    st.write(f"18-Month EMA: ${lt_ema_data.long_ema:.2f}")
+                    st.write(f"Price vs 8-Month: {lt_ema_data.price_vs_short_ema:+.2f}%")
+                    st.write(f"Price vs 18-Month: {lt_ema_data.price_vs_long_ema:+.2f}%")
                 
-                st.write(f"EMA Crossover Distance: {lt_ema_data.ema_crossover_distance:+.2f}%")
-                st.caption(f"Last updated: {lt_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    else:
-        st.info(
-            "📊 Long-term market forecast data is currently unavailable. "
-            "This may be due to market data service issues or network connectivity. "
-            "The forecast will update automatically when data becomes available."
-        )
+                with detail_col2:
+                    st.markdown("**Trend Analysis**")
+                    st.write(f"8-Month Trend: {lt_ema_data.short_trend.value.title()}")
+                    st.write(f"18-Month Trend: {lt_ema_data.long_trend.value.title()}")
+                    st.write(f"8-Month Slope: {lt_ema_data.short_slope:+.2f}% per month")
+                    st.write(f"18-Month Slope: {lt_ema_data.long_slope:+.2f}% per month")
+                    st.write(f"Months in Trend: {lt_ema_data.months_in_trend}")
+                
+                with detail_col3:
+                    st.markdown("**Strategic Guidance**")
+                    
+                    if lt_condition == LongTermMarketCondition.BULL:
+                        st.success(
+                            "✅ **Bull Market**: Both short and long-term trends are positive. "
+                            "Maintain normal risk allocation. Consider rebalancing if overweight."
+                        )
+                    elif lt_condition == LongTermMarketCondition.WARNING_NEGATIVE:
+                        st.warning(
+                            "⚠️ **Early Warning**: Short-term trend turning negative while long-term remains positive. "
+                            "Consider reducing risk exposure. Monitor closely for further deterioration."
+                        )
+                    elif lt_condition == LongTermMarketCondition.WARNING_POSITIVE:
+                        st.info(
+                            "ℹ️ **Recovery Attempt**: Short-term trend turning positive while long-term remains negative. "
+                            "Cautious optimism warranted. Wait for confirmation before increasing risk."
+                        )
+                    elif lt_condition == LongTermMarketCondition.BEAR:
+                        st.error(
+                            "🔴 **Bear Market**: Both trends are negative. "
+                            "Reduce risk exposure. Focus on capital preservation and quality holdings."
+                        )
+                    
+                    st.write(f"EMA Crossover Distance: {lt_ema_data.ema_crossover_distance:+.2f}%")
+                    st.caption(f"Last updated: {lt_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        else:
+            st.info(
+                "📊 Long-term market forecast data is currently unavailable. "
+                "This may be due to market data service issues or network connectivity. "
+                "The forecast will update automatically when data becomes available."
+            )
 
-except Exception as lt_err:
-    st.warning(f"⚠️ Could not load long-term market forecast: {lt_err}")
-    import traceback
-    st.caption(f"Debug info: {traceback.format_exc()}")
+    except Exception as lt_err:
+        st.warning(f"⚠️ Could not load long-term market forecast: {lt_err}")
+        import traceback
+        st.caption(f"Debug info: {traceback.format_exc()}")
 
-# ---------------------------------------------------------------------------
-# Short-Term Market Forecast
-# ---------------------------------------------------------------------------
-st.markdown("### 📊 Short-Term Market Forecast")
-st.caption(
-    "Tactical market outlook based on 10-week and 50-week moving averages of the S&P 500 (SPY). "
-    "This short-term perspective helps inform tactical rebalancing and near-term risk adjustments."
-)
-
-try:
-    from market_trend_analysis import (
-        get_market_condition,
-        MarketCondition,
-        MarketTrendConfig
+# ========================================================================
+# TAB 2: INTERMEDIATE-TERM MARKET FORECAST (10-week / 50-week MAs)
+# ========================================================================
+with tab_intermediate:
+    st.caption(
+        "Tactical market outlook based on 10-week and 50-week moving averages of the S&P 500 (SPY). "
+        "This intermediate-term perspective helps inform tactical rebalancing and near-term risk adjustments."
     )
     
-    # Get short-term market condition
-    st_config = MarketTrendConfig()
-    st_condition, st_ma_data = get_market_condition(st_config, use_cache=True)
-    
-    if st_condition != MarketCondition.UNKNOWN and st_ma_data:
-        # Display market condition with color coding
-        st_condition_colors = {
-            MarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
-            MarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
-            MarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
-            MarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
-        }
-        
-        st_icon, st_color, st_label = st_condition_colors.get(
-            st_condition, ("⚪", "#808080", "Unknown")
+    try:
+        from market_trend_analysis import (
+            get_market_condition,
+            MarketCondition,
+            MarketTrendConfig
         )
         
-        # Market condition summary
-        st_col1, st_col2, st_col3, st_col4 = st.columns(4)
+        # Get intermediate-term market condition
+        st_config = MarketTrendConfig()
+        st_condition, st_ma_data = get_market_condition(st_config, use_cache=True)
         
-        with st_col1:
-            st.markdown(f"**Market Condition**")
-            st.markdown(f"<h3 style='color: {st_color}; margin: 0;'>{st_icon} {st_label}</h3>", unsafe_allow_html=True)
-        
-        with st_col2:
-            # Calculate price position
-            price_vs_short = ((st_ma_data.current_price - st_ma_data.short_ma) / st_ma_data.short_ma) * 100
-            price_vs_long = ((st_ma_data.current_price - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
+        if st_condition != MarketCondition.UNKNOWN and st_ma_data:
+            # Display market condition with color coding
+            st_condition_colors = {
+                MarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
+                MarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
+                MarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
+                MarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+            }
             
-            st.metric(
-                "Price vs 10-Week MA",
-                f"{price_vs_short:+.2f}%",
-                delta=f"${st_ma_data.current_price:.2f}",
-                help="Current SPY price relative to 10-week moving average"
+            st_icon, st_color, st_label = st_condition_colors.get(
+                st_condition, ("⚪", "#808080", "Unknown")
             )
+            
+            # Market condition summary
+            st_col1, st_col2, st_col3, st_col4 = st.columns(4)
+            
+            with st_col1:
+                st.markdown(f"**Market Condition**")
+                st.markdown(f"<h3 style='color: {st_color}; margin: 0;'>{st_icon} {st_label}</h3>", unsafe_allow_html=True)
+            
+            with st_col2:
+                # Calculate price position
+                price_vs_short = ((st_ma_data.current_price - st_ma_data.short_ma) / st_ma_data.short_ma) * 100
+                price_vs_long = ((st_ma_data.current_price - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
+                
+                st.metric(
+                    "Price vs 10-Week MA",
+                    f"{price_vs_short:+.2f}%",
+                    delta=f"${st_ma_data.current_price:.2f}",
+                    help="Current SPY price relative to 10-week moving average"
+                )
+            
+            with st_col3:
+                st.metric(
+                    "Price vs 50-Week MA",
+                    f"{price_vs_long:+.2f}%",
+                    delta=f"${st_ma_data.current_price:.2f}",
+                    help="Current SPY price relative to 50-week moving average"
+                )
+            
+            with st_col4:
+                st.metric(
+                    "Confidence Score",
+                    f"{st_ma_data.confidence * 100:.0f}%",
+                    help="Confidence in the current market condition assessment (0-100%)"
+                )
+            
+            # Detailed metrics in expander
+            with st.expander("📊 Detailed Intermediate-Term Analysis", expanded=False):
+                st_detail_col1, st_detail_col2, st_detail_col3 = st.columns(3)
+                
+                with st_detail_col1:
+                    st.markdown("**Current Prices & MAs**")
+                    st.write(f"SPY Price: ${st_ma_data.current_price:.2f}")
+                    st.write(f"10-Week MA: ${st_ma_data.short_ma:.2f}")
+                    st.write(f"50-Week MA: ${st_ma_data.long_ma:.2f}")
+                    st.write(f"Price vs 10-Week: {price_vs_short:+.2f}%")
+                    st.write(f"Price vs 50-Week: {price_vs_long:+.2f}%")
+                
+                with st_detail_col2:
+                    st.markdown("**Trend Analysis**")
+                    st.write(f"10-Week Trend: {st_ma_data.short_trend.value.title()}")
+                    st.write(f"50-Week Trend: {st_ma_data.long_trend.value.title()}")
+                    st.write(f"10-Week Slope: {st_ma_data.short_slope:+.3f}% per week")
+                    st.write(f"50-Week Slope: {st_ma_data.long_slope:+.3f}% per week")
+                    
+                    # Calculate MA crossover distance
+                    ma_crossover = ((st_ma_data.short_ma - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
+                    st.write(f"MA Crossover: {ma_crossover:+.2f}%")
+                
+                with st_detail_col3:
+                    st.markdown("**Tactical Guidance**")
+                    
+                    if st_condition == MarketCondition.BULL:
+                        st.success(
+                            "✅ **Bull Market**: Both short and long-term trends are positive. "
+                            "Favorable environment for maintaining or increasing equity exposure. "
+                            "Consider tactical rebalancing if significantly overweight."
+                        )
+                    elif st_condition == MarketCondition.WARNING_NEGATIVE:
+                        st.warning(
+                            "⚠️ **Warning Signal**: Short-term trend turning negative. "
+                            "Consider reducing tactical risk exposure by 10%. "
+                            "Monitor daily for potential bear market transition."
+                        )
+                    elif st_condition == MarketCondition.WARNING_POSITIVE:
+                        st.info(
+                            "ℹ️ **Recovery Signal**: Short-term trend improving. "
+                            "Cautiously consider adding exposure. "
+                            "Wait for 50-week MA confirmation before major increases."
+                        )
+                    elif st_condition == MarketCondition.BEAR:
+                        st.error(
+                            "🔴 **Bear Market**: Both trends negative. "
+                            "Reduce tactical risk by 20%. "
+                            "Focus on capital preservation and defensive positioning."
+                        )
+                    
+                    st.caption(f"Last updated: {st_ma_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
         
-        with st_col3:
-            st.metric(
-                "Price vs 50-Week MA",
-                f"{price_vs_long:+.2f}%",
-                delta=f"${st_ma_data.current_price:.2f}",
-                help="Current SPY price relative to 50-week moving average"
+        else:
+            st.info(
+                "📊 Intermediate-term market forecast data is currently unavailable. "
+                "This may be due to market data service issues or network connectivity. "
+                "The forecast will update automatically when data becomes available."
             )
-        
-        with st_col4:
-            st.metric(
-                "Confidence Score",
-                f"{st_ma_data.confidence * 100:.0f}%",
-                help="Confidence in the current market condition assessment (0-100%)"
-            )
-        
-        # Detailed metrics in expander
-        with st.expander("📊 Detailed Short-Term Analysis", expanded=False):
-            st_detail_col1, st_detail_col2, st_detail_col3 = st.columns(3)
-            
-            with st_detail_col1:
-                st.markdown("**Current Prices & MAs**")
-                st.write(f"SPY Price: ${st_ma_data.current_price:.2f}")
-                st.write(f"10-Week MA: ${st_ma_data.short_ma:.2f}")
-                st.write(f"50-Week MA: ${st_ma_data.long_ma:.2f}")
-                st.write(f"Price vs 10-Week: {price_vs_short:+.2f}%")
-                st.write(f"Price vs 50-Week: {price_vs_long:+.2f}%")
-            
-            with st_detail_col2:
-                st.markdown("**Trend Analysis**")
-                st.write(f"10-Week Trend: {st_ma_data.short_trend.value.title()}")
-                st.write(f"50-Week Trend: {st_ma_data.long_trend.value.title()}")
-                st.write(f"10-Week Slope: {st_ma_data.short_slope:+.3f}% per week")
-                st.write(f"50-Week Slope: {st_ma_data.long_slope:+.3f}% per week")
-                
-                # Calculate MA crossover distance
-                ma_crossover = ((st_ma_data.short_ma - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
-                st.write(f"MA Crossover: {ma_crossover:+.2f}%")
-            
-            with st_detail_col3:
-                st.markdown("**Tactical Guidance**")
-                
-                if st_condition == MarketCondition.BULL:
-                    st.success(
-                        "✅ **Bull Market**: Both short and long-term trends are positive. "
-                        "Favorable environment for maintaining or increasing equity exposure. "
-                        "Consider tactical rebalancing if significantly overweight."
-                    )
-                elif st_condition == MarketCondition.WARNING_NEGATIVE:
-                    st.warning(
-                        "⚠️ **Warning Signal**: Short-term trend turning negative. "
-                        "Consider reducing tactical risk exposure by 10%. "
-                        "Monitor daily for potential bear market transition."
-                    )
-                elif st_condition == MarketCondition.WARNING_POSITIVE:
-                    st.info(
-                        "ℹ️ **Recovery Signal**: Short-term trend improving. "
-                        "Cautiously consider adding exposure. "
-                        "Wait for 50-week MA confirmation before major increases."
-                    )
-                elif st_condition == MarketCondition.BEAR:
-                    st.error(
-                        "🔴 **Bear Market**: Both trends negative. "
-                        "Reduce tactical risk by 20%. "
-                        "Focus on capital preservation and defensive positioning."
-                    )
-                
-                st.caption(f"Last updated: {st_ma_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    else:
-        st.info(
-            "📊 Short-term market forecast data is currently unavailable. "
-            "This may be due to market data service issues or network connectivity. "
-            "The forecast will update automatically when data becomes available."
-        )
 
-except Exception as st_err:
-    st.warning(f"⚠️ Could not load short-term market forecast: {st_err}")
-    import traceback
-    st.caption(f"Debug info: {traceback.format_exc()}")
+    except Exception as st_err:
+        st.warning(f"⚠️ Could not load intermediate-term market forecast: {st_err}")
+        import traceback
+        st.caption(f"Debug info: {traceback.format_exc()}")
+
+# ========================================================================
+# TAB 3: SHORT-TERM MARKET FORECAST (10-day / 50-day EMAs)
+# ========================================================================
+with tab_shortterm:
+    st.caption(
+        "Tactical market outlook based on 10-day and 50-day exponential moving averages of the S&P 500 (SPY). "
+        "This very short-term perspective helps inform day trading, swing trading, and immediate tactical adjustments."
+    )
+    
+    try:
+        from market_trend_shortterm import (
+            get_shortterm_market_condition,
+            ShortTermMarketCondition,
+            ShortTermMarketTrendConfig,
+            get_tactical_allocation_adjustment,
+            get_market_momentum_phase
+        )
+        
+        # Get short-term market condition
+        vst_config = ShortTermMarketTrendConfig()
+        vst_condition, vst_ema_data = get_shortterm_market_condition(vst_config, use_cache=True)
+        
+        if vst_condition != ShortTermMarketCondition.UNKNOWN and vst_ema_data:
+            # Display market condition with color coding
+            vst_condition_colors = {
+                ShortTermMarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
+                ShortTermMarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
+                ShortTermMarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
+                ShortTermMarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+            }
+            
+            vst_icon, vst_color, vst_label = vst_condition_colors.get(
+                vst_condition, ("⚪", "#808080", "Unknown")
+            )
+            
+            # Market condition summary
+            vst_col1, vst_col2, vst_col3, vst_col4 = st.columns(4)
+            
+            with vst_col1:
+                st.markdown(f"**Market Condition**")
+                st.markdown(f"<h3 style='color: {vst_color}; margin: 0;'>{vst_icon} {vst_label}</h3>", unsafe_allow_html=True)
+            
+            with vst_col2:
+                momentum_phase = get_market_momentum_phase(vst_ema_data)
+                st.metric(
+                    "Momentum Phase",
+                    momentum_phase,
+                    help="Current momentum phase based on trend duration and direction"
+                )
+            
+            with vst_col3:
+                allocation_adj = get_tactical_allocation_adjustment(vst_condition, vst_config)
+                st.metric(
+                    "Tactical Adjustment",
+                    f"{allocation_adj:+.1f}%",
+                    delta=f"Stock allocation",
+                    delta_color="normal" if allocation_adj >= 0 else "inverse",
+                    help="Suggested tactical adjustment to stock allocation based on current market condition"
+                )
+            
+            with vst_col4:
+                st.metric(
+                    "Confidence Score",
+                    f"{vst_ema_data.confidence * 100:.0f}%",
+                    help="Confidence in the current market condition assessment (0-100%)"
+                )
+            
+            # Detailed metrics in expander
+            with st.expander("📊 Detailed Short-Term Analysis", expanded=False):
+                vst_detail_col1, vst_detail_col2, vst_detail_col3 = st.columns(3)
+                
+                with vst_detail_col1:
+                    st.markdown("**Current Prices & EMAs**")
+                    st.write(f"SPY Price: ${vst_ema_data.current_price:.2f}")
+                    st.write(f"10-Day EMA: ${vst_ema_data.short_ema:.2f}")
+                    st.write(f"50-Day EMA: ${vst_ema_data.long_ema:.2f}")
+                    st.write(f"Price vs 10-Day: {vst_ema_data.price_vs_short_ema:+.2f}%")
+                    st.write(f"Price vs 50-Day: {vst_ema_data.price_vs_long_ema:+.2f}%")
+                
+                with vst_detail_col2:
+                    st.markdown("**Trend Analysis**")
+                    st.write(f"10-Day Trend: {vst_ema_data.short_trend.value.title()}")
+                    st.write(f"50-Day Trend: {vst_ema_data.long_trend.value.title()}")
+                    st.write(f"10-Day Slope: {vst_ema_data.short_slope:+.3f}% per day")
+                    st.write(f"50-Day Slope: {vst_ema_data.long_slope:+.3f}% per day")
+                    st.write(f"Days in Trend: {vst_ema_data.days_in_trend}")
+                
+                with vst_detail_col3:
+                    st.markdown("**Tactical Guidance**")
+                    
+                    if vst_condition == ShortTermMarketCondition.BULL:
+                        st.success(
+                            "✅ **Bull Market**: Both short and long-term trends are positive. "
+                            "Favorable environment for tactical positions. Consider maintaining or slightly increasing exposure."
+                        )
+                    elif vst_condition == ShortTermMarketCondition.WARNING_NEGATIVE:
+                        st.warning(
+                            "⚠️ **Early Warning**: Short-term trend turning negative while long-term remains positive. "
+                            "Consider reducing tactical exposure and tightening stop-losses. Monitor closely for further deterioration."
+                        )
+                    elif vst_condition == ShortTermMarketCondition.WARNING_POSITIVE:
+                        st.info(
+                            "ℹ️ **Recovery Attempt**: Short-term trend turning positive while long-term remains negative. "
+                            "Cautious optimism warranted. Wait for 50-day EMA confirmation before adding significant exposure."
+                        )
+                    elif vst_condition == ShortTermMarketCondition.BEAR:
+                        st.error(
+                            "🔴 **Bear Market**: Both trends are negative. "
+                            "Defensive posture recommended. Avoid new long positions until trend reverses."
+                        )
+                    
+                    st.write(f"EMA Crossover Distance: {vst_ema_data.ema_crossover_distance:+.2f}%")
+                    st.caption(f"Last updated: {vst_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        else:
+            st.info(
+                "📊 Short-term market forecast data is currently unavailable. "
+                "This may be due to market data service issues or network connectivity. "
+                "The forecast will update automatically when data becomes available."
+            )
+
+    except Exception as vst_err:
+        st.warning(f"⚠️ Could not load short-term market forecast: {vst_err}")
+        import traceback
+        st.caption(f"Debug info: {traceback.format_exc()}")
+
+# ========================================================================
+# TAB 4: MARKET STRESS INDICATOR
+# ========================================================================
+with tab_stress:    
+    if STRESS_INDICATOR_AVAILABLE:
+        render_stress_indicator_card()
+    else:
+        st.info("🌡️ Market Stress Indicator component not available")
 
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# ROW 1 — Financial Plan Readiness Indicator (RRI)
+# Net Worth Overview with Tabs
+# ---------------------------------------------------------------------------
+st.markdown("### 📊 Net Worth Overview")
+st.caption("For detailed account breakdowns and asset allocation, visit the **💼 Portfolio** page.")
+
+# Create tabs for different net worth views
+tab_trend, tab_statement, tab_account_mix, tab_portfolio_mix = st.tabs([
+    "📈 Net Worth Trend",
+    "📋 Net Worth Statement",
+    "🏦 Account Mix",
+    "📊 Portfolio Mix"
+])
+
+# ========================================================================
+# TAB 1: NET WORTH TREND (All Time)
+# ========================================================================
+with tab_trend:
+    # Combined bar chart with trend line overlay
+    _nw_labels = pd.DatetimeIndex(networth.index).strftime("%b %Y")
+    fig_nw_combined = go.Figure()
+    
+    # Add bars
+    fig_nw_combined.add_trace(go.Bar(
+        x=networth.index,
+        y=networth['total'],
+        name='Net Worth',
+        marker=dict(
+            color=networth['total'],
+            colorscale=COLOR_SCALE,
+            showscale=False,
+        ),
+        hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
+    ))
+    
+    # Add trend line
+    fig_nw_combined.add_trace(go.Scatter(
+        x=networth.index,
+        y=networth['total'],
+        mode='lines+markers',
+        name='Trend',
+        line=dict(color='#4c78a8', width=3),
+        marker=dict(size=8, color='#4c78a8', line=dict(color='white', width=2)),
+        hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
+    ))
+    
+    # Add month-over-month annotation
+    _last_val  = float(networth['total'].iloc[-1])
+    _prev_val  = float(networth['total'].iloc[-2])
+    _mom_delta = _last_val - _prev_val
+    _mom_pct_t = (_mom_delta / _prev_val * 100) if _prev_val else 0.0
+    _arrow_clr = '#21c354' if _mom_delta >= 0 else '#ff4b4b'
+    fig_nw_combined.add_annotation(
+        x=networth.index[-1], y=_last_val,
+        text=f"{'▲' if _mom_delta >= 0 else '▼'} ${abs(_mom_delta):,.0f} ({_mom_pct_t:+.1f}%)",
+        showarrow=True, arrowhead=2, arrowcolor=_arrow_clr,
+        font=dict(color=_arrow_clr, size=12, weight='bold'),
+        bgcolor='white', bordercolor=_arrow_clr, borderwidth=2,
+        ax=0, ay=-40,
+    )
+    
+    _y_min = networth['total'].min()
+    _y_max = networth['total'].max()
+    _y_rng = _y_max - _y_min
+    fig_nw_combined.update_layout(
+        title='Net Worth Trend (All Time)',
+        xaxis_title='Month',
+        yaxis_title='Net Worth ($)',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        xaxis=dict(tickfont=dict(color='black'), tickangle=-45),
+        yaxis=dict(
+            tickfont=dict(color='black'),
+            tickformat='$,.0f',
+            range=[_y_min - _y_rng * 0.1, _y_max + _y_rng * 0.15]
+        ),
+        height=450,
+        margin=dict(t=60, l=10, r=10, b=10),
+    )
+    
+    st.plotly_chart(fig_nw_combined, use_container_width=True)
+
+# ========================================================================
+# TAB 2: NET WORTH STATEMENT
+# ========================================================================
+with tab_statement:
+    try:
+        _nw_detailed_df, _ = get_networth_by_month(curr_month, curr_year)
+    except Exception:
+        _nw_detailed_df = pd.DataFrame()
+    render_net_worth_statement(networth, _nw_detailed_df)
+
+# ========================================================================
+# TAB 3: ACCOUNT MIX BREAKDOWN
+# ========================================================================
+with tab_account_mix:
+    if _stale_label:
+        st.warning(
+            f"⚠️ No portfolio data found for {_calendar.month_name[curr_month]} {curr_year}. "
+            f"Showing **{_stale_label}** data instead. Please update your portfolio data.",
+            icon="⚠️",
+        )
+    
+    mtd_spend, _, _ = get_month_account_values(_eff_port_month, _eff_port_year)
+    if not mtd_spend.empty:
+        _mid = (
+            np.average(mtd_spend['market_value'], weights=mtd_spend['market_value'])
+            if mtd_spend['market_value'].sum() != 0 else 0
+        )
+        fig_acct_mix = px.treemap(
+            mtd_spend, path=['account_type', 'account_name'],
+            values='market_value', color='market_value',
+            color_continuous_scale=COLOR_SCALE, color_continuous_midpoint=_mid, title="Account Mix Breakdown",
+        )
+        fig_acct_mix.data[0].textinfo = "label+text+value+percent root"
+        fig_acct_mix.update_layout(margin=dict(t=50, l=25, r=25, b=25), height=600)
+        st.plotly_chart(fig_acct_mix, use_container_width=True)
+    else:
+        st.info("No account data available for the current period.")
+
+# ========================================================================
+# TAB 4: PORTFOLIO MIX
+# ========================================================================
+with tab_portfolio_mix:
+    if _stale_label:
+        st.warning(
+            f"⚠️ No portfolio data found for {_calendar.month_name[curr_month]} {curr_year}. "
+            f"Showing **{_stale_label}** data instead. Please update your portfolio data.",
+            icon="⚠️",
+        )
+    
+    if not _portfolio_cache_ready:
+        st.info(
+            "⏳ Portfolio data is loading in the background… "
+            "The chart will appear automatically once prices are fetched.",
+            icon="📊",
+        )
+    else:
+        portdf_no_totals = _portfolio_df[_portfolio_df['Account'] != 'Portfolio Totals'].copy()
+        if portdf_no_totals.empty:
+            st.info("No portfolio data available. Please add portfolio data via Portfolio Data Entry.")
+        else:
+            portdf_treemap = portdf_no_totals[
+                portdf_no_totals['Sector'].notna() & (portdf_no_totals['Sector'] != '')  # type: ignore[union-attr]
+            ].copy()
+            if not portdf_treemap.empty:  # type: ignore[union-attr]
+                _pmid = (
+                    np.average(portdf_treemap['Current value'], weights=portdf_treemap['Current value'])
+                    if portdf_treemap['Current value'].sum() != 0 else 0
+                )
+                fig_port_mix = px.treemap(
+                    portdf_treemap, path=['Tax Type', 'Sector'],
+                    values='Current value', color='Current value',
+                    color_continuous_scale=COLOR_SCALE, color_continuous_midpoint=_pmid, title="Portfolio Mix",
+                )
+                fig_port_mix.data[0].textinfo = "label+text+value+percent root"
+                fig_port_mix.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
+                fig_port_mix.update_layout(margin=dict(t=50, l=25, r=25, b=25), height=600)
+                st.plotly_chart(fig_port_mix, use_container_width=True)
+            else:
+                st.info("No sector data available for portfolio mix chart.")
+
+st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Financial Plan Readiness Indicator (RRI)
 # ---------------------------------------------------------------------------
 st.markdown("### 🎯 Financial Plan Readiness Indicator")
 st.caption(
@@ -729,152 +1054,6 @@ st.markdown("---")
 
 
 
-# ---------------------------------------------------------------------------
-# ROW 3 — Net Worth Overview (Combined Bar + Trend)
-# ---------------------------------------------------------------------------
-st.markdown("### 📊 Net Worth Overview")
-st.caption("For detailed account breakdowns and asset allocation, visit the **💼 Portfolio** page.")
-
-# Combined bar chart with trend line overlay
-_nw_labels = pd.DatetimeIndex(networth.index).strftime("%b %Y")
-fig_nw_combined = go.Figure()
-
-# Add bars
-fig_nw_combined.add_trace(go.Bar(
-    x=networth.index,
-    y=networth['total'],
-    name='Net Worth',
-    marker=dict(
-        color=networth['total'],
-        colorscale=COLOR_SCALE,
-        showscale=False,
-    ),
-    hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
-))
-
-# Add trend line
-fig_nw_combined.add_trace(go.Scatter(
-    x=networth.index,
-    y=networth['total'],
-    mode='lines+markers',
-    name='Trend',
-    line=dict(color='#4c78a8', width=3),
-    marker=dict(size=8, color='#4c78a8', line=dict(color='white', width=2)),
-    hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
-))
-
-# Add month-over-month annotation
-_last_val  = float(networth['total'].iloc[-1])
-_prev_val  = float(networth['total'].iloc[-2])
-_mom_delta = _last_val - _prev_val
-_mom_pct_t = (_mom_delta / _prev_val * 100) if _prev_val else 0.0
-_arrow_clr = '#21c354' if _mom_delta >= 0 else '#ff4b4b'
-fig_nw_combined.add_annotation(
-    x=networth.index[-1], y=_last_val,
-    text=f"{'▲' if _mom_delta >= 0 else '▼'} ${abs(_mom_delta):,.0f} ({_mom_pct_t:+.1f}%)",
-    showarrow=True, arrowhead=2, arrowcolor=_arrow_clr,
-    font=dict(color=_arrow_clr, size=12, weight='bold'),
-    bgcolor='white', bordercolor=_arrow_clr, borderwidth=2,
-    ax=0, ay=-40,
-)
-
-_y_min = networth['total'].min()
-_y_max = networth['total'].max()
-_y_rng = _y_max - _y_min
-fig_nw_combined.update_layout(
-    title='Net Worth Trend (All Time)',
-    xaxis_title='Month',
-    yaxis_title='Net Worth ($)',
-    plot_bgcolor='white',
-    paper_bgcolor='white',
-    showlegend=True,
-    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-    xaxis=dict(tickfont=dict(color='black'), tickangle=-45),
-    yaxis=dict(
-        tickfont=dict(color='black'),
-        tickformat='$,.0f',
-        range=[_y_min - _y_rng * 0.1, _y_max + _y_rng * 0.15]
-    ),
-    height=450,
-    margin=dict(t=60, l=10, r=10, b=10),
-)
-
-st.plotly_chart(fig_nw_combined, use_container_width=True)
-
-add_vertical_space(1)
-
-# ---------------------------------------------------------------------------
-# ROW 4 — Net Worth Statement (formal balance-sheet)
-# ---------------------------------------------------------------------------
-try:
-    _nw_detailed_df, _ = get_networth_by_month(curr_month, curr_year)
-except Exception:
-    _nw_detailed_df = pd.DataFrame()
-render_net_worth_statement(networth, _nw_detailed_df)
-
-# ---------------------------------------------------------------------------
-# ROW 6 — Treemaps: Account Mix + Portfolio Mix
-# ---------------------------------------------------------------------------
-if _stale_label:
-    st.warning(
-        f"⚠️ No portfolio data found for {_calendar.month_name[curr_month]} {curr_year}. "
-        f"Showing **{_stale_label}** data instead. Please update your portfolio data.",
-        icon="⚠️",
-    )
-
-tab1_row2_col1, tab1_row2_col2 = st.columns(2)
-
-with tab1_row2_col1:
-    st.markdown('<h4 style="text-align:center;">Account Mix Breakdown</h4>', unsafe_allow_html=True)
-    mtd_spend, _, _ = get_month_account_values(_eff_port_month, _eff_port_year)
-    if not mtd_spend.empty:
-        _mid = (
-            np.average(mtd_spend['market_value'], weights=mtd_spend['market_value'])
-            if mtd_spend['market_value'].sum() != 0 else 0
-        )
-        fig_acct_mix = px.treemap(
-            mtd_spend, path=['account_type', 'account_name'],
-            values='market_value', color='market_value',
-            color_continuous_scale=COLOR_SCALE, color_continuous_midpoint=_mid, title="",
-        )
-        fig_acct_mix.data[0].textinfo = "label+text+value+percent root"
-        fig_acct_mix.update_layout(margin=dict(t=50, l=25, r=25, b=25))
-        st.plotly_chart(fig_acct_mix, use_container_width=True)
-    else:
-        st.info("No account data available for the current period.")
-
-with tab1_row2_col2:
-    st.markdown('<h4 style="text-align:center;">Portfolio Mix</h4>', unsafe_allow_html=True)
-    if not _portfolio_cache_ready:
-        st.info(
-            "⏳ Portfolio data is loading in the background… "
-            "The chart will appear automatically once prices are fetched.",
-            icon="📊",
-        )
-    else:
-        portdf_no_totals = _portfolio_df[_portfolio_df['Account'] != 'Portfolio Totals'].copy()
-        if portdf_no_totals.empty:
-            st.info("No portfolio data available. Please add portfolio data via Portfolio Data Entry.")
-        else:
-            portdf_treemap = portdf_no_totals[
-                portdf_no_totals['Sector'].notna() & (portdf_no_totals['Sector'] != '')  # type: ignore[union-attr]
-            ].copy()
-            if not portdf_treemap.empty:  # type: ignore[union-attr]
-                _pmid = (
-                    np.average(portdf_treemap['Current value'], weights=portdf_treemap['Current value'])
-                    if portdf_treemap['Current value'].sum() != 0 else 0
-                )
-                fig_port_mix = px.treemap(
-                    portdf_treemap, path=['Tax Type', 'Sector'],
-                    values='Current value', color='Current value',
-                    color_continuous_scale=COLOR_SCALE, color_continuous_midpoint=_pmid, title="",
-                )
-                fig_port_mix.data[0].textinfo = "label+text+value+percent root"
-                fig_port_mix.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
-                fig_port_mix.update_layout(margin=dict(t=50, l=25, r=25, b=25))
-                st.plotly_chart(fig_port_mix, use_container_width=True)
-            else:
-                st.info("No sector data available for portfolio mix chart.")
 
 # ---------------------------------------------------------------------------
 # Auto-rerun while background rebuilds are in flight

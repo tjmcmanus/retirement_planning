@@ -31,6 +31,41 @@ See [`BETR_GUIDE.md`](BETR_GUIDE.md) for complete documentation and [`betr_roth_
 
 ## Recent Updates (March 2026 — Latest)
 
+### 🆕 NEW: Market Stress Indicator (2026-03-19)
+**Real-time market stress monitoring with EventHorizonIQ integration**
+
+Added comprehensive market stress indicator to the Portfolio Hub for proactive risk management:
+
+**Key Features:**
+- **Real-Time Monitoring**: Live stress index (0-100) from 55+ market sensors
+- **Actionable Thresholds**:
+  - 🟢 0-50: Normal operations
+  - 🟡 50-70: Flag portfolio for review
+  - 🔴 70+: Activate hedges immediately
+- **Detailed Breakdown**: Sensor status distribution (severe, elevated, rising, neutral, stable)
+- **Smart Recommendations**: Context-aware action items based on current stress level
+- **Automatic Caching**: 15-minute cache to optimize API usage
+
+**Integration:**
+- Located in Portfolio Hub → Overview tab → "Short-Term Market Forecast" section
+- Works alongside existing portfolio analytics and moving average indicators
+- Provides early warning system for market corrections
+
+**Documentation:**
+- [Market Stress Indicator Guide](MARKET_STRESS_INDICATOR_GUIDE.md) - Complete 349-line guide with examples
+- [Test Suite](test_market_stress_indicator.py) - 8 comprehensive test cases
+- Implementation: [`components/market_stress_indicator.py`](components/market_stress_indicator.py) - Full component
+- Integration: [`components/portfolio_overview.py`](components/portfolio_overview.py:29-36) - Portfolio Hub integration
+
+**API Details:**
+```python
+import requests
+r = requests.get("https://eventhorizoniq.com/api/stress-index")
+data = r.json()
+# Returns: stress_index, regime, sensor_count, breakdown, as_of, methodology
+```
+
+
 ### 🆕 NEW: Stage 7 - Surviving Spouse Planning (2026-03-19)
 **Complete life stage for planning after loss of spouse**
 
