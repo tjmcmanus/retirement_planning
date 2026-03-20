@@ -561,7 +561,7 @@ with adv_backdoor_tab:
                 _betr_r = calculate_betr(_betr_inputs)
                 st.session_state["betr_result"] = _betr_r
                 st.session_state["betr_fut_rate"] = _betr_fut_rate
-                st.session_state["betr_years"] = _betr_years
+                # Note: betr_years is already in session_state via the widget key parameter
             except Exception as _betr_err:
                 st.error(f"BETR error: {_betr_err}")
         
@@ -1062,7 +1062,7 @@ with adv_harvest_tab:
             )
             st.session_state["hlv_result"] = _hlv_r
             st.session_state["hlv_positions"] = _hlv_positions
-            st.session_state["hlv_window"] = _hlv_window
+            # Note: hlv_window is already in session_state via the widget key parameter
         except Exception as _hlv_err:
             st.error(f"Loss harvesting error: {_hlv_err}")
     

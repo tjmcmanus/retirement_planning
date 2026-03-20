@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 from components.shared import COLOR_SCALE
 
 
+
+
 def render_portfolio_overview(
     portdf: DataFrame,
     networth: DataFrame,
@@ -354,6 +356,8 @@ def render_portfolio_overview(
         st.info("📈 Portfolio performance chart requires at least 2 months of historical data.")
     
     st.markdown("---")
+    
+   
     
     # ========================================================================
     # QUICK ACTIONS

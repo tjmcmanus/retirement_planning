@@ -533,7 +533,7 @@ with tab_financial:
 
     # Dynamic account list from config
     all_accounts = account_names if account_names else ["Account 1", "Account 2"]
-    for acct in all_accounts:
+    for idx, acct in enumerate(all_accounts):
         safe_key = acct.replace(" ", "_").lower()
         acct_data = bene.setdefault(safe_key, {"primary": "", "contingent": "", "reviewed": False})
         with st.expander(f"📋 {acct}", expanded=False):
@@ -542,19 +542,19 @@ with tab_financial:
                 acct_data["primary"] = st.text_input(
                     "Primary Beneficiary",
                     value=acct_data.get("primary", ""),
-                    key=f"bene_{safe_key}_primary",
+                    key=f"bene_{safe_key}_{idx}_primary",
                 )
             with c2:
                 acct_data["contingent"] = st.text_input(
                     "Contingent Beneficiary",
                     value=acct_data.get("contingent", ""),
-                    key=f"bene_{safe_key}_contingent",
+                    key=f"bene_{safe_key}_{idx}_contingent",
                 )
             with c3:
                 acct_data["reviewed"] = st.checkbox(
                     "Reviewed ✅",
                     value=acct_data.get("reviewed", False),
-                    key=f"bene_{safe_key}_reviewed",
+                    key=f"bene_{safe_key}_{idx}_reviewed",
                 )
 
     st.markdown("---")
@@ -565,7 +565,7 @@ with tab_financial:
     )
 
     trust_accts = fin.setdefault("trust_accounts", {})
-    for acct in all_accounts:
+    for idx, acct in enumerate(all_accounts):
         safe_key = acct.replace(" ", "_").lower()
         acct_trust = trust_accts.setdefault(safe_key, {"action": "Re-title in trust", "done": False, "notes": ""})
         col1, col2, col3 = st.columns([2, 1, 2])
@@ -574,12 +574,12 @@ with tab_financial:
         with col2:
             acct_trust["done"] = st.checkbox(
                 "Done", value=acct_trust.get("done", False),
-                key=f"trust_acct_{safe_key}_done"
+                key=f"trust_acct_{safe_key}_{idx}_done"
             )
         with col3:
             acct_trust["notes"] = st.text_input(
                 "Notes", value=acct_trust.get("notes", ""),
-                key=f"trust_acct_{safe_key}_notes",
+                key=f"trust_acct_{safe_key}_{idx}_notes",
                 label_visibility="collapsed",
                 placeholder="e.g. Named trust as contingent beneficiary",
             )
