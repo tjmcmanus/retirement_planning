@@ -7,11 +7,37 @@ document tracker, and review schedule.
 
 import logging
 import streamlit as st
+import pandas as pd
 import json
 import os
 from datetime import datetime, date
 from config import get_config_manager
 from components.navbar import navbar
+from estate_tax_calculations import (
+    calculate_comprehensive_estate_tax,
+    compare_tcja_sunset_impact,
+    STATE_ESTATE_TAXES,
+    STATE_INHERITANCE_TAXES,
+    format_currency,
+    format_percentage,
+)
+from beneficiary_optimization import (
+    calculate_inherited_ira_10_year_rule,
+    calculate_stretch_ira,
+    compare_spousal_options,
+    calculate_trust_beneficiary,
+    compare_beneficiary_strategies,
+)
+from charitable_giving_advanced import (
+    calculate_crt_crut,
+    calculate_crt_crat,
+    calculate_clt_clut,
+    calculate_clt_clat,
+    calculate_private_foundation,
+    calculate_daf,
+    compare_foundation_vs_daf,
+    calculate_qcd_benefit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +132,9 @@ st.markdown(
 
 (
     tab_assess,
+    tab_tax,
+    tab_beneficiary,
+    tab_charitable,
     tab_legal,
     tab_financial,
     tab_personal,
@@ -114,6 +143,9 @@ st.markdown(
     tab_progress,
 ) = st.tabs([
     "🔍 Situation Assessment",
+    "💰 Estate Tax Calculator",
+    "👥 Beneficiary Planning",
+    "🎁 Charitable Giving",
     "⚖️ Legal Documents",
     "💰 Financial & Accounts",
     "🏠 Personal & Property",
@@ -353,6 +385,794 @@ with tab_assess:
             st.success("✅ Assessment saved!")
         else:
             st.error("❌ Error saving assessment.")
+
+
+# ===========================================================================
+# TAB 2 — ESTATE TAX CALCULATOR
+# ===========================================================================
+
+with tab_tax:
+    st.header("💰 Estate Tax Calculator")
+    st.markdown(
+        "Calculate federal and state estate taxes, including TCJA sunset impact analysis. "
+        "This tool helps you understand potential estate tax liability and plan accordingly."
+    )
+    
+    # Initialize tax calculation data
+    tax_calc = estate.setdefault("tax_calculator", {})
+    
+    # Input Section
+    st.subheader("📊 Estate Information")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        gross_estate = st.number_input(
+            "Gross Estate Value ($)",
+            min_value=0,
+            value=tax_calc.get("gross_estate", 10_000_000),
+            step=100_000,
+            help="Total value of all assets including real estate, investments, life insurance, business interests, etc.",
+            key="tax_gross_estate"
+        )
+        tax_calc["gross_estate"] = gross_estate
+        
+        death_year = st.selectbox(
+            "Year of Death (for projections)",
+            options=list(range(2024, 2036)),
+            index=0,
+            help="Select the year to calculate estate taxes. Future years show TCJA sunset impact.",
+            key="tax_death_year"
+        )
+        tax_calc["death_year"] = death_year
+        
+        prior_gifts = st.number_input(
+            "Prior Lifetime Gifts Using Exemption ($)",
+            min_value=0,
+            value=tax_calc.get("prior_gifts", 0),
+            step=100_000,
+            help="Amount of federal estate tax exemption already used for lifetime gifts above annual exclusion",
+            key="tax_prior_gifts"
+        )
+        tax_calc["prior_gifts"] = prior_gifts
+    
+    with col2:
+        # State selection
+        state_options = ["None"] + sorted(list(STATE_ESTATE_TAXES.keys()) + list(STATE_INHERITANCE_TAXES.keys()))
+        state_code = st.selectbox(
+            "State of Residence",
+            options=state_options,
+            index=0,
+            help="Select your state to include state estate or inheritance taxes",
+            key="tax_state"
+        )
+        tax_calc["state"] = state_code if state_code != "None" else None
+        
+        portability = st.number_input(
+            "Portability from Deceased Spouse ($)",
+            min_value=0,
+            value=tax_calc.get("portability", 0),
+            step=100_000,
+            help="Unused federal exemption from deceased spouse (portability election)",
+            key="tax_portability"
+        )
+        tax_calc["portability"] = portability
+        
+        skip_transfers = st.number_input(
+            "Transfers to Skip Persons ($)",
+            min_value=0,
+            value=tax_calc.get("skip_transfers", 0),
+            step=100_000,
+            help="Amount going to grandchildren or other skip persons (for GSTT calculation)",
+            key="tax_skip_transfers"
+        )
+        tax_calc["skip_transfers"] = skip_transfers
+    
+    # Beneficiaries Section
+    st.subheader("👥 Beneficiaries (for Inheritance Tax)")
+    
+    if tax_calc["state"] and tax_calc["state"] in STATE_INHERITANCE_TAXES:
+        st.info(f"💡 {STATE_INHERITANCE_TAXES[tax_calc['state']]['name']} has inheritance taxes. Add beneficiaries below to calculate their tax liability.")
+        
+        # Initialize beneficiaries list
+        if "beneficiaries" not in tax_calc:
+            tax_calc["beneficiaries"] = []
+        
+        # Add beneficiary form
+        with st.expander("➕ Add Beneficiary", expanded=len(tax_calc["beneficiaries"]) == 0):
+            ben_col1, ben_col2, ben_col3 = st.columns(3)
+            
+            with ben_col1:
+                ben_name = st.text_input("Beneficiary Name", key="new_ben_name")
+            
+            with ben_col2:
+                ben_relationship = st.selectbox(
+                    "Relationship",
+                    options=["spouse", "child", "parent", "sibling", "other"],
+                    key="new_ben_relationship"
+                )
+            
+            with ben_col3:
+                ben_amount = st.number_input(
+                    "Inheritance Amount ($)",
+                    min_value=0,
+                    step=10_000,
+                    key="new_ben_amount"
+                )
+            
+            if st.button("Add Beneficiary", key="add_beneficiary"):
+                if ben_name and ben_amount > 0:
+                    tax_calc["beneficiaries"].append({
+                        "name": ben_name,
+                        "relationship": ben_relationship,
+                        "amount": ben_amount
+                    })
+                    st.success(f"Added {ben_name}")
+                    st.rerun()
+        
+        # Display existing beneficiaries
+        if tax_calc["beneficiaries"]:
+            st.write("**Current Beneficiaries:**")
+            for i, ben in enumerate(tax_calc["beneficiaries"]):
+                col_name, col_rel, col_amt, col_del = st.columns([3, 2, 2, 1])
+                
+                with col_name:
+                    st.write(ben["name"])
+                with col_rel:
+                    st.write(ben["relationship"].title())
+                with col_amt:
+                    st.write(f"${ben['amount']:,.0f}")
+                with col_del:
+                    if st.button("🗑️", key=f"del_ben_{i}", help="Delete beneficiary"):
+                        tax_calc["beneficiaries"].pop(i)
+                        st.rerun()
+    
+    # Calculate Button
+    st.markdown("---")
+    
+    if st.button("🧮 Calculate Estate Taxes", type="primary", key="calculate_estate_tax"):
+        try:
+            # Perform comprehensive estate tax calculation
+            result = calculate_comprehensive_estate_tax(
+                gross_estate=gross_estate,
+                year=death_year,
+                state_code=tax_calc["state"],
+                beneficiaries=tax_calc.get("beneficiaries", []),
+                skip_person_transfers=skip_transfers,
+                prior_exemption_used=prior_gifts,
+                portability_from_spouse=portability,
+            )
+            
+            # Store results
+            tax_calc["last_calculation"] = {
+                "result": result._asdict(),
+                "timestamp": datetime.now().isoformat(),
+            }
+            
+            # Display Results
+            st.markdown("---")
+            st.subheader("📊 Estate Tax Calculation Results")
+            
+            # Summary Cards
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Gross Estate",
+                    format_currency(result.federal_result.gross_estate),
+                )
+            
+            with col2:
+                st.metric(
+                    "Total Tax Burden",
+                    format_currency(result.total_tax_burden),
+                    delta=f"-{format_percentage(result.effective_total_rate)}",
+                    delta_color="inverse"
+                )
+            
+            with col3:
+                st.metric(
+                    "Net to Heirs",
+                    format_currency(result.net_to_heirs),
+                )
+            
+            with col4:
+                st.metric(
+                    "Effective Tax Rate",
+                    format_percentage(result.effective_total_rate),
+                )
+            
+            # Detailed Breakdown
+            st.subheader("🔍 Detailed Tax Breakdown")
+            
+            # Federal Estate Tax
+            st.write("**Federal Estate Tax:**")
+            fed_col1, fed_col2 = st.columns(2)
+            
+            with fed_col1:
+                st.write(f"• Exemption Available: {format_currency(result.federal_result.exemption_available)}")
+                st.write(f"• Taxable Estate: {format_currency(result.federal_result.taxable_estate)}")
+                st.write(f"• Federal Estate Tax: {format_currency(result.federal_result.estate_tax)}")
+            
+            with fed_col2:
+                st.write(f"• TCJA in Effect: {'Yes' if result.federal_result.tcja_in_effect else 'No'}")
+                st.write(f"• Portability Available: {format_currency(result.federal_result.portability_available)}")
+                st.write(f"• Effective Rate: {format_percentage(result.federal_result.effective_rate)}")
+            
+            # State Estate Tax
+            if result.state_result:
+                st.write("**State Estate Tax:**")
+                st.write(f"• State: {result.state_result.state_name}")
+                st.write(f"• State Exemption: {format_currency(result.state_result.exemption)}")
+                st.write(f"• State Estate Tax: {format_currency(result.state_result.estate_tax)}")
+                st.write(f"• Notes: {result.state_result.notes}")
+            
+            # Inheritance Tax
+            if result.inheritance_results:
+                st.write("**Inheritance Tax by Beneficiary:**")
+                for inh in result.inheritance_results:
+                    st.write(f"• {inh.beneficiary_name} ({inh.relationship}): {format_currency(inh.inheritance_tax)} on {format_currency(inh.inheritance_amount)}")
+            
+            # GSTT
+            if result.gstt_result:
+                st.write("**Generation-Skipping Transfer Tax:**")
+                st.write(f"• Skip Person Transfers: {format_currency(result.gstt_result.transfer_amount)}")
+                st.write(f"• GSTT Tax: {format_currency(result.gstt_result.gstt_tax)}")
+            
+        except Exception as e:
+            st.error(f"Error calculating estate taxes: {str(e)}")
+    
+    # TCJA Sunset Analysis
+    st.markdown("---")
+    st.subheader("⚖️ TCJA Sunset Impact Analysis")
+    st.markdown(
+        "The Tax Cuts and Jobs Act (TCJA) doubled the federal estate tax exemption through 2025. "
+        "Starting in 2026, the exemption will revert to approximately half the current level. "
+        "This analysis shows the impact on your estate."
+    )
+    
+    if st.button("📈 Analyze TCJA Sunset Impact", key="tcja_analysis"):
+        try:
+            comparison = compare_tcja_sunset_impact(
+                gross_estate=gross_estate,
+                state_code=tax_calc["state"],
+                prior_exemption_used=prior_gifts,
+            )
+            
+            st.subheader("📊 TCJA Sunset Comparison")
+            
+            # Comparison Table
+            comp_col1, comp_col2, comp_col3 = st.columns(3)
+            
+            with comp_col1:
+                st.write("**2025 (TCJA in Effect)**")
+                st.write(f"Exemption: {format_currency(comparison['year_2025']['exemption'])}")
+                st.write(f"Total Tax: {format_currency(comparison['year_2025']['total_tax'])}")
+                st.write(f"Net to Heirs: {format_currency(comparison['year_2025']['net_to_heirs'])}")
+            
+            with comp_col2:
+                st.write("**2026 (TCJA Sunset)**")
+                st.write(f"Exemption: {format_currency(comparison['year_2026']['exemption'])}")
+                st.write(f"Total Tax: {format_currency(comparison['year_2026']['total_tax'])}")
+                st.write(f"Net to Heirs: {format_currency(comparison['year_2026']['net_to_heirs'])}")
+            
+            with comp_col3:
+                st.write("**Impact**")
+                st.write(f"Exemption Reduction: {format_currency(comparison['impact']['exemption_reduction'])}")
+                st.write(f"Tax Increase: {format_currency(comparison['impact']['tax_increase'])}")
+                st.write(f"Net Reduction: {format_currency(comparison['impact']['net_reduction'])}")
+            
+            # Visual Impact
+            if comparison['impact']['tax_increase'] > 0:
+                st.error(
+                    f"⚠️ **TCJA Sunset Impact**: Your estate tax would increase by "
+                    f"{format_currency(comparison['impact']['tax_increase'])} in 2026, "
+                    f"reducing the net amount to heirs by the same amount."
+                )
+                
+                st.info(
+                    "💡 **Planning Strategies to Consider:**\n"
+                    "• Make lifetime gifts to use exemption before 2026\n"
+                    "• Consider grantor trusts (GRATs, CLATs)\n"
+                    "• Review life insurance planning\n"
+                    "• Consult with an estate planning attorney"
+                )
+            else:
+                st.success("✅ Your estate is not significantly impacted by the TCJA sunset.")
+        
+        except Exception as e:
+            st.error(f"Error analyzing TCJA impact: {str(e)}")
+    
+    # Save calculation data
+    if st.button("💾 Save Tax Calculation", key="save_tax_calc"):
+        if _save_estate_data(estate):
+            st.success("✅ Tax calculation data saved!")
+        else:
+            st.error("❌ Error saving tax calculation data.")
+
+# ===========================================================================
+# TAB 3 — BENEFICIARY PLANNING
+# ===========================================================================
+
+with tab_beneficiary:
+    st.header("👥 Beneficiary Planning & Optimization")
+    st.markdown(
+        "Analyze inherited IRA strategies, compare spousal options, and model trust beneficiaries. "
+        "SECURE Act 2.0 compliant with 10-year rule and stretch IRA calculations."
+    )
+    
+    # Initialize beneficiary data
+    ben_data = estate.setdefault("beneficiary_planning", {})
+    
+    # Strategy Selection
+    st.subheader("📊 Select Analysis Type")
+    
+    analysis_type = st.selectbox(
+        "Choose Beneficiary Analysis",
+        options=[
+            "Inherited IRA (10-Year Rule)",
+            "Stretch IRA (Eligible Designated Beneficiary)",
+            "Spousal Options Comparison",
+            "Trust as Beneficiary",
+            "Compare Multiple Strategies",
+        ],
+        key="ben_analysis_type"
+    )
+    
+    if analysis_type == "Inherited IRA (10-Year Rule)":
+        st.subheader("📉 10-Year Rule Analysis (SECURE Act)")
+        st.info("Non-spouse beneficiaries must withdraw entire IRA balance within 10 years of owner's death.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            ira_balance = st.number_input(
+                "IRA Balance ($)",
+                min_value=0,
+                value=ben_data.get("ira_balance", 500_000),
+                step=10_000,
+                key="ben_ira_balance"
+            )
+            
+            beneficiary_age = st.number_input(
+                "Beneficiary Age",
+                min_value=0,
+                max_value=120,
+                value=ben_data.get("beneficiary_age", 45),
+                key="ben_age"
+            )
+        
+        with col2:
+            tax_rate = st.slider(
+                "Beneficiary Tax Rate",
+                min_value=0.0,
+                max_value=0.50,
+                value=ben_data.get("tax_rate", 0.24),
+                step=0.01,
+                format="%.0f%%",
+                key="ben_tax_rate"
+            )
+            
+            growth_rate = st.slider(
+                "Expected Annual Return",
+                min_value=0.0,
+                max_value=0.15,
+                value=0.07,
+                step=0.01,
+                format="%.0f%%",
+                key="ben_growth"
+            )
+        
+        if st.button("Calculate 10-Year Rule", key="calc_10year"):
+            try:
+                result = calculate_inherited_ira_10_year_rule(
+                    initial_balance=ira_balance,
+                    beneficiary_age=beneficiary_age,
+                    beneficiary_tax_rate=tax_rate,
+                    annual_growth_rate=growth_rate,
+                )
+                
+                # Display results
+                st.success("✅ Calculation Complete")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Distributions", format_currency(result.total_distributions))
+                with col2:
+                    st.metric("Total Taxes", format_currency(result.total_taxes_paid))
+                with col3:
+                    st.metric("Net to Beneficiary", format_currency(result.net_to_beneficiary))
+                
+                # Year-by-year breakdown
+                st.subheader("📅 Year-by-Year Distributions")
+                df = pd.DataFrame(result.annual_distributions)
+                df['year'] = df['year'].astype(int)
+                df['distribution'] = df['distribution'].apply(lambda x: f"${x:,.0f}")
+                df['tax'] = df['tax'].apply(lambda x: f"${x:,.0f}")
+                df['after_tax_distribution'] = df['after_tax_distribution'].apply(lambda x: f"${x:,.0f}")
+                st.dataframe(df[['year', 'distribution', 'tax', 'after_tax_distribution']], use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+    
+    elif analysis_type == "Spousal Options Comparison":
+        st.subheader("💑 Spousal Beneficiary Options")
+        st.info("Surviving spouses can rollover to own IRA or remain as beneficiary. Compare both options.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            ira_balance = st.number_input(
+                "IRA Balance ($)",
+                min_value=0,
+                value=800_000,
+                step=10_000,
+                key="spouse_ira_balance"
+            )
+            
+            spouse_age = st.number_input(
+                "Spouse Age",
+                min_value=0,
+                max_value=120,
+                value=62,
+                key="spouse_age"
+            )
+        
+        with col2:
+            spouse_tax_rate = st.slider(
+                "Spouse Tax Rate",
+                min_value=0.0,
+                max_value=0.50,
+                value=0.24,
+                step=0.01,
+                format="%.0f%%",
+                key="spouse_tax_rate"
+            )
+        
+        if st.button("Compare Spousal Options", key="calc_spouse"):
+            try:
+                result = compare_spousal_options(
+                    initial_balance=ira_balance,
+                    spouse_age=spouse_age,
+                    spouse_tax_rate=spouse_tax_rate,
+                )
+                
+                st.success("✅ Comparison Complete")
+                
+                # Recommendation
+                st.subheader("🎯 Recommendation")
+                if result.recommended_option == 'rollover':
+                    st.success(f"**Recommended: Rollover to Own IRA**")
+                else:
+                    st.success(f"**Recommended: Remain as Beneficiary**")
+                
+                st.write("**Key Factors:**")
+                for factor in result.key_factors:
+                    st.write(f"• {factor}")
+                
+                # Side-by-side comparison
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Rollover Option:**")
+                    st.metric("Net to Spouse", format_currency(result.rollover_option.net_to_beneficiary))
+                    st.metric("Effective Tax Rate", format_percentage(result.rollover_option.effective_tax_rate))
+                
+                with col2:
+                    st.write("**Inherited IRA Option:**")
+                    st.metric("Net to Spouse", format_currency(result.inherited_option.net_to_beneficiary))
+                    st.metric("Effective Tax Rate", format_percentage(result.inherited_option.effective_tax_rate))
+                
+                st.metric("Savings with Recommended Option", format_currency(result.savings_amount))
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+    
+    elif analysis_type == "Trust as Beneficiary":
+        st.subheader("🏛️ Trust Beneficiary Analysis")
+        st.info("Analyze tax implications when a trust is named as IRA beneficiary.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            ira_balance = st.number_input(
+                "IRA Balance ($)",
+                min_value=0,
+                value=1_000_000,
+                step=10_000,
+                key="trust_ira_balance"
+            )
+            
+            trust_type = st.selectbox(
+                "Trust Type",
+                options=["conduit", "accumulation", "see-through"],
+                key="trust_type"
+            )
+        
+        with col2:
+            oldest_ben_age = st.number_input(
+                "Oldest Beneficiary Age",
+                min_value=0,
+                max_value=120,
+                value=40,
+                key="oldest_ben_age"
+            )
+            
+            admin_cost = st.number_input(
+                "Annual Admin Cost ($)",
+                min_value=0,
+                value=5000,
+                step=1000,
+                key="trust_admin"
+            )
+        
+        if st.button("Analyze Trust Beneficiary", key="calc_trust"):
+            try:
+                result = calculate_trust_beneficiary(
+                    initial_balance=ira_balance,
+                    trust_type=trust_type,
+                    oldest_beneficiary_age=oldest_ben_age,
+                    annual_admin_cost=admin_cost,
+                )
+                
+                st.success("✅ Analysis Complete")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Net to Beneficiaries", format_currency(result.net_to_beneficiaries))
+                with col2:
+                    st.metric("Total Taxes", format_currency(result.total_taxes_paid))
+                with col3:
+                    st.metric("Admin Costs", format_currency(result.trust_administration_costs))
+                
+                st.write(f"**Trust Type:** {result.trust_type.title()}")
+                st.write(f"**Qualifies as Designated Beneficiary:** {'Yes' if result.qualifies_as_designated_beneficiary else 'No'}")
+                st.write(f"**Distribution Method:** {result.distribution_method}")
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
+
+# ===========================================================================
+# TAB 4 — CHARITABLE GIVING
+# ===========================================================================
+
+with tab_charitable:
+    st.header("🎁 Advanced Charitable Giving Strategies")
+    st.markdown(
+        "Model Charitable Remainder Trusts (CRT), Charitable Lead Trusts (CLT), "
+        "and compare Private Foundations vs. Donor Advised Funds (DAF)."
+    )
+    
+    # Initialize charitable data
+    char_data = estate.setdefault("charitable_giving", {})
+    
+    # Strategy Selection
+    st.subheader("📊 Select Charitable Strategy")
+    
+    char_strategy = st.selectbox(
+        "Choose Strategy to Analyze",
+        options=[
+            "Charitable Remainder Trust (CRUT)",
+            "Charitable Remainder Trust (CRAT)",
+            "Charitable Lead Trust (CLUT)",
+            "Charitable Lead Trust (CLAT)",
+            "Private Foundation vs. DAF",
+            "Qualified Charitable Distribution (QCD)",
+        ],
+        key="char_strategy"
+    )
+    
+    if char_strategy == "Charitable Remainder Trust (CRUT)":
+        st.subheader("💰 CRUT Analysis (Unitrust)")
+        st.info("CRUT pays a fixed percentage of trust value each year (revalued annually). Provides inflation protection.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            funding = st.number_input(
+                "Initial Funding ($)",
+                min_value=0,
+                value=1_000_000,
+                step=50_000,
+                key="crut_funding"
+            )
+            
+            payout_rate = st.slider(
+                "Annual Payout Rate",
+                min_value=0.05,
+                max_value=0.50,
+                value=0.05,
+                step=0.01,
+                format="%.0f%%",
+                key="crut_payout"
+            )
+        
+        with col2:
+            term_years = st.number_input(
+                "Term (Years)",
+                min_value=1,
+                max_value=50,
+                value=20,
+                key="crut_term"
+            )
+            
+            donor_age = st.number_input(
+                "Donor Age",
+                min_value=0,
+                max_value=120,
+                value=65,
+                key="crut_age"
+            )
+        
+        if st.button("Calculate CRUT", key="calc_crut"):
+            try:
+                result = calculate_crt_crut(
+                    initial_funding=funding,
+                    payout_rate=payout_rate,
+                    term_years=term_years,
+                    donor_age=donor_age,
+                )
+                
+                st.success("✅ CRUT Analysis Complete")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Income", format_currency(result.total_income_received))
+                with col2:
+                    st.metric("Net Income", format_currency(result.net_income_to_donor))
+                with col3:
+                    st.metric("To Charity", format_currency(result.charitable_remainder))
+                with col4:
+                    st.metric("Tax Savings", format_currency(result.effective_tax_savings))
+                
+                st.write(f"**Initial Tax Deduction:** {format_currency(result.initial_tax_deduction)}")
+                st.write(f"**Present Value of Remainder:** {format_currency(result.present_value_remainder)}")
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+    
+    elif char_strategy == "Private Foundation vs. DAF":
+        st.subheader("🏛️ Private Foundation vs. Donor Advised Fund")
+        st.info("Compare costs, control, and grant efficiency between private foundations and DAFs.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            contribution = st.number_input(
+                "Initial Contribution ($)",
+                min_value=0,
+                value=5_000_000,
+                step=100_000,
+                key="pf_contribution"
+            )
+        
+        with col2:
+            years = st.number_input(
+                "Years to Project",
+                min_value=1,
+                max_value=50,
+                value=20,
+                key="pf_years"
+            )
+        
+        if st.button("Compare Foundation vs. DAF", key="calc_pf_daf"):
+            try:
+                result = compare_foundation_vs_daf(
+                    contribution_amount=contribution,
+                    years=years,
+                )
+                
+                st.success("✅ Comparison Complete")
+                
+                # Recommendation
+                st.subheader("🎯 Recommendation")
+                st.success(f"**Recommended: {result.recommended_strategy}**")
+                
+                st.write("**Key Factors:**")
+                for factor in result.key_factors:
+                    st.write(f"• {factor}")
+                
+                # Side-by-side comparison
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Private Foundation:**")
+                    pf_data = result.strategies['Private Foundation']
+                    st.metric("Total Grants", format_currency(pf_data['Total Grants']))
+                    st.metric("Total Costs", format_currency(pf_data['Total Costs']))
+                    st.metric("Ending Balance", format_currency(pf_data['Ending Balance']))
+                    st.write(f"Control Level: {pf_data['Control Level']}/100")
+                    st.write(f"Complexity: {pf_data['Complexity']}/100")
+                
+                with col2:
+                    st.write("**Donor Advised Fund:**")
+                    daf_data = result.strategies['Donor Advised Fund']
+                    st.metric("Total Grants", format_currency(daf_data['Total Grants']))
+                    st.metric("Total Costs", format_currency(daf_data['Total Costs']))
+                    st.metric("Ending Balance", format_currency(daf_data['Ending Balance']))
+                    st.write(f"Control Level: {daf_data['Control Level']}/100")
+                    st.write(f"Complexity: {daf_data['Complexity']}/100")
+                
+                # Tax efficiency ranking
+                st.subheader("📊 Tax Efficiency Ranking")
+                for i, (strategy, efficiency) in enumerate(result.tax_efficiency_ranking, 1):
+                    st.write(f"{i}. {strategy}: {format_percentage(efficiency)}")
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+    
+    elif char_strategy == "Qualified Charitable Distribution (QCD)":
+        st.subheader("💝 QCD Benefit Analysis")
+        st.info("QCDs allow direct IRA-to-charity transfers (up to $105,000/year) that satisfy RMDs without increasing taxable income.")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            ira_balance = st.number_input(
+                "IRA Balance ($)",
+                min_value=0,
+                value=500_000,
+                step=10_000,
+                key="qcd_balance"
+            )
+            
+            donor_age = st.number_input(
+                "Donor Age",
+                min_value=0,
+                max_value=120,
+                value=72,
+                key="qcd_age"
+            )
+        
+        with col2:
+            qcd_amount = st.number_input(
+                "QCD Amount ($)",
+                min_value=0,
+                max_value=105_000,
+                value=50_000,
+                step=5_000,
+                key="qcd_amount"
+            )
+            
+            tax_rate = st.slider(
+                "Marginal Tax Rate",
+                min_value=0.0,
+                max_value=0.50,
+                value=0.24,
+                step=0.01,
+                format="%.0f%%",
+                key="qcd_tax_rate"
+            )
+        
+        if st.button("Calculate QCD Benefit", key="calc_qcd"):
+            try:
+                result = calculate_qcd_benefit(
+                    ira_balance=ira_balance,
+                    donor_age=donor_age,
+                    qcd_amount=qcd_amount,
+                    marginal_tax_rate=tax_rate,
+                )
+                
+                if result.get('eligible'):
+                    st.success("✅ QCD Analysis Complete")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("QCD Amount", format_currency(result['qcd_amount']))
+                    with col2:
+                        st.metric("Tax Savings", format_currency(result['tax_savings']))
+                    with col3:
+                        st.metric("Total Benefit", format_currency(result['total_benefit']))
+                    
+                    st.write(f"**IRMAA Savings:** {format_currency(result['irmaa_savings'])}")
+                    st.write(f"**Effective Benefit Rate:** {format_percentage(result['effective_benefit_rate'])}")
+                else:
+                    st.warning(f"❌ Not Eligible: {result.get('reason')}")
+                
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+
 
 
 # ===========================================================================
