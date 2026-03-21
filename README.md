@@ -206,19 +206,35 @@ Deep investment style insights through multi-factor analysis:
 - **Performance Attribution**: Identify which factors drive returns
 
 
-### ⚖️ NEW: Estate Planning Module & Tax Data Admin (2026-03-17)
-**Complete estate planning toolkit and administrative tax data management**
+### ⚖️ NEW: Advanced Estate Planning Suite (2026-03-20)
+**Complete estate planning toolkit with advanced tax calculations, beneficiary optimization, and charitable giving strategies**
 
-- **Estate Planning Page** (`pages/1_estate_planning.py`) — Comprehensive 7-tab interface
+- **Estate Planning Page** (`pages/1_estate_planning.py`) — Comprehensive 10-tab interface
   - **Situation Assessment**: Family & beneficiary analysis, estate size evaluation, business ownership
+  - **Estate Tax Calculator** (NEW):
+    - Federal estate tax with TCJA sunset modeling (exemption drops from $13.61M to $7.11M in 2026)
+    - State estate taxes for 13 states with progressive rates and cliff tax rules
+    - Inheritance taxes for 6 states with relationship-based rates
+    - Generation-Skipping Transfer Tax (GSTT) analysis (40% flat rate)
+    - Portability calculations for married couples
+    - TCJA sunset impact comparison showing tax increase scenarios
+  - **Beneficiary Planning** (NEW):
+    - SECURE Act 2.0 compliant 10-year rule modeling for non-spouse beneficiaries
+    - Stretch IRA calculations for Eligible Designated Beneficiaries (EDBs)
+    - Spousal rollover vs. inherited IRA comparison with recommendations
+    - Trust beneficiary modeling (conduit, accumulation, see-through trusts)
+    - Multi-strategy comparison with net-to-beneficiary rankings
+  - **Charitable Giving** (NEW):
+    - Charitable Remainder Trusts (CRUT and CRAT) with income stream modeling
+    - Charitable Lead Trusts (CLUT and CLAT) with estate tax reduction
+    - Private Foundation vs. Donor Advised Fund comparison with cost analysis
+    - Qualified Charitable Distribution (QCD) benefit analysis with IRMAA impact
   - **Legal Documents**: Will, trusts, powers of attorney, healthcare directives with completion tracking
   - **Financial & Accounts**: Beneficiary designations, account titling, life insurance, retirement accounts
   - **Personal & Property**: Digital assets, personal property, real estate, business interests
   - **Document Locations**: Centralized tracker with secure storage recommendations
   - **Review Schedule**: Automated reminders for life events and annual reviews
   - **Overall Progress**: Visual progress tracking across all categories
-  - **Configuration Integration**: Syncs with children tracking and property management
-  - **Data Persistence**: JSON-based storage with automatic backups
 
 - **Tax Data Admin Page** (`pages/9_admin_tax_data.py`) — Administrative interface for IRS data
   - **8 Tax Tables**: Standard deduction, income brackets, capital gains, IRA limits, IRMAA, RMD, SS, AMT
@@ -229,7 +245,21 @@ Deep investment style insights through multi-factor analysis:
   - **Real-time Preview**: View changes before saving
   - **IRS Verification**: Links to official publications for data accuracy
 
-- **Impact**: Complete estate planning workflow, simplified tax data maintenance, improved data integrity
+- **New Modules** (3,680+ lines of production code):
+  - [`estate_tax_calculations.py`](estate_tax_calculations.py) (1,089 lines) — Federal, state, inheritance, GSTT calculations
+  - [`beneficiary_optimization.py`](beneficiary_optimization.py) (847 lines) — SECURE Act 2.0 compliant IRA distribution strategies
+  - [`charitable_giving_advanced.py`](charitable_giving_advanced.py) (752 lines) — CRT, CLT, Foundation, DAF, QCD analysis
+
+- **Comprehensive Testing** (1,446 test lines):
+  - [`test_estate_tax_calculations.py`](test_estate_tax_calculations.py) (652 lines) — 15 test cases covering all tax scenarios
+  - [`test_beneficiary_optimization.py`](test_beneficiary_optimization.py) (363 lines) — 8 test cases for beneficiary strategies
+  - [`test_charitable_giving_advanced.py`](test_charitable_giving_advanced.py) (431 lines) — 10 test cases for charitable strategies
+
+- **Documentation**:
+  - [`ADVANCED_ESTATE_PLANNING_GUIDE.md`](ADVANCED_ESTATE_PLANNING_GUIDE.md) (752 lines) — Complete integration guide
+  - [`ESTATE_TAX_CALCULATIONS_GUIDE.md`](ESTATE_TAX_CALCULATIONS_GUIDE.md) (545 lines) — Estate tax guide with examples
+
+- **Impact**: Production-ready estate planning suite with sophisticated tax modeling, beneficiary optimization, and charitable giving strategies
 
 ### 📊 NEW: Tax Analytics Dashboard & Cost Basis Tracking (2026-03-16)
 **Comprehensive tax analysis with actual transaction-level cost basis tracking**
@@ -512,7 +542,9 @@ Comprehensive validation in [`test_strategy.py`](test_strategy.py):
 ## Features
 
 ### 0. Estate Planning Page (⚖️)
-**NEW: Comprehensive estate planning toolkit (March 2026)**
+**NEW: Comprehensive estate planning toolkit with advanced calculations (March 2026)**
+
+#### Core Estate Planning Features
 - **Situation Assessment**: Family & beneficiary analysis, estate size evaluation, business ownership considerations
 - **Legal Documents Checklist**: Will, trusts, powers of attorney, healthcare directives with completion tracking
 - **Financial & Accounts**: Beneficiary designations, account titling, life insurance, retirement accounts
@@ -521,7 +553,101 @@ Comprehensive validation in [`test_strategy.py`](test_strategy.py):
 - **Review Schedule**: Automated reminders for periodic estate plan reviews (life events, annual reviews)
 - **Overall Progress**: Visual progress tracking across all estate planning categories
 
-See [`pages/1_estate_planning.py`](pages/1_estate_planning.py) for implementation details.
+#### Advanced Estate Tax Calculator (NEW - March 2026)
+**Federal Estate Tax:**
+- TCJA sunset modeling: Exemption drops from $13.61M (2024) to $7.11M (2026)
+- Flat 40% tax rate above exemption
+- Portability calculations for married couples (preserve deceased spouse's unused exemption)
+- Prior lifetime gift tracking
+
+**State Estate Taxes (13 States):**
+- Connecticut, District of Columbia, Hawaii, Illinois, Maine, Maryland, Massachusetts, Minnesota, New York, Oregon, Rhode Island, Vermont, Washington
+- Progressive rates from 0.8% to 20%
+- Special rules: MA and NY have "cliff taxes" where entire estate becomes taxable if over threshold
+- Lowest exemption: Oregon ($1.0M), Highest: Connecticut ($13.61M, matches federal)
+
+**Inheritance Taxes (6 States):**
+- Iowa, Kentucky, Maryland, Nebraska, New Jersey, Pennsylvania
+- Relationship-based rates: Children (0-4.5%), Siblings (11-16%), Other (15-16%)
+- Paid by beneficiaries, not estate
+- Maryland has both estate AND inheritance tax
+
+**Generation-Skipping Transfer Tax (GSTT):**
+- Applies to transfers to grandchildren or "skip persons"
+- Same exemption as estate tax ($13.61M in 2024)
+- Flat 40% rate
+- Separate from estate tax
+
+**TCJA Sunset Analysis:**
+- Side-by-side comparison of 2025 vs 2026 tax impact
+- Shows exemption reduction and resulting tax increase
+- Planning recommendations for high-net-worth estates
+
+#### Beneficiary Planning (NEW - March 2026)
+**SECURE Act 2.0 Compliance:**
+- Updated RMD ages: 73 (2023-2032), 75 (2033+)
+- 10-year rule for non-spouse beneficiaries (must withdraw entire IRA within 10 years)
+- Eligible Designated Beneficiaries (EDBs) can still use stretch IRA
+
+**10-Year Rule Analysis:**
+- Model different distribution strategies (equal annual, defer to year 10, front-load)
+- Calculate total taxes and net to beneficiary
+- Year-by-year distribution projections
+- Tax bracket optimization
+
+**Stretch IRA (EDBs Only):**
+- Lifetime distributions based on life expectancy tables
+- Decades of tax-deferred growth
+- Significantly higher net to beneficiary vs. 10-year rule
+- EDB categories: Spouse, minor child, disabled, chronically ill, within 10 years of owner's age
+
+**Spousal Options Comparison:**
+- Rollover to own IRA vs. remain as beneficiary
+- Personalized recommendations based on age and needs
+- Savings calculations
+- Key decision factors
+
+**Trust as Beneficiary:**
+- Conduit trust: Passes RMDs to beneficiaries, qualifies as designated beneficiary
+- Accumulation trust: Can accumulate income, trust pays tax at high rates, does NOT qualify
+- See-through trust: Hybrid approach with complex rules
+- Administration cost modeling
+
+#### Charitable Giving Strategies (NEW - March 2026)
+**Charitable Remainder Trusts (CRT):**
+- CRUT (Unitrust): Annual payment = % of trust value (revalued annually), inflation protection
+- CRAT (Annuity Trust): Fixed dollar payment, predictable income
+- Immediate income tax deduction for present value of remainder
+- Avoid capital gains tax on appreciated assets
+- Income stream for life or term of years
+- Remainder goes to charity
+
+**Charitable Lead Trusts (CLT):**
+- CLUT (Unitrust): Charity receives % of trust value annually
+- CLAT (Annuity Trust): Charity receives fixed payment
+- After term, remainder goes to heirs at reduced gift/estate tax
+- "Zeroed-out" CLAT: No gift tax, heirs receive all growth above AFR
+
+**Private Foundation vs. Donor Advised Fund:**
+- Foundation: Maximum control, high costs ($25K-$100K/year), 1.39% excise tax, 5% minimum distribution
+- DAF: Low costs (0.6% fee), simple administration, less control, no excise tax
+- Comparison engine with cost analysis and recommendations
+- Best for: Foundation if assets > $5M and want control, DAF for simplicity and lower costs
+
+**Qualified Charitable Distribution (QCD):**
+- Direct IRA to charity transfer (up to $105K/year in 2024)
+- Must be age 70.5+
+- Satisfies RMD without increasing taxable income
+- Avoids IRMAA surcharges
+- Tax savings calculator
+
+**Documentation:**
+- [`ADVANCED_ESTATE_PLANNING_GUIDE.md`](ADVANCED_ESTATE_PLANNING_GUIDE.md) (752 lines) — Complete integration guide with examples
+- [`ESTATE_TAX_CALCULATIONS_GUIDE.md`](ESTATE_TAX_CALCULATIONS_GUIDE.md) (545 lines) — Estate tax guide with strategies and FAQ
+- [`estate_tax_calculations.py`](estate_tax_calculations.py) (1,089 lines) — Core calculation module
+- [`beneficiary_optimization.py`](beneficiary_optimization.py) (847 lines) — Beneficiary strategy module
+- [`charitable_giving_advanced.py`](charitable_giving_advanced.py) (752 lines) — Charitable giving module
+- [`pages/1_estate_planning.py`](pages/1_estate_planning.py) — UI integration
 
 ### 1. Configuration Page (⚙️)
 **Centralized configuration management**
@@ -1210,6 +1336,50 @@ retirement_planning/
   - Troubleshooting guide
 
 ### Tax Planning & Analytics *(NEW - March 2026)*
+- **[`ADVANCED_ESTATE_PLANNING_GUIDE.md`](ADVANCED_ESTATE_PLANNING_GUIDE.md)** - Complete estate planning integration guide (752 lines)
+  - Overview of all three advanced modules
+  - Estate tax calculations with TCJA sunset modeling
+  - Beneficiary optimization strategies (SECURE Act 2.0)
+  - Charitable giving strategies (CRT, CLT, Foundation, DAF, QCD)
+  - Integration architecture and data flow
+  - Complete usage examples and code samples
+  - Best practices for estate planning, beneficiary planning, and charitable giving
+  - API reference for all modules
+- **[`ESTATE_TAX_CALCULATIONS_GUIDE.md`](ESTATE_TAX_CALCULATIONS_GUIDE.md)** - Estate tax calculations guide (545 lines)
+  - Federal estate tax with TCJA sunset modeling
+  - State estate taxes for 13 states with progressive rates
+  - Inheritance taxes for 6 states with relationship-based rates
+  - Generation-Skipping Transfer Tax (GSTT) analysis
+  - Portability calculations for married couples
+  - Lifetime gifting strategies
+  - TCJA sunset impact comparison (2025 vs 2026)
+  - Complete API reference with examples
+  - Planning strategies and best practices
+  - Comprehensive FAQ section
+- **[`estate_tax_calculations.py`](estate_tax_calculations.py)** - Estate tax calculation module (1,089 lines)
+  - Federal estate tax with exemption and rate calculations
+  - State estate taxes for 13 states (CT, DC, HI, IL, ME, MD, MA, MN, NY, OR, RI, VT, WA)
+  - Inheritance taxes for 6 states (IA, KY, MD, NE, NJ, PA)
+  - GSTT calculations with skip person tracking
+  - Portability calculations for married couples
+  - TCJA sunset modeling (2026 exemption reduction)
+  - Comprehensive result objects using NamedTuples
+- **[`beneficiary_optimization.py`](beneficiary_optimization.py)** - Beneficiary planning module (847 lines)
+  - SECURE Act 2.0 compliant calculations
+  - 10-year rule for non-spouse beneficiaries with distribution strategies
+  - Stretch IRA for Eligible Designated Beneficiaries (EDBs)
+  - Spousal rollover vs. inherited IRA comparison with recommendations
+  - Trust beneficiary modeling (conduit, accumulation, see-through)
+  - RMD calculations with updated life expectancy tables
+  - Multi-strategy comparison tools with net-to-beneficiary rankings
+- **[`charitable_giving_advanced.py`](charitable_giving_advanced.py)** - Advanced charitable giving module (752 lines)
+  - Charitable Remainder Trusts (CRUT and CRAT) with income stream modeling
+  - Charitable Lead Trusts (CLUT and CLAT) with estate tax reduction
+  - Private Foundation operations with 1.39% excise tax and 5% minimum distribution
+  - Donor Advised Fund (DAF) modeling with 0.6% admin fees
+  - Foundation vs. DAF comparison engine with cost analysis
+  - Qualified Charitable Distribution (QCD) benefit analysis with IRMAA impact
+  - Tax efficiency calculations and recommendations
 - **[`COST_BASIS_TRACKING_GUIDE.md`](COST_BASIS_TRACKING_GUIDE.md)** - Cost basis tracking implementation guide (678 lines)
   - Complete architecture overview with diagrams
   - BrokerageAccount and BrokerageTransaction class documentation
@@ -1256,6 +1426,44 @@ retirement_planning/
   - Timing strategies and tax optimization
   - Real-world examples and case studies
   - Comparison with regular backdoor Roth
+
+### Brokerage Integrations *(NEW - March 2026)*
+- **[`BROKERAGE_INTEGRATION_SUMMARY.md`](BROKERAGE_INTEGRATION_SUMMARY.md)** - Complete brokerage integration guide (752 lines)
+  - Overview of SnapTrade and Schwab integrations
+  - Feature comparison and when to use each
+  - Setup instructions for both platforms
+  - Daily workflow and usage guide
+  - Comprehensive troubleshooting section
+  - API reference and code examples
+  - Security best practices
+  - Future enhancement roadmap
+- **[`SNAPTRADE_QUICKSTART.md`](SNAPTRADE_QUICKSTART.md)** - SnapTrade setup guide (330 lines)
+  - Quick start instructions
+  - Multi-brokerage aggregation (5,000+ institutions)
+  - Automatic daily sync
+  - OAuth 2.0 authentication
+  - Transaction import and cost basis tracking
+- **[`SNAPTRADE_IMPLEMENTATION_SUMMARY.md`](SNAPTRADE_IMPLEMENTATION_SUMMARY.md)** - Technical implementation (450 lines)
+  - Architecture overview
+  - Component descriptions
+  - API integration patterns
+  - Testing guide
+- **[`SCHWAB_INTEGRATION_GUIDE.md`](SCHWAB_INTEGRATION_GUIDE.md)** - Schwab direct API guide (476 lines)
+  - Developer account setup
+  - OAuth 2.0 configuration
+  - Direct API integration
+  - Advanced transaction import
+  - Cost basis tracking (FIFO method)
+- **[`SCHWAB_DIRECT_API_IMPLEMENTATION_COMPLETE.md`](SCHWAB_DIRECT_API_IMPLEMENTATION_COMPLETE.md)** - Implementation summary (560 lines)
+  - Complete feature list
+  - Architecture details
+  - Testing results
+  - Known limitations
+- **[`SCHWAB_TRANSACTION_IMPORT_IMPLEMENTATION.md`](SCHWAB_TRANSACTION_IMPORT_IMPLEMENTATION.md)** - Transaction import guide (557 lines)
+  - Transaction type mapping
+  - Cost basis calculation (FIFO)
+  - Tax reporting features
+  - Corporate actions support
 
 ### Portfolio Management
 - **[`PORTFOLIO_REBALANCING_GUIDE.md`](PORTFOLIO_REBALANCING_GUIDE.md)** *(NEW)* - Portfolio rebalancing guide
@@ -1771,33 +1979,47 @@ For issues or questions:
 **✅ FULLY IMPLEMENTED (March 2026) - See Recent Updates section above**
 
 #### 5. Estate Planning Module
-**Status: ✅ IMPLEMENTED (March 2026)**
+**Status: ✅ FULLY IMPLEMENTED (March 2026)**
 
-**✅ Implemented:**
-- **Estate Planning Page** (`pages/1_estate_planning.py`) — Complete 7-tab interface
+**✅ Complete Implementation:**
+- **Estate Planning Page** (`pages/1_estate_planning.py`) — Complete 10-tab interface
   - Situation assessment with family & beneficiary analysis
+  - **Estate Tax Calculator** — Federal, state, inheritance, GSTT with TCJA sunset modeling
+  - **Beneficiary Planning** — SECURE Act 2.0 compliant 10-year rule, stretch IRA, spousal options, trusts
+  - **Charitable Giving** — CRT, CLT, Foundation vs. DAF, QCD analysis
   - Legal documents checklist (will, trusts, POA, healthcare directives)
   - Financial & accounts tracking (beneficiaries, titling, insurance)
   - Personal & property inventory (digital assets, real estate, business)
   - Document location tracker with secure storage recommendations
   - Review schedule with automated reminders
   - Overall progress visualization across all categories
+
+- **Advanced Calculation Modules** (3,680+ lines):
+  - [`estate_tax_calculations.py`](estate_tax_calculations.py) (1,089 lines) — Federal, state, inheritance, GSTT
+  - [`beneficiary_optimization.py`](beneficiary_optimization.py) (847 lines) — 10-year rule, stretch IRA, spousal options, trusts
+  - [`charitable_giving_advanced.py`](charitable_giving_advanced.py) (752 lines) — CRT, CLT, Foundation, DAF, QCD
+
+- **Comprehensive Testing** (1,446 test lines):
+  - [`test_estate_tax_calculations.py`](test_estate_tax_calculations.py) (652 lines) — 15 test cases
+  - [`test_beneficiary_optimization.py`](test_beneficiary_optimization.py) (363 lines) — 8 test cases
+  - [`test_charitable_giving_advanced.py`](test_charitable_giving_advanced.py) (431 lines) — 10 test cases
+
+- **Documentation** (1,297 lines):
+  - [`ADVANCED_ESTATE_PLANNING_GUIDE.md`](ADVANCED_ESTATE_PLANNING_GUIDE.md) (752 lines) — Complete integration guide
+  - [`ESTATE_TAX_CALCULATIONS_GUIDE.md`](ESTATE_TAX_CALCULATIONS_GUIDE.md) (545 lines) — Estate tax guide
+
 - **Configuration Integration** — Children tracking, property management
 - **Data Persistence** — JSON-based storage with automatic backups
 
-**🔄 Still Pending:**
-- **Advanced Estate Tax Calculations**
-  - Federal estate tax projections with TCJA sunset modeling
-  - State estate/inheritance tax calculations
-  - Generation-skipping transfer tax (GSTT) analysis
-- **Advanced Beneficiary Optimization**
-  - Stretch IRA calculations (SECURE Act 2.0 compliant)
-  - Trust beneficiary modeling with tax implications
-  - Spousal rollover vs. inherited IRA detailed analysis
-- **Advanced Charitable Giving**
-  - Charitable Remainder Trust (CRT) modeling
-  - Charitable Lead Trust (CLT) calculations
-  - Private foundation vs. DAF detailed comparison
+**Key Features:**
+- **TCJA Sunset Modeling**: Shows impact of 2026 exemption reduction from $13.61M to $7.11M
+- **13 State Estate Taxes**: CT, DC, HI, IL, ME, MD, MA, MN, NY, OR, RI, VT, WA with progressive rates
+- **6 State Inheritance Taxes**: IA, KY, MD, NE, NJ, PA with relationship-based rates
+- **GSTT Analysis**: 40% flat rate on transfers to skip persons (grandchildren)
+- **SECURE Act 2.0**: 10-year rule for non-EDBs, stretch IRA for EDBs, updated RMD ages
+- **Trust Modeling**: Conduit, accumulation, and see-through trusts with tax implications
+- **CRT/CLT**: Income stream modeling, estate tax reduction, present value calculations
+- **Foundation vs. DAF**: Cost comparison, grant efficiency, control vs. simplicity analysis
 
 #### 6. Portfolio Management Enhancements
 **Status: ✅ PARTIALLY IMPLEMENTED (February 2026)**
