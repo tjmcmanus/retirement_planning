@@ -165,6 +165,7 @@ portfolio_data_truth.csv
 retirement_config.json
 estate_planning_data.json
 *.parquet
+*.db
 
 # Backup files
 *_backup_*.csv
