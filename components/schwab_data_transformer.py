@@ -240,7 +240,7 @@ class SchwabDataTransformer:
                     transactions = storage.get_transactions(
                         user_id="default",
                         symbol=symbol,
-                        transaction_types=['buy']
+                        transaction_types=['BUY']  # Must be uppercase to match stored values
                     )
                     
                     logger.debug(f"Found {len(transactions)} BUY transactions for {symbol}")

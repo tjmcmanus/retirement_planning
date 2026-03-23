@@ -681,13 +681,28 @@ class SchwabConnector:
             raise RuntimeError("API client not initialized")
         
         try:
+            # Get account hashes first
             if account_hash:
-                # Get specific account
+                # Single account specified
+                account_hashes = [account_hash]
                 account_data = self.api.get_account_details(account_hash)
                 accounts = [account_data]
             else:
-                # Get all accounts
-                accounts = self.api.get_all_accounts(include_positions=True)
+                # Get all accounts - need to get hashes first
+                account_numbers = self.api.get_account_numbers()
+                # Filter out None values and ensure we have valid hashes
+                account_hashes = [h for h in (acc.get('hashValue') for acc in account_numbers) if h]
+                
+                # Then get details for each
+                accounts = []
+                for acc_hash in account_hashes:
+                    if not acc_hash:  # Extra safety check
+                        continue
+                    try:
+                        account_data = self.api.get_account_details(acc_hash, include_positions=True)
+                        accounts.append(account_data)
+                    except Exception as e:
+                        logger.error(f"Failed to get details for account {acc_hash}: {e}")
             
             # Extract positions from all accounts
             all_positions = []
@@ -703,19 +718,21 @@ class SchwabConnector:
                         'position': position
                     })
             
-            logger.info(f"Retrieved {len(all_positions)} positions")
+            logger.info(f"Retrieved {len(all_positions)} positions from {len(account_hashes)} accounts")
             
             # Automatically import transactions if requested
             if import_transactions:
-                try:
-                    logger.info("Automatically importing transaction history...")
-                    self._import_transactions_for_positions(
-                        account_hash=account_hash,
-                        days_back=transaction_days_back
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to auto-import transactions: {e}")
-                    # Don't fail the whole operation if transaction import fails
+                # Import transactions for each account
+                for acc_hash in account_hashes:
+                    try:
+                        logger.info(f"Importing transaction history for account {acc_hash[:8]}...")
+                        self._import_transactions_for_positions(
+                            account_hash=acc_hash,
+                            days_back=transaction_days_back
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to import transactions for account {acc_hash[:8]}: {e}")
+                        # Don't fail the whole operation if transaction import fails for one account
             
             return all_positions
             
@@ -744,18 +761,84 @@ class SchwabConnector:
             
             logger.info(f"Starting transaction import for Schwab (days_back={days_back})")
             
-            # Initialize transaction components
-            importer = TransactionImporter(schwab_connector=self)
+            # Ensure API is initialized
+            if not self.api:
+                logger.error("Schwab API not initialized - cannot import transactions")
+                return
+            
+            # Ensure account_hash is provided
+            if not account_hash:
+                logger.error("Account hash required for transaction import")
+                return
+            
+            # Initialize storage component
             storage = TransactionStorage()
             
-            # Fetch orders (Schwab API uses orders, not transactions)
-            logger.info("Fetching orders from Schwab API...")
-            transactions_df = importer.get_schwab_transactions(
+            # Calculate date range
+            end_time = datetime.now()
+            start_time = end_time - timedelta(days=days_back)
+            
+            # Format dates for Schwab API (ISO 8601)
+            start_date = start_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            end_date = end_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            
+            # Fetch transactions from Schwab API (better than orders endpoint)
+            logger.info(f"Fetching transactions from Schwab API ({start_date} to {end_date})...")
+            raw_transactions = self.api.get_transactions(
                 account_hash=account_hash,
-                days_back=days_back
+                start_date=start_date,
+                end_date=end_date,
+                transaction_types='TRADE'  # Focus on trades (buys/sells)
             )
             
-            logger.info(f"Fetched {len(transactions_df)} orders from Schwab")
+            logger.info(f"Fetched {len(raw_transactions)} transactions from Schwab")
+            
+            # Convert Schwab transactions to standard format
+            transactions = []
+            for txn in raw_transactions:
+                try:
+                    # Extract basic transaction info
+                    activity_id = txn.get('activityId', '')
+                    txn_time = txn.get('time', '')
+                    trade_date = txn.get('tradeDate', '')
+                    txn_type = txn.get('type', '')
+                    
+                    # Process transfer items (the actual trades)
+                    for item in txn.get('transferItems', []):
+                        instrument = item.get('instrument', {})
+                        symbol = instrument.get('symbol', '')
+                        
+                        # Determine if BUY or SELL based on amount sign
+                        amount = item.get('amount', 0)
+                        quantity = abs(amount)
+                        transaction_type = 'BUY' if amount > 0 else 'SELL'
+                        
+                        # Get price
+                        price = item.get('price', 0)
+                        if not price:
+                            price = item.get('cost', 0)
+                        
+                        # Create transaction record
+                        transaction = {
+                            'transaction_id': f"{activity_id}",
+                            'date': trade_date if trade_date else txn_time[:10],
+                            'symbol': symbol,
+                            'transaction_type': transaction_type,
+                            'quantity': quantity,
+                            'price': price,
+                            'amount': quantity * price,
+                            'account_id': account_hash,
+                            'description': f"{transaction_type} {quantity} {symbol} @ ${price}"
+                        }
+                        transactions.append(transaction)
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process transaction {txn.get('activityId')}: {e}")
+                    continue
+            
+            # Convert to DataFrame
+            transactions_df = pd.DataFrame(transactions)
+            logger.info(f"Converted {len(transactions_df)} transactions to standard format")
             
             if len(transactions_df) > 0:
                 # Log transaction types

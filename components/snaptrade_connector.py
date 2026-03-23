@@ -379,6 +379,69 @@ class SnapTradeConnector:
             
             logger.info(f"Retrieved {len(holdings)} holdings for user {user_id}")
             return holdings
+            
+        except Exception as e:
+            logger.error(f"Failed to get holdings: {e}")
+            return []
+    
+    def get_transactions(
+        self,
+        user_id: str,
+        user_secret: str,
+        account_id: str,
+        start_date: str,
+        end_date: str
+    ) -> List[Dict]:
+        """
+        Fetch transaction history from brokerage account.
+        
+        Args:
+            user_id: User identifier
+            user_secret: User secret for authentication
+            account_id: Account ID to fetch transactions from
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+            
+        Returns:
+            List of transaction dictionaries
+        """
+        try:
+            logger.info(f"Fetching transactions for account {account_id} from {start_date} to {end_date}")
+            
+            # Get activities (transactions) from SnapTrade
+            activities = self.client.transactions.get_activities(
+                user_id=user_id,
+                user_secret=user_secret,
+                account_id=account_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            # Extract activities from ApiResponseFor200 object
+            activities_list = []
+            if hasattr(activities, 'body'):
+                activities_list = activities.body if isinstance(activities.body, list) else []
+            elif isinstance(activities, list):
+                activities_list = activities
+            
+            # Convert activities to dictionaries
+            transactions = []
+            for activity in activities_list:
+                if hasattr(activity, '__dict__'):
+                    converted = self._convert_to_dict(activity)
+                    if isinstance(converted, dict):
+                        transactions.append(converted)
+                elif isinstance(activity, dict):
+                    transactions.append(activity)
+            
+            logger.info(f"Retrieved {len(transactions)} transactions")
+            return transactions
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch transactions: {e}", exc_info=True)
+            return []
+            logger.info(f"Retrieved {len(holdings)} holdings for user {user_id}")
+            return holdings
         except Exception as e:
             logger.error(f"Failed to get holdings: {e}")
             return []
