@@ -1,1 +1,4 @@
 
+data/credentials.db
+data/factor_cache.db
+data/transactions.db
