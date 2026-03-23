@@ -51,7 +51,11 @@ def render_connections_tab(portdf: pd.DataFrame, curr_month: int, curr_year: int
     st.caption("Automatic portfolio synchronization with your brokerage accounts")
     
     # Create tabs for different connection types
-    tab1, tab2 = st.tabs(["📊 SnapTrade (Multi-Brokerage)", "🏦 Schwab Direct"])
+    tab1, tab2, tab3 = st.tabs([
+        "📊 SnapTrade (Multi-Brokerage)",
+        "🏦 Schwab Direct",
+        "⚙️ Auto-Sync Scheduler"
+    ])
     
     with tab1:
         st.markdown("### Multi-Brokerage Integration via SnapTrade")
@@ -69,6 +73,10 @@ def render_connections_tab(portdf: pd.DataFrame, curr_month: int, curr_year: int
             render_schwab_direct_section(portdf, curr_month, curr_year)
         except ImportError as e:
             st.error(f"Schwab Direct UI not available: {e}")
+    
+    with tab3:
+        # Render automatic sync scheduler UI
+        render_sync_scheduler_ui(portdf, curr_month, curr_year)
     
     # Show features and benefits
     st.markdown("---")
@@ -572,7 +580,18 @@ def _render_features_section() -> None:
 
 def _format_time_ago(dt: datetime) -> str:
     """Format datetime as human-readable time ago."""
-    now = datetime.now()
+    # Handle both timezone-aware and naive datetimes
+    if dt.tzinfo is not None:
+        # dt is timezone-aware, make now timezone-aware too
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        # Convert dt to UTC if it's not already
+        if dt.tzinfo != timezone.utc:
+            dt = dt.astimezone(timezone.utc)
+    else:
+        # dt is naive, use naive now
+        now = datetime.now()
+    
     diff = now - dt
     
     if diff.days > 0:
@@ -585,5 +604,207 @@ def _format_time_ago(dt: datetime) -> str:
         return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
     else:
         return "just now"
+
+
+def render_sync_scheduler_ui(portdf: pd.DataFrame, curr_month: int, curr_year: int) -> None:
+    """
+    Render automatic sync scheduler UI.
+    
+    Args:
+        portdf: Current portfolio DataFrame
+        curr_month: Current month
+        curr_year: Current year
+    """
+    st.markdown("## ⚙️ Automatic Sync Settings")
+    st.caption("Configure automatic portfolio synchronization")
+    
+    # Import sync components
+    try:
+        from components.sync_scheduler import SyncScheduler, SyncFrequency
+        from components.sync_orchestrator import SyncOrchestrator
+        from components.sync_state import SyncState
+    except ImportError as e:
+        st.error(f"Sync scheduler not available: {e}")
+        st.info("Install required packages: `pip install pytz`")
+        return
+    
+    # Initialize sync state
+    if 'sync_state' not in st.session_state:
+        st.session_state.sync_state = SyncState()
+    
+    sync_state = st.session_state.sync_state
+    
+    # Show current state
+    state_summary = sync_state.get_state_summary()
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        last_sync = state_summary.get('last_sync')
+        if last_sync:
+            from datetime import datetime
+            last_sync_dt = datetime.fromisoformat(last_sync)
+            st.metric("Last Sync", _format_time_ago(last_sync_dt))
+        else:
+            st.metric("Last Sync", "Never")
+    
+    with col2:
+        st.metric("Total Syncs", state_summary.get('sync_count', 0))
+    
+    with col3:
+        st.metric("Accounts Tracked", state_summary.get('accounts_tracked', 0))
+    
+    st.markdown("---")
+    
+    # Scheduler configuration
+    st.markdown("### Sync Schedule Configuration")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        frequency = st.selectbox(
+            "Sync Frequency",
+            options=[f.value for f in SyncFrequency],
+            index=1,  # Daily default
+            help="How often to automatically sync your portfolio"
+        )
+    
+    with col2:
+        from datetime import time as dt_time
+        sync_time = st.time_input(
+            "Sync Time",
+            value=dt_time(6, 0),
+            help="Time of day for daily/weekly syncs"
+        )
+    
+    with col3:
+        market_hours_only = st.checkbox(
+            "Market Hours Only",
+            value=False,
+            help="Only sync during market hours (9:30 AM - 4:00 PM ET)"
+        )
+    
+    # Scheduler controls
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("▶️ Start Auto-Sync", type="primary", width='stretch'):
+            try:
+                # Create orchestrator
+                orchestrator = SyncOrchestrator(
+                    snaptrade_connector=st.session_state.get('snaptrade_connector'),
+                    schwab_connector=st.session_state.get('schwab_connector')
+                )
+                
+                # Create sync callback
+                def sync_callback():
+                    result = orchestrator.sync_all()
+                    sync_state.update_sync_time()
+                    return result.to_dict()
+                
+                # Create and start scheduler
+                scheduler = SyncScheduler(
+                    sync_callback=sync_callback,
+                    frequency=SyncFrequency(frequency),
+                    sync_time=sync_time,
+                    market_hours_only=market_hours_only
+                )
+                scheduler.start()
+                
+                st.session_state.sync_scheduler = scheduler
+                st.success("✅ Auto-sync started!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to start scheduler: {e}")
+                logger.error(f"Scheduler start error: {e}", exc_info=True)
+    
+    with col2:
+        if st.button("⏹️ Stop Auto-Sync", width='stretch'):
+            if 'sync_scheduler' in st.session_state and st.session_state.sync_scheduler:
+                st.session_state.sync_scheduler.stop()
+                st.session_state.sync_scheduler = None
+                st.success("✅ Auto-sync stopped")
+                st.rerun()
+            else:
+                st.warning("No active scheduler to stop")
+    
+    with col3:
+        if st.button("🔄 Sync Now", width='stretch'):
+            with st.spinner("Syncing..."):
+                try:
+                    orchestrator = SyncOrchestrator(
+                        snaptrade_connector=st.session_state.get('snaptrade_connector'),
+                        schwab_connector=st.session_state.get('schwab_connector')
+                    )
+                    result = orchestrator.sync_all()
+                    sync_state.update_sync_time()
+                    
+                    if result.success:
+                        st.success(f"✅ {result.message}")
+                    else:
+                        st.error(f"❌ {result.message}")
+                    
+                    # Show sync details
+                    with st.expander("Sync Details"):
+                        st.json(result.data)
+                    
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Sync failed: {e}")
+                    logger.error(f"Manual sync error: {e}", exc_info=True)
+    
+    # Show scheduler status
+    if 'sync_scheduler' in st.session_state and st.session_state.sync_scheduler:
+        st.markdown("---")
+        st.markdown("### Scheduler Status")
+        
+        status = st.session_state.sync_scheduler.get_status()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            is_running = status.get('is_running', False)
+            st.metric("Status", "🟢 Running" if is_running else "🔴 Stopped")
+        
+        with col2:
+            st.metric("Frequency", status.get('frequency', 'N/A').title())
+        
+        with col3:
+            market_open = status.get('market_open', False)
+            st.metric("Market", "🟢 Open" if market_open else "🔴 Closed")
+        
+        with col4:
+            last_sync = status.get('last_sync')
+            if last_sync:
+                from datetime import datetime
+                last_sync_dt = datetime.fromisoformat(last_sync)
+                st.metric("Last Run", _format_time_ago(last_sync_dt))
+            else:
+                st.metric("Last Run", "Never")
+    
+    # Show sync history
+    if 'sync_scheduler' in st.session_state and st.session_state.sync_scheduler:
+        orchestrator = SyncOrchestrator(
+            snaptrade_connector=st.session_state.get('snaptrade_connector'),
+            schwab_connector=st.session_state.get('schwab_connector')
+        )
+        
+        history = orchestrator.get_sync_history(limit=10)
+        
+        if history:
+            st.markdown("---")
+            st.markdown("### Recent Sync History")
+            
+            for sync_record in reversed(history):
+                timestamp = sync_record.get('timestamp', 'Unknown')
+                success = sync_record.get('success', False)
+                duration = sync_record.get('duration', 0)
+                
+                status_icon = "✅" if success else "❌"
+                
+                with st.expander(f"{status_icon} {timestamp} ({duration:.1f}s)"):
+                    st.json(sync_record)
+
 
 # Made with Bob

@@ -57,10 +57,10 @@ try:
     from components.transaction_history_ui import (
         render_transaction_history_tab,
         render_cost_basis_tab,
-        render_capital_gains_tab
+        render_capital_gains_tab,
+        create_transaction_importer,
+        create_transaction_storage
     )
-    from components.transaction_importer import create_transaction_importer
-    from components.transaction_storage import create_transaction_storage
     TRANSACTION_FEATURES_AVAILABLE = True
 except ImportError:
     render_transaction_history_tab = None
@@ -352,31 +352,22 @@ st.caption("Phase 1: UX Consolidation + Performance Analytics | Phase 2: Brokera
 # ---------------------------------------------------------------------------
 with transactions_tab:
     if TRANSACTION_FEATURES_AVAILABLE and render_transaction_history_tab is not None:
-        # Initialize transaction components
-        if 'transaction_importer' not in st.session_state:
+        # Initialize transaction storage (no connector needed for viewing)
+        if 'transaction_storage' not in st.session_state:
             try:
-                if 'snaptrade_connector' in st.session_state:
-                    st.session_state.transaction_importer = create_transaction_importer(
-                        st.session_state.snaptrade_connector
-                    )
-                    st.session_state.transaction_storage = create_transaction_storage()
-                else:
-                    st.warning("⚠️ SnapTrade connector not initialized. Please connect your brokerage account in the Connections tab first.")
-                    st.stop()
+                st.session_state.transaction_storage = create_transaction_storage()
             except Exception as e:
-                st.error(f"Failed to initialize transaction components: {e}")
+                st.error(f"Failed to initialize transaction storage: {e}")
                 st.stop()
         
         # Render transaction history tab
-        # Get user_id from environment if available, otherwise use "default"
-        import os
-        env_user_id = os.getenv("SNAPTRADE_USER_ID", "default")
-        
+        # Note: Transactions are automatically imported during Schwab sync
+        # The UI just displays what's already in the database
         render_transaction_history_tab(
-            connector=st.session_state.get('snaptrade_connector'),
-            transaction_importer=st.session_state.get('transaction_importer'),
-            transaction_storage=st.session_state.get('transaction_storage'),
-            user_id=env_user_id
+            connector=st.session_state.get('snaptrade_connector'),  # Optional, for manual import
+            transaction_importer=st.session_state.get('transaction_importer'),  # Optional
+            transaction_storage=st.session_state.transaction_storage,
+            user_id="default"
         )
     else:
         st.markdown("## 💳 Transaction History")
