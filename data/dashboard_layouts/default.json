@@ -1,0 +1,159 @@
+{
+  "layout_id": "default",
+  "name": "Default Dashboard",
+  "description": "Standard financial overview dashboard",
+  "grid_config": {
+    "columns": 12,
+    "row_height": 100,
+    "gap": 16,
+    "breakpoints": {
+      "mobile": 1,
+      "tablet": 2,
+      "desktop": 3,
+      "wide": 4
+    }
+  },
+  "widgets": [
+    {
+      "widget_id": "mom_change_kpi",
+      "widget_type": "kpi_metric",
+      "title": "Month-over-Month",
+      "position": {
+        "row": 0,
+        "col": 3
+      },
+      "size": {
+        "width": 3,
+        "height": 1
+      },
+      "config": {
+        "metric": "mom_change",
+        "show_trend": true
+      }
+    },
+    {
+      "widget_id": "net_worth_kpi",
+      "widget_type": "kpi_metric",
+      "title": "Net Worth",
+      "position": {
+        "row": 0,
+        "col": 0
+      },
+      "size": {
+        "width": 3,
+        "height": 1
+      },
+      "config": {
+        "metric": "net_worth",
+        "show_trend": true
+      }
+    },
+    {
+      "widget_id": "ytd_change_kpi",
+      "widget_type": "kpi_metric",
+      "title": "Year-to-Date",
+      "position": {
+        "row": 0,
+        "col": 6
+      },
+      "size": {
+        "width": 3,
+        "height": 1
+      },
+      "config": {
+        "metric": "ytd_change",
+        "show_trend": true
+      }
+    },
+    {
+      "widget_id": "net_worth_chart",
+      "widget_type": "chart",
+      "title": "Net Worth Trend",
+      "position": {
+        "row": 1,
+        "col": 0
+      },
+      "size": {
+        "width": 6,
+        "height": 2
+      },
+      "config": {
+        "chart_type": "line",
+        "data_source": "networth_by_month",
+        "x_axis": "date",
+        "y_axis": "total"
+      }
+    },
+    {
+      "widget_id": "account_mix_chart",
+      "widget_type": "chart",
+      "title": "Account Mix",
+      "position": {
+        "row": 1,
+        "col": 6
+      },
+      "size": {
+        "width": 6,
+        "height": 2
+      },
+      "config": {
+        "chart_type": "treemap",
+        "data_source": "account_balances"
+      }
+    },
+    {
+      "widget_id": "widget_6",
+      "widget_type": "chart",
+      "title": "Portfolio mix",
+      "position": {
+        "row": 5,
+        "col": 6
+      },
+      "size": {
+        "width": 6,
+        "height": 2
+      },
+      "config": {
+        "chart_type": "treemap",
+        "x_axis": "date",
+        "y_axis": "total",
+        "names": "category",
+        "values": "value",
+        "show_legend": true,
+        "show_grid": true,
+        "auto_range_x": true,
+        "auto_range_y": true
+      }
+    },
+    {
+      "widget_id": "widget_7",
+      "widget_type": "kpi_metric",
+      "title": "12-Month Rolling",
+      "position": {
+        "row": 6,
+        "col": 0
+      },
+      "size": {
+        "width": 6,
+        "height": 2
+      },
+      "config": {}
+    },
+    {
+      "widget_id": "widget_8",
+      "widget_type": "kpi_metric",
+      "title": "Net worth change over 12 months",
+      "position": {
+        "row": 7,
+        "col": 0
+      },
+      "size": {
+        "width": 6,
+        "height": 2
+      },
+      "config": {}
+    }
+  ],
+  "created_at": "2026-03-23T16:58:52.453274",
+  "updated_at": "2026-03-23T17:22:35.604611"
+}
