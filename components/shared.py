@@ -167,6 +167,7 @@ BALANCE_COLUMN_CONFIG: dict = {
 # Net worth statement style constants
 # ---------------------------------------------------------------------------
 _ACCOUNT_TYPE_LABELS: dict[str, str] = {
+    "Savings":     "Savings",
     "Cash":        "Cash",
     "Brokerage":   "Investment",
     "Traditional": "Tax Deferred",
@@ -175,10 +176,11 @@ _ACCOUNT_TYPE_LABELS: dict[str, str] = {
 }
 
 _ACCOUNT_TYPE_ORDER: list[str] = [
-    "Cash", "Brokerage", "Traditional", "Roth", "Real Estate"
+    "Savings", "Cash", "Brokerage", "Traditional", "Roth", "Real Estate"
 ]
 
 _ACCOUNT_TYPE_COLORS: dict[str, str] = {
+    "Savings":     "rgba(135, 206, 250, 0.35)",
     "Cash":        "rgba(246, 207, 113, 0.35)",
     "Brokerage":   "rgba(254, 136, 177, 0.35)",
     "Traditional": "rgba(139, 224, 164, 0.35)",
@@ -187,6 +189,7 @@ _ACCOUNT_TYPE_COLORS: dict[str, str] = {
 }
 
 _ACCOUNT_TYPE_ACCENT: dict[str, str] = {
+    "Savings":     "rgb(135, 206, 250)",
     "Cash":        "rgb(246, 207, 113)",
     "Brokerage":   "rgb(254, 136, 177)",
     "Traditional": "rgb(139, 224, 164)",

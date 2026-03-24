@@ -1,0 +1,118 @@
+month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,purchase_date
+3,2026,Schwab-8457,Brokerage,Joint,VPV,Invesco Pennsylvania Value Muni,Financial Services,5770.9856,9.6194123236,2025-03-31
+3,2026,Schwab-8457,Brokerage,Joint,MSFT,Microsoft Corporation,Technology,480.03,58.727412870029,2025-06-12
+3,2026,Schwab-8457,Brokerage,Joint,MDT,Medtronic plc.,Healthcare,400.0,90.15,2025-11-06
+3,2026,Schwab-8457,Brokerage,Joint,KMB,Kimberly-Clark Corporation,Consumer Defensive,353.4353,99.9991511884,2026-01-05
+3,2026,Schwab-8457,Brokerage,Joint,JNJ,Johnson & Johnson,Healthcare,192.2271,187.757449391891,2025-09-24
+3,2026,Schwab-8457,Brokerage,Joint,COP,ConocoPhillips,Energy,386.725,91.32194712,2026-03-02
+3,2026,Schwab-8457,Brokerage,Joint,AMZN,"Amazon.com, Inc.",Consumer Cyclical,1000.0,12.4865,
+3,2026,Schwab-6471,Roth,Morticia,XERS,"Xeris Biopharma Holdings, Inc.",Healthcare,12677.0,8.2141815887,2025-11-05
+3,2026,Schwab-6471,Roth,Morticia,WAST,Waste Energy Corp.,Industrials,200000.0,0.14316125,2025-10-30
+3,2026,Schwab-6471,Roth,Morticia,VKTX,"Viking Therapeutics, Inc.",Healthcare,2000.0,33.6445,2025-09-10
+3,2026,Schwab-6471,Roth,Morticia,SOFI,"SoFi Technologies, Inc.",Financial Services,1454.0,26.7940921596,2025-09-29
+3,2026,Schwab-6471,Roth,Morticia,SEI,"Solaris Energy Infrastructure, ",Energy,200.0,48.4524,2026-02-04
+3,2026,Schwab-6471,Roth,Morticia,OPENZ,Opendoor Technologies Inc.,EQUITY,133.0,0.959924812,2025-11-21
+3,2026,Schwab-6471,Roth,Morticia,OPENW,Opendoor Technologies Inc.,EQUITY,133.0,1.8602255639,2025-11-21
+3,2026,Schwab-6471,Roth,Morticia,OPENL,Opendoor Technologies Inc.,EQUITY,133.0,1.19,2025-11-21
+3,2026,Schwab-6471,Roth,Morticia,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,5.8787428571,2025-11-10
+3,2026,Schwab-6471,Roth,Morticia,BETR,Better Home & Finance Holding C,Financial Services,1050.0,33.5214285714,2025-11-10
+3,2026,Schwab-5553,Roth,Gomez,XERS,"Xeris Biopharma Holdings, Inc.",Healthcare,4250.0,2.4192,2025-11-05
+3,2026,Schwab-5553,Roth,Gomez,WAST,Waste Energy Corp.,Industrials,100000.0,0.0440695,2025-10-30
+3,2026,Schwab-5553,Roth,Gomez,SOFI  280121C00018000,"SoFi Technologies, Inc. Call Option",Options:Call,2.0,6.4566,2026-03-20
+3,2026,Schwab-5553,Roth,Gomez,SOFI  260402C00020000,"SoFi Technologies, Inc. Call Option",Options:Call,-7.0,0.233357142857,
+3,2026,Schwab-5553,Roth,Gomez,SOFI,"SoFi Technologies, Inc.",Financial Services,700.0,27.3052,2025-09-29
+3,2026,Schwab-5553,Roth,Gomez,BTQ,BTQ Technologies Corp.,Technology,2572.0,6.3334992224,2025-11-25
+3,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,130000.0,1.0,2023-01-01
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,VUSUX,Vanguard Long-Term Treasury Fd ,MUTUALFUND,118610.284,7.95,
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,VPCCX,Vanguard PRIMECAP Core Fund Inv,MUTUALFUND,25730.831,38.6,
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,PRRSX,PIMCO RealEstateRealReturn Stra,MUTUALFUND,34324.815,28.84,
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,FPBFX,Fidelity Pacific-Basin Fund,MUTUALFUND,24097.559,42.14,
+3,2026,Highmark 401k,Traditional,Morticia,prgfx,T. Rowe Price Growth Stock Fd,MUTUALFUND,3250.0,104.0,2021-09-20
+3,2026,Highmark 401k,Traditional,Morticia,HRSIX,Hood River Small-Cap Growth Fun,MUTUALFUND,900.0,93.0,2020-03-10
+3,2026,Highmark 401k,Traditional,Morticia,MAFOX,BlackRock Large Cap Focus Growt,MUTUALFUND,2250.0,7.5,2021-06-15
+3,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Morticia,0769,MIP II CL 3,MF:Cash,554477.38,1.0,
+2,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA Corporation,Technology,180.0,500.0,2023-02-28
+2,2026,Schwab,Brokerage,Joint,VZ,Verizon Communications Inc.,Communication Services,350.0,42.0,2021-01-15
+2,2026,Schwab,Brokerage,Joint,TSLA,"Tesla, Inc.",Consumer Cyclical,100.0,250.0,2022-11-01
+2,2026,Schwab,Brokerage,Joint,T,AT&T Inc.,Communication Services,800.0,20.0,2020-05-30
+2,2026,Schwab,Brokerage,Joint,PG,Procter & Gamble Company (The),Consumer Defensive,200.0,155.0,2021-03-22
+2,2026,Schwab,Brokerage,Joint,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,2025-11-03
+2,2026,Schwab,Brokerage,Joint,NFLX,"Netflix, Inc.",Communication Services,150.0,600.0,2022-07-11
+2,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,META,"Meta Platforms, Inc.",Communication Services,160.0,450.0,2023-01-20
+2,2026,Schwab,Brokerage,Joint,KO,Coca-Cola Company (The),Consumer Defensive,1400.0,62.5,2019-08-14
+2,2026,Schwab,Brokerage,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
+2,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,2025-09-15
+2,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Inc.,Communication Services,175.0,140.0,2022-04-01
+2,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
+2,2026,IBM 401(K) PLAN,Traditional,Gomez,VUSUX,Vanguard Long-Term Treasury Fd ,MUTUALFUND,118550.284,7.9,
+2,2026,IBM 401(K) PLAN,Traditional,Gomez,VPCCX,Vanguard PRIMECAP Core Fund Inv,MUTUALFUND,25670.831,40.6,
+2,2026,IBM 401(K) PLAN,Traditional,Gomez,PRRSX,PIMCO RealEstateRealReturn Stra,MUTUALFUND,34254.815,26.84,
+2,2026,IBM 401(K) PLAN,Traditional,Gomez,FPBFX,Fidelity Pacific-Basin Fund,MUTUALFUND,24957.559,41.14,
+2,2026,Fidelity,Traditional,Morticia,VSMAX,Vanguard Small Cap Index Fd Adm,MUTUALFUND,3250.0,95.0,2021-09-20
+2,2026,Fidelity,Traditional,Morticia,VFIAX,Vanguard 500 Index Fd Admiral S,MUTUALFUND,900.0,450.0,2020-03-10
+2,2026,Fidelity,Traditional,Morticia,VEXAX,Vanguard Extended Market Index ,MUTUALFUND,2250.0,120.0,2021-06-15
+2,2026,Fidelity,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
+2,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Morticia,0769,MIP II CL 3,MF:Cash,554477.38,1.0,
+1,2026,Schwab,Brokerage,Joint,VZ,Verizon Communications Inc.,Communication Services,350.0,42.0,2021-01-15
+1,2026,Schwab,Brokerage,Joint,TSLA,"Tesla, Inc.",Consumer Cyclical,100.0,250.0,2022-11-01
+1,2026,Schwab,Brokerage,Joint,T,AT&T Inc.,Communication Services,800.0,20.0,2020-05-30
+1,2026,Schwab,Brokerage,Joint,PG,Procter & Gamble Company (The),Consumer Defensive,200.0,155.0,2021-03-22
+1,2026,Schwab,Brokerage,Joint,NVDA,NVIDIA Corporation,Technology,80.0,500.0,2023-02-28
+1,2026,Schwab,Brokerage,Joint,NFLX,"Netflix, Inc.",Communication Services,50.0,600.0,2022-07-11
+1,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,META,"Meta Platforms, Inc.",Communication Services,160.0,450.0,2023-01-20
+1,2026,Schwab,Brokerage,Joint,KO,Coca-Cola Company (The),Consumer Defensive,1400.0,62.5,2019-08-14
+1,2026,Schwab,Brokerage,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
+1,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Inc.,Communication Services,75.0,140.0,2022-04-01
+1,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
+1,2026,IBM 401(K) PLAN,Traditional,Gomez,VUSUX,Vanguard Long-Term Treasury Fd ,MUTUALFUND,118500.284,7.9,
+1,2026,IBM 401(K) PLAN,Traditional,Gomez,VPCCX,Vanguard PRIMECAP Core Fund Inv,MUTUALFUND,25650.831,40.6,
+1,2026,IBM 401(K) PLAN,Traditional,Gomez,PRRSX,PIMCO RealEstateRealReturn Stra,MUTUALFUND,34224.815,26.84,
+1,2026,IBM 401(K) PLAN,Traditional,Gomez,FPBFX,Fidelity Pacific-Basin Fund,MUTUALFUND,24927.559,41.14,
+1,2026,Fidelity,Traditional,Morticia,VSMAX,Vanguard Small Cap Index Fd Adm,MUTUALFUND,3250.0,95.0,2021-09-20
+1,2026,Fidelity,Traditional,Morticia,VFIAX,Vanguard 500 Index Fd Admiral S,MUTUALFUND,900.0,450.0,2020-03-10
+1,2026,Fidelity,Traditional,Morticia,VEXAX,Vanguard Extended Market Index ,MUTUALFUND,2250.0,120.0,2021-06-15
+1,2026,Fidelity,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
+1,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Morticia,0769,MIP II CL 3,MF:Cash,554427.38,1.0,
+12,2025,Schwab,Brokerage,Joint,VZ,Verizon Communications Inc.,Communication Services,350.0,42.0,2021-01-15
+12,2025,Schwab,Brokerage,Joint,TSLA,"Tesla, Inc.",Consumer Cyclical,100.0,250.0,2022-11-01
+12,2025,Schwab,Brokerage,Joint,T,AT&T Inc.,Communication Services,800.0,20.0,2020-05-30
+12,2025,Schwab,Brokerage,Joint,PG,Procter & Gamble Company (The),Consumer Defensive,200.0,155.0,2021-03-22
+12,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA Corporation,Technology,80.0,500.0,2023-02-28
+12,2025,Schwab,Brokerage,Joint,NFLX,"Netflix, Inc.",Communication Services,50.0,600.0,2022-07-11
+12,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,META,"Meta Platforms, Inc.",Communication Services,60.0,450.0,2023-01-20
+12,2025,Schwab,Brokerage,Joint,KO,Coca-Cola Company (The),Consumer Defensive,400.0,62.5,2019-08-14
+12,2025,Schwab,Brokerage,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,2020-11-05
+12,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Inc.,Communication Services,75.0,140.0,2022-04-01
+12,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,55000.0,1.0,2023-01-01
+12,2025,Fidelity,Traditional,Morticia,VSMAX,Vanguard Small Cap Index Fd Adm,MUTUALFUND,2250.0,95.0,2021-09-20
+12,2025,Fidelity,Traditional,Morticia,VFIAX,Vanguard 500 Index Fd Admiral S,MUTUALFUND,900.0,450.0,2020-03-10
+12,2025,Fidelity,Traditional,Morticia,VEXAX,Vanguard Extended Market Index ,MUTUALFUND,2200.0,120.0,2021-06-15
+12,2025,Fidelity,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,86250.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,VZ,Verizon Communications Inc.,Communication Services,350.0,42.0,2021-01-15
+11,2025,Schwab,Brokerage,Joint,TSLA,"Tesla, Inc.",Consumer Cyclical,100.0,250.0,2022-11-01
+11,2025,Schwab,Brokerage,Joint,T,AT&T Inc.,Communication Services,800.0,20.0,2020-05-30
+11,2025,Schwab,Brokerage,Joint,PG,Procter & Gamble Company (The),Consumer Defensive,200.0,155.0,2021-03-22
+11,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA Corporation,Technology,80.0,500.0,2023-02-28
+11,2025,Schwab,Brokerage,Joint,NFLX,"Netflix, Inc.",Communication Services,50.0,600.0,2022-07-11
+11,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,META,"Meta Platforms, Inc.",Communication Services,60.0,450.0,2023-01-20
+11,2025,Schwab,Brokerage,Joint,KO,Coca-Cola Company (The),Consumer Defensive,400.0,62.5,2019-08-14
+11,2025,Schwab,Brokerage,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,2020-11-05
+11,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Inc.,Communication Services,75.0,140.0,2022-04-01
+11,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,54200.0,1.0,2023-01-01
+11,2025,Fidelity,Traditional,Morticia,VSMAX,Vanguard Small Cap Index Fd Adm,MUTUALFUND,1250.0,95.0,2021-09-20
+11,2025,Fidelity,Traditional,Morticia,VFIAX,Vanguard 500 Index Fd Admiral S,MUTUALFUND,900.0,450.0,2020-03-10
+11,2025,Fidelity,Traditional,Morticia,VEXAX,Vanguard Extended Market Index ,MUTUALFUND,1250.0,120.0,2021-06-15
+11,2025,Fidelity,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,95050.0,1.0,2023-01-01
+3,2026,IBM ESPP,Brokerage,Joint,IBM,International Business Machines,Technology,1802.0,180.0,2023-01-01
+3,2026,Highmark Pension,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,59000.0,1.0,
+3,2026,Highmark Pension (Legacy),Traditional,Morticia,MF:CASH,Money Market,MF:Cash,100000.0,1.0,
+3,2026,IBM Pension,Traditional,Gomez,MF:CASH,Money Market,MF:Cash,31057.71,1.0,

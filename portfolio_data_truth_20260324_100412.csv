@@ -1,4 +1,5 @@
 month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,purchase_date
+3,2026,IBM ESPP,Brokerage,Joint,IBM,International Business Machines,Technology,1802.0,180.0,2023-01-01
 11,2025,Fidelity,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,95050.0,1.0,2023-01-01
 11,2025,Fidelity,Traditional,Morticia,VEXAX,Vanguard Extended Market Index ,MUTUALFUND,1250.0,120.0,2021-06-15
 11,2025,Fidelity,Traditional,Morticia,VFIAX,Vanguard 500 Index Fd Admiral S,MUTUALFUND,900.0,450.0,2020-03-10
@@ -81,21 +82,14 @@ month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price
 2,2026,Schwab,Brokerage,Joint,VZ,Verizon Communications Inc.,Communication Services,350.0,42.0,2021-01-15
 2,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA Corporation,Technology,180.0,500.0,2023-02-28
 3,2026,CAPGEMINI SAFE HARBOR 401(K) PLAN,Traditional,Morticia,0769,MIP II CL 3,MF:Cash,554477.38,1.0,
-3,2026,CVS 401k,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,13500.0,1.0,
-3,2026,Highmark 401k,Traditional,Morticia,HRSIX,Hood River Small-Cap Growth Fun,MF:Small-Cap,3655.0,93.0,2020-03-10
-3,2026,Highmark 401k,Traditional,Morticia,MAFOX,BlackRock Large Cap Focus Growt,MF:Large-Cap,44792.0,7.5,2021-06-15
-3,2026,Highmark 401k,Traditional,Morticia,PRGFX,T. Rowe Price Growth Stock Fd,MF:Large-Cap,3650.0,104.0,2021-09-20
-3,2026,Highmark 401k,Traditional,Morticia,prgfx,T. Rowe Price Growth Stock Fd,MF:Large-Cap,3650.0,104.0,2021-09-20
-3,2026,Highmark Pension,Traditional,Morticia,MF:CASH,Money Market,MF:Cash,59000.0,1.0,
-3,2026,Highmark Pension (Legacy),Traditional,Morticia,MF:CASH,Money Market,MF:Cash,100000.0,1.0,
-3,2026,IBM 401(K) PLAN,Traditional,Gomez,FPBFX,Fidelity Pacific-Basin Fund,MF:Asia,24097.559,42.14,
-3,2026,IBM 401(K) PLAN,Traditional,Gomez,PRRSX,PIMCO RealEstateRealReturn Stra,MF:Reit,34324.815,28.84,
-3,2026,IBM 401(K) PLAN,Traditional,Gomez,VPCCX,Vanguard PRIMECAP Core Fund Inv,MF:Mid-Cap,25730.831,38.6,
-3,2026,IBM 401(K) PLAN,Traditional,Gomez,VUSUX,Vanguard Long-Term Treasury Fd ,MF:Bonds,118610.284,7.95,
-3,2026,IBM ESPP,Brokerage,Joint,IBM,International Business Machines,Technology,1802.0,180.0,2023-01-01
-3,2026,IBM Pension,Traditional,Gomez,MF:CASH,Money Market,MF:Cash,31057.71,1.0,
-3,2026,IBM Pension (Legecy),Traditional,Gomez,MF:CASH,Money Market,MF:Cash,79535.49,1.0,
-3,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,130000.0,1.0,2023-01-01
+3,2026,Highmark 401k,Traditional,Morticia,MAFOX,BlackRock Large Cap Focus Growt,MUTUALFUND,2250.0,7.5,2021-06-15
+3,2026,Highmark 401k,Traditional,Morticia,HRSIX,Hood River Small-Cap Growth Fun,MUTUALFUND,900.0,93.0,2020-03-10
+3,2026,Highmark 401k,Traditional,Morticia,prgfx,T. Rowe Price Growth Stock Fd,MUTUALFUND,3250.0,104.0,2021-09-20
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,FPBFX,Fidelity Pacific-Basin Fund,MUTUALFUND,24097.559,42.14,
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,PRRSX,PIMCO RealEstateRealReturn Stra,MUTUALFUND,34324.815,28.84,
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,VPCCX,Vanguard PRIMECAP Core Fund Inv,MUTUALFUND,25730.831,38.6,
+3,2026,IBM 401(K) PLAN,Traditional,Gomez,VUSUX,Vanguard Long-Term Treasury Fd ,MUTUALFUND,118610.284,7.95,
+3,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
 3,2026,Schwab-5553,Roth,Gomez,BTQ,BTQ Technologies Corp.,Technology,2572.0,6.3334992224,2025-11-25
 3,2026,Schwab-5553,Roth,Gomez,SOFI,"SoFi Technologies, Inc.",Financial Services,700.0,27.3052,2025-09-29
 3,2026,Schwab-5553,Roth,Gomez,SOFI  260402C00020000,"SoFi Technologies, Inc. Call Option",Options:Call,-7.0,0.233357142857,
