@@ -1,0 +1,46 @@
+{
+  "template_id": "executive_summary",
+  "name": "Executive Summary One-Pager",
+  "description": "Concise one-page summary with key metrics, findings, and action items",
+  "version": "1.0",
+  "page_size": "letter",
+  "orientation": "portrait",
+  "margins": {
+    "top": 0.5,
+    "bottom": 0.5,
+    "left": 0.5,
+    "right": 0.5
+  },
+  "branding": {
+    "show_logo": true,
+    "logo_path": "assets/logo.png",
+    "footer_text": "Confidential - For Personal Use Only",
+    "show_page_numbers": false
+  },
+  "sections": [
+    {
+      "section_id": "executive_summary",
+      "title": "Retirement Planning Executive Summary",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "include_metrics": [
+          "net_worth",
+          "retirement_readiness",
+          "success_rate",
+          "years_to_retirement",
+          "monthly_income_goal",
+          "current_savings_rate"
+        ],
+        "include_key_findings": true,
+        "include_recommendations": true,
+        "include_action_items": true,
+        "include_next_review_date": true,
+        "max_findings": 5,
+        "max_recommendations": 5,
+        "max_action_items": 5,
+        "compact_layout": true
+      }
+    }
+  ]
+}

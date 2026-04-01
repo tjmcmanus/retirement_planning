@@ -168,6 +168,9 @@ estate_planning_data.json
 data/factor_cache.db
 data/credentials.db
 data/transactions.db
+data/monte_carlo_results.json
+data/generated_reports/*.pdf
+portfolio_data_truth_*.csv
 
 # Backup files
 *_backup_*.csv
@@ -178,3 +181,4 @@ data/transactions.db
 *.tmp
 *.temp
 ~*
+portfolio_data_truth.csv

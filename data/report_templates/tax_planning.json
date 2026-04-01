@@ -1,0 +1,90 @@
+{
+  "template_id": "tax_planning",
+  "name": "Tax Planning Report",
+  "description": "Focused tax optimization analysis including Roth conversions, tax harvesting, and charitable giving strategies",
+  "version": "1.0",
+  "page_size": "letter",
+  "orientation": "portrait",
+  "margins": {
+    "top": 0.75,
+    "bottom": 0.75,
+    "left": 0.75,
+    "right": 0.75
+  },
+  "branding": {
+    "show_logo": true,
+    "logo_path": "assets/logo.png",
+    "footer_text": "Confidential - For Personal Use Only",
+    "show_page_numbers": true
+  },
+  "sections": [
+    {
+      "section_id": "title_page",
+      "title": "Tax Planning Report",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "show_date": true,
+        "show_prepared_for": true
+      }
+    },
+    {
+      "section_id": "current_tax_situation",
+      "title": "Current Tax Situation",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "include_current_year_projection": true,
+        "include_effective_rate": true,
+        "include_marginal_rate": true,
+        "include_irmaa_status": true
+      }
+    },
+    {
+      "section_id": "roth_conversion_analysis",
+      "title": "Roth Conversion Analysis",
+      "enabled": true,
+      "order": 3,
+      "config": {
+        "include_optimal_conversion_amount": true,
+        "include_multi_year_strategy": true,
+        "include_tax_cost_analysis": true,
+        "projection_years": 10
+      }
+    },
+    {
+      "section_id": "tax_harvesting",
+      "title": "Tax Loss Harvesting Opportunities",
+      "enabled": true,
+      "order": 4,
+      "config": {
+        "include_current_opportunities": true,
+        "include_historical_analysis": true,
+        "include_wash_sale_tracking": true
+      }
+    },
+    {
+      "section_id": "charitable_giving",
+      "title": "Charitable Giving Strategies",
+      "enabled": true,
+      "order": 5,
+      "config": {
+        "include_daf_analysis": true,
+        "include_qcd_analysis": true,
+        "include_bunching_strategy": true,
+        "include_tax_savings": true
+      }
+    },
+    {
+      "section_id": "multi_year_projections",
+      "title": "Multi-Year Tax Projections",
+      "enabled": true,
+      "order": 6,
+      "config": {
+        "projection_years": 10,
+        "include_charts": true,
+        "include_bracket_analysis": true
+      }
+    }
+  ]
+}
