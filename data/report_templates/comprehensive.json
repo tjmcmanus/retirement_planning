@@ -1,0 +1,158 @@
+{
+  "template_id": "comprehensive",
+  "name": "Comprehensive Retirement Plan",
+  "description": "Complete retirement planning analysis with all sections including current position, strategy, tax analysis, portfolio review, and Monte Carlo simulations",
+  "version": "1.0",
+  "page_size": "letter",
+  "orientation": "portrait",
+  "margins": {
+    "top": 0.75,
+    "bottom": 0.75,
+    "left": 0.75,
+    "right": 0.75
+  },
+  "branding": {
+    "show_logo": true,
+    "logo_path": "assets/logo.png",
+    "footer_text": "Confidential - For Personal Use Only",
+    "show_page_numbers": true
+  },
+  "sections": [
+    {
+      "section_id": "title_page",
+      "title": "Retirement Planning Report",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "show_date": true,
+        "show_prepared_for": true,
+        "show_disclaimer": true,
+        "disclaimer_text": "This report is for informational purposes only and does not constitute financial advice. Please consult with a qualified financial advisor before making investment decisions."
+      }
+    },
+    {
+      "section_id": "introduction",
+      "title": "Introduction",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "include_client_profile": true,
+        "include_life_stage": true,
+        "include_planning_objectives": true,
+        "include_scope": true
+      }
+    },
+    {
+      "section_id": "executive_summary",
+      "title": "Executive Summary",
+      "enabled": true,
+      "order": 3,
+      "config": {
+        "include_metrics": [
+          "net_worth",
+          "retirement_readiness",
+          "success_rate",
+          "years_to_retirement"
+        ],
+        "include_key_findings": true,
+        "include_recommendations": true,
+        "include_action_items": true,
+        "max_length": 500
+      }
+    },
+    {
+      "section_id": "current_position",
+      "title": "Current Financial Position",
+      "enabled": true,
+      "order": 4,
+      "config": {
+        "include_net_worth_statement": true,
+        "include_account_summary": false,
+        "include_asset_allocation": true,
+        "include_income_sources": true,
+        "include_expense_summary": true
+      }
+    },
+    {
+      "section_id": "retirement_strategy",
+      "title": "Retirement Income Strategy",
+      "enabled": true,
+      "order": 5,
+      "config": {
+        "include_withdrawal_plan": true,
+        "include_income_sources": true,
+        "include_expense_projections": true,
+        "include_life_stages": true,
+        "projection_years": 30,
+        "show_charts": true
+      }
+    },
+    {
+      "section_id": "tax_analysis",
+      "title": "Tax Planning Analysis",
+      "enabled": true,
+      "order": 6,
+      "config": {
+        "include_current_tax": true,
+        "include_roth_conversion": true,
+        "include_tax_harvesting": true,
+        "include_charitable_giving": true,
+        "include_irmaa_analysis": true,
+        "projection_years": 10
+      }
+    },
+    {
+      "section_id": "portfolio_analysis",
+      "title": "Portfolio Analysis",
+      "enabled": true,
+      "order": 7,
+      "config": {
+        "include_holdings": true,
+        "include_performance": true,
+        "include_factor_analysis": true,
+        "include_rebalancing": true,
+        "include_risk_metrics": true
+      }
+    },
+    {
+      "section_id": "monte_carlo",
+      "title": "Monte Carlo Simulation Results",
+      "enabled": true,
+      "order": 8,
+      "config": {
+        "include_success_rate": true,
+        "include_scenarios": false,
+        "include_stress_tests": true,
+        "include_probability_charts": false,
+        "num_scenarios": 1000,
+        "confidence_levels": [10, 25, 50, 75, 90]
+      }
+    },
+    {
+      "section_id": "assumptions",
+      "title": "Assumptions & Methodology",
+      "enabled": true,
+      "order": 9,
+      "config": {
+        "include_return_assumptions": true,
+        "include_inflation_assumptions": true,
+        "include_tax_assumptions": true,
+        "include_longevity_assumptions": true,
+        "include_methodology": true,
+        "include_data_sources": true
+      }
+    },
+    {
+      "section_id": "appendices",
+      "title": "Appendices",
+      "enabled": true,
+      "order": 10,
+      "config": {
+        "include_detailed_projections": true,
+        "include_tax_tables": true,
+        "include_account_details": true,
+        "include_glossary": true
+      }
+    }
+  ]
+}

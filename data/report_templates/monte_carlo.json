@@ -1,0 +1,104 @@
+{
+  "template_id": "monte_carlo",
+  "name": "Monte Carlo Analysis Report",
+  "description": "Detailed Monte Carlo simulation results with probability analysis, scenarios, and stress testing",
+  "version": "1.0",
+  "page_size": "letter",
+  "orientation": "portrait",
+  "margins": {
+    "top": 0.75,
+    "bottom": 0.75,
+    "left": 0.75,
+    "right": 0.75
+  },
+  "branding": {
+    "show_logo": true,
+    "logo_path": "assets/logo.png",
+    "footer_text": "Confidential - For Personal Use Only",
+    "show_page_numbers": true
+  },
+  "sections": [
+    {
+      "section_id": "title_page",
+      "title": "Monte Carlo Analysis Report",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "show_date": true,
+        "show_prepared_for": true
+      }
+    },
+    {
+      "section_id": "simulation_overview",
+      "title": "Simulation Overview",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "include_success_rate": true,
+        "include_methodology": true,
+        "include_assumptions": true,
+        "num_scenarios": 1000
+      }
+    },
+    {
+      "section_id": "probability_analysis",
+      "title": "Probability Analysis",
+      "enabled": true,
+      "order": 3,
+      "config": {
+        "include_fan_chart": true,
+        "include_probability_table": true,
+        "include_percentile_analysis": true,
+        "confidence_levels": [10, 25, 50, 75, 90]
+      }
+    },
+    {
+      "section_id": "scenario_comparison",
+      "title": "Scenario Comparison",
+      "enabled": true,
+      "order": 4,
+      "config": {
+        "include_best_case": true,
+        "include_worst_case": true,
+        "include_median_case": true,
+        "include_charts": true
+      }
+    },
+    {
+      "section_id": "stress_testing",
+      "title": "Stress Testing",
+      "enabled": true,
+      "order": 5,
+      "config": {
+        "include_market_crash": true,
+        "include_high_inflation": true,
+        "include_longevity_risk": true,
+        "include_sequence_risk": true,
+        "include_combined_scenarios": true
+      }
+    },
+    {
+      "section_id": "sensitivity_analysis",
+      "title": "Sensitivity Analysis",
+      "enabled": true,
+      "order": 6,
+      "config": {
+        "include_return_sensitivity": true,
+        "include_inflation_sensitivity": true,
+        "include_spending_sensitivity": true,
+        "include_heatmaps": true
+      }
+    },
+    {
+      "section_id": "recommendations",
+      "title": "Recommendations",
+      "enabled": true,
+      "order": 7,
+      "config": {
+        "include_risk_mitigation": true,
+        "include_strategy_adjustments": true,
+        "include_action_items": true
+      }
+    }
+  ]
+}

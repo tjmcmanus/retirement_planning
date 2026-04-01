@@ -204,6 +204,84 @@ with mc_sim_tab:
                 _mc_result = run_monte_carlo(_mc_inputs)
                 st.session_state["_mc_result"] = _mc_result
                 st.session_state["_mc_inputs"] = _mc_inputs
+                
+                # Save Monte Carlo results to file for report generation
+                import json
+                from pathlib import Path
+                from datetime import datetime
+                import numpy as np
+                
+                mc_data = {
+                    'success_rate': _mc_result.success_probability,
+                    'median_final_portfolio': _mc_result.median_final_portfolio,
+                    'p10_final_portfolio': _mc_result.p10_final_portfolio,
+                    'p90_final_portfolio': _mc_result.p90_final_portfolio,
+                    'years_to_depletion_p10': _mc_result.years_to_depletion_p10,
+                    'timestamp': datetime.now().isoformat(),
+                    'n_simulations': st.session_state.get('mc_n_sims', 10_000),
+                    'available': True,
+                    'annual_withdrawal': float(_mc_inputs.annual_withdrawal),
+                    'initial_portfolio': float(_mc_inputs.initial_portfolio),
+                    'start_age': int(_mc_inputs.start_age),
+                    'end_age': int(_mc_inputs.end_age),
+                    'social_security_annual': float(_mc_inputs.social_security_annual),
+                    'ss_start_age': int(_mc_inputs.ss_start_age) if _mc_inputs.ss_start_age else None,
+                    'filing_status': st.session_state.get('mc_filing_status', 'Married Filing Jointly')
+                }
+                
+                # Calculate safe withdrawal rates at multiple confidence levels
+                portfolio_value = float(st.session_state.get("mc_portfolio", 1_500_000))
+                try:
+                    swr_90 = get_safe_withdrawal_rate(_mc_inputs, target_success=0.90)
+                    swr_75 = get_safe_withdrawal_rate(_mc_inputs, target_success=0.75)
+                    swr_65 = get_safe_withdrawal_rate(_mc_inputs, target_success=0.65)
+                    
+                    mc_data['safe_withdrawal_rates'] = {
+                        '90_percent_confidence': {
+                            'annual_amount': float(swr_90),
+                            'percentage': float(swr_90 / portfolio_value * 100),
+                            'description': 'Conservative - 90% confidence of success'
+                        },
+                        '75_percent_confidence': {
+                            'annual_amount': float(swr_75),
+                            'percentage': float(swr_75 / portfolio_value * 100),
+                            'description': 'Moderate - 75% confidence of success'
+                        },
+                        '65_percent_confidence': {
+                            'annual_amount': float(swr_65),
+                            'percentage': float(swr_65 / portfolio_value * 100),
+                            'description': 'Aggressive - 65% confidence of success'
+                        },
+                        'portfolio_value': float(portfolio_value),
+                        'inflation_rate': float(_mc_inputs.inflation_rate)
+                    }
+                except Exception as swr_err:
+                    # Safe withdrawal rate calculation failed, continue without it
+                    pass
+                
+                # Add scenario paths if available
+                if _mc_result.portfolio_paths is not None:
+                    paths = _mc_result.portfolio_paths
+                    # Calculate percentile paths across all simulations
+                    p10_path = np.percentile(paths, 10, axis=0).tolist()
+                    p25_path = np.percentile(paths, 25, axis=0).tolist()
+                    p50_path = np.percentile(paths, 50, axis=0).tolist()
+                    p75_path = np.percentile(paths, 75, axis=0).tolist()
+                    p90_path = np.percentile(paths, 90, axis=0).tolist()
+                    
+                    mc_data['scenario_paths'] = {
+                        'p10': p10_path,
+                        'p25': p25_path,
+                        'p50': p50_path,
+                        'p75': p75_path,
+                        'p90': p90_path,
+                        'ages': list(range(_mc_inputs.start_age, _mc_inputs.end_age + 1))
+                    }
+                
+                Path("data").mkdir(exist_ok=True)
+                with open("data/monte_carlo_results.json", 'w') as f:
+                    json.dump(mc_data, f, indent=2)
+                
             except Exception as _mc_err:
                 st.error(f"Simulation error: {_mc_err}")
                 st.session_state.pop("_mc_result", None)
@@ -348,6 +426,41 @@ with mc_stress_tab:
                 _st_results = run_stress_tests(_st_inputs, _st_scenarios)
                 st.session_state["_mc_stress_results"] = _st_results
                 st.session_state["_mc_stress_inputs"] = _st_inputs
+                
+                # Save stress test results to JSON for reporting
+                import json
+                from pathlib import Path
+                
+                _stress_data = []
+                for _s in _st_results:
+                    _stress_data.append({
+                        "scenario_name": _s.scenario_name,
+                        "description": _s.description,
+                        "success_probability": float(_s.success_probability),
+                        "median_final_portfolio": float(_s.median_final_portfolio),
+                        "p10_final_portfolio": float(_s.p10_final_portfolio),
+                        "years_to_depletion_median": _s.years_to_depletion_median,
+                        "portfolio_path_median": [float(v) for v in _s.portfolio_path_median] if _s.portfolio_path_median else [],
+                        "notes": _s.notes,
+                    })
+                
+                # Load existing Monte Carlo results if they exist
+                _mc_file = Path("data/monte_carlo_results.json")
+                if _mc_file.exists():
+                    with open(_mc_file, "r") as f:
+                        _existing_data = json.load(f)
+                else:
+                    _existing_data = {}
+                
+                # Add stress test results
+                _existing_data["stress_tests"] = _stress_data
+                _existing_data["stress_test_timestamp"] = pd.Timestamp.now().isoformat()
+                
+                # Save back to file
+                _mc_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(_mc_file, "w") as f:
+                    json.dump(_existing_data, f, indent=2)
+                
             except Exception as _st_err:
                 st.error(f"Stress test error: {_st_err}")
 

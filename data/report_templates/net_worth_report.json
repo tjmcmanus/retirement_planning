@@ -1,0 +1,169 @@
+{
+  "template_id": "net_worth_report",
+  "name": "Net Worth & Market Outlook Report",
+  "description": "Detailed net worth analysis with market forecasts, account breakdowns, and trend analysis",
+  "version": "1.0",
+  "page_size": "letter",
+  "orientation": "portrait",
+  "margins": {
+    "top": 0.75,
+    "bottom": 0.75,
+    "left": 0.75,
+    "right": 0.75
+  },
+  "branding": {
+    "show_logo": true,
+    "logo_path": "assets/logo.png",
+    "footer_text": "Confidential - For Personal Use Only",
+    "show_page_numbers": true
+  },
+  "sections": [
+    {
+      "section_id": "title_page",
+      "title": "Net Worth & Market Outlook Report",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "show_date": true,
+        "show_prepared_for": true,
+        "show_disclaimer": false
+      }
+    },
+    {
+      "section_id": "executive_summary",
+      "title": "Executive Summary",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "include_metrics": [
+          "net_worth",
+          "month_over_month_change",
+          "year_to_date_change",
+          "twelve_month_change"
+        ],
+        "include_key_findings": true,
+        "include_recommendations": false,
+        "max_length": 300
+      }
+    },
+    {
+      "section_id": "net_worth_statement",
+      "title": "Net Worth Statement",
+      "enabled": true,
+      "order": 3,
+      "config": {
+        "include_current_statement": true,
+        "include_account_details": true,
+        "include_real_estate": true,
+        "group_by_type": true,
+        "show_percentages": true
+      }
+    },
+    {
+      "section_id": "net_worth_trends",
+      "title": "Net Worth Trends & Analysis",
+      "enabled": true,
+      "order": 4,
+      "config": {
+        "include_historical_chart": true,
+        "include_growth_analysis": true,
+        "include_volatility_metrics": true,
+        "time_periods": ["1M", "3M", "6M", "1Y", "3Y", "5Y", "ITD"],
+        "show_trend_lines": true
+      }
+    },
+    {
+      "section_id": "account_breakdown",
+      "title": "Account Breakdown by Type",
+      "enabled": true,
+      "order": 5,
+      "config": {
+        "include_account_summary": true,
+        "include_allocation_chart": true,
+        "include_tax_treatment": true,
+        "show_account_details": true,
+        "group_by": "account_type"
+      }
+    },
+    {
+      "section_id": "asset_allocation",
+      "title": "Asset Allocation Analysis",
+      "enabled": true,
+      "order": 6,
+      "config": {
+        "include_current_allocation": true,
+        "include_target_allocation": true,
+        "include_allocation_chart": true,
+        "include_drift_analysis": true,
+        "show_rebalancing_needs": true
+      }
+    },
+    {
+      "section_id": "market_forecast_longterm",
+      "title": "Long-Term Market Forecast",
+      "enabled": true,
+      "order": 7,
+      "config": {
+        "include_economic_outlook": true,
+        "include_market_indicators": true,
+        "include_sector_analysis": true,
+        "include_risk_assessment": true,
+        "forecast_horizon": "5-10 years",
+        "show_charts": true
+      }
+    },
+    {
+      "section_id": "market_forecast_intermediate",
+      "title": "Intermediate-Term Market Forecast",
+      "enabled": true,
+      "order": 8,
+      "config": {
+        "include_market_trends": true,
+        "include_technical_indicators": true,
+        "include_sentiment_analysis": true,
+        "include_volatility_forecast": true,
+        "forecast_horizon": "6-18 months",
+        "show_charts": true
+      }
+    },
+    {
+      "section_id": "market_stress_indicator",
+      "title": "Market Stress Indicators",
+      "enabled": true,
+      "order": 9,
+      "config": {
+        "include_stress_level": true,
+        "include_volatility_index": true,
+        "include_correlation_analysis": true,
+        "include_risk_metrics": true,
+        "show_historical_comparison": true
+      }
+    },
+    {
+      "section_id": "performance_attribution",
+      "title": "Performance Attribution",
+      "enabled": true,
+      "order": 10,
+      "config": {
+        "include_returns_by_account": true,
+        "include_returns_by_asset_class": true,
+        "include_contribution_analysis": true,
+        "include_benchmark_comparison": true,
+        "time_periods": ["1M", "3M", "YTD", "1Y"]
+      }
+    },
+    {
+      "section_id": "recommendations",
+      "title": "Recommendations & Action Items",
+      "enabled": true,
+      "order": 11,
+      "config": {
+        "include_rebalancing_recommendations": true,
+        "include_tax_optimization": true,
+        "include_risk_management": true,
+        "include_action_items": true,
+        "prioritize_by_impact": true
+      }
+    }
+  ]
+}

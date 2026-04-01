@@ -34,6 +34,15 @@ schwab-py>=1.0.0
 requests>=2.31.0
 oauthlib>=3.2.0
 
+# PDF Report Generation
+reportlab>=4.0.0
+matplotlib>=3.8.0
+Pillow>=10.0.0
+kaleido>=0.2.1
+
+# Email Scheduling (Phase 4)
+schedule>=1.2.0
+
 # Testing
 pytest>=7.4.0
 pytest-mock>=3.11.0

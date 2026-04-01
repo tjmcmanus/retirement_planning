@@ -1,0 +1,104 @@
+{
+  "template_id": "portfolio_review",
+  "name": "Portfolio Review Report",
+  "description": "Comprehensive portfolio analysis including holdings, performance, factor analysis, and rebalancing recommendations",
+  "version": "1.0",
+  "page_size": "letter",
+  "orientation": "portrait",
+  "margins": {
+    "top": 0.75,
+    "bottom": 0.75,
+    "left": 0.75,
+    "right": 0.75
+  },
+  "branding": {
+    "show_logo": true,
+    "logo_path": "assets/logo.png",
+    "footer_text": "Confidential - For Personal Use Only",
+    "show_page_numbers": true
+  },
+  "sections": [
+    {
+      "section_id": "title_page",
+      "title": "Portfolio Review Report",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "show_date": true,
+        "show_prepared_for": true
+      }
+    },
+    {
+      "section_id": "portfolio_summary",
+      "title": "Portfolio Summary",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "include_total_value": true,
+        "include_account_breakdown": true,
+        "include_asset_allocation": true,
+        "include_period_performance": true
+      }
+    },
+    {
+      "section_id": "holdings_detail",
+      "title": "Holdings Detail",
+      "enabled": true,
+      "order": 3,
+      "config": {
+        "include_all_positions": true,
+        "include_cost_basis": true,
+        "include_unrealized_gains": true,
+        "group_by_account": true
+      }
+    },
+    {
+      "section_id": "performance_analysis",
+      "title": "Performance Analysis",
+      "enabled": true,
+      "order": 4,
+      "config": {
+        "include_returns": true,
+        "include_benchmark_comparison": true,
+        "include_risk_metrics": true,
+        "time_periods": ["1M", "3M", "6M", "1Y", "3Y", "5Y", "ITD"]
+      }
+    },
+    {
+      "section_id": "factor_analysis",
+      "title": "Factor Analysis",
+      "enabled": true,
+      "order": 5,
+      "config": {
+        "include_factor_exposures": true,
+        "include_style_analysis": true,
+        "include_sector_breakdown": true,
+        "include_geographic_exposure": true
+      }
+    },
+    {
+      "section_id": "rebalancing",
+      "title": "Rebalancing Recommendations",
+      "enabled": true,
+      "order": 6,
+      "config": {
+        "include_current_vs_target": true,
+        "include_trade_recommendations": true,
+        "include_tax_implications": true,
+        "rebalancing_threshold": 5.0
+      }
+    },
+    {
+      "section_id": "risk_assessment",
+      "title": "Risk Assessment",
+      "enabled": true,
+      "order": 7,
+      "config": {
+        "include_volatility": true,
+        "include_drawdown_analysis": true,
+        "include_correlation_matrix": true,
+        "include_stress_scenarios": true
+      }
+    }
+  ]
+}
