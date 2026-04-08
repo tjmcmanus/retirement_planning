@@ -451,8 +451,34 @@ class TaxAnalysisRenderer(SectionRenderer):
                 
                 if self.config.get('include_daf_analysis'):
                     pdf.add_section("Donor-Advised Fund (DAF) Analysis", "", level=2)
-                    if isinstance(giving_data, dict) and 'daf_benefit' in giving_data:
-                        pdf.add_section("", f"Estimated tax benefit: ${giving_data['daf_benefit']:,.0f}", level=3)
+                    
+                    if isinstance(giving_data, dict) and 'daf_enabled' in giving_data and giving_data['daf_enabled']:
+                        # Show DAF data from strategy
+                        total_contributions = giving_data.get('total_contributions', 0)
+                        total_tax_savings = giving_data.get('total_tax_savings', 0)
+                        marginal_rate = giving_data.get('marginal_rate', 0)
+                        
+                        summary_text = (
+                            f"Your strategy includes ${total_contributions:,.0f} in DAF contributions "
+                            f"over the projection period, resulting in ${total_tax_savings:,.0f} in tax savings "
+                            f"at your {marginal_rate*100:.0f}% marginal rate."
+                        )
+                        pdf.add_section("", summary_text, level=3)
+                        
+                        # Show multi-year DAF plan if available
+                        if 'daf_plan' in giving_data and giving_data['daf_plan'] is not None:
+                            daf_plan = giving_data['daf_plan']
+                            if isinstance(daf_plan, pd.DataFrame) and not daf_plan.empty:
+                                # Format the DataFrame
+                                formatted_daf = daf_plan.copy()
+                                formatted_daf['Year'] = formatted_daf['Year'].astype(int)
+                                formatted_daf['Contribution'] = formatted_daf['Contribution'].apply(
+                                    lambda x: f"${x:,.0f}"
+                                )
+                                formatted_daf['Balance'] = formatted_daf['Balance'].apply(
+                                    lambda x: f"${x:,.0f}"
+                                )
+                                pdf.add_table(formatted_daf, title="Multi-Year DAF Strategy")
                     else:
                         pdf.add_section("", "DAF analysis available when charitable giving goals are configured.", level=3)
                 
@@ -465,11 +491,24 @@ class TaxAnalysisRenderer(SectionRenderer):
                 
                 if self.config.get('include_bunching_strategy'):
                     pdf.add_section("Bunching Strategy", "", level=2)
-                    pdf.add_section("", "Charitable bunching strategy analysis would appear here when configured.", level=3)
+                    
+                    if isinstance(giving_data, dict) and 'daf_enabled' in giving_data and giving_data['daf_enabled']:
+                        bunching_text = (
+                            "Your strategy uses DAF bunching to maximize tax benefits. "
+                            "By contributing multiple years of charitable giving in a single year, "
+                            "you can itemize deductions and receive a larger tax benefit, "
+                            "then distribute the funds to charities over time."
+                        )
+                        pdf.add_section("", bunching_text, level=3)
+                    else:
+                        pdf.add_section("", "Charitable bunching strategy analysis would appear here when configured.", level=3)
                 
                 if self.config.get('include_tax_savings'):
                     pdf.add_section("Tax Savings Summary", "", level=2)
-                    if isinstance(giving_data, dict) and 'total_savings' in giving_data:
+                    if isinstance(giving_data, dict) and 'total_tax_savings' in giving_data:
+                        total_savings = giving_data['total_tax_savings']
+                        pdf.add_section("", f"Total estimated tax savings from charitable giving: ${total_savings:,.0f}", level=3)
+                    elif isinstance(giving_data, dict) and 'total_savings' in giving_data:
                         pdf.add_section("", f"Total estimated tax savings: ${giving_data['total_savings']:,.0f}", level=3)
             else:
                 pdf.add_section("", "Charitable giving analysis not available. Configure charitable goals in the strategy settings.", level=2)
@@ -514,7 +553,56 @@ class TaxAnalysisRenderer(SectionRenderer):
                     
                     if self.config.get('include_bracket_analysis'):
                         pdf.add_section("Tax Bracket Analysis", "", level=2)
-                        pdf.add_section("", "Tax bracket progression analysis would appear here.", level=3)
+                        
+                        if 'tax_bracket_analysis' in data and data['tax_bracket_analysis'] is not None:
+                            bracket_data = data['tax_bracket_analysis']
+                            
+                            if isinstance(bracket_data, pd.DataFrame) and not bracket_data.empty:
+                                # Format the DataFrame for display
+                                formatted_brackets = bracket_data.copy()
+                                
+                                # Format Year as integer
+                                if 'Year' in formatted_brackets.columns:
+                                    formatted_brackets['Year'] = formatted_brackets['Year'].astype(int)
+                                
+                                # Format Taxable Income as currency
+                                if 'Taxable Income' in formatted_brackets.columns:
+                                    formatted_brackets['Taxable Income'] = formatted_brackets['Taxable Income'].apply(
+                                        lambda x: f"${x:,.0f}"
+                                    )
+                                
+                                # Format Federal Tax as currency
+                                if 'Federal Tax' in formatted_brackets.columns:
+                                    formatted_brackets['Federal Tax'] = formatted_brackets['Federal Tax'].apply(
+                                        lambda x: f"${x:,.0f}"
+                                    )
+                                
+                                # Format rates as percentages with 1 decimal
+                                for col in ['Marginal Rate', 'Effective Rate']:
+                                    if col in formatted_brackets.columns:
+                                        formatted_brackets[col] = formatted_brackets[col].apply(
+                                            lambda x: f"{x:.1f}%"
+                                        )
+                                
+                                # Show table
+                                pdf.add_table(formatted_brackets, title="Tax Bracket Progression")
+                                
+                                # Add summary text
+                                first_year = bracket_data.iloc[0]
+                                last_year = bracket_data.iloc[-1]
+                                
+                                summary_text = (
+                                    f"Your marginal tax bracket progresses from {first_year['Marginal Bracket']} "
+                                    f"in {int(first_year['Year'])} to {last_year['Marginal Bracket']} "
+                                    f"in {int(last_year['Year'])}. "
+                                    f"The effective tax rate ranges from {first_year['Effective Rate']:.1f}% "
+                                    f"to {last_year['Effective Rate']:.1f}%."
+                                )
+                                pdf.add_section("", summary_text, level=3)
+                            else:
+                                pdf.add_section("", "Tax bracket analysis not available.", level=3)
+                        else:
+                            pdf.add_section("", "Tax bracket analysis not available.", level=3)
                 else:
                     pdf.add_section("", "Multi-year tax projections require retirement strategy configuration.", level=3)
             else:
@@ -615,11 +703,28 @@ class PortfolioAnalysisRenderer(SectionRenderer):
             has_content = False
             
             if self.config.get('include_returns'):
-                pdf.add_section("Returns", "", level=2)
+                pdf.add_section("Returns", "", level=2, keep_with_next=True)
                 if 'performance' in data and data['performance'] is not None:
                     perf_data = data['performance']
                     if isinstance(perf_data, pd.DataFrame) and not perf_data.empty:
-                        pdf.add_table(perf_data)
+                        # Format the performance data
+                        formatted_perf = perf_data.copy()
+                        
+                        # Format percentage columns (Return, Benchmark, Alpha, Volatility, Max Drawdown)
+                        percentage_cols = ['Return', 'Benchmark', 'Alpha', 'Volatility', 'Max Drawdown']
+                        for col in percentage_cols:
+                            if col in formatted_perf.columns:
+                                formatted_perf[col] = formatted_perf[col].apply(
+                                    lambda x: f"{x:.2f}%" if pd.notna(x) else ""
+                                )
+                        
+                        # Format ratio columns (Sharpe) - keep as decimal
+                        if 'Sharpe' in formatted_perf.columns:
+                            formatted_perf['Sharpe'] = formatted_perf['Sharpe'].apply(
+                                lambda x: f"{x:.2f}" if pd.notna(x) else ""
+                            )
+                        
+                        pdf.add_table(formatted_perf)
                         has_content = True
                     else:
                         pdf.add_section("", "Performance data requires historical portfolio values.", level=3)
@@ -627,8 +732,8 @@ class PortfolioAnalysisRenderer(SectionRenderer):
                     pdf.add_section("", "Performance data requires historical portfolio values.", level=3)
             
             if self.config.get('include_benchmark_comparison'):
-                pdf.add_section("Benchmark Comparison", "", level=2)
-                if 'performance_chart' in data:
+                pdf.add_section("Benchmark Comparison", "", level=2, keep_with_next=True)
+                if 'performance_chart' in data and data['performance_chart'] is not None:
                     pdf.add_chart(
                         data['performance_chart'],
                         title="Portfolio vs Benchmark",
@@ -660,24 +765,60 @@ class PortfolioAnalysisRenderer(SectionRenderer):
             has_content = False
             
             if self.config.get('include_factor_exposures'):
-                pdf.add_section("Factor Exposures", "", level=2)
-                if 'factor_chart' in data:
-                    pdf.add_chart(
-                        data['factor_chart'],
-                        title="Portfolio Factor Exposures",
-                        width=6,
-                        height=4
-                    )
-                    has_content = True
+                pdf.add_section("Factor Exposures", "", level=2, keep_with_next=True)
+                
+                # Check for factor analysis data
+                factor_data = data.get('factor_analysis')
+                if factor_data and isinstance(factor_data, dict):
+                    # Build factor exposure summary
+                    factor_text = []
+                    
+                    # Primary style
+                    if 'primary_style' in factor_data:
+                        style = factor_data['primary_style']
+                        factor_text.append(f"Investment Style: {style}")
+                    
+                    # Individual factor exposures
+                    factor_text.append("\nFactor Exposures:")
+                    
+                    if 'value_exposure' in factor_data:
+                        value = factor_data['value_exposure']
+                        factor_text.append(f"  • Value: {value:.2f} (negative = growth tilt, positive = value tilt)")
+                    
+                    if 'growth_exposure' in factor_data:
+                        growth = factor_data['growth_exposure']
+                        factor_text.append(f"  • Growth: {growth:.2f}")
+                    
+                    if 'momentum_exposure' in factor_data:
+                        momentum = factor_data['momentum_exposure']
+                        factor_text.append(f"  • Momentum: {momentum:.2f}")
+                    
+                    if 'quality_exposure' in factor_data:
+                        quality = factor_data['quality_exposure']
+                        factor_text.append(f"  • Quality: {quality:.2f}")
+                    
+                    if factor_text:
+                        pdf.add_section("", "\n".join(factor_text), level=3)
+                        has_content = True
+                    else:
+                        pdf.add_section("", "Factor analysis requires stock holdings with factor data.", level=3)
                 else:
-                    pdf.add_section("", "Factor analysis available through Portfolio Hub > Factor Analysis.", level=3)
+                    pdf.add_section("", "Factor analysis requires stock holdings with factor data.", level=3)
             
             if self.config.get('include_sector_breakdown'):
-                pdf.add_section("Sector Breakdown", "", level=2)
-                if 'sector_breakdown' in data and data['sector_breakdown'] is not None:
-                    sector_data = data['sector_breakdown']
-                    if isinstance(sector_data, pd.DataFrame) and not sector_data.empty:
-                        pdf.add_table(sector_data)
+                pdf.add_section("Sector Breakdown", "", level=2, keep_with_next=True)
+                # Check for sector_breakdown in factor_analysis data
+                factor_data = data.get('factor_analysis')
+                if factor_data and isinstance(factor_data, dict):
+                    sector_data = factor_data.get('sector_breakdown')
+                    if sector_data is not None and isinstance(sector_data, pd.DataFrame) and not sector_data.empty:
+                        # Format the values as currency
+                        formatted_sector = sector_data.copy()
+                        if 'Value' in formatted_sector.columns:
+                            formatted_sector['Value'] = formatted_sector['Value'].apply(lambda x: f"${x:,.2f}")
+                        if 'Percentage' in formatted_sector.columns:
+                            formatted_sector['Percentage'] = formatted_sector['Percentage'].apply(lambda x: f"{x:.1f}%")
+                        pdf.add_table(formatted_sector)
                         has_content = True
                     else:
                         pdf.add_section("", "Sector breakdown requires holdings with sector classifications.", level=3)
@@ -692,27 +833,70 @@ class PortfolioAnalysisRenderer(SectionRenderer):
             has_content = False
             
             if self.config.get('include_current_vs_target'):
-                pdf.add_section("Current vs Target Allocation", "", level=2)
-                if 'rebalancing_analysis' in data and data['rebalancing_analysis'] is not None:
-                    rebal_data = data['rebalancing_analysis']
-                    if isinstance(rebal_data, pd.DataFrame) and not rebal_data.empty:
-                        pdf.add_table(rebal_data)
+                pdf.add_section("Current vs Target Allocation", "", level=2, keep_with_next=True)
+                # Check for rebalancing data (stored as 'rebalancing' key)
+                rebal_data = data.get('rebalancing')
+                if rebal_data is not None and isinstance(rebal_data, dict):
+                    # Extract summary DataFrame
+                    summary_df = rebal_data.get('summary')
+                    if isinstance(summary_df, pd.DataFrame) and not summary_df.empty:
+                        pdf.add_table(summary_df)
                         has_content = True
+                        
+                        # Add target allocation info
+                        if 'target_allocation' in rebal_data:
+                            target = rebal_data['target_allocation']
+                            pdf.add_section(
+                                "",
+                                f"Target Allocation: {target['cash']:.0f}% Cash, "
+                                f"{target['bonds']:.0f}% Bonds, {target['stocks']:.0f}% Stocks "
+                                f"(Drift Threshold: {target['threshold']:.0f}%)",
+                                level=3
+                            )
                     else:
                         pdf.add_section("", "Rebalancing analysis requires target allocation to be configured.", level=3)
                 else:
                     pdf.add_section("", "Rebalancing analysis requires target allocation to be configured in Portfolio Hub.", level=3)
             
             if self.config.get('include_trade_recommendations'):
-                pdf.add_section("Recommended Trades", "", level=2)
-                if 'trade_recommendations' in data and data['trade_recommendations']:
-                    trades = data['trade_recommendations']
-                    if isinstance(trades, list) and trades:
-                        pdf.add_bullet_list(trades)
-                        has_content = True
-                    elif isinstance(trades, pd.DataFrame) and not trades.empty:
-                        pdf.add_table(trades)
-                        has_content = True
+                pdf.add_section("Recommended Trades", "", level=2, keep_with_next=True)
+                
+                # Check for actions in rebalancing data
+                rebal_data = data.get('rebalancing')
+                if rebal_data and isinstance(rebal_data, dict):
+                    actions = rebal_data.get('actions', [])
+                    if actions and isinstance(actions, list) and len(actions) > 0:
+                        # Format actions as detailed descriptions
+                        for i, action in enumerate(actions, 1):
+                            if isinstance(action, dict):
+                                # Build formatted description
+                                action_type = action.get('action', 'Trade')
+                                asset_class = action.get('asset_class', '')
+                                symbol = action.get('symbol', '').strip()
+                                account_name = action.get('account_name', '')
+                                account_type = action.get('account_type', '')
+                                amount = action.get('amount', 0)
+                                rationale = action.get('rationale', '')
+                                tax_impact = action.get('tax_impact', '')
+                                
+                                # Format the trade description
+                                trade_desc = f"{i}. {action_type} {asset_class}"
+                                if symbol:
+                                    trade_desc += f" ({symbol})"
+                                trade_desc += f" in {account_name} ({account_type})"
+                                trade_desc += f"\n   Amount: ${amount:,.2f}"
+                                
+                                if rationale:
+                                    trade_desc += f"\n   Rationale: {rationale}"
+                                
+                                if tax_impact:
+                                    trade_desc += f"\n   Tax Impact: {tax_impact}"
+                                
+                                pdf.add_section("", trade_desc, level=3)
+                                has_content = True
+                        
+                        if not has_content:
+                            pdf.add_section("", "No rebalancing trades recommended at this time.", level=3)
                     else:
                         pdf.add_section("", "No rebalancing trades recommended at this time.", level=3)
                 else:
@@ -726,30 +910,45 @@ class PortfolioAnalysisRenderer(SectionRenderer):
             has_content = False
             
             if self.config.get('include_volatility'):
-                pdf.add_section("Volatility Analysis", "", level=2)
-                if 'volatility_metrics' in data and data['volatility_metrics']:
-                    vol_data = data['volatility_metrics']
-                    if isinstance(vol_data, dict):
-                        for metric, value in vol_data.items():
-                            pdf.add_section(f"{metric}:", str(value), level=3)
+                pdf.add_section("Volatility Analysis", "", level=2, keep_with_next=True)
+                risk_data = data.get('risk_metrics')
+                if risk_data and isinstance(risk_data, dict):
+                    # Format risk metrics nicely
+                    metrics_text = []
+                    
+                    if 'annual_return' in risk_data:
+                        metrics_text.append(f"Annual Return: {risk_data['annual_return']*100:.2f}%")
+                    
+                    if 'volatility' in risk_data:
+                        metrics_text.append(f"Volatility (Std Dev): {risk_data['volatility']*100:.2f}%")
+                    
+                    if 'sharpe_ratio' in risk_data:
+                        metrics_text.append(f"Sharpe Ratio: {risk_data['sharpe_ratio']:.2f}")
+                    
+                    if 'beta' in risk_data:
+                        metrics_text.append(f"Beta: {risk_data['beta']:.2f}")
+                    
+                    if 'months_analyzed' in risk_data:
+                        metrics_text.append(f"\nBased on {risk_data['months_analyzed']} months of historical data")
+                    
+                    if metrics_text:
+                        pdf.add_section("", "\n".join(metrics_text), level=3)
                         has_content = True
                     else:
-                        pdf.add_section("", "Volatility metrics calculated from historical returns.", level=3)
+                        pdf.add_section("", "Insufficient data to calculate volatility metrics. Requires at least 12 months of historical portfolio values.", level=3)
                 else:
-                    pdf.add_section("", "Volatility metrics calculated from historical returns.", level=3)
+                    pdf.add_section("", "Volatility metrics require at least 12 months of historical portfolio values.", level=3)
             
             if self.config.get('include_drawdown_analysis'):
-                pdf.add_section("Drawdown Analysis", "", level=2)
-                if 'drawdown_chart' in data:
-                    pdf.add_chart(
-                        data['drawdown_chart'],
-                        title="Historical Drawdowns",
-                        width=6,
-                        height=4
-                    )
+                pdf.add_section("Drawdown Analysis", "", level=2, keep_with_next=True)
+                risk_data = data.get('risk_metrics')
+                if risk_data and isinstance(risk_data, dict) and 'max_drawdown' in risk_data:
+                    max_dd = risk_data['max_drawdown']
+                    months = risk_data.get('months_analyzed', 0)
+                    pdf.add_section("", f"Maximum Drawdown: {max_dd*100:.2f}%\n\nThis represents the largest peak-to-trough decline in your portfolio value during the analyzed period ({months} months of data).", level=3)
                     has_content = True
                 else:
-                    pdf.add_section("", "Drawdown analysis requires historical portfolio values.", level=3)
+                    pdf.add_section("", "Drawdown analysis requires at least 12 months of historical portfolio values.", level=3)
             
             if not has_content:
                 logger.info("Risk assessment section has no data")
@@ -772,7 +971,7 @@ class PortfolioAnalysisRenderer(SectionRenderer):
                 if isinstance(perf_data, pd.DataFrame) and not perf_data.empty:
                     pdf.add_table(perf_data)
                 
-                if 'performance_chart' in data:
+                if 'performance_chart' in data and data['performance_chart'] is not None:
                     pdf.add_chart(
                         data['performance_chart'],
                         title="Portfolio Performance",
@@ -1502,6 +1701,58 @@ class IntroductionRenderer(SectionRenderer):
         pdf.add_section(self.title, "", level=1)
         
         config = get_config_manager()
+        
+        # Add professional portfolio review introduction
+        if self.config.get('include_portfolio_intro', True):
+            pdf.add_section("Portfolio Review Overview", "", level=2)
+            
+            intro_text = (
+                "This Portfolio Review Report provides a comprehensive analysis of your investment portfolio's "
+                "current position, performance, and alignment with your long-term financial objectives. As your "
+                "financial advisors, we have prepared this report to give you clear insights into:"
+            )
+            pdf.add_section("", intro_text, level=3)
+            
+            # Add bullet list for insights
+            insights_bullets = [
+                "Your portfolio's composition across accounts, asset classes, and individual holdings",
+                "Performance metrics compared to relevant market benchmarks",
+                "Risk characteristics including volatility, drawdowns, and factor exposures",
+                "Rebalancing opportunities to maintain your target asset allocation",
+                "Tax-efficient strategies for portfolio optimization"
+            ]
+            pdf.add_bullet_list(insights_bullets, compact=True)
+            
+            closing_text = (
+                "This report is designed to be reviewed quarterly to ensure your portfolio remains aligned with "
+                "your retirement goals and risk tolerance. We encourage you to review each section carefully and "
+                "reach out with any questions or concerns."
+            )
+            pdf.add_section("", closing_text, level=3)
+            
+            # Add "How to Use This Report" section
+            pdf.add_section("How to Use This Report", "", level=2)
+            
+            usage_text = "This report is organized into key sections, each providing specific insights:"
+            pdf.add_section("", usage_text, level=3)
+            
+            # Add bullet list for sections
+            sections_bullets = [
+                "Portfolio Summary: Overview of your total portfolio value and account breakdown",
+                "Holdings Analysis: Detailed view of your investments with current market values",
+                "Performance Analysis: Time-weighted returns across multiple periods with benchmark comparisons",
+                "Risk Assessment: Volatility metrics and maximum drawdown analysis",
+                "Factor Analysis: Investment style and factor exposures (Value, Growth, Momentum, Quality)",
+                "Sector Breakdown: Allocation across market sectors",
+                "Rebalancing Recommendations: Specific trades to realign with your target allocation"
+            ]
+            pdf.add_bullet_list(sections_bullets, compact=True)
+            
+            action_text = (
+                "Key metrics are highlighted throughout the report. Pay special attention to sections marked with "
+                "recommendations, as these may require action on your part."
+            )
+            pdf.add_section("", action_text, level=3)
         
         # Client Profile
         if self.config.get('include_client_profile'):

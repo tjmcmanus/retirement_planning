@@ -244,7 +244,8 @@ class PDFGenerator:
         self,
         title: str,
         content: str,
-        level: int = 1
+        level: int = 1,
+        keep_with_next: bool = False
     ):
         """
         Add text section with heading.
@@ -253,6 +254,7 @@ class PDFGenerator:
             title: Section title
             content: Section content (can include HTML tags)
             level: Heading level (1, 2, or 3)
+            keep_with_next: If True, keeps this section with the next element (prevents page break between them)
         """
         # Add to TOC
         self.toc_entries.append({
@@ -269,16 +271,35 @@ class PDFGenerator:
         else:
             style = self.styles['Heading3']
         
-        self.story.append(Paragraph(title, style))
+        # Build section elements
+        section_elements = []
+        if title:
+            section_elements.append(Paragraph(title, style))
         
         # Add content
         if content:
             paragraphs = content.split('\n\n')
             for para in paragraphs:
                 if para.strip():
-                    self.story.append(Paragraph(para, self.styles['CustomBody']))
+                    section_elements.append(Paragraph(para, self.styles['CustomBody']))
         
-        logger.debug(f"Added section: {title}")
+        # If keep_with_next is True, store elements to be combined with next item
+        if keep_with_next and section_elements:
+            # Store for combining with next element
+            if not hasattr(self, '_pending_keep_together'):
+                self._pending_keep_together = []
+            self._pending_keep_together.extend(section_elements)
+        else:
+            # Add any pending elements first
+            if hasattr(self, '_pending_keep_together') and self._pending_keep_together:
+                section_elements = self._pending_keep_together + section_elements
+                self._pending_keep_together = []
+            
+            # Add to story
+            for elem in section_elements:
+                self.story.append(elem)
+        
+        logger.debug(f"Added section: {title} (keep_with_next={keep_with_next})")
     
     def add_table(
         self,
@@ -298,9 +319,12 @@ class PDFGenerator:
             col_widths: Optional column widths in inches
             style: Table style ('default', 'minimal', or 'colorful')
         """
+        # Collect elements for this table
+        table_elements = []
+        
         if title:
-            self.story.append(Paragraph(title, self.styles['Heading3']))
-            self.story.append(Spacer(1, 0.1*inch))
+            table_elements.append(Paragraph(title, self.styles['Heading3']))
+            table_elements.append(Spacer(1, 0.1*inch))
         
         # Convert DataFrame to list of lists
         table_data = [data.columns.tolist()] + data.values.tolist()
@@ -368,10 +392,25 @@ class PDFGenerator:
             table_style.add('ALIGN', (col_idx, 1), (col_idx, -1), alignment)
         
         table.setStyle(table_style)
-        self.story.append(table)
-        self.story.append(Spacer(1, 0.2*inch))
+        table_elements.append(table)
+        table_elements.append(Spacer(1, 0.2*inch))
         
-        logger.debug(f"Added table with {len(data)} rows, alignments: {col_alignments}")
+        # Check if there are pending keep_together elements (e.g., a header)
+        if hasattr(self, '_pending_keep_together') and self._pending_keep_together:
+            # Combine header with table using KeepTogether
+            combined_elements = self._pending_keep_together + table_elements
+            self.story.append(KeepTogether(combined_elements))
+            self._pending_keep_together = []
+            logger.debug(f"Added table with {len(data)} rows (kept with header), alignments: {col_alignments}")
+        elif title:
+            # If table has its own title, always keep title with table
+            self.story.append(KeepTogether(table_elements))
+            logger.debug(f"Added table with {len(data)} rows (title kept with table), alignments: {col_alignments}")
+        else:
+            # Add table elements normally (no title, no pending header)
+            for elem in table_elements:
+                self.story.append(elem)
+            logger.debug(f"Added table with {len(data)} rows, alignments: {col_alignments}")
     
     def add_chart(
         self,
@@ -391,9 +430,12 @@ class PDFGenerator:
             height: Chart height in inches
             caption: Optional caption text
         """
+        # Collect elements for this chart
+        chart_elements = []
+        
         if title:
-            self.story.append(Paragraph(title, self.styles['Heading3']))
-            self.story.append(Spacer(1, 0.1*inch))
+            chart_elements.append(Paragraph(title, self.styles['Heading3']))
+            chart_elements.append(Spacer(1, 0.1*inch))
         
         try:
             # Export chart to image
@@ -408,19 +450,42 @@ class PDFGenerator:
             # Add image to PDF
             img = Image(img_path, width=width*inch, height=height*inch)
             img.hAlign = 'CENTER'
-            self.story.append(img)
+            chart_elements.append(img)
             
             # Add caption
             if caption:
-                self.story.append(Spacer(1, 0.05*inch))
-                self.story.append(Paragraph(caption, self.styles['Caption']))
+                chart_elements.append(Spacer(1, 0.05*inch))
+                chart_elements.append(Paragraph(caption, self.styles['Caption']))
             
-            self.story.append(Spacer(1, 0.2*inch))
-            logger.debug(f"Added chart: {title or 'Untitled'}")
+            chart_elements.append(Spacer(1, 0.2*inch))
+            
+            # Check if there are pending keep_together elements (e.g., a header)
+            if hasattr(self, '_pending_keep_together') and self._pending_keep_together:
+                # Combine header with chart using KeepTogether
+                combined_elements = self._pending_keep_together + chart_elements
+                self.story.append(KeepTogether(combined_elements))
+                self._pending_keep_together = []
+                logger.debug(f"Added chart: {title or 'Untitled'} (kept with header)")
+            elif title:
+                # If chart has its own title, always keep title with chart
+                self.story.append(KeepTogether(chart_elements))
+                logger.debug(f"Added chart: {title or 'Untitled'} (title kept with chart)")
+            else:
+                # Add chart elements normally (no title, no pending header)
+                for elem in chart_elements:
+                    self.story.append(elem)
+                logger.debug(f"Added chart: {title or 'Untitled'}")
             
         except Exception as e:
             logger.error(f"Failed to add chart: {e}")
-            self.story.append(Paragraph(f"[Chart could not be rendered: {e}]", self.styles['Normal']))
+            error_elem = Paragraph(f"[Chart could not be rendered: {e}]", self.styles['Normal'])
+            
+            # Handle pending elements even on error
+            if hasattr(self, '_pending_keep_together') and self._pending_keep_together:
+                self.story.extend(self._pending_keep_together)
+                self._pending_keep_together = []
+            
+            self.story.append(error_elem)
     
     def add_page_break(self):
         """Force new page."""
@@ -435,13 +500,14 @@ class PDFGenerator:
         """
         self.story.append(Spacer(1, height * inch))
     
-    def add_bullet_list(self, items: List[str], style_name: Optional[str] = None):
+    def add_bullet_list(self, items: List[str], style_name: Optional[str] = None, compact: bool = False):
         """
         Add bullet list.
         
         Args:
             items: List of items
             style_name: Optional paragraph style name
+            compact: If True, use minimal spacing between items (like Shift+Enter)
         """
         if style_name is None:
             para_style = self.styles['CustomBody']
@@ -449,11 +515,19 @@ class PDFGenerator:
             para_style = self.styles.get(style_name, self.styles['CustomBody'])
         
         # Create bullet list using simple paragraphs with bullet prefix
-        for item in items:
+        for i, item in enumerate(items):
             bullet_para = Paragraph(f"• {item}", para_style)
             self.story.append(bullet_para)
+            
+            # Add minimal spacer between items if compact mode
+            if compact and i < len(items) - 1:
+                self.story.append(Spacer(1, 0.02*inch))  # Minimal spacing (like Shift+Enter)
         
-        self.story.append(Spacer(1, 0.1*inch))
+        # Add normal spacer after the list
+        if not compact:
+            self.story.append(Spacer(1, 0.1*inch))
+        else:
+            self.story.append(Spacer(1, 0.1*inch))  # Normal space after compact list
     
     def add_toc(self):
         """Generate and add table of contents."""

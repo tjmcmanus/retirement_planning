@@ -104,6 +104,7 @@ class ReportBuilder:
             data['roth_conversion'] = self._get_roth_conversion_data()
             data['charitable_giving'] = self._get_charitable_giving_data()
             data['tax_projections'] = self._get_tax_projections()
+            data['tax_bracket_analysis'] = self._get_tax_bracket_analysis()
             data['tax_harvesting'] = self._get_tax_harvesting_data()
             
             # Monte Carlo data
@@ -124,6 +125,23 @@ class ReportBuilder:
             # Performance data
             update_progress("Collecting performance data...")
             data['performance'] = self._get_performance_data()
+            
+            # Generate performance chart if performance data exists
+            if data['performance'] is not None and not data['performance'].empty:
+                try:
+                    chart = self._get_performance_chart(data['performance'])
+                    if chart is not None:
+                        data['performance_chart'] = chart
+                        logger.info("Performance chart generated successfully")
+                    else:
+                        logger.warning("Performance chart generation returned None")
+                        data['performance_chart'] = None
+                except Exception as e:
+                    logger.error(f"Error generating performance chart: {e}")
+                    data['performance_chart'] = None
+            else:
+                logger.info("No performance data available for chart generation")
+                data['performance_chart'] = None
             
             # Assumptions
             update_progress("Collecting assumptions...")
@@ -189,30 +207,45 @@ class ReportBuilder:
             return None
     
     def _get_account_summary(self) -> Optional[pd.DataFrame]:
-        """Get account summary with Total row at the end."""
+        """Get account summary with Account, Account Type, and Balance columns."""
         try:
             from load_data import get_networth_by_month
             import datetime
             
             today = datetime.date.today()
-            _, summary_df = get_networth_by_month(today.month, today.year)
+            detailed_df, _ = get_networth_by_month(today.month, today.year)
             
-            if not summary_df.empty:
-                # Group by account type
-                summary = summary_df.groupby('account_type')['market_value'].sum().reset_index()
-                summary.columns = ['Account Type', 'Balance']
+            if not detailed_df.empty:
+                # Filter out any 'Total' rows from the detailed data to avoid duplicate totals
+                detailed_df = detailed_df[detailed_df['account_type'] != 'Total']
                 
-                # Calculate total
-                total_balance = summary['Balance'].sum()
+                # Group by account_name and account_type to get balances per account
+                account_summary = detailed_df.groupby(['account_name', 'account_type'], as_index=False).agg({
+                    'market_value': 'sum'
+                })
                 
-                # Format balances
-                summary['Balance'] = summary['Balance'].apply(lambda x: f"${x:,.0f}")
+                # Rename columns for display
+                account_summary = account_summary.rename(columns={
+                    'account_name': 'Account',
+                    'account_type': 'Account Type',
+                    'market_value': 'Balance'
+                })
+                
+                # Calculate total before formatting
+                total_balance = account_summary['Balance'].sum()
+                
+                # Format balances as currency
+                account_summary['Balance'] = account_summary['Balance'].apply(lambda x: f"${x:,.0f}")
                 
                 # Add Total row at the end
-                total_row = pd.DataFrame([{'Account Type': 'Total', 'Balance': f"${total_balance:,.0f}"}])
-                summary = pd.concat([summary, total_row], ignore_index=True)
+                total_row = pd.DataFrame([{
+                    'Account': 'Total',
+                    'Account Type': '',
+                    'Balance': f"${total_balance:,.0f}"
+                }])
+                account_summary = pd.concat([account_summary, total_row], ignore_index=True)
                 
-                return summary
+                return account_summary
             
             return None
         except Exception as e:
@@ -419,9 +452,9 @@ class ReportBuilder:
         return relevant_stages
     
     def _get_current_tax_data(self) -> Optional[Dict[str, Any]]:
-        """Get current tax situation from Admin Tax Data calculations or estimates."""
+        """Get current tax situation from actual 2026 strategy results."""
         try:
-            # Try to get tax data from calculations module
+            from strategy import build_withdrawal_strategy_display
             from calculations import calculate_taxable_income
             from load_data import get_income_tax_brackets, get_std_deduction
             from config import get_config_manager
@@ -431,73 +464,78 @@ class ReportBuilder:
             filing_status = config.get_filing_status()
             current_year = datetime.date.today().year
             
-            # Try to get income data from config or session state
-            wages = config.get("income", "wages", 0.0)
-            investment_income = config.get("income", "investment_income", 0.0)
-            ss_benefits = config.get("income", "ss_benefits", 0.0)
+            # Run the actual strategy to get real tax data for current year
+            logger.info(f"Getting current tax data from strategy for year {current_year}")
+            strategy_df, _ = build_withdrawal_strategy_display(
+                start_year=current_year,
+                num_years=1  # Only need current year
+            )
             
-            # Simple AGI calculation (wages + investment income + 85% of SS benefits)
-            agi = wages + investment_income + (ss_benefits * 0.85)
-            
-            # If no income configured, estimate from portfolio withdrawals
-            if agi == 0:
-                # Try to estimate from expected expenses
-                annual_expenses = config.get("financial_assumptions", "expected_annual_expenses", 0.0)
-                if annual_expenses > 0:
-                    # Assume 4% withdrawal rate to estimate portfolio income
-                    agi = annual_expenses
-                    logger.info(f"Estimated AGI from annual expenses: ${agi:,.0f}")
-                else:
-                    # Last resort: use portfolio value to estimate
-                    portfolio_df = self._get_portfolio_data()
-                    if portfolio_df is not None and not portfolio_df.empty and 'market_value' in portfolio_df.columns:
-                        total_portfolio = portfolio_df['market_value'].sum()
-                        # Assume 4% withdrawal rate
-                        agi = total_portfolio * 0.04
-                        logger.info(f"Estimated AGI from 4% portfolio withdrawal: ${agi:,.0f}")
-            
-            if agi == 0:
+            if strategy_df is None or strategy_df.empty:
+                logger.warning("Strategy returned no data for current tax calculation")
                 return None
             
-            # Get standard deduction
+            # Get the first row (current year)
+            current_year_data = strategy_df.iloc[0]
+            
+            # Extract tax data from strategy
+            federal_tax = float(current_year_data.get('Federal Tax', 0))
+            state_tax = float(current_year_data.get('State Tax', 0))
+            total_tax = federal_tax + state_tax
+            
+            # Get AGI directly from strategy (it calculates this properly)
+            agi = float(current_year_data.get('AGI', 0))
+            
+            # Also get individual income sources for reference
+            wages = float(current_year_data.get('Wages', 0))
+            ss_benefits = float(current_year_data.get('SS Benefits', 0))
+            traditional_withdrawal = float(current_year_data.get('Traditional Withdrawal', 0))
+            roth_conversion = float(current_year_data.get('Roth Conversion', 0))
+            
+            # Calculate effective rate
+            effective_rate = (total_tax / agi) if agi > 0 else 0.0
+            
+            # Calculate actual marginal rate using the same method as strategy
+            # Get standard deduction and calculate taxable income
             std_ded_df = get_std_deduction(current_year, filing_status)
             std_deduction = float(std_ded_df.iloc[0]['deduction']) if not std_ded_df.empty else 0.0
-            
-            # Calculate taxable income
             taxable_income = max(0, agi - std_deduction)
             
-            # Calculate federal tax using progressive brackets
+            # Calculate marginal rate using tax brackets
             brackets_df = get_income_tax_brackets(current_year, filing_status)
-            if brackets_df.empty:
-                return None
+            if not brackets_df.empty and taxable_income > 0:
+                tax_calc = calculate_taxable_income(taxable_income, brackets_df)
+                marginal_rate = tax_calc.max_rate  # This is the actual marginal rate
+            else:
+                marginal_rate = 0.0
             
-            tax_calc = calculate_taxable_income(taxable_income, brackets_df)
-            federal_tax = tax_calc.total_tax
-            marginal_rate = tax_calc.max_rate
+            # Check IRMAA status from strategy
+            irmaa_penalty = float(current_year_data.get('IRMAA Penalty', 0))
+            irmaa_status = "Yes" if irmaa_penalty > 0 else "No"
             
-            # Simple state tax estimate (5% flat rate)
-            state_tax = taxable_income * 0.05
-            
-            effective_rate = (federal_tax + state_tax) / agi if agi > 0 else 0.0
-            
-            # Check IRMAA status (simplified)
-            irmaa_threshold = 206000 if filing_status == "married_filing_jointly" else 103000
-            irmaa_status = "Yes" if agi > irmaa_threshold else "No"
+            logger.info(f"Current tax data from strategy: Federal=${federal_tax:,.0f}, State=${state_tax:,.0f}, Total=${total_tax:,.0f}")
+            logger.info(f"Marginal rate calculated: {marginal_rate:.2%}, Effective rate: {effective_rate:.2%}")
             
             return {
                 'agi': agi,
                 'federal_tax': federal_tax,
                 'state_tax': state_tax,
-                'total_tax': federal_tax + state_tax,
+                'total_tax': total_tax,
                 'effective_rate': effective_rate,
                 'marginal_rate': marginal_rate,
                 'irmaa_status': irmaa_status,
+                'irmaa_penalty': irmaa_penalty,
                 'filing_status': filing_status,
                 'year': current_year,
-                'is_estimated': wages == 0 and investment_income == 0 and ss_benefits == 0
+                'is_estimated': False,  # This is from actual strategy, not estimated
+                'wages': wages,
+                'ss_benefits': ss_benefits,
+                'traditional_withdrawal': traditional_withdrawal,
+                'roth_conversion': roth_conversion
             }
         except Exception as e:
-            logger.warning(f"Could not load tax data: {e}")
+            logger.warning(f"Could not load tax data from strategy: {e}")
+            logger.exception("Full traceback:")
             return None
     
     def _get_roth_conversion_data(self) -> Optional[Dict[str, Any]]:
@@ -536,8 +574,7 @@ class ReportBuilder:
                 return None
             
             # Extract Roth conversion data from strategy
-            # The strategy DataFrame has columns: Year, Trad->Roth, Fed Tax, State Tax, etc.
-            conversion_cols = ['Year', 'Trad->Roth', 'Fed Tax', 'State Tax']
+            # The strategy DataFrame has columns: Year, Roth Conversion, Federal Tax, State Tax, etc.
             balance_cols = []
             
             # Find balance columns (they vary by account type)
@@ -550,18 +587,14 @@ class ReportBuilder:
             # Build multi-year plan from actual strategy data
             plan_data = []
             for _, row in strategy_df.head(10).iterrows():
-                conversion_amount = row.get('Trad->Roth', 0) if 'Trad->Roth' in row else 0
-                fed_tax = row.get('Fed Tax', 0) if 'Fed Tax' in row else 0
-                state_tax = row.get('State Tax', 0) if 'State Tax' in row else 0
+                # Use correct column names from strategy
+                conversion_amount = float(row.get('Roth Conversion', 0))
+                fed_tax = float(row.get('Federal Tax', 0))
+                state_tax = float(row.get('State Tax', 0))
                 
-                # Get balances
-                trad_bal = traditional_balance
-                roth_bal = roth_balance
-                for label, col in balance_cols:
-                    if 'Traditional' in label and col in row:
-                        trad_bal = row[col]
-                    elif 'Roth' in label and col in row:
-                        roth_bal = row[col]
+                # Get balances from strategy columns
+                trad_bal = float(row.get('Traditional Balance', traditional_balance))
+                roth_bal = float(row.get('Roth Balance', roth_balance))
                 
                 plan_data.append({
                     'Year': int(row['Year']),
@@ -633,11 +666,17 @@ class ReportBuilder:
             # Get top 10 opportunities
             result_df = cast(pd.DataFrame, harvest_opps[available_cols]).head(10).copy()
             
-            # Format numeric columns to 2 decimal places
+            # Format numeric columns with proper formatting
             if 'Unrealized G/L' in result_df.columns:
-                result_df['Unrealized G/L'] = result_df['Unrealized G/L'].apply(lambda x: round(float(x), 2) if pd.notna(x) else x)
+                # Format as currency with 2 decimal places
+                result_df['Unrealized G/L'] = result_df['Unrealized G/L'].apply(
+                    lambda x: f"${x:,.2f}" if pd.notna(x) else ""
+                )
             if 'Return %' in result_df.columns:
-                result_df['Return %'] = result_df['Return %'].apply(lambda x: round(float(x), 2) if pd.notna(x) else x)
+                # Format as percentage with 2 decimal places
+                result_df['Return %'] = result_df['Return %'].apply(
+                    lambda x: f"{x:.2f}%" if pd.notna(x) else ""
+                )
             
             return result_df
             
@@ -678,8 +717,98 @@ class ReportBuilder:
             return None
     
     def _get_performance_data(self) -> Optional[pd.DataFrame]:
-        """Get portfolio performance metrics from historical net worth data."""
+        """
+        Get portfolio performance metrics using Time-Weighted Returns (TWR) and real benchmarks.
+        
+        This method uses:
+        1. PerformanceTracker for accurate TWR calculations
+        2. BenchmarkDataProvider for real market benchmark data
+        3. Advanced metrics (Beta, Alpha, Information Ratio, etc.)
+        
+        Falls back to simple calculations if services unavailable.
+        """
         try:
+            from components.performance_tracker import get_tracker
+            from components.benchmark_data import get_benchmark_provider, BenchmarkType
+            from datetime import date, timedelta
+            
+            # Configuration: Select benchmark (can be made configurable later)
+            use_real_benchmarks = True  # Set to False to use static 7%
+            selected_benchmark = BenchmarkType.SP500  # Default to S&P 500
+            
+            # Try to use performance tracker for accurate TWR
+            try:
+                tracker = get_tracker()
+                benchmark_provider = get_benchmark_provider() if use_real_benchmarks else None
+                
+                periods = ['1M', '3M', '6M', '1Y']
+                performance_data = []
+                
+                for period in periods:
+                    metrics = tracker.get_period_performance(period)
+                    
+                    if metrics:
+                        # Get real benchmark data if enabled
+                        benchmark_return = None
+                        benchmark_name = "7% Annual"
+                        
+                        if use_real_benchmarks and benchmark_provider:
+                            try:
+                                benchmark_returns = benchmark_provider.get_benchmark_returns(
+                                    selected_benchmark,
+                                    metrics.start_date,
+                                    metrics.end_date
+                                )
+                                
+                                if benchmark_returns:
+                                    # Ensure we get a scalar float value, not a Series
+                                    total_ret = benchmark_returns.total_return
+                                    if isinstance(total_ret, pd.Series):
+                                        benchmark_return = float(total_ret.iloc[0])
+                                    else:
+                                        benchmark_return = float(total_ret)
+                                    from components.benchmark_data import BENCHMARK_CONFIGS
+                                    benchmark_name = BENCHMARK_CONFIGS[selected_benchmark].name
+                                    logger.info(f"Using real {benchmark_name} data for {period}")
+                            except Exception as e:
+                                logger.warning(f"Could not fetch real benchmark data: {e}")
+                        
+                        # Fallback to static 7% if real data unavailable
+                        if benchmark_return is None:
+                            if period == '1M':
+                                benchmark_return = 0.07 / 12
+                            elif period == '3M':
+                                benchmark_return = (1 + 0.07) ** (3/12) - 1
+                            elif period == '6M':
+                                benchmark_return = (1 + 0.07) ** (6/12) - 1
+                            else:  # 1Y
+                                benchmark_return = 0.07
+                            benchmark_name = "7% Annual"
+                        
+                        # Ensure all values are scalar floats
+                        alpha = float(metrics.twr) - float(benchmark_return)
+                        
+                        performance_data.append({
+                            'Period': period,
+                            'Return': round(float(metrics.twr) * 100, 2),
+                            'Benchmark': round(float(benchmark_return) * 100, 2),
+                            'Benchmark Name': str(benchmark_name),
+                            'Alpha': round(float(alpha) * 100, 2),
+                            'Volatility': round(float(metrics.volatility) * 100, 2),
+                            'Sharpe': round(float(metrics.sharpe_ratio), 2),
+                            'Max Drawdown': round(float(metrics.max_drawdown) * 100, 2)
+                        })
+                
+                if performance_data:
+                    logger.info("Using TWR-based performance calculations with real benchmarks")
+                    return pd.DataFrame(performance_data)
+                else:
+                    logger.info("No performance tracking data available, falling back to simple calculations")
+            
+            except Exception as e:
+                logger.warning(f"Could not use performance tracker, falling back to simple calculations: {e}")
+            
+            # Fallback: Use simple calculations from net worth history
             networth = self._get_net_worth_data()
             if networth is None or networth.empty or len(networth) < 2:
                 return None
@@ -732,6 +861,142 @@ class ReportBuilder:
             
         except Exception as e:
             logger.warning(f"Could not load performance data: {e}")
+            return None
+    
+    def _get_performance_chart(self, performance_df: pd.DataFrame) -> Optional[Any]:
+        """
+        Generate a performance vs benchmark comparison chart using Plotly.
+        
+        Args:
+            performance_df: DataFrame with columns: Period, Return, Benchmark, Alpha
+            
+        Returns:
+            Plotly Figure object or None if chart cannot be generated
+        """
+        try:
+            import plotly.graph_objects as go
+            
+            if performance_df is None or performance_df.empty:
+                logger.warning("Performance DataFrame is None or empty")
+                return None
+            
+            logger.info(f"Generating chart for {len(performance_df)} periods")
+            logger.info(f"Performance DataFrame columns: {performance_df.columns.tolist()}")
+            logger.info(f"Performance DataFrame dtypes:\n{performance_df.dtypes}")
+            logger.info(f"First row of data:\n{performance_df.iloc[0]}")
+            
+            # Prepare data - ensure we're getting clean values
+            periods = performance_df['Period'].tolist()
+            
+            # Convert to float and handle any Series objects
+            returns = []
+            for val in performance_df['Return']:
+                if isinstance(val, pd.Series):
+                    returns.append(float(val.iloc[0]))
+                else:
+                    returns.append(float(val))
+            
+            benchmarks = []
+            for val in performance_df['Benchmark']:
+                if isinstance(val, pd.Series):
+                    benchmarks.append(float(val.iloc[0]))
+                else:
+                    benchmarks.append(float(val))
+            
+            logger.info(f"Prepared data - periods: {periods}, returns: {returns}, benchmarks: {benchmarks}")
+            
+            # Get benchmark name (use first row's benchmark name if available)
+            benchmark_name = "Benchmark"
+            if 'Benchmark Name' in performance_df.columns and not performance_df.empty:
+                benchmark_name = performance_df['Benchmark Name'].iloc[0]
+            
+            # Create figure
+            fig = go.Figure()
+            
+            # Add portfolio returns bar
+            fig.add_trace(go.Bar(
+                name='Portfolio Return',
+                x=periods,
+                y=returns,
+                marker_color='#2E86AB',
+                text=[f'{r:+.1f}%' for r in returns],
+                textposition='outside',
+                textfont=dict(size=10, color='#2E86AB'),
+                hovertemplate='<b>%{x}</b><br>Portfolio: %{y:.2f}%<extra></extra>'
+            ))
+            
+            # Add benchmark bar with dynamic name
+            fig.add_trace(go.Bar(
+                name=f'Benchmark ({benchmark_name})',
+                x=periods,
+                y=benchmarks,
+                marker_color='#A23B72',
+                text=[f'{b:+.1f}%' for b in benchmarks],
+                textposition='outside',
+                textfont=dict(size=10, color='#A23B72'),
+                hovertemplate='<b>%{x}</b><br>Benchmark: %{y:.2f}%<extra></extra>'
+            ))
+            
+            # Update layout
+            fig.update_layout(
+                title={
+                    'text': 'Portfolio Performance vs Benchmark',
+                    'x': 0.5,
+                    'xanchor': 'center',
+                    'font': {'size': 16, 'color': '#1f2937'}
+                },
+                xaxis_title='Period',
+                yaxis_title='Return (%)',
+                barmode='group',
+                bargap=0.15,
+                bargroupgap=0.1,
+                hovermode='x unified',
+                plot_bgcolor='white',
+                paper_bgcolor='white',
+                font=dict(family='Arial, sans-serif', size=12, color='#374151'),
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='right',
+                    x=1,
+                    bgcolor='rgba(255, 255, 255, 0.8)',
+                    bordercolor='#d1d5db',
+                    borderwidth=1
+                ),
+                margin=dict(l=60, r=40, t=80, b=60),
+                height=400,
+                width=800
+            )
+            
+            # Add gridlines
+            fig.update_xaxes(
+                showgrid=False,
+                showline=True,
+                linewidth=1,
+                linecolor='#d1d5db'
+            )
+            
+            fig.update_yaxes(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor='#e5e7eb',
+                showline=True,
+                linewidth=1,
+                linecolor='#d1d5db',
+                zeroline=True,
+                zerolinewidth=2,
+                zerolinecolor='#9ca3af'
+            )
+            
+            logger.info("Performance chart generated successfully (Plotly)")
+            logger.info(f"Chart type: {type(fig)}")
+            return fig
+            
+        except Exception as e:
+            logger.error(f"Could not generate performance chart: {e}", exc_info=True)
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     def _get_assumptions(self) -> Dict[str, Any]:
@@ -1103,52 +1368,73 @@ class ReportBuilder:
             return None
     
     def _get_rebalancing_analysis(self) -> Optional[Dict[str, Any]]:
-        """Get rebalancing analysis comparing current vs target allocation."""
+        """
+        Get rebalancing analysis comparing current vs target allocation.
+        
+        Uses cached analysis if available and fresh (< 1 day old).
+        Updates cache if stale or missing.
+        """
         try:
-            from portfolio_rebalancing import compute_rebalance_plan
-            import datetime
+            from components.rebalancing_cache import get_cache_manager
             
-            current_date = datetime.date.today()
+            cache_mgr = get_cache_manager()
             
-            # Use default target allocation (can be customized)
-            target_cash = 10.0
-            target_bonds = 10.0
-            target_stocks = 80.0
-            drift_threshold = 5.0
+            # Update cache if needed (older than 1 day)
+            if cache_mgr.needs_update():
+                logger.info("Rebalancing cache is stale, updating...")
+                cache_mgr.update_cache()
             
-            # Compute rebalancing plan
-            report = compute_rebalance_plan(
-                month=current_date.month,
-                year=current_date.year,
-                target_cash_pct=target_cash,
-                target_bonds_pct=target_bonds,
-                target_stocks_pct=target_stocks,
-                drift_threshold_pct=drift_threshold
-            )
+            # Get cached analysis
+            analysis = cache_mgr.get_latest_analysis()
             
-            # Build summary DataFrame from asset_summary
-            summary_data = []
-            for asset_summary in report.asset_summary:
-                summary_data.append({
-                    'Asset Class': asset_summary.asset_class,
-                    'Current Value': asset_summary.current_value,
-                    'Current %': asset_summary.current_pct,
-                    'Target %': asset_summary.target_pct,
-                    'Difference': asset_summary.drift_pct,
-                    'Trade Amount': asset_summary.delta_value
-                })
-            
-            summary_df = pd.DataFrame(summary_data) if summary_data else None
-            
-            return {
-                'drift_triggered': report.drift_triggered,
-                'total_value': report.total_portfolio_value,
-                'summary': summary_df,
-                'actions_count': len(report.actions)
-            }
+            if analysis:
+                logger.info(f"Using cached rebalancing analysis from {analysis['calculation_date']}")
+                
+                # Format the summary DataFrame for display
+                summary_df = analysis['summary']
+                if isinstance(summary_df, pd.DataFrame) and not summary_df.empty:
+                    # Create a copy to avoid modifying cached data
+                    formatted_summary = summary_df.copy()
+                    
+                    # Format currency columns (Current Value, Trade Amount)
+                    if 'Current Value' in formatted_summary.columns:
+                        formatted_summary['Current Value'] = formatted_summary['Current Value'].apply(
+                            lambda x: f"${x:,.2f}" if pd.notna(x) else ""
+                        )
+                    
+                    if 'Trade Amount' in formatted_summary.columns:
+                        formatted_summary['Trade Amount'] = formatted_summary['Trade Amount'].apply(
+                            lambda x: f"${x:,.2f}" if pd.notna(x) else ""
+                        )
+                    
+                    # Format percentage columns (Current %, Target %, Difference)
+                    for col in ['Current %', 'Target %', 'Difference']:
+                        if col in formatted_summary.columns:
+                            formatted_summary[col] = formatted_summary[col].apply(
+                                lambda x: f"{x:.2f}%" if pd.notna(x) else ""
+                            )
+                else:
+                    formatted_summary = summary_df
+                
+                return {
+                    'drift_triggered': analysis['drift_triggered'],
+                    'total_value': analysis['total_value'],
+                    'summary': formatted_summary,
+                    'actions_count': analysis['actions_count'],
+                    'actions': analysis.get('actions', []),
+                    'target_allocation': {
+                        'cash': analysis['target_allocation'].cash_pct,
+                        'bonds': analysis['target_allocation'].bonds_pct,
+                        'stocks': analysis['target_allocation'].stocks_pct,
+                        'threshold': analysis['target_allocation'].drift_threshold_pct
+                    }
+                }
+            else:
+                logger.warning("No rebalancing analysis available in cache")
+                return None
             
         except Exception as e:
-            logger.warning(f"Could not load rebalancing analysis: {e}")
+            logger.warning(f"Could not load rebalancing analysis: {e}", exc_info=True)
             return None
     
     def _get_risk_metrics(self) -> Optional[Dict[str, Any]]:
@@ -1198,74 +1484,143 @@ class ReportBuilder:
             return None
     
     def _get_charitable_giving_data(self) -> Optional[Dict[str, Any]]:
-        """Get charitable giving strategy configuration or estimates."""
+        """Get charitable giving data from actual strategy results."""
         try:
+            from strategy import build_withdrawal_strategy_display
             from config import get_config_manager
+            import datetime
             
             config = get_config_manager()
+            current_year = datetime.date.today().year
             
-            # Get charitable giving configuration
-            annual_giving = config.get("charitable", "annual_giving", 0.0)
-            daf_enabled = config.get("charitable", "daf_enabled", False)
-            qcd_enabled = config.get("charitable", "qcd_enabled", False)
+            # Run the actual strategy to get charitable giving data
+            strategy_df, _ = build_withdrawal_strategy_display(
+                start_year=current_year,
+                num_years=10
+            )
             
-            # If no charitable data configured, check if portfolio suggests QCD opportunity
-            if annual_giving == 0:
-                age = config.get("personal", "age", 0)
-                if age >= 70:
-                    # Estimate potential QCD from RMD
-                    portfolio_df = self._get_portfolio_data()
-                    if portfolio_df is not None and not portfolio_df.empty:
-                        if 'account_type' in portfolio_df.columns and 'market_value' in portfolio_df.columns:
-                            traditional_balance = portfolio_df[portfolio_df['account_type'] == 'Traditional']['market_value'].sum()
-                            if traditional_balance > 0:
-                                # Estimate RMD (simplified - use 4% for age 70-75)
-                                estimated_rmd = traditional_balance * 0.04
-                                # Suggest QCD up to $105,000 (2024 limit)
-                                suggested_qcd = min(105000, estimated_rmd * 0.5)
-                                
-                                tax_data = self._get_current_tax_data()
-                                marginal_rate = tax_data.get('marginal_rate', 0.22) if tax_data else 0.22
-                                
-                                return {
-                                    'annual_giving': 0,
-                                    'daf_enabled': False,
-                                    'qcd_enabled': False,
-                                    'qcd_eligible': True,
-                                    'suggested_qcd': suggested_qcd,
-                                    'estimated_rmd': estimated_rmd,
-                                    'potential_tax_savings': suggested_qcd * marginal_rate,
-                                    'marginal_rate': marginal_rate,
-                                    'is_estimated': True
-                                }
+            if strategy_df is None or strategy_df.empty:
                 return None
             
-            # Calculate potential tax benefits
+            # Check if strategy includes DAF contributions
+            has_daf = 'DAF Contribution' in strategy_df.columns and 'DAF Balance' in strategy_df.columns
+            
+            if not has_daf:
+                return None
+            
+            # Extract DAF data from strategy
+            daf_contributions = []
+            for _, row in strategy_df.head(10).iterrows():
+                year = int(row['Year'])
+                contribution = float(row.get('DAF Contribution', 0))
+                balance = float(row.get('DAF Balance', 0))
+                
+                if contribution > 0 or balance > 0:
+                    daf_contributions.append({
+                        'Year': year,
+                        'Contribution': contribution,
+                        'Balance': balance
+                    })
+            
+            if not daf_contributions:
+                return None
+            
+            # Calculate total contributions and tax savings
+            total_contributions = sum(item['Contribution'] for item in daf_contributions)
+            
+            # Get tax data for savings calculation
             tax_data = self._get_current_tax_data()
-            marginal_rate = tax_data.get('marginal_rate', 0.22) if tax_data else 0.22
+            marginal_rate = tax_data.get('marginal_rate', 0.35) if tax_data else 0.35
             
-            # DAF bundling benefit (3 years of giving)
-            daf_benefit = annual_giving * 3 * marginal_rate if daf_enabled else 0
+            # Tax savings from DAF contributions (deductible in year of contribution)
+            total_tax_savings = total_contributions * marginal_rate
             
-            # QCD benefit (if over 70.5)
-            age = config.get("personal", "age", 65)
-            qcd_benefit = min(annual_giving, 105000) * marginal_rate if qcd_enabled and age >= 70 else 0
-            
-            total_savings = daf_benefit + qcd_benefit
+            # Create DataFrame for multi-year plan
+            daf_plan = pd.DataFrame(daf_contributions)
             
             return {
-                'annual_giving': annual_giving,
-                'daf_enabled': daf_enabled,
-                'qcd_enabled': qcd_enabled,
-                'daf_benefit': daf_benefit,
-                'qcd_benefit': qcd_benefit,
-                'total_savings': total_savings,
+                'daf_enabled': True,
+                'total_contributions': total_contributions,
+                'total_tax_savings': total_tax_savings,
                 'marginal_rate': marginal_rate,
+                'daf_plan': daf_plan,
                 'is_estimated': False
             }
             
         except Exception as e:
-            logger.warning(f"Could not load charitable giving data: {e}")
+            logger.warning(f"Could not load charitable giving data from strategy: {e}")
+            logger.exception("Full traceback:")
+            return None
+    
+    def _get_tax_bracket_analysis(self) -> Optional[pd.DataFrame]:
+        """Get tax bracket analysis from strategy projections."""
+        try:
+            from calculations import calculate_taxable_income
+            from load_data import get_income_tax_brackets, get_std_deduction
+            from config import get_config_manager
+            import datetime
+            
+            # Get tax projections first
+            projections = self._get_tax_projections()
+            if projections is None or projections.empty:
+                return None
+            
+            config = get_config_manager()
+            filing_status = config.get_filing_status()
+            current_year = datetime.date.today().year
+            
+            # Get tax brackets
+            brackets_df = get_income_tax_brackets(current_year, filing_status)
+            if brackets_df.empty:
+                return None
+            
+            # Calculate bracket for each year
+            bracket_analysis = []
+            for _, row in projections.iterrows():
+                year = int(row['Year'])
+                income = float(row['Income'])
+                federal_tax = float(row['Federal Tax'])
+                effective_rate = float(row['Effective Rate'])
+                
+                # Get standard deduction for the year
+                std_ded_df = get_std_deduction(year, filing_status)
+                std_deduction = float(std_ded_df.iloc[0]['deduction']) if not std_ded_df.empty else 0.0
+                
+                # Calculate taxable income
+                taxable_income = max(0, income - std_deduction)
+                
+                # Determine marginal bracket
+                if taxable_income > 0:
+                    tax_calc = calculate_taxable_income(taxable_income, brackets_df)
+                    marginal_rate = tax_calc.max_rate
+                    
+                    # Find the bracket name
+                    bracket_row = brackets_df[brackets_df['rate'] == marginal_rate].iloc[0]
+                    bracket_lower = bracket_row['lower']
+                    bracket_upper = bracket_row['upper']
+                    
+                    if bracket_upper == float('inf'):
+                        bracket_name = f"{marginal_rate*100:.0f}% (${bracket_lower:,.0f}+)"
+                    else:
+                        bracket_name = f"{marginal_rate*100:.0f}% (${bracket_lower:,.0f}-${bracket_upper:,.0f})"
+                else:
+                    marginal_rate = 0.0
+                    bracket_name = "0% (No taxable income)"
+                
+                bracket_analysis.append({
+                    'Year': year,
+                    'Taxable Income': taxable_income,
+                    'Marginal Bracket': bracket_name,
+                    'Marginal Rate': marginal_rate * 100,
+                    'Effective Rate': effective_rate,
+                    'Federal Tax': federal_tax
+                })
+            
+            return pd.DataFrame(bracket_analysis)
+            
+        except Exception as e:
+            logger.warning(f"Could not calculate tax bracket analysis: {e}")
+            logger.exception("Full traceback:")
             return None
     
     def _get_tax_projections(self) -> Optional[pd.DataFrame]:
@@ -1286,17 +1641,17 @@ class ReportBuilder:
                 return None
             
             # Extract tax projection data from strategy
-            # The strategy DataFrame has columns: Year, AGI, Fed Tax, State Tax, etc.
+            # The strategy DataFrame has columns: Year, AGI, Federal Tax, State Tax, etc.
             projections = []
             for _, row in strategy_df.head(10).iterrows():
                 year = int(row['Year'])
                 
                 # Get income (AGI or MAGI)
-                income = row.get('AGI', row.get('MAGI', 0))
+                income = float(row.get('AGI', row.get('MAGI', 0)))
                 
-                # Get tax amounts
-                federal_tax = row.get('Fed Tax', 0)
-                state_tax = row.get('State Tax', 0)
+                # Get tax amounts - use correct column names from strategy
+                federal_tax = float(row.get('Federal Tax', 0))
+                state_tax = float(row.get('State Tax', 0))
                 total_tax = federal_tax + state_tax
                 
                 # Calculate effective rate

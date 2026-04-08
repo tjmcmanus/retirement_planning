@@ -181,6 +181,79 @@ def render_optimization_tab(
         else:
             st.warning(f"⚠️ Target allocation totals: **{total_pct}%** (Must equal 100% to calculate rebalancing)")
         
+        # Show cache status and save button
+        st.markdown("#### 💾 Save Target Allocation")
+        
+        try:
+            from components.rebalancing_cache import get_cache_manager
+            from set_target_allocation import get_target_allocation
+            
+            cache_mgr = get_cache_manager()
+            
+            # Get current saved allocation
+            saved_target = get_target_allocation()
+            
+            col_save1, col_save2 = st.columns([3, 1])
+            
+            with col_save1:
+                if saved_target:
+                    st.info(
+                        f"📌 **Saved Target:** {saved_target['cash_pct']:.0f}% cash, "
+                        f"{saved_target['bonds_pct']:.0f}% bonds, {saved_target['stocks_pct']:.0f}% stocks "
+                        f"(Threshold: {saved_target['drift_threshold_pct']:.0f}%)\n\n"
+                        f"Last updated: {saved_target['last_updated'][:10]}"
+                    )
+                else:
+                    st.info("💡 No saved target allocation. Save your targets to use in reports.")
+            
+            with col_save2:
+                save_btn = st.button(
+                    "💾 Save Targets",
+                    disabled=not is_valid,
+                    use_container_width=True,
+                    key="rb_save_targets_btn",
+                    help="Save these targets for use in Portfolio Review reports"
+                )
+                
+                if save_btn and is_valid:
+                    try:
+                        from set_target_allocation import set_target_allocation
+                        
+                        success = set_target_allocation(
+                            cash_pct=float(cash_tgt),
+                            bonds_pct=float(bonds_tgt),
+                            stocks_pct=float(stocks_tgt),
+                            drift_threshold_pct=float(drift_thresh)
+                        )
+                        
+                        if success:
+                            st.success("✅ Target allocation saved! Will be used in Portfolio Review reports.")
+                            st.rerun()
+                        else:
+                            st.error("❌ Failed to save target allocation")
+                    except Exception as e:
+                        st.error(f"❌ Error saving targets: {e}")
+            
+            # Show cache status
+            latest_analysis = cache_mgr.get_latest_analysis()
+            if latest_analysis:
+                needs_update = cache_mgr.needs_update()
+                status_icon = "⚠️" if needs_update else "✅"
+                status_text = "Stale (will update)" if needs_update else "Fresh"
+                
+                st.caption(
+                    f"{status_icon} **Cache Status:** {status_text} | "
+                    f"Last analysis: {latest_analysis['calculation_date']} | "
+                    f"Total value: ${latest_analysis['total_value']:,.0f}"
+                )
+            else:
+                st.caption("ℹ️ No cached analysis yet. Will be created when you calculate or save targets.")
+                
+        except Exception as e:
+            st.warning(f"⚠️ Cache system unavailable: {e}")
+        
+        st.markdown("---")
+        
         # Only show the calculate button when targets are valid
         calculate_btn = st.button(
             "🔄 Calculate Rebalancing Plan",
