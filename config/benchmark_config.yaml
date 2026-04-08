@@ -1,0 +1,61 @@
+# Benchmark Configuration
+# ======================
+# Configure benchmark settings for performance comparison
+
+benchmark:
+  # Default benchmark for performance comparison
+  # Options: SP500, TOTAL_MARKET, NASDAQ, DOW, RUSSELL_2000, 
+  #          BALANCED_60_40, BALANCED_40_60, ALL_WEATHER,
+  #          TREASURY_10Y, AGGREGATE_BOND
+  default: SP500
+  
+  # Enable real-time benchmark data from market APIs
+  # Set to false to use static 7% annual return assumption
+  use_real_data: true
+  
+  # Cache duration in days
+  # Benchmark data will be cached locally to reduce API calls
+  cache_duration: 7
+  
+  # Risk-free rate for Sharpe ratio calculation (annual rate)
+  # Default: 4% (0.04)
+  risk_free_rate: 0.04
+  
+  # Force refresh benchmark data on next report generation
+  # Set to true to bypass cache and fetch fresh data
+  force_refresh: false
+
+# Benchmark Descriptions
+# ======================
+# SP500: S&P 500 Index - Large-cap U.S. stocks
+# TOTAL_MARKET: Total Stock Market - Entire U.S. stock market
+# NASDAQ: NASDAQ Composite - Technology-heavy index
+# DOW: Dow Jones Industrial Average - 30 large U.S. companies
+# RUSSELL_2000: Russell 2000 - Small-cap U.S. stocks
+# BALANCED_60_40: 60% stocks, 40% bonds - Balanced portfolio
+# BALANCED_40_60: 40% stocks, 60% bonds - Conservative balanced
+# ALL_WEATHER: Ray Dalio's All Weather Portfolio
+# TREASURY_10Y: 10-Year U.S. Treasury - Government bonds
+# AGGREGATE_BOND: U.S. Aggregate Bond Index - Investment-grade bonds
+
+# Advanced Metrics
+# ================
+# When real benchmark data is enabled, the following metrics are calculated:
+# - Beta: Portfolio volatility relative to benchmark
+# - Alpha: Risk-adjusted excess return vs benchmark
+# - Information Ratio: Excess return divided by tracking error
+# - Tracking Error: Standard deviation of excess returns
+# - Correlation: Correlation coefficient with benchmark
+# - R-Squared: Proportion of variance explained by benchmark
+# - Sharpe Ratio: Risk-adjusted return metric
+# - Sortino Ratio: Downside risk-adjusted return
+# - Up/Down Capture: Performance in up and down markets
+
+# Notes
+# =====
+# - Real benchmark data requires internet connection on first fetch
+# - Data is cached locally for faster subsequent loads
+# - If API is unavailable, system falls back to 7% static benchmark
+# - yfinance package required: pip install yfinance
+
+# Made with Bob

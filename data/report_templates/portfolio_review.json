@@ -60,14 +60,14 @@
       "config": {
         "include_returns": true,
         "include_benchmark_comparison": true,
-        "include_risk_metrics": true,
+        "include_risk_metrics": false,
         "time_periods": ["1M", "3M", "6M", "1Y", "3Y", "5Y", "ITD"]
       }
     },
     {
       "section_id": "factor_analysis",
       "title": "Factor Analysis",
-      "enabled": true,
+      "enabled": false,
       "order": 5,
       "config": {
         "include_factor_exposures": true,

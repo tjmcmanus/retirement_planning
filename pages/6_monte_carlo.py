@@ -81,7 +81,10 @@ _default_person2_age = _config_mgr.calculate_age(
     _config_mgr.get("personal_info", "person2_birth_date", "1967-01-01")
 )
 _default_ss_age = _config_mgr.get("social_security", "person1_ssi_age", 70)
-_default_ss_amount = _config_mgr.get("social_security", "person1_ssi_amount", 0)
+# Get both people's MONTHLY social security amounts and convert to ANNUAL total
+_person1_monthly_ss = _config_mgr.get("social_security", "person1_ssi_amount", 0)
+_person2_monthly_ss = _config_mgr.get("social_security", "person2_ssi_amount", 0)
+_default_ss_amount = (_person1_monthly_ss + _person2_monthly_ss) * 12  # Convert monthly to annual
 _default_inflation = _config_mgr.get("financial_assumptions", "expense_inflation_rate", 3.0) / 100
 
 # Use the younger person's retirement age if both are defined

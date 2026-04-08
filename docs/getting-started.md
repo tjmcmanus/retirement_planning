@@ -149,6 +149,8 @@ Create or edit `retirement_config.json`:
 
 This is your primary data file containing all account information.
 
+> **Note:** To get started quickly, make a copy of `portfolio_data_truth.sample.csv` and name it `portfolio_data_truth.csv`. You can then edit this file with your actual account information.
+
 **Format:**
 ```csv
 Account,Type,Owner,Balance,Basis,Contribution,Annual_Return

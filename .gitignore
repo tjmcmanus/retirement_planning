@@ -182,3 +182,7 @@ portfolio_data_truth_*.csv
 *.temp
 ~*
 portfolio_data_truth.csv
+data/benchmark_cache.db
+data/performance_history.db
+.gitignore
+data/rebalancing_cache.db

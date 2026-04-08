@@ -888,8 +888,8 @@ def generate_monte_carlo_report_csv(
 def get_safe_withdrawal_rate(
     inputs: MonteCarloInputs,
     target_success: float = 0.90,
-    tolerance: float = 0.01,
-    max_iterations: int = 20,
+    tolerance: float = 0.005,  # Tighter tolerance for better precision
+    max_iterations: int = 25,  # More iterations for better convergence
 ) -> float:
     """
     Binary search for the maximum safe withdrawal rate at a target success probability.
@@ -897,16 +897,20 @@ def get_safe_withdrawal_rate(
     Args:
         inputs: MonteCarloInputs (annual_withdrawal is the starting point)
         target_success: Target success probability (default 90%)
-        tolerance: Convergence tolerance
+        tolerance: Convergence tolerance (default 0.5%)
         max_iterations: Maximum binary search iterations
 
     Returns:
         Safe annual withdrawal amount at the target success probability
     """
-    low = inputs.annual_withdrawal * 0.1
-    high = inputs.annual_withdrawal * 2.0
+    # Use wider search range to ensure we find the right value
+    low = inputs.annual_withdrawal * 0.05  # Start lower
+    high = inputs.annual_withdrawal * 3.0  # Go higher
+    
+    best_withdrawal = inputs.annual_withdrawal
+    best_diff = float('inf')
 
-    for _ in range(max_iterations):
+    for iteration in range(max_iterations):
         mid = (low + high) / 2.0
         test_inputs = MonteCarloInputs(
             initial_portfolio=inputs.initial_portfolio,
@@ -920,16 +924,28 @@ def get_safe_withdrawal_rate(
             ss_start_age=inputs.ss_start_age,
             additional_income=inputs.additional_income,
             n_simulations=min(inputs.n_simulations, 2_000),
-            random_seed=inputs.random_seed,
+            random_seed=(inputs.random_seed or 42) + iteration,  # Vary seed for each iteration
         )
         mc = run_monte_carlo(test_inputs)
-        if abs(mc.success_probability - target_success) < tolerance:
+        
+        # Track best result
+        diff = abs(mc.success_probability - target_success)
+        if diff < best_diff:
+            best_diff = diff
+            best_withdrawal = mid
+        
+        # Check convergence
+        if diff < tolerance:
             return mid
+        
+        # Binary search: if success rate is too high, we can withdraw more
+        # if success rate is too low, we need to withdraw less
         if mc.success_probability > target_success:
-            low = mid
+            low = mid  # Success rate too high, try higher withdrawal
         else:
-            high = mid
+            high = mid  # Success rate too low, try lower withdrawal
 
-    return (low + high) / 2.0
+    # Return best result found
+    return best_withdrawal
 
 # Made with Bob
