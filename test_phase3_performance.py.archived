@@ -1,0 +1,257 @@
+"""
+Performance Tests for Phase 3: Testing & Validation
+
+Measures performance impact of refactored stages vs original implementation.
+"""
+
+import pytest
+import time
+from typing import Dict, Any
+
+import strategy
+from strategy import (
+    WithdrawalStrategyEngine,
+    create_life_stages,
+    REFACTORED_STAGES_AVAILABLE
+)
+
+
+class TestPhase3Performance:
+    """Performance benchmarks for stage implementations"""
+    
+    def test_factory_performance_old(self, benchmark):
+        """Benchmark factory function with old implementation"""
+        def create_old():
+            return create_life_stages(use_refactored=False)
+        
+        result = benchmark(create_old)
+        assert len(result) == 7
+    
+    def test_factory_performance_new(self, benchmark):
+        """Benchmark factory function with new implementation"""
+        if not REFACTORED_STAGES_AVAILABLE:
+            pytest.skip("Refactored stages not available")
+        
+        def create_new():
+            return create_life_stages(use_refactored=True)
+        
+        result = benchmark(create_new)
+        assert len(result) == 7
+    
+    def test_engine_initialization_old(self, benchmark):
+        """Benchmark engine initialization with old stages"""
+        def init_old():
+            return WithdrawalStrategyEngine(use_refactored_stages=False)
+        
+        result = benchmark(init_old)
+        assert len(result.stages) == 7
+    
+    def test_engine_initialization_new(self, benchmark):
+        """Benchmark engine initialization with new stages"""
+        if not REFACTORED_STAGES_AVAILABLE:
+            pytest.skip("Refactored stages not available")
+        
+        def init_new():
+            return WithdrawalStrategyEngine(use_refactored_stages=True)
+        
+        result = benchmark(init_new)
+        assert len(result.stages) == 7
+    
+    def test_stage_applies_performance_old(self, benchmark):
+        """Benchmark stage.applies() with old implementation"""
+        engine = WithdrawalStrategyEngine(use_refactored_stages=False)
+        stage = engine.stages[1]  # Stage 1
+        
+        def check_applies():
+            return stage.applies(
+                age_primary=35,
+                age_spouse=33,
+                year=2024,
+                has_wages=True,
+                has_ss=False
+            )
+        
+        result = benchmark(check_applies)
+        assert isinstance(result, bool)
+    
+    def test_stage_applies_performance_new(self, benchmark):
+        """Benchmark stage.applies() with new implementation"""
+        if not REFACTORED_STAGES_AVAILABLE:
+            pytest.skip("Refactored stages not available")
+        
+        engine = WithdrawalStrategyEngine(use_refactored_stages=True)
+        stage = engine.stages[1]  # Stage 1
+        
+        def check_applies():
+            return stage.applies(
+                age_primary=35,
+                age_spouse=33,
+                year=2024,
+                has_wages=True,
+                has_ss=False
+            )
+        
+        result = benchmark(check_applies)
+        assert isinstance(result, bool)
+
+
+class TestPhase3PerformanceComparison:
+    """Direct performance comparison tests"""
+    
+    def test_compare_factory_performance(self):
+        """Compare factory performance between implementations"""
+        iterations = 1000
+        
+        # Benchmark old implementation
+        start = time.perf_counter()
+        for _ in range(iterations):
+            stages = create_life_stages(use_refactored=False)
+        old_time = time.perf_counter() - start
+        
+        # Benchmark new implementation (if available)
+        if REFACTORED_STAGES_AVAILABLE:
+            start = time.perf_counter()
+            for _ in range(iterations):
+                stages = create_life_stages(use_refactored=True)
+            new_time = time.perf_counter() - start
+            
+            # Calculate performance difference
+            diff_pct = ((new_time - old_time) / old_time) * 100
+            
+            print(f"\nFactory Performance:")
+            print(f"  Old: {old_time*1000:.2f}ms for {iterations} iterations")
+            print(f"  New: {new_time*1000:.2f}ms for {iterations} iterations")
+            print(f"  Difference: {diff_pct:+.1f}%")
+            
+            # New implementation should be within 100% of old (acceptable overhead for initialization)
+            # Note: Dependency injection adds some overhead, but this is one-time cost
+            assert new_time < old_time * 2.0, f"New implementation too slow: {diff_pct:+.1f}%"
+            
+            # Warn if overhead is significant
+            if diff_pct > 50:
+                print(f"  ⚠️  Warning: New implementation is {diff_pct:.1f}% slower")
+                print(f"     This is acceptable for one-time initialization")
+        else:
+            print(f"\nFactory Performance (old only):")
+            print(f"  Old: {old_time*1000:.2f}ms for {iterations} iterations")
+    
+    def test_compare_engine_initialization(self):
+        """Compare engine initialization performance"""
+        iterations = 100
+        
+        # Benchmark old implementation
+        start = time.perf_counter()
+        for _ in range(iterations):
+            engine = WithdrawalStrategyEngine(use_refactored_stages=False)
+        old_time = time.perf_counter() - start
+        
+        # Benchmark new implementation (if available)
+        if REFACTORED_STAGES_AVAILABLE:
+            start = time.perf_counter()
+            for _ in range(iterations):
+                engine = WithdrawalStrategyEngine(use_refactored_stages=True)
+            new_time = time.perf_counter() - start
+            
+            # Calculate performance difference
+            diff_pct = ((new_time - old_time) / old_time) * 100
+            
+            print(f"\nEngine Initialization Performance:")
+            print(f"  Old: {old_time*1000:.2f}ms for {iterations} iterations")
+            print(f"  New: {new_time*1000:.2f}ms for {iterations} iterations")
+            print(f"  Difference: {diff_pct:+.1f}%")
+            
+            # New implementation should be within 100% of old (acceptable for initialization)
+            assert new_time < old_time * 2.0, f"New implementation too slow: {diff_pct:+.1f}%"
+            
+            # Warn if overhead is significant
+            if diff_pct > 50:
+                print(f"  ⚠️  Warning: New implementation is {diff_pct:.1f}% slower")
+                print(f"     This is acceptable for one-time initialization")
+        else:
+            print(f"\nEngine Initialization Performance (old only):")
+            print(f"  Old: {old_time*1000:.2f}ms for {iterations} iterations")
+    
+    def test_memory_usage_comparison(self):
+        """Compare memory usage between implementations"""
+        import sys
+        
+        # Measure old implementation
+        old_stages = create_life_stages(use_refactored=False)
+        old_size = sum(sys.getsizeof(s) for s in old_stages)
+        
+        if REFACTORED_STAGES_AVAILABLE:
+            # Measure new implementation
+            new_stages = create_life_stages(use_refactored=True)
+            new_size = sum(sys.getsizeof(s) for s in new_stages)
+            
+            print(f"\nMemory Usage:")
+            print(f"  Old: {old_size} bytes")
+            print(f"  New: {new_size} bytes")
+            print(f"  Difference: {new_size - old_size:+d} bytes")
+            
+            # Memory usage should be reasonable (within 2x)
+            assert new_size < old_size * 2, "New implementation uses too much memory"
+        else:
+            print(f"\nMemory Usage (old only):")
+            print(f"  Old: {old_size} bytes")
+
+
+class TestPhase3Stability:
+    """Stability and reliability tests"""
+    
+    def test_repeated_factory_calls(self):
+        """Test factory can be called repeatedly without issues"""
+        for i in range(100):
+            stages = create_life_stages(use_refactored=False)
+            assert len(stages) == 7
+            
+            if REFACTORED_STAGES_AVAILABLE:
+                stages = create_life_stages(use_refactored=True)
+                assert len(stages) == 7
+    
+    def test_repeated_engine_creation(self):
+        """Test engine can be created repeatedly without issues"""
+        for i in range(50):
+            engine = WithdrawalStrategyEngine(use_refactored_stages=False)
+            assert len(engine.stages) == 7
+            
+            if REFACTORED_STAGES_AVAILABLE:
+                engine = WithdrawalStrategyEngine(use_refactored_stages=True)
+                assert len(engine.stages) == 7
+    
+    def test_concurrent_engine_creation(self):
+        """Test multiple engines can coexist"""
+        engines = []
+        
+        # Create multiple engines with different settings
+        for use_refactored in [False, True, False, True]:
+            if use_refactored and not REFACTORED_STAGES_AVAILABLE:
+                continue
+            engine = WithdrawalStrategyEngine(use_refactored_stages=use_refactored)
+            engines.append(engine)
+        
+        # All should be valid
+        for engine in engines:
+            assert len(engine.stages) == 7
+            assert engine.brokerage_account is None
+
+
+if __name__ == '__main__':
+    # Run without pytest-benchmark for basic performance info
+    import sys
+    
+    print("=" * 70)
+    print("Phase 3 Performance Tests")
+    print("=" * 70)
+    
+    # Run comparison tests
+    test = TestPhase3PerformanceComparison()
+    test.test_compare_factory_performance()
+    test.test_compare_engine_initialization()
+    test.test_memory_usage_comparison()
+    
+    print("\n" + "=" * 70)
+    print("All performance tests completed successfully!")
+    print("=" * 70)
+
+# Made with Bob

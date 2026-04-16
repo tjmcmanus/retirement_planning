@@ -304,6 +304,78 @@ class CredentialManager:
             
             return history
     
+    def store_snaptrade_user(
+        self,
+        user_id: str,
+        user_secret: str
+    ) -> bool:
+        """
+        Store SnapTrade user credentials.
+        
+        Args:
+            user_id: SnapTrade user ID
+            user_secret: SnapTrade user secret
+        
+        Returns:
+            True if stored successfully
+        """
+        try:
+            encrypted_secret = self.encrypt(user_secret)
+            
+            with sqlite3.connect(self.db_path) as conn:
+                # Create table if it doesn't exist
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS snaptrade_users (
+                        user_id TEXT PRIMARY KEY,
+                        encrypted_user_secret TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                conn.execute("""
+                    INSERT OR REPLACE INTO snaptrade_users
+                    (user_id, encrypted_user_secret, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                """, (user_id, encrypted_secret))
+                
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"Failed to store SnapTrade user: {e}")
+            return False
+    
+    def get_snaptrade_user(self, user_id: str) -> Optional[dict]:
+        """
+        Retrieve SnapTrade user credentials.
+        
+        Args:
+            user_id: SnapTrade user ID
+        
+        Returns:
+            Dictionary with user_id and user_secret, or None if not found
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT user_id, encrypted_user_secret
+                    FROM snaptrade_users
+                    WHERE user_id = ?
+                """, (user_id,))
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                return {
+                    'user_id': row['user_id'],
+                    'user_secret': self.decrypt(row['encrypted_user_secret'])
+                }
+        except Exception as e:
+            print(f"Failed to get SnapTrade user: {e}")
+            return None
+    
     def _is_token_expired(self, token_expiry: Optional[str]) -> bool:
         """Check if token is expired."""
         if not token_expiry:

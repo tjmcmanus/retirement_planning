@@ -174,8 +174,32 @@ class SyncOrchestrator:
             return {'status': 'skipped', 'reason': 'No connector'}
         
         try:
-            # Get current holdings
-            holdings_data = self.snaptrade_connector.get_holdings(user_id)
+            # Get user_secret from multiple sources (in order of preference)
+            user_secret = None
+            
+            # 1. Try environment variable first
+            import os
+            user_secret = os.getenv("SNAPTRADE_USER_SECRET")
+            
+            # 2. Try credential manager if available
+            if not user_secret and hasattr(self.snaptrade_connector, 'credential_manager'):
+                snaptrade_user = self.snaptrade_connector.credential_manager.get_snaptrade_user(user_id)
+                if snaptrade_user:
+                    user_secret = snaptrade_user.get('user_secret')
+                    logger.info(f"Retrieved user_secret from credential manager for user {user_id}")
+            
+            if not user_secret:
+                error_msg = f"No user_secret found for user {user_id}. Please set SNAPTRADE_USER_SECRET environment variable or store credentials."
+                logger.error(error_msg)
+                return {
+                    'status': 'error',
+                    'accounts': 0,
+                    'holdings': 0,
+                    'message': error_msg
+                }
+            
+            # Get current holdings with user_secret
+            holdings_data = self.snaptrade_connector.get_holdings(user_id, user_secret=user_secret)
             
             # Handle both list and DataFrame returns
             if isinstance(holdings_data, list):

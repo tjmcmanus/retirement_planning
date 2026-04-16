@@ -417,7 +417,14 @@ def build_portfolio_display(month=None, year=None):
 
     # Append totals row at the bottom (Suggestion 2 + 4).
     if not portdf.empty:
-        portdf = pd.DataFrame(pd.concat([portdf, _build_totals_row(portdf)], ignore_index=True))
+        totals_row = _build_totals_row(portdf)
+        if totals_row is not None and not totals_row.empty:
+            # Filter out columns with all-NA values before concat to avoid FutureWarning
+            # Only keep columns that have at least one non-NA value in totals_row
+            totals_row_filtered = totals_row.dropna(axis=1, how='all')
+            # Reindex to match portdf columns, filling missing columns with None
+            totals_row_aligned = totals_row_filtered.reindex(columns=portdf.columns)
+            portdf = pd.concat([portdf, totals_row_aligned], ignore_index=True, sort=False)
 
     return portdf
 

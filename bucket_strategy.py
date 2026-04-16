@@ -300,10 +300,8 @@ def estimate_annual_taxes(
         # - Deductions and credits
         
         # Get standard deduction
-        std_deduction_df = get_std_deduction(current_year)
-        std_deduction = std_deduction_df[
-            std_deduction_df['year'] == current_year
-        ]['married_filing_jointly'].iloc[0] if not std_deduction_df.empty else 29200
+        std_deduction_df = get_std_deduction(current_year, 'married_filing_jointly')
+        std_deduction = std_deduction_df['deduction'].iloc[0] if not std_deduction_df.empty else 29200
         
         # Assume 85% of expenses come from taxable sources (Traditional IRA/401k)
         # The rest from Roth (tax-free) or already-taxed sources
