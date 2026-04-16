@@ -186,3 +186,10 @@ data/benchmark_cache.db
 data/performance_history.db
 .gitignore
 data/rebalancing_cache.db
+.backups/income_rates_20260414_174923.csv
+.backups/income_rates_20260414_174931.csv
+.backups/income_rates_20260414_175017.csv
+.backups/income_rates_20260414_175019.csv
+BOB_DEMO_README.md
+bob_demo.py
+strategy.py.bak2

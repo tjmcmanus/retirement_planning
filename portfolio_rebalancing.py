@@ -119,8 +119,11 @@ def _classify_asset(symbol: str, sector: str, name: str = "") -> str:
     classification unreliable for these instruments.
     """
     sym_upper    = symbol.upper()
-    sector_lower = (sector or "").lower()
-    name_lower   = (name or "").lower()
+    # Ensure sector and name are strings
+    sector_str = str(sector) if sector is not None else ""
+    name_str = str(name) if name is not None else ""
+    sector_lower = sector_str.lower()
+    name_lower   = name_str.lower()
 
     if sym_upper == CASH_SYMBOL:
         return "Cash"

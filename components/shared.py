@@ -216,11 +216,18 @@ def format_currency(val) -> str:
     """Format a numeric value as currency (no decimals for whole numbers)."""
     if pd.isna(val):
         return ""
+    
+    # Handle string values that are already formatted
+    if isinstance(val, str):
+        return val
+    
     try:
-        if val == int(val):
-            return f"${int(val):,}"
-        return f"${val:,.2f}"
-    except (TypeError, ValueError):
+        # Convert to float first to handle any numeric type
+        num_val = float(val)
+        if num_val == int(num_val):
+            return f"${int(num_val):,}"
+        return f"${num_val:,.2f}"
+    except (TypeError, ValueError, OverflowError):
         return ""
 
 

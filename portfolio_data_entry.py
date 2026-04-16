@@ -507,7 +507,9 @@ def create_empty_entry_template(month: Optional[int] = None, year: Optional[int]
         'name': [''],
         'sector': [''],
         'qty': [0.0],
-        'purchase_price': [0.0]
+        'purchase_price': [0.0],
+        'purchase_date': [''],
+        'end_of_month_price': [None]
     })
     
     return template
@@ -597,8 +599,8 @@ def create_blank_portfolio_file() -> Tuple[bool, str]:
     try:
         # Create DataFrame with just headers
         blank_df = pd.DataFrame(columns=pd.Index([
-            'month', 'year', 'account_name', 'account_type',
-            'symbol', 'name', 'sector', 'qty', 'purchase_price'
+            'month', 'year', 'account_name', 'account_type', 'owner',
+            'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date', 'end_of_month_price'
         ]))
         
         # Save to file

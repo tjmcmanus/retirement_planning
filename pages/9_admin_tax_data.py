@@ -51,13 +51,13 @@ TAX_DATA_SCHEMAS = {
         "filing_status_values": ["married_filing_jointly", "single"],
     },
     "income_rates.csv": {
-        "required_columns": ["year", "filing_status", "bracket", "rate"],
-        "numeric_columns": ["year", "bracket", "rate"],
+        "required_columns": ["year", "filing_status", "lower", "upper", "rate"],
+        "numeric_columns": ["year", "lower", "upper", "rate"],
         "filing_status_values": ["married_filing_jointly", "single"],
     },
     "cap_gains.csv": {
-        "required_columns": ["year", "filing_status", "bracket", "rate"],
-        "numeric_columns": ["year", "bracket", "rate"],
+        "required_columns": ["year", "filing_status", "lower", "upper", "rate"],
+        "numeric_columns": ["year", "lower", "upper", "rate"],
         "filing_status_values": ["married_filing_jointly", "single"],
     },
     "ira_limits.csv": {

@@ -67,12 +67,20 @@ def render_summary_cards(strategy_df: pd.DataFrame, phase: str) -> None:
     if total_roth_conversions > 0 and 'Federal Tax' in strategy_df.columns and 'AGI' in strategy_df.columns:
         # For each year with conversions, estimate the tax attributable to the conversion
         for idx, row in strategy_df.iterrows():
-            conversion_amt = row.get(roth_conv_col, 0)
+            # Safely access row values - row is a pandas Series from iterrows()
+            try:
+                conversion_amt = float(row[roth_conv_col]) if not pd.isna(row[roth_conv_col]) else 0
+            except (KeyError, TypeError, ValueError):
+                conversion_amt = 0
+                
             if conversion_amt > 0:
                 # Estimate marginal rate from the year's data
-                agi = row.get('AGI', 0)
-                fed_tax = row.get('Federal Tax', 0)
-                state_tax = row.get('State Tax', 0)
+                try:
+                    agi = float(row['AGI']) if not pd.isna(row['AGI']) else 0
+                    fed_tax = float(row['Federal Tax']) if not pd.isna(row['Federal Tax']) else 0
+                    state_tax = float(row['State Tax']) if not pd.isna(row['State Tax']) else 0
+                except (KeyError, TypeError, ValueError):
+                    continue
                 
                 # Approximate marginal rate (this is a simplification)
                 # In reality, the conversion fills specific brackets
@@ -1020,7 +1028,11 @@ def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
     filing_status = config_mgr.get("tax_info", "filing_status", "married_filing_jointly")
     
     for idx, row in strategy_df.iterrows():
-        year = row.get('Year', 2026)
+        # Safely extract year value - handle both dict-like and Series access
+        try:
+            year = int(row.get('Year', 2026)) if hasattr(row, 'get') else int(row['Year'])
+        except (ValueError, KeyError, TypeError):
+            year = 2026
         
         # Calculate taxable income FIRST (needed for both marginal and effective rates)
         # IMPORTANT: Marginal rate is based on TAXABLE INCOME, not AGI
@@ -3277,7 +3289,11 @@ else:
                 st.info("No tax data available for analysis.")
 
     except Exception as e:
+        import traceback
         st.error(f"Error calculating withdrawal strategy: {e}")
         st.info("Please ensure all configuration parameters are properly set.")
+        # Log full traceback for debugging
+        with st.expander("🔍 Error Details (for debugging)"):
+            st.code(traceback.format_exc())
 
 # Made with Bob

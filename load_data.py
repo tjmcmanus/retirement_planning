@@ -320,6 +320,34 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, Optional[float]]:
         >>> print(prices)
         {'AAPL': 150.25, 'GOOGL': 2800.50, 'MSFT': 380.75}
     """
+    return _fetch_prices(symbols, target_date=None)
+
+
+def _fetch_prices(symbols: list[str], target_date: Optional[datetime] = None) -> dict[str, Optional[float]]:
+    """
+    Fetch prices for multiple symbols from Yahoo Finance, either current or historical.
+    
+    This function uses yfinance.Tickers to fetch all prices at once, which is
+    significantly faster than individual requests (10-60x improvement).
+    
+    Args:
+        symbols: List of ticker symbols to fetch prices for
+        target_date: If provided, fetch historical prices for this date (end of day).
+                    If None, fetch current/recent prices.
+        
+    Returns:
+        dict: Mapping of symbol -> price (or None if unavailable)
+        
+    Raises:
+        ValueError: If symbols list is invalid
+        
+    Example:
+        >>> # Current prices
+        >>> prices = _fetch_prices(['AAPL', 'GOOGL'], target_date=None)
+        >>> # Historical prices for end of March 2026
+        >>> from datetime import datetime
+        >>> prices = _fetch_prices(['AAPL', 'GOOGL'], target_date=datetime(2026, 3, 31))
+    """
     if not symbols:
         return {}
     
@@ -349,11 +377,21 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, Optional[float]]:
     
     for symbol in tradeable_symbols:
         try:
-            hist = tickers.tickers[symbol].history(period='4d')
+            if target_date is None:
+                # Fetch recent prices (current behavior)
+                hist = tickers.tickers[symbol].history(period='4d')
+            else:
+                # Fetch historical prices for specific date
+                # Get a range around the target date to handle weekends/holidays
+                start_date = target_date - pd.Timedelta(days=7)
+                end_date = target_date + pd.Timedelta(days=1)
+                hist = tickers.tickers[symbol].history(start=start_date, end=end_date)
+            
             if not hist.empty and 'Close' in hist.columns:
                 price_map[symbol] = float(hist['Close'].iloc[-1])
             else:
-                logger.warning(f"No price data available for {symbol}")
+                logger.warning(f"No price data available for {symbol}" +
+                             (f" on {target_date.date()}" if target_date else ""))
                 price_map[symbol] = None
         except Exception as e:
             logger.warning(f"Could not fetch price for {symbol}: {e}")
@@ -364,14 +402,15 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, Optional[float]]:
 @st.cache_data(ttl=300)  # Cache for 5 minutes to balance freshness and performance
 def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Calculate net worth for a specific month with current market values from Yahoo Finance.
+    Calculate net worth for a specific month using stored or fetched prices.
     
     This method:
     1. Validates input parameters
     2. Fetches portfolio data for the specified month/year
-    3. Gets current prices from Yahoo Finance in a single batch request (OPTIMIZED)
-    4. Calculates market_value = current_price * qty
-    5. Aggregates by account_type (Cash, Brokerage, Traditional, Roth)
+    3. Uses stored end_of_month_price if available, otherwise fetches from Yahoo Finance
+    4. For current month, always fetches live prices
+    5. Calculates market_value = price * qty
+    6. Aggregates by account_type (Cash, Brokerage, Traditional, Roth)
     
     Args:
         month: Month number (1-12)
@@ -424,30 +463,61 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     if missing_columns:
         raise ValueError(f"Portfolio data missing required columns: {missing_columns}")
     
+    # Check if this is the current month
+    today = datetime.now()
+    is_current_month = (month == today.month and year == today.year)
+    
     # Initialize current_price with purchase_price as fallback
     detailed_df['current_price'] = detailed_df['purchase_price']
     
-    # Get unique non-CASH symbols (handle both 'CASH' and 'MF:CASH')
-    non_cash_mask = ~detailed_df['symbol'].isin(CASH_SYMBOLS)
-    unique_symbols = detailed_df.loc[non_cash_mask, 'symbol'].unique().tolist()
+    # Check if end_of_month_price column exists and has values
+    has_stored_prices = 'end_of_month_price' in detailed_df.columns
     
-    # Fetch all prices in one batch (MAJOR PERFORMANCE IMPROVEMENT)
-    if unique_symbols:
-        try:
-            price_map = _fetch_current_prices(unique_symbols)
+    if has_stored_prices and not is_current_month:
+        # Use stored historical prices for past months
+        stored_price_mask = detailed_df['end_of_month_price'].notna()
+        detailed_df.loc[stored_price_mask, 'current_price'] = detailed_df.loc[stored_price_mask, 'end_of_month_price']
+        
+        # Identify symbols that need prices fetched
+        needs_fetch_mask = ~stored_price_mask & ~detailed_df['symbol'].isin(CASH_SYMBOLS)
+        symbols_to_fetch = detailed_df.loc[needs_fetch_mask, 'symbol'].unique().tolist()
+        
+        if symbols_to_fetch:
+            logger.info(f"Fetching historical prices for {len(symbols_to_fetch)} symbols without stored prices for {month}/{year}")
+            # Calculate end of month date for historical fetch
+            import calendar
+            last_day = calendar.monthrange(year, month)[1]
+            target_date = datetime(year, month, last_day)
             
-            # Apply fetched prices using vectorized operations
-            # Only update where we successfully fetched a price
-            for symbol, price in price_map.items():
-                if price is not None:
-                    detailed_df.loc[detailed_df['symbol'] == symbol, 'current_price'] = price
-                # If price is None, purchase_price fallback is already set
-            
-            # Log statistics
-            successful_fetches = sum(1 for p in price_map.values() if p is not None)
-            logger.info(f"Fetched {successful_fetches}/{len(unique_symbols)} current prices")
-        except Exception as e:
-            logger.warning(f"Error fetching current prices, using purchase prices as fallback: {e}")
+            try:
+                price_map = _fetch_prices(symbols_to_fetch, target_date=target_date)
+                for symbol, price in price_map.items():
+                    if price is not None:
+                        detailed_df.loc[detailed_df['symbol'] == symbol, 'current_price'] = price
+            except Exception as e:
+                logger.warning(f"Error fetching historical prices for {month}/{year}: {e}")
+        
+        stored_count = stored_price_mask.sum()
+        logger.info(f"Using {stored_count} stored prices for {month}/{year}")
+    else:
+        # Current month or no stored prices: fetch live prices
+        non_cash_mask = ~detailed_df['symbol'].isin(CASH_SYMBOLS)
+        unique_symbols = detailed_df.loc[non_cash_mask, 'symbol'].unique().tolist()
+        
+        if unique_symbols:
+            try:
+                price_map = _fetch_current_prices(unique_symbols)
+                
+                # Apply fetched prices using vectorized operations
+                for symbol, price in price_map.items():
+                    if price is not None:
+                        detailed_df.loc[detailed_df['symbol'] == symbol, 'current_price'] = price
+                
+                # Log statistics
+                successful_fetches = sum(1 for p in price_map.values() if p is not None)
+                logger.info(f"Fetched {successful_fetches}/{len(unique_symbols)} current prices for {month}/{year}")
+            except Exception as e:
+                logger.warning(f"Error fetching current prices, using purchase prices as fallback: {e}")
     
     # Set CASH to 1.0 (handle both 'CASH' and 'MF:CASH')
     detailed_df.loc[detailed_df['symbol'].isin(CASH_SYMBOLS), 'current_price'] = CASH_PRICE

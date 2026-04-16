@@ -1,92 +1,92 @@
-month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,purchase_date
-11,2025,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,95050.0,1.0,2023-01-01
-11,2025,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,1250.0,120.0,2021-06-15
-11,2025,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
-11,2025,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,1250.0,95.0,2021-09-20
-11,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,54200.0,1.0,2023-01-01
-11,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,2022-04-01
-11,2025,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,2020-11-05
-11,2025,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,400.0,62.5,2019-08-14
-11,2025,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,60.0,450.0,2023-01-20
-11,2025,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
-11,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
-11,2025,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,2022-07-11
-11,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,2023-02-28
-11,2025,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
-11,2025,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
-11,2025,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
-11,2025,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
-12,2025,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,86250.0,1.0,2023-01-01
-12,2025,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2200.0,120.0,2021-06-15
-12,2025,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
-12,2025,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,2250.0,95.0,2021-09-20
-12,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,55000.0,1.0,2023-01-01
-12,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,2022-04-01
-12,2025,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,2020-11-05
-12,2025,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,400.0,62.5,2019-08-14
-12,2025,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,60.0,450.0,2023-01-20
-12,2025,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,2023-01-01
-12,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,2023-01-01
-12,2025,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,2022-07-11
-12,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,2023-02-28
-12,2025,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
-12,2025,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
-12,2025,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
-12,2025,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
-1,2026,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
-1,2026,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0,2021-06-15
-1,2026,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
-1,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0,2021-09-20
-1,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
-1,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,2022-04-01
-1,2026,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
-1,2026,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,2019-08-14
-1,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,160.0,450.0,2023-01-20
-1,2026,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,2023-01-01
-1,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,2023-01-01
-1,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,2022-07-11
-1,2026,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,2023-02-28
-1,2026,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
-1,2026,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
-1,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
-1,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
-2,2026,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
-2,2026,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0,2021-06-15
-2,2026,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,2020-03-10
-2,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0,2021-09-20
-2,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
-2,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,175.0,140.0,2022-04-01
-2,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,2025-09-15
-2,2026,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
-2,2026,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,2019-08-14
-2,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,160.0,450.0,2023-01-20
-2,2026,Schwab,Traditional,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,2023-01-01
-2,2026,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
-2,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
-2,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,150.0,600.0,2022-07-11
-2,2026,Schwab,Roth,Joint,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,2025-11-03
-2,2026,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
-2,2026,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,2020-05-30
-2,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,2022-11-01
-2,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
-2,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA,Technology,180.0,500.0,2023-02-28
-3,2026,Fidelity,Traditional,Spouse,MF:CASH,Money Market,MF:Cash,100000.0,1.0,2023-01-01
-3,2026,Fidelity,Traditional,Spouse,VEXAX,Vanguard Extended Market Index Admiral,MF:Global,2250.0,120.0,2021-06-15
-3,2026,Fidelity,Traditional,Spouse,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap,900.0,450.0,2020-03-10
-3,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap,3250.0,95.0,2021-09-20
-3,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,2023-01-01
-3,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Communication Services,175.0,140.0,2022-04-01
-3,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,2025-09-15
-3,2026,Schwab,Roth,Spouse,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,2020-11-05
-3,2026,Schwab,Roth,Spouse,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,2019-08-14
-3,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Communication Services,160.0,450.0,2023-01-20
-3,2026,Schwab,Traditional,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,2023-01-01
-3,2026,Schwab,Roth,Spouse,MF:CASH,Money Market,MF:Cash,55650.0,1.0,2023-01-01
-3,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,2023-01-01
-3,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,150.0,600.0,2022-07-11
-3,2026,Schwab,Roth,Primary,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,2025-11-03
-3,2026,Schwab,Roth,Spouse,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,2021-03-22
-3,2026,Schwab,Roth,Spouse,T,AT&T,Communication Services,800.0,20.0,2020-05-30
-3,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Consumer Cyclical,100.0,250.0,2022-11-01
-3,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,2021-01-15
-3,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA,Technology,180.0,500.0,2023-02-28
+month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,end_of_month_price,purchase_date
+11,2025,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,95050.0,1.0,1.0,2023-01-01
+11,2025,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,1250.0,120.0,158.94180297851562,2021-06-15
+11,2025,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,629.4981689453125,2020-03-10
+11,2025,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,1250.0,95.0,123.03348541259766,2021-09-20
+11,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,54200.0,1.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,319.74560546875,2022-04-01
+11,2025,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,205.8258056640625,2020-11-05
+11,2025,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,400.0,62.5,72.11414337158203,2019-08-14
+11,2025,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,60.0,450.0,646.8681640625,2023-01-20
+11,2025,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,1.0,2023-01-01
+11,2025,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,107.58000183105469,2022-07-11
+11,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,176.98056030273438,2023-02-28
+11,2025,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,147.115478515625,2021-03-22
+11,2025,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,25.45209312438965,2020-05-30
+11,2025,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,430.1700134277344,2022-11-01
+11,2025,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,39.810142517089844,2021-01-15
+12,2025,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,86250.0,1.0,1.0,2023-01-01
+12,2025,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2200.0,120.0,158.1176300048828,2021-06-15
+12,2025,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,629.869384765625,2020-03-10
+12,2025,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,2250.0,95.0,123.1208724975586,2021-09-20
+12,2025,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,55000.0,1.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,312.7798156738281,2022-04-01
+12,2025,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,150.0,165.0,205.85565185546875,2020-11-05
+12,2025,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,400.0,62.5,69.43258666992188,2019-08-14
+12,2025,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,60.0,450.0,659.5253295898438,2023-01-20
+12,2025,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,1.0,2023-01-01
+12,2025,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,93.76000213623047,2022-07-11
+12,2025,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,186.4899139404297,2023-02-28
+12,2025,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,142.29966735839844,2021-03-22
+12,2025,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,24.297847747802734,2020-05-30
+12,2025,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,449.7200012207031,2022-11-01
+12,2025,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,39.44215393066406,2021-01-15
+1,2026,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,100000.0,1.0,1.0,2023-01-01
+1,2026,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0,161.8956298828125,2021-06-15
+1,2026,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,638.9808349609375,2020-03-10
+1,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0,128.79969787597656,2021-09-20
+1,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,75.0,140.0,337.7622375488281,2022-04-01
+1,2026,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,226.0482940673828,2020-11-05
+1,2026,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,74.29911804199219,2019-08-14
+1,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,160.0,450.0,715.8870849609375,2023-01-20
+1,2026,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,53550.0,1.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,87500.0,1.0,1.0,2023-01-01
+1,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,50.0,600.0,83.48999786376953,2022-07-11
+1,2026,Schwab,Brokerage,Joint,NVDA,NVIDIA,Technology,80.0,500.0,191.11965942382812,2023-02-28
+1,2026,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,151.77000427246094,2021-03-22
+1,2026,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,25.93852424621582,2020-05-30
+1,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,430.4100036621094,2022-11-01
+1,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,43.86030960083008,2021-01-15
+2,2026,Fidelity,Traditional,Joint,MF:CASH,Money Market,MF:Cash,100000.0,1.0,1.0,2023-01-01
+2,2026,Fidelity,Traditional,Joint,VEXAX,Vanguard Extended Market Index Admiral,MF:Mid-Cap Blend,2250.0,120.0,163.62014770507812,2021-06-15
+2,2026,Fidelity,Traditional,Joint,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap Blend,900.0,450.0,634.1060791015625,2020-03-10
+2,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap Blend,3250.0,95.0,132.3365020751953,2021-09-20
+2,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Technology,175.0,140.0,311.54071044921875,2022-04-01
+2,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,240.2100067138672,2025-09-15
+2,2026,Schwab,Roth,Joint,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,248.42999267578125,2020-11-05
+2,2026,Schwab,Roth,Joint,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,81.00302124023438,2019-08-14
+2,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Technology,160.0,450.0,647.62548828125,2023-01-20
+2,2026,Schwab,Traditional,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,1.0,2023-01-01
+2,2026,Schwab,Roth,Joint,MF:CASH,Money Market,MF:Cash,55650.0,1.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,1.0,2023-01-01
+2,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,150.0,600.0,96.23999786376953,2022-07-11
+2,2026,Schwab,Roth,Joint,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,5.420000076293945,2025-11-03
+2,2026,Schwab,Roth,Joint,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,167.1999969482422,2021-03-22
+2,2026,Schwab,Roth,Joint,T,AT&T,Communication Services,800.0,20.0,27.719881057739258,2020-05-30
+2,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Automotive,100.0,250.0,402.510009765625,2022-11-01
+2,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,49.397029876708984,2021-01-15
+2,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA,Technology,180.0,500.0,177.180419921875,2023-02-28
+3,2026,Fidelity,Traditional,Spouse,MF:CASH,Money Market,MF:Cash,100000.0,1.0,1.0,2023-01-01
+3,2026,Fidelity,Traditional,Spouse,VEXAX,Vanguard Extended Market Index Admiral,MF:Global,2250.0,120.0,156.1300048828125,2021-06-15
+3,2026,Fidelity,Traditional,Spouse,VFIAX,Vanguard 500 Index Admiral,MF:Large-Cap,900.0,450.0,602.469970703125,2020-03-10
+3,2026,Fidelity,Traditional,Joint,VSMAX,Vanguard Small-Cap Index Admiral,MF:Small-Cap,3250.0,95.0,125.45999908447266,2021-09-20
+3,2026,PNC,Savings,Joint,MF:CASH,Money Market,MF:Cash,200000.0,1.0,1.0,2023-01-01
+3,2026,Schwab,Brokerage,Joint,GOOGL,Alphabet Class A,Communication Services,175.0,140.0,287.55999755859375,2022-04-01
+3,2026,Schwab,Brokerage,Joint,IBM,International Business Machines,Technology,1700.0,215.0,242.38999938964844,2025-09-15
+3,2026,Schwab,Roth,Spouse,JNJ,Johnson & Johnson,Healthcare,1150.0,165.0,244.44000244140625,2020-11-05
+3,2026,Schwab,Roth,Spouse,KO,Coca-Cola,Consumer Defensive,1400.0,62.5,76.05000305175781,2019-08-14
+3,2026,Schwab,Brokerage,Joint,META,Meta Platforms,Communication Services,160.0,450.0,572.1300048828125,2023-01-20
+3,2026,Schwab,Traditional,Joint,MF:CASH,Money Market,MF:Cash,20000.0,1.0,1.0,2023-01-01
+3,2026,Schwab,Roth,Spouse,MF:CASH,Money Market,MF:Cash,55650.0,1.0,1.0,2023-01-01
+3,2026,Schwab,Brokerage,Joint,MF:CASH,Money Market,MF:Cash,90900.0,1.0,1.0,2023-01-01
+3,2026,Schwab,Brokerage,Joint,NFLX,Netflix,Communication Services,150.0,600.0,96.1500015258789,2022-07-11
+3,2026,Schwab,Roth,Primary,OPEN,Opendoor Technologies Inc,Real Estate,7000.0,6.2,4.679999828338623,2025-11-03
+3,2026,Schwab,Roth,Spouse,PG,Procter & Gamble,Consumer Defensive,200.0,155.0,144.44000244140625,2021-03-22
+3,2026,Schwab,Roth,Spouse,T,AT&T,Communication Services,800.0,20.0,28.68973159790039,2020-05-30
+3,2026,Schwab,Brokerage,Joint,TSLA,Tesla,Consumer Cyclical,100.0,250.0,371.75,2022-11-01
+3,2026,Schwab,Roth,Joint,VZ,Verizon,Communication Services,350.0,42.0,49.45614242553711,2021-01-15
+3,2026,Vanguard,Brokerage,Joint,NVDA,NVIDIA,Technology,180.0,500.0,174.39999389648438,2023-02-28

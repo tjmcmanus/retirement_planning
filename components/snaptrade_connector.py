@@ -290,9 +290,22 @@ class SnapTradeConnector:
             if not user_secret:
                 import os
                 user_secret = os.getenv("SNAPTRADE_USER_SECRET")
+                
+                # Try credential manager if environment variable not set
+                if not user_secret:
+                    snaptrade_user = self.credential_manager.get_snaptrade_user(user_id)
+                    if snaptrade_user:
+                        user_secret = snaptrade_user.get('user_secret')
             
             if not user_secret:
                 raise ValueError("userSecret is required but not provided")
+            
+            # Store credentials in credential manager for future use (if not already stored)
+            if user_secret and self.credential_manager:
+                stored_user = self.credential_manager.get_snaptrade_user(user_id)
+                if not stored_user:
+                    self.credential_manager.store_snaptrade_user(user_id, user_secret)
+                    logger.info(f"Stored SnapTrade credentials for user {user_id}")
             
             accounts = self.client.account_information.list_user_accounts(
                 user_id=user_id,
@@ -329,9 +342,22 @@ class SnapTradeConnector:
             if not user_secret:
                 import os
                 user_secret = os.getenv("SNAPTRADE_USER_SECRET")
+                
+                # Try credential manager if environment variable not set
+                if not user_secret:
+                    snaptrade_user = self.credential_manager.get_snaptrade_user(user_id)
+                    if snaptrade_user:
+                        user_secret = snaptrade_user.get('user_secret')
             
             if not user_secret:
                 raise ValueError("userSecret is required but not provided")
+            
+            # Store credentials in credential manager for future use (if not already stored)
+            if user_secret and self.credential_manager:
+                stored_user = self.credential_manager.get_snaptrade_user(user_id)
+                if not stored_user:
+                    self.credential_manager.store_snaptrade_user(user_id, user_secret)
+                    logger.info(f"Stored SnapTrade credentials for user {user_id}")
             
             if account_id:
                 # Get holdings for specific account
@@ -638,12 +664,21 @@ class SnapTradeConnector:
                 logger.warning(f"Could not load account config for {account_name}: {e}")
                 owner = 'Joint'  # Default fallback
             
-            # Determine sector based on symbol type
+            # Determine sector based on symbol type and fund name
             sector = ''
             if isinstance(symbol_type, dict):
                 type_code = symbol_type.get('code', '').lower()
                 if type_code in ['oef', 'cef', 'etf']:
-                    sector = 'MF:Unknown'  # Mutual fund/ETF - user can specify category
+                    # Use intelligent inference to determine fund type
+                    try:
+                        from components.fund_type_inference import get_fund_type_for_holding
+                        sector = get_fund_type_for_holding(raw_symbol, fund_name, type_code)
+                        # If inference returns empty, leave sector empty (don't default to MF:Unknown)
+                        logger.info(f"Inferred sector '{sector}' for {raw_symbol} - {fund_name}")
+                    except Exception as e:
+                        logger.warning(f"Could not infer fund type for {raw_symbol}: {e}")
+                        # Leave sector empty if inference fails
+                        sector = ''
             
             # Create row with explicit string conversions and None handling
             row = {
