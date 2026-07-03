@@ -583,8 +583,26 @@ def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Shared page initialisation helper
+# Shared page initialisation helpers
 # ---------------------------------------------------------------------------
+
+def init_page_minimal(title: str = "Financial Planner", icon: str = "😊") -> None:
+    """Lightweight page setup: config + CSS only — no data fetching.
+
+    Use this on pages that do not display portfolio or net worth data so they
+    do not trigger unnecessary background yfinance rebuilds.
+
+    Pages that need portfolio/net-worth data should call :func:`init_page`
+    instead.
+    """
+    from config import ConfigManager
+
+    st.set_page_config(page_title=title, page_icon=icon, layout="wide")
+    st.markdown(HIDE_ST_STYLE, unsafe_allow_html=True)
+
+    config_mgr = ConfigManager()
+    st.session_state["filing_status"] = config_mgr.get_filing_status()
+
 
 def init_page(title: str = "Financial Planner", icon: str = "😊") -> tuple[pd.DataFrame, pd.DataFrame, bool, str, int, int, int, int]:
     """

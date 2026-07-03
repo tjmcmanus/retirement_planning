@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 from components.navbar import navbar
-from components.shared import init_page, auto_rerun_if_rebuilding
+from components.shared import init_page_minimal
 from scenario_manager import (
     Scenario,
     ScenarioManager,
@@ -44,16 +44,7 @@ from monte_carlo import PORTFOLIO_PRESETS
 # Page Setup
 # ============================================================================
 
-(
-    _networth,
-    _portfolio_df,
-    _portfolio_cache_ready,
-    _stale_label,
-    _curr_month,
-    _curr_year,
-    _eff_port_month,
-    _eff_port_year,
-) = init_page("🎯 Scenario Planning — Financial Planner", "🎯")
+init_page_minimal("🎯 Scenario Planning — Financial Planner", "🎯")
 
 navbar("🎯 Scenario Planning")
 
@@ -800,8 +791,5 @@ with _footer_col4:
         - Inheritance windfall at age 70
         - Downsizing home at age 75
         """)
-
-# ============================================================================
-auto_rerun_if_rebuilding()
 
 # Made with Bob

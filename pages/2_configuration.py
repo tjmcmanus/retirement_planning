@@ -20,12 +20,14 @@ from portfolio_data_entry import (
     load_previous_month_data,
     create_empty_entry_template,
     save_portfolio_data,
+    backup_portfolio_data,
     start_from_scratch,
     revert_to_last_backup,
     VALID_ACCOUNT_TYPES,
     get_valid_account_owners,
     VALID_SECTORS,
 )
+from portfolio_db import db_load_all, migrate_from_csv as _migrate_from_csv
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
 from ltc_hsa_export import (
     export_ltc_analysis_to_csv, export_ltc_analysis_to_json, export_ltc_analysis_to_markdown,
@@ -4403,18 +4405,16 @@ with tab6:
     
     # Initialize session state for portfolio data
     if 'portfolio_df' not in st.session_state:
-        # Try to load existing data
-        if os.path.exists('portfolio_data_truth.csv'):
-            try:
-                st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
-            except Exception as e:
-                st.error(f"Error loading portfolio data: {e}")
-                st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
-                    'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
-                ]))
-        else:
+        # Load from portfolio.db (source of truth)
+        try:
+            _loaded = db_load_all()
+            st.session_state['portfolio_df'] = _loaded if not _loaded.empty else pd.DataFrame(columns=pd.Index([
+                'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date'
+            ]))
+        except Exception as e:
+            st.error(f"Error loading portfolio data: {e}")
             st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
-                'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
+                'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date'
             ]))
     
     # Month/Year selector for loading prior month data
@@ -4432,14 +4432,12 @@ with tab6:
 
     with col1:
         if st.button("📂 Load Current Data", use_container_width=True):
-            if os.path.exists('portfolio_data_truth.csv'):
-                try:
-                    st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv')
-                    st.success(f"Loaded {len(st.session_state['portfolio_df'])} rows from portfolio_data_truth.csv")
-                except Exception as e:
-                    st.error(f"Error loading data: {e}")
-            else:
-                st.warning("portfolio_data_truth.csv not found")
+            try:
+                _df = db_load_all()
+                st.session_state['portfolio_df'] = _df
+                st.success(f"Loaded {len(_df)} rows from portfolio.db")
+            except Exception as e:
+                st.error(f"Error loading data: {e}")
 
     with col2:
         if st.button("➕ Add Empty Row", use_container_width=True):
@@ -4627,8 +4625,8 @@ with tab6:
                 if success:
                     st.success(f"✅ {message}")
                     st.cache_data.clear()
-                    st.session_state['portfolio_df'] = pd.read_csv('portfolio_data_truth.csv') \
-                        if os.path.exists('portfolio_data_truth.csv') else create_empty_entry_template(entry_month, entry_year)
+                    _reverted = db_load_all()
+                    st.session_state['portfolio_df'] = _reverted if not _reverted.empty else create_empty_entry_template(entry_month, entry_year)
                     st.session_state.cfg_confirm_revert = False
                     st.rerun()
                 else:
@@ -4650,7 +4648,19 @@ with tab6:
                                                    help="Account owner from Personal Info configuration"),
         'symbol': st.column_config.TextColumn('Symbol', required=True),
         'name': st.column_config.TextColumn('Name', required=True),
-        'sector': st.column_config.SelectboxColumn('Sector', options=VALID_SECTORS, required=True),
+        # TextColumn so any value (including yfinance-enriched MF: categories not in
+        # the dropdown list) is always visible and editable without being silently cleared.
+        'sector': st.column_config.TextColumn(
+            'Sector',
+            help=(
+                'Asset sector or fund category. Common values: Technology, Healthcare, '
+                'Financial Services, Consumer Cyclical, Consumer Defensive, Communication Services, '
+                'Industrials, Energy, Real Estate, Utilities, Basic Materials, '
+                'MF:Cash, MF:US, MF:Bond, MF:Global, MF:Balanced, MF:Large-Cap, MF:Small-Cap, '
+                'MF:Reit, MF:OTHER, Options:Call, Options:Put.'
+            ),
+            max_chars=60,
+        ),
         'qty': st.column_config.NumberColumn('Quantity', min_value=0, step=0.01, format="%.2f", required=True),
         'purchase_price': st.column_config.NumberColumn('Purchase Price', min_value=0, step=0.01, format="%.2f", required=True)
     }
@@ -4703,15 +4713,16 @@ with tab6:
                 _do_save(valid_df)
 
     def _do_save(df_to_save: pd.DataFrame) -> None:
-        """Perform the actual CSV save with backup, then refresh the portfolio display cache."""
+        """Save to portfolio.db (with auto CSV backup), then refresh the portfolio display cache."""
         try:
-            if os.path.exists('portfolio_data_truth.csv'):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_name = f'portfolio_data_truth_{timestamp}.csv'
-                shutil.copy2('portfolio_data_truth.csv', backup_name)
-                st.info(f"✅ Backed up existing data to {backup_name}")
-            df_to_save.to_csv('portfolio_data_truth.csv', index=False)
-            st.success(f"✅ Successfully saved {len(df_to_save)} rows to portfolio_data_truth.csv")
+            _bk_ok, _bk_msg = backup_portfolio_data()
+            if _bk_ok:
+                st.info(f"✅ {_bk_msg}")
+            ok, msg = save_portfolio_data(df_to_save, append=False)
+            if not ok:
+                st.error(f"❌ Save failed: {msg}")
+                return
+            st.success(f"✅ {msg}")
 
             # ── Refresh portfolio display cache ───────────────────────────
             # Clear the cached result so the next call fetches fresh data
@@ -5456,13 +5467,18 @@ with tab10:
                             st.error("❌ ZIP bundle does not contain retirement_config.json.")
                             st.stop()
 
-                        # Restore portfolio CSV
+                        # Restore portfolio CSV then re-populate portfolio.db
                         if "portfolio_data_truth.csv" in _name_map:
                             _actual_csv = _name_map["portfolio_data_truth.csv"]
                             _csv_bytes = _zf.read(_actual_csv)
                             with open("portfolio_data_truth.csv", "wb") as _out:
                                 _out.write(_csv_bytes)
                             st.success("✅ portfolio_data_truth.csv restored.")
+                            try:
+                                _n = _migrate_from_csv("portfolio_data_truth.csv")
+                                st.success(f"✅ portfolio.db re-populated ({_n} rows).")
+                            except Exception as _db_err:
+                                st.warning(f"⚠️ CSV restored but portfolio.db update failed: {_db_err}")
 
                         # Restore estate planning JSON
                         if "estate_planning_data.json" in _name_map:

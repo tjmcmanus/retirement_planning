@@ -37,6 +37,7 @@ from portfolio_data_entry import (
     validate_portfolio_entry,
     save_portfolio_data,
 )
+from portfolio_db import db_get_by_month, db_load_all, db_upsert, db_overwrite_month, enrich_holdings
 from portfolio_market_indicators import (
     calculate_security_indicator,
     get_portfolio_indicators,
@@ -165,16 +166,22 @@ def create_empty_row(month: int, year: int) -> dict:
 
 def load_portfolio_data(month: int, year: int) -> DataFrame:
     """
-    Load portfolio data for a specific month/year.
-    
+    Load portfolio data for a specific month/year from portfolio.db.
+
     Args:
         month: Month (1-12)
         year: Year (e.g., 2026)
-    
+
     Returns:
         DataFrame with portfolio holdings for the specified month/year
     """
-    if not os.path.exists(PORTFOLIO_TRUTH_FILE):
+    required_cols = [
+        'month', 'year', 'account_name', 'account_type', 'owner',
+        'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date',
+    ]
+    filtered = db_get_by_month(month, year).copy()
+
+    if filtered.empty:
         return pd.DataFrame({
             'month': pd.Series(dtype='int'),
             'year': pd.Series(dtype='int'),
@@ -188,30 +195,15 @@ def load_portfolio_data(month: int, year: int) -> DataFrame:
             'purchase_price': pd.Series(dtype='float'),
             'purchase_date': pd.Series(dtype='datetime64[ns]'),
         })
-    
-    df = pd.read_csv(PORTFOLIO_TRUTH_FILE)
-    
-    # Filter for specified month/year
-    filtered = df[(df['month'] == month) & (df['year'] == year)].copy()
-    
-    # Ensure all required columns exist
-    required_cols = [
-        'month', 'year', 'account_name', 'account_type', 'owner',
-        'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date'
-    ]
-    for col in required_cols:
-        if col not in filtered.columns:
-            filtered[col] = '' if col in ['account_name', 'symbol', 'name', 'sector', 'purchase_date', 'owner'] else 0
-    
+
     # Fill missing owner values with 'Joint' as default
-    if 'owner' in filtered.columns:
-        filtered['owner'] = filtered['owner'].fillna('Joint')
-        filtered.loc[filtered['owner'].astype(str).str.strip() == '', 'owner'] = 'Joint'
-    
+    filtered['owner'] = filtered['owner'].fillna('Joint')
+    filtered.loc[filtered['owner'].astype(str).str.strip() == '', 'owner'] = 'Joint'
+
     # Convert purchase_date to datetime for compatibility with DateColumn
-    if 'purchase_date' in filtered.columns and not filtered.empty:
+    if not filtered.empty:
         filtered['purchase_date'] = pd.to_datetime(filtered['purchase_date'], errors='coerce')
-    
+
     result: DataFrame = filtered[required_cols]  # type: ignore[assignment]
     return result
 
@@ -231,12 +223,8 @@ def copy_from_previous_month(month: int, year: int) -> Tuple[bool, str, DataFram
     prev_month = month - 1 if month > 1 else 12
     prev_year = year if month > 1 else year - 1
     
-    if not os.path.exists(PORTFOLIO_TRUTH_FILE):
-        return False, "No portfolio data file found", pd.DataFrame()
-    
-    df = pd.read_csv(PORTFOLIO_TRUTH_FILE)
-    prev_data = df[(df['month'] == prev_month) & (df['year'] == prev_year)].copy()
-    
+    prev_data = db_get_by_month(prev_month, prev_year).copy()
+
     if prev_data.empty:
         return False, f"No data found for {prev_month}/{prev_year}", pd.DataFrame()
     
@@ -254,20 +242,18 @@ def copy_from_previous_month(month: int, year: int) -> Tuple[bool, str, DataFram
 
 def create_backup() -> Tuple[bool, str]:
     """
-    Create a backup of the portfolio data file.
-    
+    Export a timestamped CSV backup from portfolio.db.
+
     Returns:
         Tuple of (success, message)
     """
-    if not os.path.exists(PORTFOLIO_TRUTH_FILE):
-        return False, "No portfolio data file to backup"
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_file = f'portfolio_data_truth_backup_{timestamp}.csv'
-    
     try:
-        shutil.copy2(PORTFOLIO_TRUTH_FILE, backup_file)
-        return True, f"Backup created: {backup_file}"
+        from portfolio_db import db_load_all
+        df = db_load_all()
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f'portfolio_data_truth_backup_{timestamp}.csv'
+        df.to_csv(backup_file, index=False)
+        return True, f"Backup created: {backup_file} ({len(df)} rows)"
     except Exception as e:
         return False, f"Backup failed: {str(e)}"
 
@@ -367,8 +353,42 @@ def render_holdings_tab(
             except Exception as e:
                 st.error(f"Import failed: {str(e)}")
     
+    # ── Name & Sector Enrichment row ─────────────────────────────────────────
+    enrich_col1, enrich_col2 = st.columns([1, 3])
+    with enrich_col1:
+        if st.button(
+            "🔄 Enrich Names & Sectors",
+            use_container_width=True,
+            help="Fetch missing names and GICS sectors from Yahoo Finance for holdings "
+                 "with blank names or generic sector values (Stock, Mutual Fund, Unknown…).",
+            key="enrich_sectors_btn",
+        ):
+            with st.spinner("🔍 Fetching names & sectors from Yahoo Finance…"):
+                _m, _y = curr_month, curr_year
+                result = enrich_holdings(month=_m, year=_y)
+            if result['enriched'] == 0 and result['failed'] == 0:
+                st.info("✅ All holdings already complete — nothing to update.")
+            elif result['enriched'] > 0:
+                st.success(
+                    f"✅ Updated {result['enriched']} holding(s). "
+                    f"{result['unchanged']} already complete. "
+                    f"{result['failed']} symbol(s) had no data."
+                )
+                st.session_state.holdings_data = load_portfolio_data(_m, _y)
+                st.rerun()
+            else:
+                st.warning(
+                    f"⚠️ Enrichment complete — "
+                    f"{result['failed']} symbol(s) returned no data from Yahoo Finance."
+                )
+    with enrich_col2:
+        st.caption(
+            "Fills blank names and stale sector values (Stock, Mutual Fund, Unknown, blank) "
+            "using live Yahoo Finance data. Runs automatically after a brokerage sync."
+        )
+
     st.markdown("---")
-    
+
     # ========================================================================
     # MARKET INDICATORS
     # ========================================================================
@@ -398,13 +418,15 @@ def render_holdings_tab(
         if prev_symbol and prev_symbol != curr_symbol:
             changed_symbols.add(idx)
     
-    # Only fetch sectors for symbols that changed or are empty
-    sector_cache = {}
+    # Fetch name + sector for symbols that changed or have empty fields
+    enrichment_cache: dict[str, tuple[str, str]] = {}  # symbol → (name, sector)
     if changed_symbols:
-        with st.spinner("🔍 Fetching sector data for updated symbols..."):
+        with st.spinner("🔍 Fetching name & sector for updated symbols…"):
+            from portfolio_db import _fetch_name_and_sector
             for idx in changed_symbols:
-                symbol = st.session_state.holdings_data.loc[idx, 'symbol']
-                sector_cache[symbol] = get_sector_from_yfinance(symbol)
+                symbol = str(st.session_state.holdings_data.loc[idx, 'symbol']).strip()
+                if symbol:
+                    enrichment_cache[symbol] = _fetch_name_and_sector(symbol)
     
     # Add market indicator column and conditionally update sectors in display data
     display_data = st.session_state.holdings_data.copy().reset_index(drop=True)
@@ -416,30 +438,37 @@ def render_holdings_tab(
             return ind.emoji + " " + ind.condition.value.replace('_', ' ').title()
         return "❓ Unknown"
     
-    def get_sector_display(row, row_idx: int) -> str:
-        """Get sector, using Yahoo Finance lookup ONLY if symbol changed."""
-        current_sector = str(row['sector']).strip()
-        symbol = str(row['symbol']).strip()
-        
-        # Special case: symbols starting with a number are MF:Cash
+    def _get_enrichment(row, row_idx: int) -> tuple[str, str]:
+        """
+        Return (name, sector) to display.
+        Auto-fills from yfinance ONLY when the user just changed the symbol in
+        that row.  Existing non-stale values are always preserved.
+        """
+        from portfolio_db import _STALE_SECTORS
+        symbol         = str(row['symbol']).strip()
+        current_name   = str(row.get('name',   '')).strip()
+        current_sector = str(row.get('sector', '')).strip()
+
+        # Numeric symbols → cash balance row, special-case sector
         if symbol and symbol[0].isdigit():
-            return 'MF:Cash'
-        
-        # If sector already exists in data, preserve it (don't overwrite)
-        if current_sector and current_sector != 'nan':
-            return current_sector
-        
-        # Only auto-update sector if this row's symbol was changed by user
-        if row_idx in changed_symbols:
-            yf_sector = sector_cache.get(symbol, '')
-            if yf_sector:
-                return yf_sector
-        
-        # Return current sector (even if empty) - don't auto-fill on page load
-        return current_sector if current_sector != 'nan' else ''
-    
+            return current_name, 'MF:Cash'
+
+        # If symbol changed, apply fetched values where current is blank/stale
+        if row_idx in changed_symbols and symbol in enrichment_cache:
+            fetched_name, fetched_sector = enrichment_cache[symbol]
+            out_name   = fetched_name   if (fetched_name   and not current_name)   else current_name
+            out_sector = fetched_sector if (fetched_sector and current_sector in _STALE_SECTORS) else current_sector
+            return out_name, out_sector
+
+        # Preserve whatever is already stored
+        out_sector = current_sector if current_sector and current_sector != 'nan' else ''
+        return current_name, out_sector
+
+    # Apply to display_data in one pass
+    _enriched = display_data.apply(lambda row: _get_enrichment(row, row.name), axis=1)
+    display_data['name']   = [v[0] for v in _enriched]
+    display_data['sector'] = [v[1] for v in _enriched]
     display_data['Market Indicator'] = display_data['symbol'].apply(get_indicator_display)
-    display_data['sector'] = display_data.apply(lambda row: get_sector_display(row, row.name), axis=1)
     
     # Update previous symbols tracking for next render
     st.session_state.previous_symbols = {idx: row['symbol'] for idx, row in display_data.iterrows()}
@@ -487,10 +516,15 @@ def render_holdings_tab(
             help='Security name',
             max_chars=100,
         ),
-        'sector': st.column_config.SelectboxColumn(
+        'sector': st.column_config.TextColumn(
             'Sector',
-            help='Sector classification',
-            options=VALID_SECTORS,
+            help=(
+                'Asset sector or fund category. '
+                'Stocks: Technology, Healthcare, Financial Services… '
+                'Funds: MF:US, MF:Bond, MF:Global, MF:Large-Cap, MF:Reit, MF:Cash… '
+                'Other: Options:Call, Options:Put, MF:OTHER.'
+            ),
+            max_chars=60,
         ),
         'qty': st.column_config.NumberColumn(
             'Quantity',

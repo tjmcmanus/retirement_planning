@@ -1,0 +1,11 @@
+symbol,name,sector,shares_to_buy,current_price,actual_amount,target_amount,fractional_shares,order_type
+GOOGL,Alphabet Inc.,Communication Services,7,140.0,980.0,1000.0,0.14285714285714324,MARKET
+META,Meta Platforms Inc.,Communication Services,2,450.0,900.0,1000.0,0.22222222222222232,MARKET
+AMZN,Amazon.com Inc.,Consumer Discretionary,5,170.0,850.0,1000.0,0.882352941176471,MARKET
+TSLA,Tesla Inc.,Consumer Discretionary,4,250.0,1000.0,1000.0,0.0,MARKET
+BRK.B,Berkshire Hathaway,Financials,2,450.0,900.0,1000.0,0.22222222222222232,MARKET
+JPM,JPMorgan Chase,Financials,5,180.0,900.0,1000.0,0.5555555555555554,MARKET
+JNJ,Johnson & Johnson,Health Care,6,160.0,960.0,1000.0,0.25,MARKET
+AAPL,Apple Inc.,Information Technology,6,150.0,900.0,1000.0,0.666666666666667,MARKET
+MSFT,Microsoft Corp.,Information Technology,2,380.0,760.0,1000.0,0.6315789473684212,MARKET
+NVDA,NVIDIA Corp.,Information Technology,2,500.0,1000.0,1000.0,0.0,MARKET

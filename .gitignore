@@ -161,6 +161,8 @@ $RECYCLE.BIN/
 *.code-workspace
 
 # Personal/Sensitive Data
+# portfolio.db is the live data source — exclude from version control
+portfolio.db
 portfolio_data_truth.csv
 retirement_config.json
 estate_planning_data.json

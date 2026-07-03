@@ -1,15 +1,15 @@
 """
 Market Trend Analysis Module
 ============================
-Analyzes market conditions using SPY (S&P 500 ETF) moving averages to inform
-bucket strategy rebalancing decisions.
+Analyzes market conditions using SPY (S&P 500 ETF) exponential moving averages
+to inform bucket strategy rebalancing decisions.
 
 This module implements a 4-state market condition system based on 10-week and
-50-week moving averages:
-- Bull Case: Both MAs trending positive
-- Warning Negative: 10-week MA negative, 50-week MA positive
-- Warning Positive: 10-week MA positive, 50-week MA negative
-- Bear Case: Both MAs trending negative
+50-week exponential moving averages (EMAs):
+- Bull Case: Both EMAs trending positive
+- Warning Negative: 10-week EMA negative, 50-week EMA positive
+- Warning Positive: 10-week EMA positive, 50-week EMA negative
+- Bear Case: Both EMAs trending negative
 
 The market condition influences bucket allocation adjustments and rebalancing
 triggers to help manage sequence of returns risk.
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SPY_SYMBOL = "SPY"
-DEFAULT_SHORT_MA_WEEKS = 10
-DEFAULT_LONG_MA_WEEKS = 50
+DEFAULT_SHORT_EMA_WEEKS = 10
+DEFAULT_LONG_EMA_WEEKS = 50
 CACHE_TTL_HOURS = 1  # Cache market conditions for 1 hour
 MIN_STATE_DURATION_DAYS = 3  # Minimum days in state before transition
 
@@ -65,23 +65,27 @@ class TrendDirection(Enum):
 
 @dataclass
 class MovingAverageData:
-    """Moving average calculation results."""
-    short_ma: float  # 10-week MA value
-    long_ma: float  # 50-week MA value
-    current_price: float  # Current SPY price
-    short_trend: TrendDirection  # 10-week MA trend
-    long_trend: TrendDirection  # 50-week MA trend
-    short_slope: float  # Rate of change of short MA (% per week)
-    long_slope: float  # Rate of change of long MA (% per week)
-    calculation_date: datetime  # When this was calculated
-    confidence: float  # Confidence score 0.0-1.0 based on slope magnitudes
+    """Exponential moving average calculation results."""
+    short_ema: float              # 10-week EMA value
+    long_ema: float               # 50-week EMA value
+    current_price: float          # Current SPY price
+    short_trend: TrendDirection   # 10-week EMA trend
+    long_trend: TrendDirection    # 50-week EMA trend
+    short_slope: float            # Rate of change of short EMA (% per week)
+    long_slope: float             # Rate of change of long EMA (% per week)
+    price_vs_short_ema: float     # Price relative to short EMA (%)
+    price_vs_long_ema: float      # Price relative to long EMA (%)
+    ema_crossover_distance: float # Distance between EMAs: (short-long)/long * 100 (%)
+    weeks_in_trend: int           # Estimated weeks in current trend
+    calculation_date: datetime    # When this was calculated
+    confidence: float             # Confidence score 0.0-1.0 based on slope magnitudes
 
 
 @dataclass
 class MarketTrendConfig:
     """Configuration for market trend analysis."""
-    short_ma_weeks: int = DEFAULT_SHORT_MA_WEEKS
-    long_ma_weeks: int = DEFAULT_LONG_MA_WEEKS
+    short_ema_weeks: int = DEFAULT_SHORT_EMA_WEEKS
+    long_ema_weeks: int = DEFAULT_LONG_EMA_WEEKS
     cache_ttl_hours: int = CACHE_TTL_HOURS
     min_state_duration_days: int = MIN_STATE_DURATION_DAYS
     enabled: bool = True
@@ -193,42 +197,42 @@ def calculate_moving_averages(
     Returns:
         MovingAverageData with calculation results, or None if calculation fails
     """
-    # Fetch data for the longer MA period
-    max_weeks = max(config.short_ma_weeks, config.long_ma_weeks)
+    # Fetch data for the longer EMA period
+    max_weeks = max(config.short_ema_weeks, config.long_ema_weeks)
     df = fetch_spy_data(max_weeks)
-    
+
     if df is None or df.empty:
-        logger.error("Cannot calculate moving averages: no data available")
+        logger.error("Cannot calculate EMAs: no data available")
         return None
-    
+
     try:
-        # Calculate weekly data (resample to weekly close prices)
+        # Resample daily closes to weekly closes for EMA calculation
         weekly_df = df['Close'].resample('W').last().dropna()
-        
-        if len(weekly_df) < config.long_ma_weeks:
-            logger.error(f"Insufficient data: need {config.long_ma_weeks} weeks, have {len(weekly_df)}")
+
+        if len(weekly_df) < config.long_ema_weeks:
+            logger.error(f"Insufficient data: need {config.long_ema_weeks} weeks, have {len(weekly_df)}")
             return None
-        
-        # Calculate moving averages
-        short_ma = weekly_df.rolling(window=config.short_ma_weeks).mean().iloc[-1]
-        long_ma = weekly_df.rolling(window=config.long_ma_weeks).mean().iloc[-1]
+
+        # Calculate EMAs using pandas ewm (exponential weighted moving average)
+        short_ema_series = weekly_df.ewm(span=config.short_ema_weeks, adjust=False).mean()
+        long_ema_series  = weekly_df.ewm(span=config.long_ema_weeks,  adjust=False).mean()
+
+        short_ema     = short_ema_series.iloc[-1]
+        long_ema      = long_ema_series.iloc[-1]
         current_price = weekly_df.iloc[-1]
-        
+
         # Calculate slopes (rate of change as % per week)
-        # Compare current MA to MA from 4 weeks ago
+        # Compare current EMA to EMA from 4 weeks ago
         lookback_weeks = 4
-        if len(weekly_df) >= config.short_ma_weeks + lookback_weeks:
-            short_ma_prev = weekly_df.rolling(window=config.short_ma_weeks).mean().iloc[-(lookback_weeks+1)]
-            short_slope = ((short_ma - short_ma_prev) / short_ma_prev) * 100 / lookback_weeks
+        if len(weekly_df) >= lookback_weeks + 1:
+            short_slope = ((short_ema - short_ema_series.iloc[-(lookback_weeks + 1)]) /
+                           short_ema_series.iloc[-(lookback_weeks + 1)]) * 100 / lookback_weeks
+            long_slope  = ((long_ema  - long_ema_series.iloc[-(lookback_weeks + 1)]) /
+                           long_ema_series.iloc[-(lookback_weeks + 1)]) * 100 / lookback_weeks
         else:
             short_slope = 0.0
-        
-        if len(weekly_df) >= config.long_ma_weeks + lookback_weeks:
-            long_ma_prev = weekly_df.rolling(window=config.long_ma_weeks).mean().iloc[-(lookback_weeks+1)]
-            long_slope = ((long_ma - long_ma_prev) / long_ma_prev) * 100 / lookback_weeks
-        else:
-            long_slope = 0.0
-        
+            long_slope  = 0.0
+
         # Determine trend directions
         # Use a threshold to avoid noise (0.05% per week)
         slope_threshold = 0.05
@@ -242,29 +246,55 @@ def calculate_moving_averages(
             else TrendDirection.NEGATIVE if long_slope < -slope_threshold
             else TrendDirection.NEUTRAL
         )
-        
+
+        # Calculate price relative to EMAs
+        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100
+        price_vs_long_ema  = ((current_price - long_ema)  / long_ema)  * 100
+
+        # Calculate EMA crossover distance
+        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100
+
         # Calculate confidence score based on slope magnitudes
-        # Higher slopes = higher confidence
-        # Scale: 0.0 (flat) to 1.0 (strong trend)
-        max_slope = 2.0  # 2% per week is considered very strong
+        # Scale: 0.0 (flat) to 1.0 (strong trend); 2% per week = very strong
+        max_slope  = 2.0
         confidence = min(1.0, (abs(short_slope) + abs(long_slope)) / (2 * max_slope))
-        
+
+        # Estimate weeks in current trend
+        weeks_in_trend = 1
+        for i in range(2, min(21, len(short_ema_series))):
+            prev_ema      = short_ema_series.iloc[-i]
+            prev_prev_ema = short_ema_series.iloc[-(i + 1)]
+            if prev_prev_ema == 0:
+                break
+            prev_slope = ((prev_ema - prev_prev_ema) / prev_prev_ema) * 100
+            if short_trend == TrendDirection.POSITIVE and prev_slope > slope_threshold:
+                weeks_in_trend += 1
+            elif short_trend == TrendDirection.NEGATIVE and prev_slope < -slope_threshold:
+                weeks_in_trend += 1
+            else:
+                break
+
         ma_data = MovingAverageData(
-            short_ma=short_ma,
-            long_ma=long_ma,
+            short_ema=short_ema,
+            long_ema=long_ema,
             current_price=current_price,
             short_trend=short_trend,
             long_trend=long_trend,
             short_slope=short_slope,
             long_slope=long_slope,
+            price_vs_short_ema=price_vs_short_ema,
+            price_vs_long_ema=price_vs_long_ema,
+            ema_crossover_distance=ema_crossover_distance,
+            weeks_in_trend=weeks_in_trend,
             calculation_date=datetime.now(),
-            confidence=confidence
+            confidence=confidence,
         )
-        
+
         logger.info(
-            f"MA calculated: Short={short_ma:.2f} ({short_trend.value}, {short_slope:+.3f}%/wk), "
-            f"Long={long_ma:.2f} ({long_trend.value}, {long_slope:+.3f}%/wk), "
-            f"Price={current_price:.2f}, Confidence={confidence:.2f}"
+            f"EMA calculated: Short={short_ema:.2f} ({short_trend.value}, {short_slope:+.3f}%/wk), "
+            f"Long={long_ema:.2f} ({long_trend.value}, {long_slope:+.3f}%/wk), "
+            f"Price={current_price:.2f}, Confidence={confidence:.2f}, "
+            f"Weeks in trend={weeks_in_trend}"
         )
         
         return ma_data
@@ -280,33 +310,76 @@ def calculate_moving_averages(
 
 def determine_market_condition(ma_data: MovingAverageData) -> MarketCondition:
     """
-    Determine market condition based on moving average trends.
-    
+    Determine market condition based on EMA trends.
+
+    Uses three explicit states per EMA (POSITIVE / NEUTRAL / NEGATIVE) so that
+    flat/consolidating markets are not misclassified as BEAR.  When either EMA
+    is NEUTRAL the price position relative to the EMAs acts as the tiebreaker.
+
+    Decision matrix:
+      Short       Long        Result
+      POSITIVE    POSITIVE    BULL
+      POSITIVE    NEUTRAL     BULL
+      NEUTRAL     POSITIVE    BULL
+      NEUTRAL     NEUTRAL     BULL if price > both EMAs, else WARNING_NEGATIVE
+      NEGATIVE    POSITIVE    WARNING_NEGATIVE
+      POSITIVE    NEGATIVE    WARNING_POSITIVE
+      NEGATIVE    NEUTRAL     WARNING_NEGATIVE
+      NEUTRAL     NEGATIVE    WARNING_NEGATIVE
+      NEGATIVE    NEGATIVE    BEAR
+
     Args:
-        ma_data: Moving average data
-        
+        ma_data: EMA data
+
     Returns:
         MarketCondition enum value
     """
-    short_positive = ma_data.short_trend == TrendDirection.POSITIVE
-    long_positive = ma_data.long_trend == TrendDirection.POSITIVE
-    
-    if short_positive and long_positive:
+    short = ma_data.short_trend
+    long  = ma_data.long_trend
+
+    P = TrendDirection.POSITIVE
+    N = TrendDirection.NEGATIVE
+    U = TrendDirection.NEUTRAL
+
+    # --- Unambiguous cases ---
+    if short == P and long == P:
         return MarketCondition.BULL
-    elif not short_positive and long_positive:
-        return MarketCondition.WARNING_NEGATIVE
-    elif short_positive and not long_positive:
-        return MarketCondition.WARNING_POSITIVE
-    elif not short_positive and not long_positive:
+
+    if short == N and long == N:
         return MarketCondition.BEAR
-    else:
-        # Both neutral - use price vs MA comparison as tiebreaker
-        if ma_data.current_price > ma_data.short_ma and ma_data.current_price > ma_data.long_ma:
+
+    if short == N and long == P:
+        return MarketCondition.WARNING_NEGATIVE
+
+    if short == P and long == N:
+        return MarketCondition.WARNING_POSITIVE
+
+    # --- Cases involving NEUTRAL ---
+    # Both neutral: use price position vs EMAs as tiebreaker
+    if short == U and long == U:
+        if ma_data.current_price > ma_data.short_ema and ma_data.current_price > ma_data.long_ema:
             return MarketCondition.BULL
-        elif ma_data.current_price < ma_data.short_ma and ma_data.current_price < ma_data.long_ma:
-            return MarketCondition.BEAR
         else:
-            return MarketCondition.WARNING_NEGATIVE  # Default to caution
+            return MarketCondition.WARNING_NEGATIVE
+
+    # Short neutral, long positive → leaning bullish
+    if short == U and long == P:
+        return MarketCondition.BULL
+
+    # Short positive, long neutral → leaning bullish
+    if short == P and long == U:
+        return MarketCondition.BULL
+
+    # Short neutral, long negative → caution
+    if short == U and long == N:
+        return MarketCondition.WARNING_NEGATIVE
+
+    # Short negative, long neutral → caution
+    if short == N and long == U:
+        return MarketCondition.WARNING_NEGATIVE
+
+    # Fallback (should never reach here given the enum only has 3 values)
+    return MarketCondition.WARNING_NEGATIVE
 
 
 def get_market_condition(
@@ -435,8 +508,8 @@ def format_market_condition_summary(
     
     summary = f"""Market Condition: {condition.value.upper()}
 Current SPY Price: ${ma_data.current_price:.2f}
-10-Week MA: ${ma_data.short_ma:.2f} ({ma_data.short_trend.value}, {ma_data.short_slope:+.2f}%/week)
-50-Week MA: ${ma_data.long_ma:.2f} ({ma_data.long_trend.value}, {ma_data.long_slope:+.2f}%/week)
+10-Week EMA: ${ma_data.short_ema:.2f} ({ma_data.short_trend.value}, {ma_data.short_slope:+.2f}%/week)
+50-Week EMA: ${ma_data.long_ema:.2f} ({ma_data.long_trend.value}, {ma_data.long_slope:+.2f}%/week)
 Confidence: {ma_data.confidence:.0%}
 Updated: {ma_data.calculation_date.strftime('%Y-%m-%d %H:%M')}"""
     

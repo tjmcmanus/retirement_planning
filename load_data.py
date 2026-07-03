@@ -5,7 +5,10 @@ from datetime import datetime
 import logging
 import os
 import threading as _threading
+import time
 from typing import Callable, Optional
+
+from portfolio_db import db_load_all, db_get_by_month, db_get_latest_month_year, DB_PATH
 
 # Configure logging
 log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
@@ -233,71 +236,78 @@ def get_annual_ssi_data(year):
    year_df = ssi_data[ssi_data['year']==year]
    return year_df
 
+def _auto_migrate_if_needed() -> None:
+    """
+    Auto-migrate portfolio_data_truth.csv → portfolio.db on first run.
+
+    Runs silently if portfolio.db already exists or the CSV is not present.
+    Logs a warning if the migration encounters an error but never raises.
+    """
+    if DB_PATH.exists():
+        return  # Already migrated
+    csv = os.path.join(os.path.dirname(__file__), 'portfolio_data_truth.csv')
+    if not os.path.exists(csv):
+        return  # Nothing to migrate
+    try:
+        from portfolio_db import migrate_from_csv
+        n = migrate_from_csv(csv)
+        logger.info(f"Auto-migrated {n} rows from portfolio_data_truth.csv → portfolio.db")
+    except Exception as exc:
+        logger.warning(f"Auto-migration failed (non-fatal): {exc}")
+
+# Run auto-migration once at module import time
+_auto_migrate_if_needed()
+
+
 @st.cache_data()
-def load_portfolio_truth(_file_mtime=None):
+def load_portfolio_truth(_db_mtime=None):
    """
-   Load the complete portfolio data truth dataset.
-   
-   The _file_mtime parameter is used as a cache key to automatically
-   invalidate the cache when the file is modified.
-   
-   Args:
-       _file_mtime: File modification time (used for cache invalidation)
-   
+   Load the complete portfolio data truth dataset from portfolio.db.
+
+   The _db_mtime parameter is used as a cache key to automatically
+   invalidate the cache when the database file is modified.
+
    Returns:
        pd.DataFrame: Complete dataset with columns:
-           month, year, account_name, account_type, symbol, name, sector, qty, purchase_price, purchase_date
+           month, year, account_name, account_type, owner, symbol, name,
+           sector, qty, purchase_price, purchase_date
    """
-   portfolio_truth = pd.read_csv('portfolio_data_truth.csv')
-   return portfolio_truth
+   return db_load_all()
 
 def _get_portfolio_file_mtime():
-   """Get the modification time of the portfolio data file for cache invalidation."""
-   import os
+   """Get the modification time of portfolio.db for cache invalidation."""
    try:
-       return os.path.getmtime('portfolio_data_truth.csv')
+       return os.path.getmtime(str(DB_PATH))
    except OSError:
-       return None
+       # Fall back to CSV mtime so existing callers still get cache invalidation
+       # while portfolio.db doesn't exist yet (pre-migration).
+       try:
+           return os.path.getmtime('portfolio_data_truth.csv')
+       except OSError:
+           return None
 
 def get_latest_portfolio_month_year() -> tuple[int, int]:
     """
-    Return the most recent (month, year) available in portfolio_data_truth.csv.
+    Return the most recent (month, year) available in portfolio.db.
 
     Returns:
         tuple[int, int]: (month, year) of the latest entry, e.g. (2, 2026)
     """
-    portfolio_truth = load_portfolio_truth(_get_portfolio_file_mtime())
-    if portfolio_truth.empty:
-        now = datetime.now()
-        return now.month, now.year
-    # Build a sortable period key and find the max
-    latest = portfolio_truth.assign(
-        _period=portfolio_truth['year'] * 100 + portfolio_truth['month']
-    ).loc[lambda df: df['_period'].idxmax()]
-    return int(latest['month']), int(latest['year'])
+    return db_get_latest_month_year()
 
 
 def get_portfolio_truth_by_month(month, year):
    """
    Get portfolio data for a specific month and year.
-   
+
    Args:
        month (int): Month number (1-12)
        year (int): Year (e.g., 2025, 2026)
-   
+
    Returns:
        pd.DataFrame: Filtered dataset for the specified month and year
-   
-   Example:
-       # Get December 2025 data
-       dec_2025_data = get_portfolio_truth_by_month(12, 2025)
-       
-       # Get January 2026 data
-       jan_2026_data = get_portfolio_truth_by_month(1, 2026)
    """
-   portfolio_truth = load_portfolio_truth(_get_portfolio_file_mtime())
-   filtered_data = portfolio_truth[(portfolio_truth['month'] == month) & (portfolio_truth['year'] == year)]
-   return filtered_data
+   return db_get_by_month(month, year)
 
 def _fetch_current_prices(symbols: list[str]) -> dict[str, Optional[float]]:
     """
@@ -702,15 +712,19 @@ def render_networth(
 
     if not cached.empty:
         # Cache is fresh — kick off a background refresh only if the previous
-        # rebuild has already finished (event is set) so we don't pile up threads.
+        # rebuild has already finished (event is set) AND enough time has passed
+        # since the last rebuild in this session (TTL guard).
         if done_event.is_set():
-            done_event.clear()
-            _t = _threading.Thread(
-                target=_rebuild_networth_and_cache,
-                args=(num_months, done_event, build_fn),
-                daemon=True,
-            )
-            _t.start()
+            _last_ts = st.session_state.get("_networth_last_rebuild_ts", 0.0)
+            if time.time() - _last_ts >= NETWORTH_CACHE_TTL_SECONDS:
+                st.session_state["_networth_last_rebuild_ts"] = time.time()
+                done_event.clear()
+                _t = _threading.Thread(
+                    target=_rebuild_networth_and_cache,
+                    args=(num_months, done_event, build_fn),
+                    daemon=True,
+                )
+                _t.start()
         return cached
 
     # Cache is empty / stale — start background rebuild if not already running.
@@ -719,6 +733,7 @@ def render_networth(
         return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
 
     # Launch a fresh background rebuild
+    st.session_state["_networth_last_rebuild_ts"] = time.time()
     done_event.clear()
     _t = _threading.Thread(
         target=_rebuild_networth_and_cache,

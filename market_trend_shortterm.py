@@ -318,32 +318,75 @@ def calculate_shortterm_emas(
 def determine_shortterm_market_condition(ema_data: ShortTermEMAData) -> ShortTermMarketCondition:
     """
     Determine short-term market condition based on EMA trends.
-    
+
+    Uses three explicit states per EMA (POSITIVE / NEUTRAL / NEGATIVE) so that
+    flat/consolidating markets are not misclassified as BEAR.  When either EMA
+    is NEUTRAL the price position relative to the EMAs acts as the tiebreaker.
+
+    Decision matrix:
+      Short       Long        Result
+      POSITIVE    POSITIVE    BULL
+      POSITIVE    NEUTRAL     BULL  (price above both; short trend healthy)
+      NEUTRAL     POSITIVE    BULL  (long trend driving; price above)
+      NEUTRAL     NEUTRAL     BULL if price > both EMAs, else WARNING_NEGATIVE
+      NEGATIVE    POSITIVE    WARNING_NEGATIVE
+      POSITIVE    NEGATIVE    WARNING_POSITIVE
+      NEGATIVE    NEUTRAL     WARNING_NEGATIVE
+      NEUTRAL     NEGATIVE    WARNING_NEGATIVE
+      NEGATIVE    NEGATIVE    BEAR
+
     Args:
         ema_data: EMA data
-        
+
     Returns:
         ShortTermMarketCondition enum value
     """
-    short_positive = ema_data.short_trend == ShortTermTrendDirection.POSITIVE
-    long_positive = ema_data.long_trend == ShortTermTrendDirection.POSITIVE
-    
-    if short_positive and long_positive:
+    short = ema_data.short_trend
+    long  = ema_data.long_trend
+
+    P = ShortTermTrendDirection.POSITIVE
+    N = ShortTermTrendDirection.NEGATIVE
+    U = ShortTermTrendDirection.NEUTRAL
+
+    # --- Unambiguous cases ---
+    if short == P and long == P:
         return ShortTermMarketCondition.BULL
-    elif not short_positive and long_positive:
-        return ShortTermMarketCondition.WARNING_NEGATIVE
-    elif short_positive and not long_positive:
-        return ShortTermMarketCondition.WARNING_POSITIVE
-    elif not short_positive and not long_positive:
+
+    if short == N and long == N:
         return ShortTermMarketCondition.BEAR
-    else:
-        # Both neutral - use EMA crossover and price position as tiebreaker
-        if ema_data.ema_crossover_distance > 0 and ema_data.price_vs_long_ema > 0:
+
+    if short == N and long == P:
+        return ShortTermMarketCondition.WARNING_NEGATIVE
+
+    if short == P and long == N:
+        return ShortTermMarketCondition.WARNING_POSITIVE
+
+    # --- Cases involving NEUTRAL ---
+    # Both neutral: use price position vs EMAs as tiebreaker
+    if short == U and long == U:
+        if ema_data.price_vs_short_ema > 0 and ema_data.price_vs_long_ema > 0:
             return ShortTermMarketCondition.BULL
-        elif ema_data.ema_crossover_distance < 0 and ema_data.price_vs_long_ema < 0:
-            return ShortTermMarketCondition.BEAR
         else:
-            return ShortTermMarketCondition.WARNING_NEGATIVE  # Default to caution
+            return ShortTermMarketCondition.WARNING_NEGATIVE
+
+    # Short neutral, long positive → leaning bullish
+    if short == U and long == P:
+        return ShortTermMarketCondition.BULL
+
+    # Short positive, long neutral → leaning bullish
+    if short == P and long == U:
+        return ShortTermMarketCondition.BULL
+
+    # Short neutral, long negative → caution
+    if short == U and long == N:
+        return ShortTermMarketCondition.WARNING_NEGATIVE
+
+    # Short negative, long neutral → caution
+    if short == N and long == U:
+        return ShortTermMarketCondition.WARNING_NEGATIVE
+
+    # Fallback (should never reach here given the enum only has 3 values)
+    return ShortTermMarketCondition.WARNING_NEGATIVE
 
 
 def get_shortterm_market_condition(
