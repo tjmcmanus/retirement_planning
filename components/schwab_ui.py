@@ -240,40 +240,40 @@ def sync_schwab_account(schwab_connector, schwab_transformer, month: int, year: 
     """Sync Schwab account positions."""
     with st.spinner("Syncing Schwab positions..."):
         try:
-            # Get positions (this automatically imports transactions)
+            # Get raw positions (automatically imports transactions)
             positions = schwab_connector.get_positions(
                 import_transactions=True,
                 transaction_days_back=365
             )
-            
+
             if not positions:
                 st.warning("No positions found")
                 return
-            
-            # Transform to portfolio format (this enriches with purchase dates from transactions)
+
+            # Transform all positions to portfolio format (including direct-index holdings)
             portfolio_df = schwab_transformer.transform_positions_to_portfolio(
                 positions,
-                enrich_with_transactions=True
+                enrich_with_transactions=True,
             )
-            
+
             if portfolio_df.empty:
                 st.warning("No holdings to sync")
                 return
-            
+
             # Check how many positions have purchase dates
             enriched_count = portfolio_df['purchase_date'].notna().sum()
             logger.info(f"Enriched {enriched_count} of {len(portfolio_df)} positions with purchase dates")
-            
+
             # Store in session state
             st.session_state.schwab_synced_holdings = portfolio_df
             st.session_state.schwab_sync_month = month
             st.session_state.schwab_sync_year = year
-            
+
             st.success(f"✅ Synced {len(portfolio_df)} holdings from Schwab")
             if enriched_count > 0:
                 st.info(f"📅 Enriched {enriched_count} holdings with purchase dates from transaction history")
             st.info("📊 Scroll down to see holdings preview and merge button")
-            
+
         except Exception as e:
             st.error(f"Sync failed: {e}")
             logger.error(f"Schwab sync error: {e}", exc_info=True)

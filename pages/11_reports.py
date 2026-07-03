@@ -17,7 +17,7 @@ from components.reporting import (
     ReportBuilder,
     get_template_manager,
 )
-from components.shared import init_page
+from components.shared import init_page_minimal
 
 # Try to import navbar if available
 try:
@@ -30,16 +30,8 @@ except ImportError:
     def _render_navbar():
         pass
 
-# Page configuration
-st.set_page_config(
-    page_title="Report Generation",
-    page_icon="📄",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Initialize page
-init_page(title="Report Generation", icon="📄")
+# Initialize page (sets page config + CSS; no data fetching needed here)
+init_page_minimal(title="Report Generation", icon="📄")
 
 # Render navigation if available
 _render_navbar()

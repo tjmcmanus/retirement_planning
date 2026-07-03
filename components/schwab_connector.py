@@ -711,12 +711,44 @@ class SchwabConnector:
                 account_info = account.get('securitiesAccount', {})
                 positions = account_info.get('positions', [])
                 account_number = account_info.get('accountNumber', 'Unknown')
+                balances = account_info.get('currentBalances', {})
                 
                 for position in positions:
                     all_positions.append({
                         'account_number': account_number,
                         'position': position
                     })
+                
+                # Inject cash / sweep / money-market balances as synthetic positions
+                # Schwab reports these in currentBalances, not positions
+                cash_items = {
+                    'CASH':         ('CASH', 'Cash Balance',         'CASH_EQUIVALENT'),
+                    'moneyMarketFund': ('SWVXX', 'Money Market Fund','MONEY_MARKET_FUND'),
+                    'cashDebitCallValue': ('SWEEP', 'Cash Sweep',    'CASH_EQUIVALENT'),
+                }
+                
+                for balance_key, (sym, desc, asset_type) in cash_items.items():
+                    amount = balances.get(balance_key, 0) or 0
+                    if amount != 0:
+                        all_positions.append({
+                            'account_number': account_number,
+                            'position': {
+                                'instrument': {
+                                    'symbol': sym,
+                                    'description': desc,
+                                    'assetType': asset_type,
+                                },
+                                'longQuantity': amount,
+                                'shortQuantity': 0,
+                                'averagePrice': 1.0,
+                                'marketValue': amount,
+                                '_is_cash_balance': True,
+                            }
+                        })
+                        logger.info(
+                            f"Injected {desc} balance of ${amount:,.2f} "
+                            f"for account {account_number[-4:]}"
+                        )
             
             logger.info(f"Retrieved {len(all_positions)} positions from {len(account_hashes)} accounts")
             
@@ -932,25 +964,27 @@ class SchwabConnector:
     def merge_holdings_to_portfolio(
         self,
         synced_holdings: pd.DataFrame,
-        portfolio_file: str = 'portfolio_data_truth.csv'
+        portfolio_file: str = 'portfolio_data_truth.csv'  # kept for API compatibility, unused
     ) -> pd.DataFrame:
         """
         Merge synced holdings with existing portfolio data.
-        
-        Logic:
-        - If month/year/account_name/symbol match exactly: keep existing (no update)
-        - If month/year/account_name/symbol match but qty differs: update that row
-        - If no match for month/year/account_name/symbol: add new row
-        
+
+        Logic for automated/synced accounts:
+        - Remove ALL existing holdings for synced accounts in the current month/year
+        - Replace with current synced holdings only
+        - Keep holdings from other accounts and other months unchanged
+
+        This prevents old securities from being retained when investments are switched.
+
         Args:
             synced_holdings: DataFrame from sync_holdings()
-            portfolio_file: Path to portfolio CSV file
-        
+            portfolio_file: Ignored — data is read from portfolio.db via db_load_all().
+
         Returns:
             Updated portfolio DataFrame
         """
-        import os
-        
+        from portfolio_db import db_load_all
+
         # Debug: Log incoming synced holdings
         logger.info(f"=== SCHWAB MERGE DEBUG ===")
         logger.info(f"Synced holdings columns: {synced_holdings.columns.tolist()}")
@@ -961,75 +995,56 @@ class SchwabConnector:
             logger.info(f"Sample purchase dates: {synced_holdings[synced_holdings['purchase_date'].notna()]['purchase_date'].head().tolist()}")
         else:
             logger.warning("⚠️ purchase_date column NOT FOUND in synced holdings!")
-        
-        # Load existing portfolio data
-        if os.path.exists(portfolio_file):
-            existing_df = pd.read_csv(portfolio_file)
-        else:
-            logger.warning(f"Portfolio file {portfolio_file} not found, creating new")
+
+        # Load existing portfolio data directly from the DB
+        existing_df = db_load_all()
+        if existing_df.empty and len(synced_holdings) == 0:
+            logger.warning("No synced holdings to merge and DB is empty")
             return synced_holdings
-        
-        # Create merge key for matching
-        merge_cols = ['month', 'year', 'account_name', 'symbol']
-        
-        # Process each synced holding
-        updated_rows = []
+        if existing_df.empty:
+            logger.info("DB is empty — returning synced holdings as full portfolio")
+            return synced_holdings
+
         logger.info(f"Starting merge: {len(synced_holdings)} synced holdings, {len(existing_df)} existing holdings")
         
-        for idx, synced_row in synced_holdings.iterrows():
-            # Find matching row in existing data
-            mask = (
-                (existing_df['month'] == synced_row['month']) &
-                (existing_df['year'] == synced_row['year']) &
-                (existing_df['account_name'] == synced_row['account_name']) &
-                (existing_df['symbol'] == synced_row['symbol'])
-            )
-            
-            matching_rows = existing_df[mask]
-            
-            logger.info(f"Processing synced row {idx}: symbol={synced_row['symbol']}, account={synced_row['account_name']}, month={synced_row['month']}/{synced_row['year']}, matches={len(matching_rows)}")
-            
-            if len(matching_rows) == 0:
-                # No match - add new row
-                logger.info(f"✓ Adding new holding: {synced_row['symbol']} in {synced_row['account_name']} for {synced_row['month']}/{synced_row['year']}")
-                updated_rows.append(synced_row.to_dict())
-            elif len(matching_rows) == 1:
-                existing_row = matching_rows.iloc[0]
-                
-                # Check if we should update purchase_date
-                synced_has_date = pd.notna(synced_row.get('purchase_date')) and synced_row.get('purchase_date') != ''
-                existing_has_date = pd.notna(existing_row.get('purchase_date')) and existing_row.get('purchase_date') != ''
-                should_update_date = synced_has_date and not existing_has_date
-                
-                # Check if quantity differs
-                qty_differs = abs(existing_row['qty'] - synced_row['qty']) > 0.01
-                
-                if qty_differs:
-                    logger.info(f"✓ Updating {synced_row['symbol']}: qty {existing_row['qty']} -> {synced_row['qty']}")
-                    updated_rows.append(synced_row.to_dict())
-                elif should_update_date:
-                    # Quantity same but we have a new purchase date - merge them
-                    logger.info(f"✓ Enriching {synced_row['symbol']} with purchase_date: {synced_row['purchase_date']}")
-                    merged_row = existing_row.to_dict()
-                    merged_row['purchase_date'] = synced_row['purchase_date']
-                    updated_rows.append(merged_row)
-                else:
-                    # No changes needed - keep existing
-                    logger.info(f"= Keeping existing {synced_row['symbol']}: qty unchanged at {existing_row['qty']}")
-                    updated_rows.append(existing_row.to_dict())
-                
-                # Remove from existing_df to avoid duplicates
-                existing_df = existing_df[~mask]
-            else:
-                # Multiple matches - log warning and use first
-                logger.warning(f"⚠ Multiple matches found for {synced_row['symbol']}, using synced version")
-                updated_rows.append(synced_row.to_dict())
-                existing_df = existing_df[~mask]
+        # Get unique synced accounts and their month/year
+        if len(synced_holdings) == 0:
+            logger.warning("No synced holdings to merge")
+            return existing_df
         
-        # Add remaining rows from existing_df (holdings not in synced data)
-        logger.info(f"Adding {len(existing_df)} remaining holdings from existing portfolio")
-        if len(existing_df) > 0:
-            updated_rows.extend([row.to_dict() for _, row in existing_df.iterrows()])
+        # Extract unique (month, year, account_name) combinations from synced data
+        synced_accounts = synced_holdings[['month', 'year', 'account_name']].drop_duplicates()
+        
+        logger.info(f"Synced accounts to replace: {len(synced_accounts)}")
+        for _, acc in synced_accounts.iterrows():
+            logger.info(f"  - {acc['account_name']} for {acc['month']}/{acc['year']}")
+        
+        # Remove ALL existing holdings for these synced accounts in the current month/year
+        # This ensures old securities are removed when investments are switched
+        mask_to_remove = pd.Series([False] * len(existing_df))
+        for _, acc in synced_accounts.iterrows():
+            account_mask = (
+                (existing_df['month'] == acc['month']) &
+                (existing_df['year'] == acc['year']) &
+                (existing_df['account_name'] == acc['account_name'])
+            )
+            mask_to_remove |= account_mask
+            removed_count = account_mask.sum()
+            logger.info(f"Removing {removed_count} existing holdings from {acc['account_name']} for {acc['month']}/{acc['year']}")
+        
+        # Keep only holdings NOT in synced accounts for this month/year
+        remaining_df = existing_df[~mask_to_remove].copy()
+        logger.info(f"Kept {len(remaining_df)} holdings from other accounts/months")
+        
+        # Combine remaining holdings with new synced holdings
+        updated_rows = []
+        if len(remaining_df) > 0:
+            updated_rows.extend([row.to_dict() for _, row in remaining_df.iterrows()])
+        
+        # Add all synced holdings (these replace the old ones completely)
+        for _, synced_row in synced_holdings.iterrows():
+            logger.info(f"✓ Adding synced holding: {synced_row['symbol']} in {synced_row['account_name']} for {synced_row['month']}/{synced_row['year']}")
+            updated_rows.append(synced_row.to_dict())
         
         # Create final DataFrame
         logger.info(f"Creating final DataFrame with {len(updated_rows)} total rows")

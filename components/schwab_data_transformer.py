@@ -83,16 +83,16 @@ class SchwabDataTransformer:
     def transform_positions_to_portfolio(
         positions_data: List[Dict],
         owner: str = "Self",
-        enrich_with_transactions: bool = True
+        enrich_with_transactions: bool = True,
     ) -> pd.DataFrame:
         """
-        Transform Schwab positions to portfolio format
-        
+        Transform Schwab positions to portfolio format.
+
         Args:
             positions_data: List of position dictionaries from Schwab API
             owner: Owner name for the positions
             enrich_with_transactions: Whether to enrich with purchase dates from transactions (default: True)
-            
+
         Returns:
             DataFrame in portfolio format with columns:
             month, year, account_name, account_type, owner, symbol,
@@ -126,6 +126,7 @@ class SchwabDataTransformer:
         for item in positions_data:
             account_number = item.get('account_number', 'Unknown')
             position = item.get('position', {})
+            is_cash_balance = position.get('_is_cash_balance', False)
             
             # Extract instrument details
             instrument = position.get('instrument', {})
@@ -138,18 +139,23 @@ class SchwabDataTransformer:
             avg_price = position.get('averagePrice', 0)
             market_value = position.get('marketValue', 0)
             
-            # Skip if no quantity
-            if quantity == 0:
+            # Skip if no quantity (but always include cash balance rows even if 0)
+            if quantity == 0 and not is_cash_balance:
                 continue
             
-            # Map asset type to sector
-            sector = SchwabDataTransformer.ASSET_TYPE_MAP.get(
-                asset_type,
-                asset_type.replace('_', ' ').title()
-            )
+            # Map asset type to sector — cash/money-market get explicit labels
+            if asset_type == 'CASH_EQUIVALENT':
+                sector = 'Cash'
+            elif asset_type == 'MONEY_MARKET_FUND':
+                sector = 'Money Market'
+            else:
+                sector = SchwabDataTransformer.ASSET_TYPE_MAP.get(
+                    asset_type,
+                    asset_type.replace('_', ' ').title()
+                )
             
             # Additional check: if symbol contains special characters, likely option/warrant
-            if any(char in symbol for char in ['/', ' ', '.']):
+            if not is_cash_balance and any(char in symbol for char in ['/', ' ', '.']):
                 sector = 'MF:OTHER'
                 logger.info(f"Detected option/warrant by symbol pattern: {symbol}")
             
@@ -186,11 +192,11 @@ class SchwabDataTransformer:
         
         df = pd.DataFrame(rows)
         logger.info(f"Transformed {len(df)} positions to portfolio format")
-        
+
         # Enrich with purchase dates from transaction history if requested
-        if enrich_with_transactions and len(df) > 0:
+        if enrich_with_transactions and not df.empty:
             df = SchwabDataTransformer._enrich_with_purchase_dates(df)
-        
+
         return df
     
     @staticmethod

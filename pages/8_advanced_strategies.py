@@ -210,6 +210,20 @@ with adv_tax_planner_tab:
             state_tax = (wages + cg_income_lt + cg_income_st + interest) * 0.03
             q_fed = (taxable_income + cg_tax - pd_tax_amount) / 4
             q_st  = state_tax / 4
+            _total_taxes = taxable_income + cg_tax + irmaa_fees + state_tax
+            _eff_rate = (_total_taxes / agi * 100) if agi > 0 else 0.0
+            st.metric("Effective Tax Rate", f"{_eff_rate:.1f}%")
+            st.metric("Marginal Bracket", f"{maxrate:.0%}")
+            try:
+                _bracket_row = taxratedf[
+                    (taxratedf['rate'] - maxrate).abs() < 1e-9
+                ]
+                _bracket_lower = float(_bracket_row['lower'].iloc[0])
+                _drop_by = agi - _bracket_lower
+                if _drop_by > 0 and maxrate > 0:
+                    st.metric("Reduce AGI to drop bracket", f"${_drop_by:,.0f}")
+            except Exception:
+                pass
             if taxable_income > 0:
                 st.metric("Income Tax", f"${taxable_income + cg_tax - pd_tax_amount:,.2f}")
                 st.metric("Quarterly Fed", f"${q_fed:,.2f}")

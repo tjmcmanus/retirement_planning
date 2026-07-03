@@ -17,6 +17,8 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
+from portfolio_db import db_load_all, db_upsert, db_overwrite_month, enrich_holdings
+
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
@@ -73,6 +75,10 @@ def render_connections_tab(portdf: pd.DataFrame, curr_month: int, curr_year: int
             render_schwab_direct_section(portdf, curr_month, curr_year)
         except ImportError as e:
             st.error(f"Schwab Direct UI not available: {e}")
+
+        # Schwab Direct Index position sync
+        st.markdown("---")
+        _render_schwab_di_sync()
     
     with tab3:
         # Render automatic sync scheduler UI
@@ -466,23 +472,25 @@ def _sync_account(connection_id: int, connector, cred_manager, month: int, year:
 
 def _merge_synced_holdings(synced_df: pd.DataFrame, month: int, year: int) -> None:
     """
-    Merge synced holdings with existing portfolio data.
-    
-    Uses smart merge logic:
-    - If month/year/account_name/symbol match exactly: keep existing (no update)
-    - If month/year/account_name/symbol match but qty differs: update that row
-    - If no match for month/year/account_name/symbol: add new row
+    Merge synced holdings into portfolio.db.
+
+    Connector logic (SnapTrade / Schwab) builds a complete merged DataFrame
+    from a CSV read; we intercept that result and write it to the DB instead.
+    The DB write calls _write_csv_backup() automatically so the CSV stays current.
+
+    Uses account-replacement logic:
+    - All existing rows for the synced (month, year, account_name) combinations
+      are removed and replaced with the incoming synced rows.
     """
-    import os
-    
-    portfolio_file = "portfolio_data_truth.csv"
-    
     logger.info(f"=== Starting merge process ===")
     logger.info(f"Synced holdings to merge: {len(synced_df)}")
     logger.info(f"Synced holdings preview:\n{synced_df.head()}")
-    
+
     try:
-        # Use the connector's merge logic
+        # Build merged DataFrame via connector merge logic.
+        # Connectors still read portfolio_data_truth.csv internally (their own method),
+        # but we capture the result and write it to the DB rather than back to CSV.
+        portfolio_file = "portfolio_data_truth.csv"
         if 'snaptrade_connector' in st.session_state:
             logger.info("Using SnapTrade connector merge logic")
             connector = st.session_state.snaptrade_connector
@@ -492,33 +500,41 @@ def _merge_synced_holdings(synced_df: pd.DataFrame, month: int, year: int) -> No
             connector = st.session_state.schwab_connector
             merged_df = connector.merge_holdings_to_portfolio(synced_df, portfolio_file)
         else:
-            logger.warning("Connector not available, using fallback merge")
-            # Fallback to simple merge if connector not available
-            if os.path.exists(portfolio_file):
-                existing_df = pd.read_csv(portfolio_file)
-                logger.info(f"Existing portfolio has {len(existing_df)} holdings")
-                # Remove existing entries for this month/year from synced accounts
-                mask = (existing_df['month'] == month) & (existing_df['year'] == year)
-                existing_df = existing_df[~mask]
-                merged_df = pd.concat([existing_df, synced_df], ignore_index=True)
-            else:
-                merged_df = synced_df
-        
+            logger.warning("Connector not available, using fallback DB merge")
+            # Fallback: replace (month, year) rows for each synced account in the DB
+            existing_df = db_load_all()
+            synced_accounts = synced_df[['month', 'year', 'account_name']].drop_duplicates()
+            mask_keep = pd.Series([True] * len(existing_df), index=existing_df.index)
+            for _, acc in synced_accounts.iterrows():
+                mask_keep &= ~(
+                    (existing_df['month'] == acc['month']) &
+                    (existing_df['year'] == acc['year']) &
+                    (existing_df['account_name'] == acc['account_name'])
+                )
+            merged_df = pd.concat([existing_df[mask_keep], synced_df], ignore_index=True)
+
         logger.info(f"Merged DataFrame has {len(merged_df)} total holdings")
-        logger.info(f"Merged DataFrame columns: {merged_df.columns.tolist()}")
-        
-        # Save back to file
-        logger.info(f"Saving to {portfolio_file}")
-        merged_df.to_csv(portfolio_file, index=False)
-        logger.info(f"✓ Successfully saved {len(merged_df)} holdings to {portfolio_file}")
-        
-        # Verify the save
-        if os.path.exists(portfolio_file):
-            verify_df = pd.read_csv(portfolio_file)
-            logger.info(f"✓ Verified: File now contains {len(verify_df)} holdings")
-        else:
-            logger.error(f"✗ File {portfolio_file} does not exist after save!")
-        
+
+        # Write the merged result to the DB (CSV backup written automatically)
+        total = 0
+        for (m, y), grp in merged_df.groupby(['month', 'year']):
+            total += db_overwrite_month(int(m), int(y), grp)
+        logger.info(f"✓ Successfully wrote {total} holdings to portfolio.db")
+
+        # Enrich stale/missing names & sectors via yfinance after every sync
+        try:
+            with st.spinner("🔍 Enriching names & sectors from Yahoo Finance…"):
+                result = enrich_holdings(month=month, year=year)
+            if result['enriched'] > 0:
+                st.info(
+                    f"✅ Enriched {result['enriched']} holding(s) — "
+                    f"{result['unchanged']} already complete, "
+                    f"{result['failed']} symbol(s) had no data."
+                )
+            logger.info(f"enrich_holdings after sync: {result}")
+        except Exception as _enrich_err:
+            logger.warning(f"Holdings enrichment failed (non-fatal): {_enrich_err}")
+
         # Clear portfolio cache and rebuild display to reflect new holdings
         logger.info("Clearing portfolio cache and rebuilding display")
         try:
@@ -805,6 +821,83 @@ def render_sync_scheduler_ui(portdf: pd.DataFrame, curr_month: int, curr_year: i
                 
                 with st.expander(f"{status_icon} {timestamp} ({duration:.1f}s)"):
                     st.json(sync_record)
+
+
+
+
+def _render_schwab_di_sync() -> None:
+    """
+    Render the Schwab Direct Index position sync section.
+
+    Ported from pages/Direct_Indexing.py (Portfolio tab sync expander).
+    Syncs executed direct-index positions into rsp_holdings.db so the
+    Tax Harvesting tab can scan them.
+    """
+    st.markdown("### 🗂 Direct Index Position Sync")
+    st.caption(
+        "Sync your Schwab direct-index positions into the local rsp_holdings.db "
+        "tax-lot database so the Tax Harvesting scanner can find them."
+    )
+
+    with st.expander("🔄 Sync Direct Index Positions from Schwab", expanded=False):
+        schwab_key = os.getenv("SCHWAB_APP_KEY", "")
+        schwab_secret = os.getenv("SCHWAB_APP_SECRET", "")
+
+        if not schwab_key or not schwab_secret:
+            st.info(
+                "Schwab API credentials not configured. "
+                "Set `SCHWAB_APP_KEY` and `SCHWAB_APP_SECRET` in your `.env` file "
+                "to enable automatic position sync."
+            )
+            return
+
+        sync_account_name = st.text_input(
+            "Account name to assign synced positions",
+            value="Schwab Brokerage",
+            key="conn_di_sync_account_name",
+        )
+        overwrite = st.checkbox(
+            "Replace existing lots for these symbols",
+            value=False,
+            key="conn_di_sync_overwrite",
+            help="When checked, existing lots for each synced symbol are removed before adding the Schwab-sourced lot.",
+        )
+        update_prices = st.checkbox(
+            "Also update RSP constituent prices from Schwab quotes",
+            value=True,
+            key="conn_di_sync_prices",
+        )
+
+        if st.button("🔄 Sync from Schwab", type="primary", key="conn_di_sync_btn"):
+            try:
+                from components.schwab_direct_indexing import create_schwab_di_connector
+
+                di_conn = create_schwab_di_connector()
+                if di_conn is None or not di_conn._schwab.is_connected():
+                    st.warning(
+                        "Schwab is not authenticated. "
+                        "Complete the OAuth flow above (Schwab Direct tab) first."
+                    )
+                else:
+                    with st.spinner("Syncing positions from Schwab…"):
+                        result = di_conn.sync_positions_to_db(
+                            account_name=sync_account_name,
+                            account_hash=None,
+                            overwrite_existing=overwrite,
+                        )
+                    st.success(
+                        f"Sync complete — Added: {result['added']}, "
+                        f"Skipped: {result['skipped']}, Errors: {result['errors']}"
+                    )
+
+                    if update_prices and result["added"] > 0:
+                        with st.spinner("Updating prices…"):
+                            n = di_conn.update_db_prices()
+                        st.info(f"Updated {n} RSP constituent prices from Schwab.")
+
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Schwab DI sync failed: {exc}")
 
 
 # Made with Bob

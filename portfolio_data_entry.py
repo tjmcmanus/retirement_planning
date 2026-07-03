@@ -1,6 +1,8 @@
 """
 Portfolio Data Entry Module
-Handles manual entry, validation, and saving of portfolio data to portfolio_data_truth.csv
+Handles manual entry, validation, and saving of portfolio data to portfolio.db
+(portfolio_data_truth.csv is kept as a human-readable backup, written automatically
+after every DB write by portfolio_db._write_csv_backup).
 """
 
 import pandas as pd
@@ -13,6 +15,8 @@ import os
 import shutil
 import glob
 import threading as _threading
+
+from portfolio_db import db_upsert, db_overwrite_month, db_load_all, DB_PATH
 
 # Configure logging
 log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
@@ -61,33 +65,56 @@ def get_valid_account_owners():
 # Keep for backward compatibility, but use get_valid_account_owners() for validation
 VALID_ACCOUNT_OWNERS = ['Joint', 'Primary', 'Spouse']
 
+# Full sector list used in SelectboxColumn dropdowns.
+# Sections:
+#   MF:Cash / options  — special asset types
+#   MF:*               — mutual fund / ETF categories (from yfinance & fund_type_inference)
+#   GICS sectors       — standard equity sectors from yfinance info['sector']
 VALID_SECTORS = [
+    # ── Special types ────────────────────────────────────────────────────────
     'MF:Cash',
-    'MF:Bonds',
-    'Stock/ETF',
     'Options:Call',
     'Options:Put',
-    'MF:Large-Cap',
-    'MF:Mid-Cap',
-    'MF:Small-Cap',
-    'MF:Total-Stock-Market',
-    'MF:Reit',
+    'MF:OTHER',
+    # ── Mutual fund / ETF broad categories ──────────────────────────────────
+    'MF:US',
+    'MF:Bond',
+    'MF:Bonds',
     'MF:Global',
+    'MF:Balanced',
+    'MF:Commodity',
     'MF:Asia',
     'MF:Europe',
     'MF:Latin America',
-    'Automotive',
+    # ── Mutual fund style-box categories (from yfinance info['category']) ───
+    'MF:Large Blend',
+    'MF:Large Growth',
+    'MF:Large Value',
+    'MF:Large-Cap',
+    'MF:Mid Blend',
+    'MF:Mid Growth',
+    'MF:Mid Value',
+    'MF:Mid-Cap',
+    'MF:Small Blend',
+    'MF:Small Growth',
+    'MF:Small Value',
+    'MF:Small-Cap',
+    'MF:Total-Stock-Market',
+    'MF:Reit',
+    'MF:Unknown',
+    # ── GICS equity sectors (from yfinance info['sector']) ──────────────────
     'Technology',
-    'Communication Services',
     'Healthcare',
-    'Consumer Defensive',
     'Financial Services',
-    'Energy',
+    'Consumer Cyclical',
+    'Consumer Defensive',
+    'Communication Services',
     'Industrials',
+    'Energy',
+    'Basic Materials',
     'Real Estate',
     'Utilities',
-    'Basic Materials',
-    'Consumer Cyclical'
+    'Automotive',
 ]
 
 def is_option_symbol(symbol: str) -> Tuple[bool, str, str]:
@@ -337,92 +364,42 @@ def validate_portfolio_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Dat
 
 def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bool, str]:
     """
-    Save portfolio data to portfolio_data_truth.csv.
-    Updates/overwrites existing entries with matching month, year, account_name, and symbol.
-    
+    Save portfolio data to portfolio.db (and auto-backup to portfolio_data_truth.csv).
+
+    append=True  → INSERT OR REPLACE (upsert) individual rows via db_upsert().
+    append=False → Delete + replace ALL rows for every (month, year) present in
+                   new_data via db_overwrite_month(), then upsert the rest.
+
     Args:
-        new_data: DataFrame with new portfolio entries
-        append: If True, merge with existing file (update duplicates); if False, overwrite entire file
-    
+        new_data: DataFrame with new portfolio entries.
+        append:   If True, merge/upsert; if False, overwrite by month.
+
     Returns:
-        Tuple of (success, message)
+        Tuple of (success, message).
     """
     try:
-        # Ensure required columns are present
-        required_columns = ['month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date']
-        
-        # Check for missing columns
+        required_columns = [
+            'month', 'year', 'account_name', 'account_type', 'owner',
+            'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date',
+        ]
+
         missing_cols = [col for col in required_columns if col not in new_data.columns]
         if missing_cols:
             return False, f"Missing required columns: {missing_cols}"
-        
-        # Select only required columns in correct order
-        new_data = cast(pd.DataFrame, new_data[required_columns].copy())
-        
-        # Convert numeric columns to appropriate types
-        new_data['month'] = new_data['month'].astype(int)
-        new_data['year'] = new_data['year'].astype(int)
-        new_data['qty'] = new_data['qty'].astype(float)
-        new_data['purchase_price'] = new_data['purchase_price'].astype(float)
-        
-        # Convert purchase_date to string format (YYYY-MM-DD) if it's a datetime
-        if 'purchase_date' in new_data.columns:
-            new_data['purchase_date'] = pd.to_datetime(new_data['purchase_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-            # Replace NaT with empty string
-            new_data['purchase_date'] = new_data['purchase_date'].fillna('')
-        
-        if append:
-            # Load existing data
-            try:
-                existing_data = pd.read_csv(PORTFOLIO_TRUTH_FILE)
-                
-                # Define merge columns (unique identifier for each entry)
-                merge_cols = ['month', 'year', 'account_name', 'symbol']
-                
-                # Remove existing entries that match the new data (will be replaced)
-                # Create a mask for rows that DON'T match any new entries
-                mask = ~existing_data.set_index(merge_cols).index.isin(
-                    new_data.set_index(merge_cols).index
-                )
-                
-                # Keep only non-matching existing entries
-                existing_data_filtered = existing_data[mask].copy()
-                
-                # Combine filtered existing data with new data
-                combined_data: pd.DataFrame = cast(pd.DataFrame, pd.concat([existing_data_filtered, new_data], ignore_index=True))
-                
-                # Sort by year, month, account_name, symbol
-                combined_data = combined_data.sort_values(['year', 'month', 'account_name', 'symbol'])
-                
-                # Save to file
-                combined_data.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
-                
-                # Count updates vs new entries
-                updated_count = len(new_data) - len(new_data[~new_data.set_index(merge_cols).index.isin(
-                    existing_data.set_index(merge_cols).index
-                )])
-                new_count = len(new_data) - updated_count
-                
-                message_parts = []
-                if updated_count > 0:
-                    message_parts.append(f"updated {updated_count} existing")
-                if new_count > 0:
-                    message_parts.append(f"added {new_count} new")
-                
-                msg = f"Successfully {' and '.join(message_parts)} entries in {PORTFOLIO_TRUTH_FILE}"
-                _trigger_portfolio_cache_rebuild(new_data)
-                return True, msg
 
-            except FileNotFoundError:
-                # File doesn't exist, create new one
-                new_data.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
-                _trigger_portfolio_cache_rebuild(new_data)
-                return True, f"Created new {PORTFOLIO_TRUTH_FILE} with {len(new_data)} entries"
-        else:
-            # Overwrite mode
-            new_data.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
+        new_data = cast(pd.DataFrame, new_data[required_columns].copy())
+
+        if append:
+            n = db_upsert(new_data)
             _trigger_portfolio_cache_rebuild(new_data)
-            return True, f"Overwrote {PORTFOLIO_TRUTH_FILE} with {len(new_data)} entries"
+            return True, f"Saved {n} entries to portfolio.db"
+        else:
+            # Overwrite each (month, year) present in new_data
+            total = 0
+            for (month, year), grp in new_data.groupby(['month', 'year']):
+                total += db_overwrite_month(int(month), int(year), grp)
+            _trigger_portfolio_cache_rebuild(new_data)
+            return True, f"Overwrote {total} entries in portfolio.db"
 
     except Exception as e:
         logger.error(f"Error saving portfolio data: {e}")
@@ -535,14 +512,9 @@ def load_previous_month_data(month: int, year: int) -> pd.DataFrame:
         prev_year -= 1
     
     try:
-        # Try to load previous month's data
-        existing_data = pd.read_csv(PORTFOLIO_TRUTH_FILE)
-        
-        # Filter for previous month
-        prev_data = existing_data[
-            (existing_data['month'] == prev_month) &
-            (existing_data['year'] == prev_year)
-        ].copy()
+        # Try to load previous month's data from the DB
+        from portfolio_db import db_get_by_month
+        prev_data = db_get_by_month(prev_month, prev_year).copy()
         
         if not prev_data.empty:
             # Update month and year to current
@@ -565,25 +537,24 @@ def load_previous_month_data(month: int, year: int) -> pd.DataFrame:
 
 def backup_portfolio_data() -> Tuple[bool, str]:
     """
-    Create a timestamped backup of the current portfolio_data_truth.csv file.
-    
+    Create a timestamped backup of portfolio.db (exported as CSV).
+
     Returns:
         Tuple of (success, message)
     """
     try:
-        if not os.path.exists(PORTFOLIO_TRUTH_FILE):
-            return False, f"{PORTFOLIO_TRUTH_FILE} does not exist - nothing to backup"
-        
-        # Create timestamp suffix
+        if not DB_PATH.exists():
+            return False, f"portfolio.db does not exist — nothing to backup"
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_filename = f"portfolio_data_truth_{timestamp}.csv"
-        
-        # Copy the file
-        shutil.copy2(PORTFOLIO_TRUTH_FILE, backup_filename)
-        
+
+        df = db_load_all()
+        df.to_csv(backup_filename, index=False)
+
         logger.info(f"Created backup: {backup_filename}")
-        return True, f"Backup created: {backup_filename}"
-        
+        return True, f"Backup created: {backup_filename} ({len(df)} rows)"
+
     except Exception as e:
         logger.error(f"Error creating backup: {e}")
         return False, f"Error creating backup: {str(e)}"
@@ -591,27 +562,29 @@ def backup_portfolio_data() -> Tuple[bool, str]:
 
 def create_blank_portfolio_file() -> Tuple[bool, str]:
     """
-    Create a blank portfolio_data_truth.csv file with only column headers.
-    
+    Clear all holdings from portfolio.db and write an empty CSV backup.
+
     Returns:
         Tuple of (success, message)
     """
     try:
-        # Create DataFrame with just headers
-        blank_df = pd.DataFrame(columns=pd.Index([
+        import sqlite3
+        conn = __import__('portfolio_db').get_db_connection()
+        conn.execute("DELETE FROM holdings")
+        conn.commit()
+        conn.close()
+        # Write empty CSV backup to preserve the file for tools that expect it
+        blank_df = pd.DataFrame(columns=[
             'month', 'year', 'account_name', 'account_type', 'owner',
-            'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date', 'end_of_month_price'
-        ]))
-        
-        # Save to file
+            'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date',
+        ])
         blank_df.to_csv(PORTFOLIO_TRUTH_FILE, index=False)
-        
-        logger.info(f"Created blank {PORTFOLIO_TRUTH_FILE}")
-        return True, f"Created blank {PORTFOLIO_TRUTH_FILE} with column headers only"
-        
+        logger.info("Cleared portfolio.db and wrote empty CSV backup")
+        return True, "Cleared portfolio.db (all holdings removed)"
+
     except Exception as e:
-        logger.error(f"Error creating blank file: {e}")
-        return False, f"Error creating blank file: {str(e)}"
+        logger.error(f"Error clearing portfolio: {e}")
+        return False, f"Error clearing portfolio: {str(e)}"
 
 
 def start_from_scratch() -> Tuple[bool, str]:
@@ -662,29 +635,33 @@ def get_latest_backup() -> Optional[str]:
 
 def revert_to_last_backup() -> Tuple[bool, str]:
     """
-    Restore the portfolio_data_truth.csv from the most recent backup.
-    
+    Restore portfolio.db from the most recent CSV backup file.
+
     Returns:
         Tuple of (success, message)
     """
     try:
         latest_backup = get_latest_backup()
-        
+
         if not latest_backup:
             return False, "No backup files found to revert to"
-        
-        # Backup current file before reverting (just in case)
-        if os.path.exists(PORTFOLIO_TRUTH_FILE):
-            temp_backup = f"portfolio_data_truth_before_revert_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            shutil.copy2(PORTFOLIO_TRUTH_FILE, temp_backup)
-            logger.info(f"Created safety backup before revert: {temp_backup}")
-        
-        # Copy backup to main file
-        shutil.copy2(latest_backup, PORTFOLIO_TRUTH_FILE)
-        
-        logger.info(f"Reverted to backup: {latest_backup}")
-        return True, f"Successfully reverted to backup: {latest_backup}"
-        
+
+        # Safety-snapshot current DB state before overwriting
+        backup_before = backup_portfolio_data()
+        logger.info(f"Safety snapshot before revert: {backup_before[1]}")
+
+        # Re-import the backup CSV into the DB (overwrite all months present in CSV)
+        backup_df = pd.read_csv(latest_backup)
+        if backup_df.empty:
+            return False, f"Backup file {latest_backup} is empty"
+
+        total = 0
+        for (month, year), grp in backup_df.groupby(['month', 'year']):
+            total += db_overwrite_month(int(month), int(year), grp)
+
+        logger.info(f"Reverted to backup {latest_backup}: {total} rows restored")
+        return True, f"Successfully reverted to backup: {latest_backup} ({total} rows restored)"
+
     except Exception as e:
         logger.error(f"Error reverting to backup: {e}")
         return False, f"Error reverting to backup: {str(e)}"

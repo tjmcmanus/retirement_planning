@@ -1,0 +1,222 @@
+# Direct Indexing Configuration
+# ==============================
+# Configuration for Direct Indexing with Tax Loss Harvesting
+# Based on RSP (Equal-Weighted S&P 500) ETF
+
+direct_indexing:
+  # Enable direct indexing features
+  enabled: true
+
+  # Initial setup configuration
+  initial_setup:
+    # Default minimum trade size (dollars)
+    # Positions below this amount may be excluded or flagged
+    min_trade_size: 100.0
+
+    # Allow fractional shares in initial portfolio
+    # Set to false if your broker doesn't support fractional shares
+    allow_fractional: true
+
+    # Exclude specific symbols from initial portfolio
+    # Example: ['TSLA', 'GME'] to exclude specific stocks
+    exclude_symbols: []
+
+    # Refresh prices before generating portfolio
+    refresh_prices: true
+
+    # Percentage of RSP constituents to BUY as your direct index (1–100).
+    # The remaining stocks stay in your replacement pool for tax-loss harvesting.
+    # Example: 40 means buy ~200 of the ~500 S&P 500 stocks, keeping ~300 as
+    # replacement candidates. Stocks are selected proportionally across all
+    # 11 GICS sectors so sector balance is maintained.
+    index_coverage_pct: 100
+
+    # How to weight the positions in the portfolio.
+    # Options:
+    #   'stock'  — every stock gets the same dollar amount (true RSP equal-weight).
+    #              Sector allocations reflect how many companies are in each sector.
+    #   'sector' — each GICS sector gets an equal share of the portfolio (~9.1% for
+    #              11 sectors), then stocks within each sector are equal-weighted.
+    #              This balances sectors but deviates from RSP.
+    weighting_mode: stock
+
+  # Tax loss harvesting thresholds
+  thresholds:
+    # Minimum loss percentage to trigger harvest alert
+    # Default: 10% loss required to consider harvesting
+    loss_threshold_pct: 10.0
+
+    # Minimum dollar loss to consider
+    # Ignore small losses below this amount
+    min_loss_amount: 500.0
+
+    # Maximum positions to harvest per quarter
+    # Helps avoid excessive trading
+    max_harvests_per_quarter: 10
+
+    # Consider gains harvesting in 0% LTCG bracket
+    # Useful for taxpayers in 0% long-term capital gains bracket
+    enable_gains_harvesting: true
+
+    # Minimum gain percentage for gains harvesting
+    # Only harvest gains above this threshold
+    gains_threshold_pct: 15.0
+
+    # Minimum holding period for harvesting (days)
+    # Prefer long-term holdings (365+ days)
+    min_holding_period_days: 0
+
+  # Replacement stock selection strategy
+  replacement:
+    # Strategy for selecting replacement stocks
+    # Options: 'sector_based', 'correlation_based', 'manual'
+    strategy: sector_based
+
+    # For sector_based: prefer larger or smaller market cap stocks
+    # true = prefer larger cap, false = prefer smaller cap
+    prefer_larger_cap: true
+
+    # Minimum market cap for replacement stocks (in billions)
+    # Helps ensure liquidity
+    min_market_cap: 1.0
+
+    # Allow cross-sector replacements if needed
+    # If true, will suggest stocks from adjacent sectors when
+    # same-sector options are exhausted
+    allow_cross_sector: false
+
+    # Number of alternative replacement suggestions to provide
+    # Gives user options to choose from
+    num_alternatives: 3
+
+    # Exclude stocks from replacement consideration
+    # Example: ['TSLA', 'GME'] to never use as replacements
+    exclude_from_replacements: []
+
+  # Wash sale rule compliance
+  wash_sale:
+    # Days before/after to check for wash sales (IRS: 30 days)
+    window_days: 35
+
+    # Automatically exclude positions with wash sale risk
+    # If true, won't suggest harvesting positions with wash sale risk
+    auto_exclude: true
+
+    # Check for substantially identical securities
+    # More conservative approach to avoid wash sales
+    check_similar_securities: true
+
+    # Consider ETFs as substantially identical
+    # If true, owning SPY/VOO/IVV prevents harvesting individual stocks
+    consider_etfs_identical: false
+
+  # Data refresh and caching
+  data:
+    # Refresh RSP holdings frequency (days)
+    # RSP rebalances quarterly, so weekly refresh is sufficient
+    rsp_refresh_days: 7
+
+    # Price update frequency (hours)
+    # How often to refresh current stock prices
+    price_refresh_hours: 4
+
+    # Cache duration (days)
+    # How long to keep cached data before forcing refresh
+    cache_duration: 1
+
+    # Auto-refresh on startup
+    # Automatically check for updates when system starts
+    auto_refresh_on_startup: true
+
+  # Schwab API integration
+  schwab:
+    # Enable Schwab API integration
+    # Requires Schwab developer account and API credentials
+    enabled: false
+
+    # Auto-sync positions from Schwab
+    # Automatically import positions from Schwab account
+    auto_sync: false
+
+    # Sync frequency (hours)
+    # How often to sync with Schwab
+    sync_frequency_hours: 24
+
+    # Require manual approval for all trades
+    # If true, all trades must be manually reviewed and approved
+    require_approval: true
+
+    # Account ID to sync (leave empty to sync all accounts)
+    account_id: ""
+
+    # Enable trade execution via API
+    # WARNING: This allows automated trading
+    enable_trade_execution: false
+
+  # Reporting and notifications
+  reporting:
+    # Track tax savings from harvesting
+    track_tax_savings: true
+
+    # Generate quarterly reports
+    # Automatically generate summary reports each quarter
+    quarterly_reports: true
+
+    # Email notifications for harvest opportunities
+    # Requires email configuration
+    email_notifications: false
+
+    # Email address for notifications
+    notification_email: ""
+
+    # Minimum tax savings to trigger notification
+    # Only notify for opportunities above this threshold
+    min_notification_savings: 1000.0
+
+    # Export format for tax reports
+    # Options: 'csv', 'excel', 'pdf'
+    tax_report_format: excel
+
+  # Advanced settings
+  advanced:
+    # Use correlation-based replacement selection
+    # Requires historical price data and more computation
+    use_correlation_analysis: false
+
+    # Correlation lookback period (days)
+    correlation_lookback_days: 252
+
+    # Minimum correlation for replacement consideration
+    min_correlation: 0.7
+
+    # Factor-based replacement selection
+    # Match stocks by factors (value, growth, momentum, etc.)
+    use_factor_matching: false
+
+    # Optimize for after-tax returns
+    # Consider tax impact in all decisions
+    optimize_after_tax: true
+
+    # Transaction cost per trade (dollars)
+    # Used in optimization calculations
+    transaction_cost: 0.0
+
+    # Rebalancing integration
+    # Coordinate harvesting with portfolio rebalancing
+    integrate_with_rebalancing: true
+
+# Logging configuration
+logging:
+  # Log level for direct indexing module
+  # Options: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+
+  # Log file path
+  log_file: logs/direct_indexing.log
+
+  # Log rotation
+  rotate_logs: true
+  max_log_size_mb: 10
+  backup_count: 5
+
+# Made with Bob

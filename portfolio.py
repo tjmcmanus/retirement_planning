@@ -8,6 +8,7 @@ import streamlit as st
 import os
 import threading as _threading
 import logging
+import time
 from datetime import datetime
 from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
 
@@ -111,59 +112,70 @@ def get_ticker_name(symbol, month=None, year=None):
 
 
 def get_sector(symbol, month=None, year=None):
-    #print(f"get sector {symbol}")
     # For cash holdings, return "MF:Cash"
     if symbol == "MF:CASH":
         return "MF:Cash"
-    
-    # Check if sector is specified in CSV first
+
+    # Check stored sector first
     df = getPortfolioData(month=month, year=year)
-    csv_sector = df.loc[df['symbol'] == symbol, 'sector'].iloc[0]
-    
-    # If CSV has a valid sector value (including MF: prefixed), use it
-    # This preserves user overrides and MF: categories like MF:Bonds, MF:Global
-    # Skip "MUTUALFUND" and "nan" as these need to be looked up
-    if isinstance(csv_sector, str) and csv_sector and csv_sector not in ['MUTUALFUND', 'nan', 'Cash']:
+    rows = df.loc[df['symbol'] == symbol, 'sector']
+    csv_sector = rows.iloc[0] if not rows.empty else ''
+
+    # If stored sector is already good, use it as-is (user overrides honoured)
+    _stale = {
+        '', 'MUTUALFUND', 'EQUITY', 'FIXED_INCOME', 'nan', 'NONE',
+        'Stock', 'Mutual Fund', 'Index Fund', 'Fund', 'Unknown',
+    }
+    if isinstance(csv_sector, str) and csv_sector and csv_sector not in _stale:
+        # Cash label normalisation
+        if csv_sector == 'Cash':
+            return 'MF:Cash'
         return csv_sector
-    
-    # Special handling for "Cash" in CSV - convert to MF:Cash for consistency
-    if isinstance(csv_sector, str) and csv_sector == 'Cash':
-        return 'MF:Cash'
-    
-    # For mutual funds (5-letter tickers), try to get category from yfinance
-    # and prefix it with MF: for consistency
+
+    # Stored sector is stale/missing — fetch from yfinance
+    resolved = None
+
+    # Mutual funds: 5-letter alpha tickers → prefix with MF:
     if len(symbol) == 5 and symbol.isalpha():
         try:
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
+            info = yf.Ticker(symbol).info
             category = info.get('category', '')
-            
-            # Try category first (for mutual funds)
-            if category and category not in ['MUTUALFUND', '']:
-                return f"MF:{category}"
-            
-            # Fallback to categoryName if available
-            category_name = info.get('categoryName', '')
-            if category_name:
-                return f"MF:{category_name}"
-                
-        except Exception as e:
-            pass  # Fall through to check stocks/ETFs
-    
-    # For stocks/ETFs, get sector from yfinance
-    try:
-        ticker = yf.Ticker(symbol)
-        sector = ticker.info.get('sector')
-        if sector:
-            return sector
-    except Exception:
-        pass
-    
-    # Final fallback - if CSV had MUTUALFUND but we couldn't get better data, return it
+            if category and category not in ('MUTUALFUND', ''):
+                resolved = f"MF:{category}"
+            elif info.get('categoryName', ''):
+                resolved = f"MF:{info['categoryName']}"
+        except Exception:
+            pass
+
+    # Stocks / ETFs
+    if resolved is None:
+        try:
+            info = yf.Ticker(symbol).info
+            sector = info.get('sector', '')
+            if sector:
+                resolved = sector
+        except Exception:
+            pass
+
+    # Persist the resolved value so future cache builds skip this yfinance call
+    if resolved:
+        try:
+            from portfolio_db import db_upsert
+            _persist_cols = [
+                'month', 'year', 'account_name', 'account_type', 'owner',
+                'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date',
+            ]
+            _present = [c for c in _persist_cols if c in df.columns]
+            update_df = df[df['symbol'] == symbol][_present].copy()
+            update_df['sector'] = resolved
+            db_upsert(update_df)
+        except Exception:
+            pass   # persistence is best-effort; always return the resolved value
+        return resolved
+
+    # Final fallbacks
     if isinstance(csv_sector, str) and csv_sector == 'MUTUALFUND':
         return 'MF:Unknown'
-    
-    # Fallback - return "Unknown" for missing data
     return "Unknown"
 
 def calculate_current_value(symbol, month=None, year=None):
@@ -577,16 +589,19 @@ def render_portfolio(month: int, year: int, done_event: "_threading.Event") -> p
 
     if not cached.empty:
         # Cache is fresh — kick off a background refresh only if the event has
-        # already been set (meaning a previous rebuild finished) so we don't
-        # pile up threads on every rerun.
+        # already been set (meaning a previous rebuild finished) AND enough time
+        # has passed since the last rebuild in this session (TTL guard).
         if done_event.is_set():
-            done_event.clear()
-            _t = _threading.Thread(
-                target=_rebuild_and_cache,
-                args=(month, year, done_event),
-                daemon=True,
-            )
-            _t.start()
+            _last_ts = st.session_state.get("_portfolio_last_rebuild_ts", 0.0)
+            if time.time() - _last_ts >= PORTFOLIO_CACHE_TTL_SECONDS:
+                st.session_state["_portfolio_last_rebuild_ts"] = time.time()
+                done_event.clear()
+                _t = _threading.Thread(
+                    target=_rebuild_and_cache,
+                    args=(month, year, done_event),
+                    daemon=True,
+                )
+                _t.start()
         return cached
 
     # Cache is empty / stale / wrong period — start background rebuild if not
@@ -596,6 +611,7 @@ def render_portfolio(month: int, year: int, done_event: "_threading.Event") -> p
         return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
     # Launch a fresh background rebuild
+    st.session_state["_portfolio_last_rebuild_ts"] = time.time()
     done_event.clear()
     _t = _threading.Thread(
         target=_rebuild_and_cache,

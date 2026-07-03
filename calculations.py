@@ -239,9 +239,32 @@ def calc_daf_value(
         return 0.0
 
     # Compute the AGI-based ceiling per IRC §170: the deduction limit is a
-    # percentage of AGI, not gross income.  AGI = gross_income - std_deduction.
+    # percentage of AGI, not gross income.
+    #
+    # When maxdaf="Y" the taxpayer is choosing to itemize via the DAF, so the
+    # standard deduction is replaced (not added) by the DAF deduction.  We
+    # therefore compute the ceiling off gross income so the returned value is
+    # always larger than the standard deduction.  calc_agi() will then take the
+    # DAF-only route (daf > std_deduction) and correctly omit the standard
+    # deduction.
+    #
+    # For a custom amount (daf1) we still use the traditional AGI = gross -
+    # std_deduction basis, because the caller may have already accounted for
+    # the deduction interaction.
     total_income  = joint_gross_income + interest
     std_deduction = calculate_std_deduction(total_income, stddectdf) if stddectdf is not None else 0.0
+
+    if maxdaf == "Y":
+        # Itemized route: ceiling is limit_pct of gross income (no std deduction).
+        max_daf_limit = total_income * limit_pct
+        logger.debug(
+            f"calc_daf_value (maxdaf=Y): gross_income={joint_gross_income:,.2f}, "
+            f"interest={interest:,.2f}, type={contribution_type}, "
+            f"limit={limit_label}, max_limit=${max_daf_limit:,.2f}"
+        )
+        logger.debug(f"DAF: Maximum ({limit_label}) = ${max_daf_limit:,.2f}")
+        return max_daf_limit
+
     agi           = total_income - std_deduction
     max_daf_limit = agi * limit_pct
 
@@ -252,11 +275,6 @@ def calc_daf_value(
         f"type={contribution_type}, limit={limit_label}, "
         f"max_limit=${max_daf_limit:,.2f}"
     )
-
-    # Maximum allowable contribution.
-    if maxdaf == "Y":
-        logger.debug(f"DAF: Maximum ({limit_label}) = ${max_daf_limit:,.2f}")
-        return max_daf_limit
 
     # Custom amount: use daf1 when it is non-negative and within the AGI limit.
     if 0 <= daf1 <= max_daf_limit:

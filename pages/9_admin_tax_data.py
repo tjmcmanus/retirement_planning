@@ -13,10 +13,10 @@ import shutil
 from typing import Dict, List, Tuple, Any
 
 from components.navbar import navbar
-from components.shared import init_page
+from components.shared import init_page_minimal
 
 # Initialize page
-init_page("🔧 Tax Data Admin", "🔧")
+init_page_minimal("🔧 Tax Data Admin", "🔧")
 navbar("🔧 Tax Data Admin")
 
 # Get current year for filtering

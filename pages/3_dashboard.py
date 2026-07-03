@@ -192,10 +192,14 @@ with tab_longterm:
             get_market_cycle_phase,
             get_strategic_allocation_adjustment,
             LongTermMarketCondition,
-            LongTermMarketTrendConfig
+            LongTermMarketTrendConfig,
+            clear_longterm_market_condition_cache,
         )
-        
-        # Get long-term market condition
+
+        if "longterm_cache_cleared" not in st.session_state:
+            clear_longterm_market_condition_cache()
+            st.session_state["longterm_cache_cleared"] = True
+
         lt_config = LongTermMarketTrendConfig()
         lt_condition, lt_ema_data = get_longterm_market_condition(lt_config, use_cache=True)
         
@@ -316,10 +320,14 @@ with tab_intermediate:
         from market_trend_analysis import (
             get_market_condition,
             MarketCondition,
-            MarketTrendConfig
+            MarketTrendConfig,
+            clear_market_condition_cache,
         )
-        
-        # Get intermediate-term market condition
+
+        if "intermediate_cache_cleared" not in st.session_state:
+            clear_market_condition_cache()
+            st.session_state["intermediate_cache_cleared"] = True
+
         st_config = MarketTrendConfig()
         st_condition, st_ma_data = get_market_condition(st_config, use_cache=True)
         
@@ -336,62 +344,62 @@ with tab_intermediate:
                 st_condition, ("⚪", "#808080", "Unknown")
             )
             
-            # Market condition summary
+            # Market condition summary — matches short/long-term layout
             st_col1, st_col2, st_col3, st_col4 = st.columns(4)
-            
+
             with st_col1:
                 st.markdown(f"**Market Condition**")
                 st.markdown(f"<h3 style='color: {st_color}; margin: 0;'>{st_icon} {st_label}</h3>", unsafe_allow_html=True)
-            
+
             with st_col2:
-                # Calculate price position
-                price_vs_short = ((st_ma_data.current_price - st_ma_data.short_ma) / st_ma_data.short_ma) * 100
-                price_vs_long = ((st_ma_data.current_price - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
-                
-                st.metric(
-                    "Price vs 10-Week MA",
-                    f"{price_vs_short:+.2f}%",
-                    delta=f"${st_ma_data.current_price:.2f}",
-                    help="Current SPY price relative to 10-week moving average"
+                from market_trend_analysis import get_allocation_adjustment
+                int_momentum = (
+                    "Weakening Momentum (Caution)" if st_ma_data.short_trend.value == "negative" and st_ma_data.long_trend.value == "positive"
+                    else "Momentum Reversal Attempt" if st_ma_data.short_trend.value == "positive" and st_ma_data.long_trend.value == "negative"
+                    else f"{'Sustained' if st_ma_data.weeks_in_trend >= 7 else 'Building'} {'Upward' if st_ma_data.short_trend.value != 'negative' else 'Downward'} Momentum"
                 )
-            
+                st.metric(
+                    "Momentum Phase",
+                    int_momentum,
+                    help="Current momentum phase based on trend duration and direction"
+                )
+
             with st_col3:
+                int_adj = get_allocation_adjustment(st_condition, st_config)
                 st.metric(
-                    "Price vs 50-Week MA",
-                    f"{price_vs_long:+.2f}%",
-                    delta=f"${st_ma_data.current_price:.2f}",
-                    help="Current SPY price relative to 50-week moving average"
+                    "Tactical Adjustment",
+                    f"{int_adj:+.1f}%",
+                    delta="Stock allocation",
+                    delta_color="normal" if int_adj >= 0 else "inverse",
+                    help="Suggested tactical adjustment to stock allocation based on current market condition"
                 )
-            
+
             with st_col4:
                 st.metric(
                     "Confidence Score",
                     f"{st_ma_data.confidence * 100:.0f}%",
                     help="Confidence in the current market condition assessment (0-100%)"
                 )
-            
+
             # Detailed metrics in expander
             with st.expander("📊 Detailed Intermediate-Term Analysis", expanded=False):
                 st_detail_col1, st_detail_col2, st_detail_col3 = st.columns(3)
-                
+
                 with st_detail_col1:
-                    st.markdown("**Current Prices & MAs**")
+                    st.markdown("**Current Prices & EMAs**")
                     st.write(f"SPY Price: ${st_ma_data.current_price:.2f}")
-                    st.write(f"10-Week MA: ${st_ma_data.short_ma:.2f}")
-                    st.write(f"50-Week MA: ${st_ma_data.long_ma:.2f}")
-                    st.write(f"Price vs 10-Week: {price_vs_short:+.2f}%")
-                    st.write(f"Price vs 50-Week: {price_vs_long:+.2f}%")
-                
+                    st.write(f"10-Week EMA: ${st_ma_data.short_ema:.2f}")
+                    st.write(f"50-Week EMA: ${st_ma_data.long_ema:.2f}")
+                    st.write(f"Price vs 10-Week: {st_ma_data.price_vs_short_ema:+.2f}%")
+                    st.write(f"Price vs 50-Week: {st_ma_data.price_vs_long_ema:+.2f}%")
+
                 with st_detail_col2:
                     st.markdown("**Trend Analysis**")
                     st.write(f"10-Week Trend: {st_ma_data.short_trend.value.title()}")
                     st.write(f"50-Week Trend: {st_ma_data.long_trend.value.title()}")
                     st.write(f"10-Week Slope: {st_ma_data.short_slope:+.3f}% per week")
                     st.write(f"50-Week Slope: {st_ma_data.long_slope:+.3f}% per week")
-                    
-                    # Calculate MA crossover distance
-                    ma_crossover = ((st_ma_data.short_ma - st_ma_data.long_ma) / st_ma_data.long_ma) * 100
-                    st.write(f"MA Crossover: {ma_crossover:+.2f}%")
+                    st.write(f"Weeks in Trend: {st_ma_data.weeks_in_trend}")
                 
                 with st_detail_col3:
                     st.markdown("**Tactical Guidance**")
@@ -421,6 +429,7 @@ with tab_intermediate:
                             "Focus on capital preservation and defensive positioning."
                         )
                     
+                    st.write(f"EMA Crossover Distance: {st_ma_data.ema_crossover_distance:+.2f}%")
                     st.caption(f"Last updated: {st_ma_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
         
         else:
@@ -450,10 +459,17 @@ with tab_shortterm:
             ShortTermMarketCondition,
             ShortTermMarketTrendConfig,
             get_tactical_allocation_adjustment,
-            get_market_momentum_phase
+            get_market_momentum_phase,
+            clear_shortterm_market_condition_cache,
         )
-        
-        # Get short-term market condition
+
+        # Get short-term market condition (force fresh calculation on first
+        # render this session so a stale cache from before the bug fix cannot
+        # persist across a page reload)
+        if "shortterm_cache_cleared" not in st.session_state:
+            clear_shortterm_market_condition_cache()
+            st.session_state["shortterm_cache_cleared"] = True
+
         vst_config = ShortTermMarketTrendConfig()
         vst_condition, vst_ema_data = get_shortterm_market_condition(vst_config, use_cache=True)
         

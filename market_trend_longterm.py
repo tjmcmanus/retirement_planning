@@ -322,32 +322,75 @@ def calculate_longterm_emas(
 def determine_longterm_market_condition(ema_data: LongTermEMAData) -> LongTermMarketCondition:
     """
     Determine long-term market condition based on EMA trends.
-    
+
+    Uses three explicit states per EMA (POSITIVE / NEUTRAL / NEGATIVE) so that
+    flat/consolidating markets are not misclassified as BEAR.  When either EMA
+    is NEUTRAL the price position relative to the EMAs acts as the tiebreaker.
+
+    Decision matrix:
+      Short       Long        Result
+      POSITIVE    POSITIVE    BULL
+      POSITIVE    NEUTRAL     BULL
+      NEUTRAL     POSITIVE    BULL
+      NEUTRAL     NEUTRAL     BULL if price > both EMAs, else WARNING_NEGATIVE
+      NEGATIVE    POSITIVE    WARNING_NEGATIVE
+      POSITIVE    NEGATIVE    WARNING_POSITIVE
+      NEGATIVE    NEUTRAL     WARNING_NEGATIVE
+      NEUTRAL     NEGATIVE    WARNING_NEGATIVE
+      NEGATIVE    NEGATIVE    BEAR
+
     Args:
         ema_data: EMA data
-        
+
     Returns:
         LongTermMarketCondition enum value
     """
-    short_positive = ema_data.short_trend == LongTermTrendDirection.POSITIVE
-    long_positive = ema_data.long_trend == LongTermTrendDirection.POSITIVE
-    
-    if short_positive and long_positive:
+    short = ema_data.short_trend
+    long  = ema_data.long_trend
+
+    P = LongTermTrendDirection.POSITIVE
+    N = LongTermTrendDirection.NEGATIVE
+    U = LongTermTrendDirection.NEUTRAL
+
+    # --- Unambiguous cases ---
+    if short == P and long == P:
         return LongTermMarketCondition.BULL
-    elif not short_positive and long_positive:
-        return LongTermMarketCondition.WARNING_NEGATIVE
-    elif short_positive and not long_positive:
-        return LongTermMarketCondition.WARNING_POSITIVE
-    elif not short_positive and not long_positive:
+
+    if short == N and long == N:
         return LongTermMarketCondition.BEAR
-    else:
-        # Both neutral - use EMA crossover and price position as tiebreaker
-        if ema_data.ema_crossover_distance > 0 and ema_data.price_vs_long_ema > 0:
+
+    if short == N and long == P:
+        return LongTermMarketCondition.WARNING_NEGATIVE
+
+    if short == P and long == N:
+        return LongTermMarketCondition.WARNING_POSITIVE
+
+    # --- Cases involving NEUTRAL ---
+    # Both neutral: use price position vs EMAs as tiebreaker
+    if short == U and long == U:
+        if ema_data.price_vs_short_ema > 0 and ema_data.price_vs_long_ema > 0:
             return LongTermMarketCondition.BULL
-        elif ema_data.ema_crossover_distance < 0 and ema_data.price_vs_long_ema < 0:
-            return LongTermMarketCondition.BEAR
         else:
-            return LongTermMarketCondition.WARNING_NEGATIVE  # Default to caution
+            return LongTermMarketCondition.WARNING_NEGATIVE
+
+    # Short neutral, long positive → leaning bullish
+    if short == U and long == P:
+        return LongTermMarketCondition.BULL
+
+    # Short positive, long neutral → leaning bullish
+    if short == P and long == U:
+        return LongTermMarketCondition.BULL
+
+    # Short neutral, long negative → caution
+    if short == U and long == N:
+        return LongTermMarketCondition.WARNING_NEGATIVE
+
+    # Short negative, long neutral → caution
+    if short == N and long == U:
+        return LongTermMarketCondition.WARNING_NEGATIVE
+
+    # Fallback (should never reach here given the enum only has 3 values)
+    return LongTermMarketCondition.WARNING_NEGATIVE
 
 
 def get_longterm_market_condition(
