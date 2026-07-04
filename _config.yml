@@ -5,7 +5,7 @@ baseurl: "/retirement_planning" # the subpath of your site, e.g. /blog
 url: "" # the base hostname & protocol for your site
 
 # Build settings
-theme: jekyll-theme-cayman
+theme: jekyll-theme-architect
 markdown: kramdown
 
 # Exclude from processing
