@@ -14,9 +14,9 @@ from ..models import PortfolioBalances, YearlyStrategy
 
 logger = logging.getLogger(__name__)
 
-# Constants for backdoor Roth IRA
-ROTH_IRA_INCOME_LIMIT = 240000  # 2024 MFJ limit
-IRA_CONTRIBUTION_LIMIT = 7000    # 2024 limit
+# Fallback constants — used only when ira_limits.csv has no row for the year
+_ROTH_IRA_INCOME_LIMIT_FALLBACK = 240_000  # MFJ phase-out upper bound
+_IRA_CONTRIBUTION_LIMIT_FALLBACK = 7_000   # base limit (age < 50)
 
 
 class Stage2PrepForRetirement(BaseLifeStageStrategy):
@@ -464,27 +464,45 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         Returns:
             Backdoor Roth amount
         """
-        if agi > ROTH_IRA_INCOME_LIMIT:
-            backdoor_amount = IRA_CONTRIBUTION_LIMIT
-            
+        # Look up IRA limits for this strategy year from ira_limits.csv
+        try:
+            from load_data import get_ira_limits
+            _df = get_ira_limits(strategy.year)
+            if not _df.empty:
+                roth_income_limit = int(_df["roth_phaseout_end_mfj"].iloc[0])
+                ira_contribution_limit = int(_df["ira_contribution_base"].iloc[0])
+            else:
+                logger.warning(
+                    f"IRA limits not found for year {strategy.year}, using fallback constants"
+                )
+                roth_income_limit = _ROTH_IRA_INCOME_LIMIT_FALLBACK
+                ira_contribution_limit = _IRA_CONTRIBUTION_LIMIT_FALLBACK
+        except Exception as e:
+            logger.warning(f"Could not load IRA limits for year {strategy.year}: {e}")
+            roth_income_limit = _ROTH_IRA_INCOME_LIMIT_FALLBACK
+            ira_contribution_limit = _IRA_CONTRIBUTION_LIMIT_FALLBACK
+
+        if agi > roth_income_limit:
+            backdoor_amount = ira_contribution_limit
+
             logger.info(
                 f"Year {strategy.year}: AGI ${agi:,.0f} exceeds Roth IRA limit — "
                 f"executing backdoor Roth ${backdoor_amount:,.0f}"
             )
-            
+
             self._log_decision(
                 strategy,
                 'contribution_decisions',
                 'Backdoor Roth IRA',
                 f'Execute ${backdoor_amount:,.0f} backdoor Roth',
-                f'AGI (${agi:,.0f}) exceeds the direct Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}). '
+                f'AGI (${agi:,.0f}) exceeds the direct Roth IRA income limit (${roth_income_limit:,.0f}). '
                 'Executing backdoor Roth: contribute to empty Traditional IRA then immediately convert, '
                 'achieving Roth tax treatment without the income restriction.',
                 agi=agi,
-                income_limit=ROTH_IRA_INCOME_LIMIT,
+                income_limit=roth_income_limit,
                 amount=backdoor_amount
             )
-            
+
             return backdoor_amount
         else:
             self._log_decision(
@@ -492,7 +510,7 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
                 'contribution_decisions',
                 'Backdoor Roth IRA',
                 'Direct Roth IRA contribution eligible',
-                f'AGI (${agi:,.0f}) is below the Roth IRA income limit (${ROTH_IRA_INCOME_LIMIT:,.0f}); '
+                f'AGI (${agi:,.0f}) is below the Roth IRA income limit (${roth_income_limit:,.0f}); '
                 'backdoor Roth not needed.',
                 agi=agi
             )

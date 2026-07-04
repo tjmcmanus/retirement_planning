@@ -1114,7 +1114,7 @@ def optimize_rmd_lookback(strategies: list,
                             # Get state from config
                             try:
                                 state = config_mgr.get('personal_info', 'retirement_state', 'FL')
-                            except:
+                            except (KeyError, AttributeError):
                                 state = 'FL'
                             
                             # CRITICAL: Use the UPDATED conversion amount for retirement_income
@@ -2295,8 +2295,6 @@ RMD_AGE = 73  # Updated for 2023+ (SECURE Act 2.0)
 ACA_SUBSIDY_THRESHOLD = 400  # % of Federal Poverty Level for max subsidies
 TAXABLE_SS_RATE = 0.85  # 85% of SS benefits are taxable at higher incomes
 FUND_CONSERVATION_TOLERANCE = 1.0  # Allow $1 rounding error in fund conservation checks
-ROTH_IRA_INCOME_LIMIT = 240_000  # MFJ 2024 phase-out upper bound (update annually)
-IRA_CONTRIBUTION_LIMIT = 7_000   # 2024 limit (age < 50); 8_000 if ≥ 50 (update annually)
 
 
 # ==============================================================================

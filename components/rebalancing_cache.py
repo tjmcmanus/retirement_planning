@@ -271,14 +271,16 @@ class RebalancingCacheManager:
                 try:
                     summary_data = json.loads(summary_json)
                     summary_df = pd.DataFrame(summary_data) if summary_data else None
-                except:
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning("Could not parse summary JSON from cache row", exc_info=True)
                     summary_df = None
-                
+
                 # Parse actions JSON
                 actions_json = row[5]
                 try:
                     actions = json.loads(actions_json) if actions_json else []
-                except:
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning("Could not parse actions JSON from cache row", exc_info=True)
                     actions = []
                 
                 return {
@@ -314,7 +316,8 @@ class RebalancingCacheManager:
             cache_date = datetime.fromisoformat(latest['calculation_date']).date()
             today = date.today()
             return cache_date < today
-        except:
+        except ValueError:
+            logger.warning("Could not parse cache calculation_date %r", latest.get('calculation_date'))
             return True
     
     def update_cache(self):
