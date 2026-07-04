@@ -201,8 +201,7 @@ def _render_rebalancing_body(
     st.markdown("#### 💾 Save Target Allocation")
 
     try:
-        from components.rebalancing_cache import get_cache_manager
-        from set_target_allocation import get_target_allocation
+        from components.rebalancing_cache import get_cache_manager, get_target_allocation
 
         cache_mgr = get_cache_manager()
         saved_target = get_target_allocation()
@@ -231,7 +230,7 @@ def _render_rebalancing_body(
 
             if save_btn and is_valid:
                 try:
-                    from set_target_allocation import set_target_allocation
+                    from components.rebalancing_cache import set_target_allocation
 
                     success = set_target_allocation(
                         cash_pct=float(cash_tgt),

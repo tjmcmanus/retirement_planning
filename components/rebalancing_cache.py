@@ -397,4 +397,86 @@ def get_cache_manager() -> RebalancingCacheManager:
         _cache_manager_instance = RebalancingCacheManager()
     return _cache_manager_instance
 
+
+def set_target_allocation(
+    cash_pct: float,
+    bonds_pct: float,
+    stocks_pct: float,
+    drift_threshold_pct: float = 5.0,
+) -> bool:
+    """
+    Set target portfolio allocation and update the rebalancing cache.
+
+    Args:
+        cash_pct: Target cash percentage (0-100)
+        bonds_pct: Target bonds percentage (0-100)
+        stocks_pct: Target stocks percentage (0-100)
+        drift_threshold_pct: Drift threshold percentage (default: 5.0)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        if cash_pct < 0 or bonds_pct < 0 or stocks_pct < 0:
+            raise ValueError("Percentages cannot be negative")
+
+        total = cash_pct + bonds_pct + stocks_pct
+        if abs(total - 100.0) > 0.01:
+            raise ValueError(f"Target allocations must sum to 100%, got {total}%")
+
+        if drift_threshold_pct <= 0:
+            raise ValueError("Drift threshold must be positive")
+
+        cache_mgr = get_cache_manager()
+        cache_mgr.save_target_allocation(
+            cash_pct=cash_pct,
+            bonds_pct=bonds_pct,
+            stocks_pct=stocks_pct,
+            drift_threshold_pct=drift_threshold_pct,
+        )
+
+        logger.info("Updating rebalancing analysis with new target allocation...")
+        success = cache_mgr.update_cache()
+
+        if success:
+            logger.info(
+                f"Target allocation set: {cash_pct}% cash, "
+                f"{bonds_pct}% bonds, {stocks_pct}% stocks"
+            )
+            return True
+        else:
+            logger.error("Failed to update rebalancing cache")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to set target allocation: {e}")
+        return False
+
+
+def get_target_allocation() -> Optional[Dict[str, Any]]:
+    """
+    Get the current saved target allocation.
+
+    Returns:
+        Dict with keys cash_pct, bonds_pct, stocks_pct, drift_threshold_pct,
+        last_updated — or None if no allocation has been saved yet.
+    """
+    try:
+        cache_mgr = get_cache_manager()
+        target = cache_mgr.get_target_allocation()
+
+        if target:
+            return {
+                "cash_pct": target.cash_pct,
+                "bonds_pct": target.bonds_pct,
+                "stocks_pct": target.stocks_pct,
+                "drift_threshold_pct": target.drift_threshold_pct,
+                "last_updated": target.last_updated,
+            }
+        return None
+
+    except Exception as e:
+        logger.error(f"Failed to get target allocation: {e}")
+        return None
+
 # Made with Bob

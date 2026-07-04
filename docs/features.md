@@ -42,6 +42,13 @@ Centralized configuration management for all planning parameters:
 
 Real-time financial overview and key metrics:
 
+**Market Forecast Tabs:**
+- Long-Term, Intermediate, and Short-Term market condition across three EMA timeframes
+- Regime label: **Bull / Neutral / Bear** (driven by the long EMA)
+- Sub-phase label: **Accumulation / Consolidating / Distribution** (driven by the short EMA)
+- Tactical adjustment suggestion and confidence score
+- See the [Market Trend Analysis Guide](user/MARKET_TREND_GUIDE.md) for a full explanation
+
 **Summary Cards:**
 - Total net worth
 - Retirement readiness score
@@ -483,4 +490,4 @@ The application is actively maintained with:
 
 ---
 
-[← Back to Home](../index.md) | [Next: User Guides →](guides.md)
+[← Back to Home](index.md) | [Next: User Guides →](guides.md)

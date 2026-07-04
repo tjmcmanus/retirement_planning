@@ -44,12 +44,11 @@ MIN_STATE_DURATION_DAYS = 3  # Minimum days in state before transition
 # ---------------------------------------------------------------------------
 
 class MarketCondition(Enum):
-    """Market condition states based on moving average trends."""
-    BULL = "bull"  # Both MAs positive
-    WARNING_NEGATIVE = "warning_negative"  # 10-week down, 50-week up
-    WARNING_POSITIVE = "warning_positive"  # 10-week up, 50-week down
-    BEAR = "bear"  # Both MAs negative
-    UNKNOWN = "unknown"  # Unable to determine (data issues)
+    """Market condition states. Driven solely by the long (50-week) EMA."""
+    BULL = "bull"       # 50-week EMA positive — long trend intact
+    NEUTRAL = "neutral" # 50-week EMA flat — no clear direction
+    BEAR = "bear"       # 50-week EMA negative — sustained downtrend
+    UNKNOWN = "unknown" # Unable to determine (data issues)
 
 
 class TrendDirection(Enum):
@@ -90,8 +89,8 @@ class MarketTrendConfig:
     min_state_duration_days: int = MIN_STATE_DURATION_DAYS
     enabled: bool = True
     # Allocation adjustment percentages for each market state
-    bull_adjustment: float = 0.0  # No adjustment in bull market
-    warning_adjustment: float = -10.0  # Reduce stocks by 10% in warning states
+    bull_adjustment: float = 0.0    # No adjustment in bull market
+    neutral_adjustment: float = 0.0  # No adjustment when consolidating
     bear_adjustment: float = -20.0  # Reduce stocks by 20% in bear market
 
 
@@ -308,25 +307,34 @@ def calculate_moving_averages(
 # Market Condition Determination
 # ---------------------------------------------------------------------------
 
+def get_market_subphase(ma_data: MovingAverageData) -> str:
+    """
+    Return the market sub-phase label driven by the short (10-week) EMA direction.
+
+    Accumulation  — short EMA rising  (buyers stepping in)
+    Consolidating — short EMA flat    (no directional pressure)
+    Distribution  — short EMA falling (sellers taking over)
+    """
+    if ma_data.short_trend == TrendDirection.POSITIVE:
+        return "Accumulation"
+    elif ma_data.short_trend == TrendDirection.NEGATIVE:
+        return "Distribution"
+    else:
+        return "Consolidating"
+
+
 def determine_market_condition(ma_data: MovingAverageData) -> MarketCondition:
     """
-    Determine market condition based on EMA trends.
+    Determine intermediate-term market condition based on EMA trends.
 
-    Uses three explicit states per EMA (POSITIVE / NEUTRAL / NEGATIVE) so that
-    flat/consolidating markets are not misclassified as BEAR.  When either EMA
-    is NEUTRAL the price position relative to the EMAs acts as the tiebreaker.
+    The long (50-week) EMA sets the regime; the short (10-week) EMA determines
+    the sub-phase (see get_market_subphase).
 
     Decision matrix:
-      Short       Long        Result
-      POSITIVE    POSITIVE    BULL
-      POSITIVE    NEUTRAL     BULL
-      NEUTRAL     POSITIVE    BULL
-      NEUTRAL     NEUTRAL     BULL if price > both EMAs, else WARNING_NEGATIVE
-      NEGATIVE    POSITIVE    WARNING_NEGATIVE
-      POSITIVE    NEGATIVE    WARNING_POSITIVE
-      NEGATIVE    NEUTRAL     WARNING_NEGATIVE
-      NEUTRAL     NEGATIVE    WARNING_NEGATIVE
-      NEGATIVE    NEGATIVE    BEAR
+      Long EMA    Result
+      POSITIVE    BULL
+      NEUTRAL     NEUTRAL
+      NEGATIVE    BEAR
 
     Args:
         ma_data: EMA data
@@ -334,52 +342,12 @@ def determine_market_condition(ma_data: MovingAverageData) -> MarketCondition:
     Returns:
         MarketCondition enum value
     """
-    short = ma_data.short_trend
-    long  = ma_data.long_trend
-
-    P = TrendDirection.POSITIVE
-    N = TrendDirection.NEGATIVE
-    U = TrendDirection.NEUTRAL
-
-    # --- Unambiguous cases ---
-    if short == P and long == P:
+    if ma_data.long_trend == TrendDirection.POSITIVE:
         return MarketCondition.BULL
-
-    if short == N and long == N:
+    elif ma_data.long_trend == TrendDirection.NEGATIVE:
         return MarketCondition.BEAR
-
-    if short == N and long == P:
-        return MarketCondition.WARNING_NEGATIVE
-
-    if short == P and long == N:
-        return MarketCondition.WARNING_POSITIVE
-
-    # --- Cases involving NEUTRAL ---
-    # Both neutral: use price position vs EMAs as tiebreaker
-    if short == U and long == U:
-        if ma_data.current_price > ma_data.short_ema and ma_data.current_price > ma_data.long_ema:
-            return MarketCondition.BULL
-        else:
-            return MarketCondition.WARNING_NEGATIVE
-
-    # Short neutral, long positive → leaning bullish
-    if short == U and long == P:
-        return MarketCondition.BULL
-
-    # Short positive, long neutral → leaning bullish
-    if short == P and long == U:
-        return MarketCondition.BULL
-
-    # Short neutral, long negative → caution
-    if short == U and long == N:
-        return MarketCondition.WARNING_NEGATIVE
-
-    # Short negative, long neutral → caution
-    if short == N and long == U:
-        return MarketCondition.WARNING_NEGATIVE
-
-    # Fallback (should never reach here given the enum only has 3 values)
-    return MarketCondition.WARNING_NEGATIVE
+    else:
+        return MarketCondition.NEUTRAL
 
 
 def get_market_condition(
@@ -442,8 +410,7 @@ def get_allocation_adjustment(
     """
     adjustments = {
         MarketCondition.BULL: config.bull_adjustment,
-        MarketCondition.WARNING_NEGATIVE: config.warning_adjustment,
-        MarketCondition.WARNING_POSITIVE: config.warning_adjustment,
+        MarketCondition.NEUTRAL: config.neutral_adjustment,
         MarketCondition.BEAR: config.bear_adjustment,
         MarketCondition.UNKNOWN: 0.0,
     }
@@ -505,8 +472,10 @@ def format_market_condition_summary(
     """
     if ma_data is None:
         return f"Market Condition: {condition.value.upper()} (data unavailable)"
-    
-    summary = f"""Market Condition: {condition.value.upper()}
+
+    subphase = get_market_subphase(ma_data)
+
+    summary = f"""Market Condition: {condition.value.upper()} ({subphase})
 Current SPY Price: ${ma_data.current_price:.2f}
 10-Week EMA: ${ma_data.short_ema:.2f} ({ma_data.short_trend.value}, {ma_data.short_slope:+.2f}%/week)
 50-Week EMA: ${ma_data.long_ema:.2f} ({ma_data.long_trend.value}, {ma_data.long_slope:+.2f}%/week)

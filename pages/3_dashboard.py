@@ -190,6 +190,7 @@ with tab_longterm:
         from market_trend_longterm import (
             get_longterm_market_condition,
             get_market_cycle_phase,
+            get_market_subphase as get_longterm_subphase,
             get_strategic_allocation_adjustment,
             LongTermMarketCondition,
             LongTermMarketTrendConfig,
@@ -205,11 +206,11 @@ with tab_longterm:
         
         if lt_condition != LongTermMarketCondition.UNKNOWN and lt_ema_data:
             # Display market condition with color coding
+            subphase = get_longterm_subphase(lt_ema_data)
             condition_colors = {
-                LongTermMarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
-                LongTermMarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
-                LongTermMarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
-                LongTermMarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+                LongTermMarketCondition.BULL: ("🟢", "#21c354", f"Bull ({subphase})"),
+                LongTermMarketCondition.NEUTRAL: ("⚪", "#808080", f"Neutral ({subphase})"),
+                LongTermMarketCondition.BEAR: ("🔴", "#ff4b4b", f"Bear ({subphase})"),
             }
             
             icon, color, label = condition_colors.get(
@@ -219,34 +220,24 @@ with tab_longterm:
             # Market condition summary
             lt_col1, lt_col2, lt_col3, lt_col4 = st.columns(4)
             
+            _VAL = "font-size:1.6rem; font-weight:700; margin:2px 0 0;"
+            _LBL = "font-size:0.75rem; color:#57606a; margin:0; text-transform:uppercase; letter-spacing:0.04em;"
+
             with lt_col1:
-                st.markdown(f"Market Condition")
-                st.markdown(f"<h3 style='color: {color}; margin: 0;'>{icon} {label}</h3>", unsafe_allow_html=True)
+                st.markdown(f"<p style='{_LBL}'>Market Condition</p><p style='{_VAL} color:{color};'>{icon} {label}</p>", unsafe_allow_html=True)
             
             with lt_col2:
                 cycle_phase = get_market_cycle_phase(lt_ema_data)
-                st.metric(
-                    "Market Cycle Phase",
-                    cycle_phase,
-                    help="Current phase of the market cycle based on trend duration and direction"
-                )
+                st.markdown(f"<p style='{_LBL}'>Market Cycle Phase</p><p style='{_VAL} color:{color};'>{cycle_phase}</p>", unsafe_allow_html=True)
             
             with lt_col3:
                 allocation_adj = get_strategic_allocation_adjustment(lt_condition, lt_config)
-                st.metric(
-                    "Strategic Adjustment",
-                    f"{allocation_adj:+.1f}%",
-                    delta=f"Stock allocation",
-                    delta_color="normal" if allocation_adj >= 0 else "inverse",
-                    help="Suggested adjustment to stock allocation based on current market condition"
-                )
+                st.markdown(f"<p style='{_LBL}'>Strategic Adjustment</p><p style='{_VAL} color:{color};'>{allocation_adj:+.1f}%</p><p style='font-size:0.75rem; color:#57606a; margin:0;'>Stock allocation</p>", unsafe_allow_html=True)
             
             with lt_col4:
-                st.metric(
-                    "Confidence Score",
-                    f"{lt_ema_data.confidence * 100:.0f}%",
-                    help="Confidence in the current market condition assessment (0-100%)"
-                )
+                _lt_conf_pct = lt_ema_data.confidence * 100
+                _lt_conf_color = "#ffa500" if _lt_conf_pct <= 5 else ("#21c354" if lt_condition == LongTermMarketCondition.BULL else ("#ff4b4b" if lt_condition == LongTermMarketCondition.BEAR else "#808080"))
+                st.markdown(f"<p style='{_LBL}'>Confidence Score</p><p style='{_VAL} color:{_lt_conf_color};'>{_lt_conf_pct:.0f}%</p><p style='font-size:0.75rem; color:#57606a; margin:0;'>Strength of EMA slopes</p>", unsafe_allow_html=True)
             
             # Detailed metrics in expander
             with st.expander("📊 Detailed Market Analysis", expanded=False):
@@ -261,36 +252,40 @@ with tab_longterm:
                     st.write(f"Price vs 18-Month: {lt_ema_data.price_vs_long_ema:+.2f}%")
                 
                 with detail_col2:
+                    def _slope_color(v):
+                        return "#21c354" if v > 0 else ("#ff4b4b" if v < 0 else "#808080")
                     st.markdown("**Trend Analysis**")
                     st.write(f"8-Month Trend: {lt_ema_data.short_trend.value.title()}")
                     st.write(f"18-Month Trend: {lt_ema_data.long_trend.value.title()}")
-                    st.write(f"8-Month Slope: {lt_ema_data.short_slope:+.2f}% per month")
-                    st.write(f"18-Month Slope: {lt_ema_data.long_slope:+.2f}% per month")
+                    st.markdown(f"8-Month Slope: <span style='color:{_slope_color(lt_ema_data.short_slope)}; font-weight:600;'>{lt_ema_data.short_slope:+.2f}% per month</span>", unsafe_allow_html=True)
+                    st.markdown(f"18-Month Slope: <span style='color:{_slope_color(lt_ema_data.long_slope)}; font-weight:600;'>{lt_ema_data.long_slope:+.2f}% per month</span>", unsafe_allow_html=True)
                     st.write(f"Months in Trend: {lt_ema_data.months_in_trend}")
                 
                 with detail_col3:
                     st.markdown("**Strategic Guidance**")
                     
+                    lt_subphase = get_longterm_subphase(lt_ema_data)
                     if lt_condition == LongTermMarketCondition.BULL:
-                        st.success(
-                            "✅ **Bull Market**: Both short and long-term trends are positive. "
-                            "Maintain normal risk allocation. Consider rebalancing if overweight."
-                        )
-                    elif lt_condition == LongTermMarketCondition.WARNING_NEGATIVE:
-                        st.warning(
-                            "⚠️ **Early Warning**: Short-term trend turning negative while long-term remains positive. "
-                            "Consider reducing risk exposure. Monitor closely for further deterioration."
-                        )
-                    elif lt_condition == LongTermMarketCondition.WARNING_POSITIVE:
-                        st.info(
-                            "ℹ️ **Recovery Attempt**: Short-term trend turning positive while long-term remains negative. "
-                            "Cautious optimism warranted. Wait for confirmation before increasing risk."
-                        )
+                        if lt_subphase == "Accumulation":
+                            st.success("✅ **Bull (Accumulation)**: 18-month trend up, 8-month momentum rising. Favorable for full equity exposure — consider maintaining or adding to allocation.")
+                        elif lt_subphase == "Consolidating":
+                            st.success("✅ **Bull (Consolidating)**: 18-month trend up, 8-month momentum flat. Healthy pause in uptrend — hold allocation and wait for momentum to resume.")
+                        else:
+                            st.warning("⚠️ **Bull (Distribution)**: 18-month trend up but 8-month momentum fading. Monitor for regime change — avoid increasing equity exposure.")
+                    elif lt_condition == LongTermMarketCondition.NEUTRAL:
+                        if lt_subphase == "Accumulation":
+                            st.info("⚪ **Neutral (Accumulation)**: 18-month EMA flat, 8-month momentum rising. Possible early bull forming — wait for 18-month confirmation before acting.")
+                        elif lt_subphase == "Consolidating":
+                            st.info("⚪ **Neutral (Consolidating)**: Both EMAs flat. Sideways market — maintain current allocation, avoid major strategic shifts.")
+                        else:
+                            st.warning("⚪ **Neutral (Distribution)**: 18-month EMA flat, 8-month momentum falling. Risk of bear transition — consider reducing equity exposure.")
                     elif lt_condition == LongTermMarketCondition.BEAR:
-                        st.error(
-                            "🔴 **Bear Market**: Both trends are negative. "
-                            "Reduce risk exposure. Focus on capital preservation and quality holdings."
-                        )
+                        if lt_subphase == "Accumulation":
+                            st.info("🔄 **Bear (Accumulation)**: 18-month trend down but 8-month bouncing. Possible relief rally — wait for 18-month EMA to turn before adding exposure.")
+                        elif lt_subphase == "Consolidating":
+                            st.error("🛡️ **Bear (Consolidating)**: 18-month trend down, 8-month flat. Downtrend pausing, not reversing — maintain defensive posture.")
+                        else:
+                            st.error("🔴 **Bear (Distribution)**: Both EMAs falling. Sustained downtrend — reduce risk exposure; focus on capital preservation.")
                     
                     st.write(f"EMA Crossover Distance: {lt_ema_data.ema_crossover_distance:+.2f}%")
                     st.caption(f"Last updated: {lt_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -319,6 +314,7 @@ with tab_intermediate:
     try:
         from market_trend_analysis import (
             get_market_condition,
+            get_market_subphase as get_intermediate_subphase,
             MarketCondition,
             MarketTrendConfig,
             clear_market_condition_cache,
@@ -333,11 +329,11 @@ with tab_intermediate:
         
         if st_condition != MarketCondition.UNKNOWN and st_ma_data:
             # Display market condition with color coding
+            int_subphase = get_intermediate_subphase(st_ma_data)
             st_condition_colors = {
-                MarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
-                MarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
-                MarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
-                MarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+                MarketCondition.BULL: ("🟢", "#21c354", f"Bull ({int_subphase})"),
+                MarketCondition.NEUTRAL: ("⚪", "#808080", f"Neutral ({int_subphase})"),
+                MarketCondition.BEAR: ("🔴", "#ff4b4b", f"Bear ({int_subphase})"),
             }
             
             st_icon, st_color, st_label = st_condition_colors.get(
@@ -347,39 +343,24 @@ with tab_intermediate:
             # Market condition summary — matches short/long-term layout
             st_col1, st_col2, st_col3, st_col4 = st.columns(4)
 
+            _VAL = "font-size:1.6rem; font-weight:700; margin:2px 0 0;"
+            _LBL = "font-size:0.75rem; color:#57606a; margin:0; text-transform:uppercase; letter-spacing:0.04em;"
+
             with st_col1:
-                st.markdown(f"**Market Condition**")
-                st.markdown(f"<h3 style='color: {st_color}; margin: 0;'>{st_icon} {st_label}</h3>", unsafe_allow_html=True)
+                st.markdown(f"<p style='{_LBL}'>Market Condition</p><p style='{_VAL} color:{st_color};'>{st_icon} {st_label}</p>", unsafe_allow_html=True)
 
             with st_col2:
                 from market_trend_analysis import get_allocation_adjustment
-                int_momentum = (
-                    "Weakening Momentum (Caution)" if st_ma_data.short_trend.value == "negative" and st_ma_data.long_trend.value == "positive"
-                    else "Momentum Reversal Attempt" if st_ma_data.short_trend.value == "positive" and st_ma_data.long_trend.value == "negative"
-                    else f"{'Sustained' if st_ma_data.weeks_in_trend >= 7 else 'Building'} {'Upward' if st_ma_data.short_trend.value != 'negative' else 'Downward'} Momentum"
-                )
-                st.metric(
-                    "Momentum Phase",
-                    int_momentum,
-                    help="Current momentum phase based on trend duration and direction"
-                )
+                st.markdown(f"<p style='{_LBL}'>Momentum Phase</p><p style='{_VAL} color:{st_color};'>{st_condition.value.title()} ({int_subphase})</p>", unsafe_allow_html=True)
 
             with st_col3:
                 int_adj = get_allocation_adjustment(st_condition, st_config)
-                st.metric(
-                    "Tactical Adjustment",
-                    f"{int_adj:+.1f}%",
-                    delta="Stock allocation",
-                    delta_color="normal" if int_adj >= 0 else "inverse",
-                    help="Suggested tactical adjustment to stock allocation based on current market condition"
-                )
+                st.markdown(f"<p style='{_LBL}'>Tactical Adjustment</p><p style='{_VAL} color:{st_color};'>{int_adj:+.1f}%</p><p style='font-size:0.75rem; color:#57606a; margin:0;'>Stock allocation</p>", unsafe_allow_html=True)
 
             with st_col4:
-                st.metric(
-                    "Confidence Score",
-                    f"{st_ma_data.confidence * 100:.0f}%",
-                    help="Confidence in the current market condition assessment (0-100%)"
-                )
+                _int_conf_pct = st_ma_data.confidence * 100
+                _int_conf_color = "#ffa500" if _int_conf_pct <= 5 else ("#21c354" if st_condition == MarketCondition.BULL else ("#ff4b4b" if st_condition == MarketCondition.BEAR else "#808080"))
+                st.markdown(f"<p style='{_LBL}'>Confidence Score</p><p style='{_VAL} color:{_int_conf_color};'>{_int_conf_pct:.0f}%</p><p style='font-size:0.75rem; color:#57606a; margin:0;'>Strength of EMA slopes</p>", unsafe_allow_html=True)
 
             # Detailed metrics in expander
             with st.expander("📊 Detailed Intermediate-Term Analysis", expanded=False):
@@ -394,40 +375,39 @@ with tab_intermediate:
                     st.write(f"Price vs 50-Week: {st_ma_data.price_vs_long_ema:+.2f}%")
 
                 with st_detail_col2:
+                    def _slope_color_int(v):
+                        return "#21c354" if v > 0 else ("#ff4b4b" if v < 0 else "#808080")
                     st.markdown("**Trend Analysis**")
                     st.write(f"10-Week Trend: {st_ma_data.short_trend.value.title()}")
                     st.write(f"50-Week Trend: {st_ma_data.long_trend.value.title()}")
-                    st.write(f"10-Week Slope: {st_ma_data.short_slope:+.3f}% per week")
-                    st.write(f"50-Week Slope: {st_ma_data.long_slope:+.3f}% per week")
+                    st.markdown(f"10-Week Slope: <span style='color:{_slope_color_int(st_ma_data.short_slope)}; font-weight:600;'>{st_ma_data.short_slope:+.3f}% per week</span>", unsafe_allow_html=True)
+                    st.markdown(f"50-Week Slope: <span style='color:{_slope_color_int(st_ma_data.long_slope)}; font-weight:600;'>{st_ma_data.long_slope:+.3f}% per week</span>", unsafe_allow_html=True)
                     st.write(f"Weeks in Trend: {st_ma_data.weeks_in_trend}")
                 
                 with st_detail_col3:
                     st.markdown("**Tactical Guidance**")
-                    
+                    int_sp = get_intermediate_subphase(st_ma_data)
                     if st_condition == MarketCondition.BULL:
-                        st.success(
-                            "✅ **Bull Market**: Both short and long-term trends are positive. "
-                            "Favorable environment for maintaining or increasing equity exposure. "
-                            "Consider tactical rebalancing if significantly overweight."
-                        )
-                    elif st_condition == MarketCondition.WARNING_NEGATIVE:
-                        st.warning(
-                            "⚠️ **Warning Signal**: Short-term trend turning negative. "
-                            "Consider reducing tactical risk exposure by 10%. "
-                            "Monitor daily for potential bear market transition."
-                        )
-                    elif st_condition == MarketCondition.WARNING_POSITIVE:
-                        st.info(
-                            "ℹ️ **Recovery Signal**: Short-term trend improving. "
-                            "Cautiously consider adding exposure. "
-                            "Wait for 50-week MA confirmation before major increases."
-                        )
+                        if int_sp == "Accumulation":
+                            st.success("✅ **Bull (Accumulation)**: 50-week trend up, 10-week momentum rising. Favorable for maintaining or increasing equity exposure.")
+                        elif int_sp == "Consolidating":
+                            st.success("✅ **Bull (Consolidating)**: 50-week trend up, 10-week momentum flat. Healthy pause — hold allocation; wait for momentum to resume.")
+                        else:
+                            st.warning("⚠️ **Bull (Distribution)**: 50-week trend up but 10-week momentum fading. Avoid adding; monitor for transition.")
+                    elif st_condition == MarketCondition.NEUTRAL:
+                        if int_sp == "Accumulation":
+                            st.info("⚪ **Neutral (Accumulation)**: 50-week EMA flat, 10-week momentum rising. Possible breakout building — wait for 50-week confirmation.")
+                        elif int_sp == "Consolidating":
+                            st.info("⚪ **Neutral (Consolidating)**: Both MAs flat. Sideways market — maintain positions; no directional action warranted.")
+                        else:
+                            st.warning("⚪ **Neutral (Distribution)**: 50-week EMA flat, 10-week momentum falling. Risk of breakdown — reduce tactical exposure.")
                     elif st_condition == MarketCondition.BEAR:
-                        st.error(
-                            "🔴 **Bear Market**: Both trends negative. "
-                            "Reduce tactical risk by 20%. "
-                            "Focus on capital preservation and defensive positioning."
-                        )
+                        if int_sp == "Accumulation":
+                            st.info("🔄 **Bear (Accumulation)**: 50-week trend down but 10-week bouncing. Possible relief rally — wait for 50-week EMA to turn before adding.")
+                        elif int_sp == "Consolidating":
+                            st.error("🛡️ **Bear (Consolidating)**: 50-week trend down, 10-week flat. Downtrend pausing — maintain defensive posture.")
+                        else:
+                            st.error("🔴 **Bear (Distribution)**: Both MAs falling. Reduce tactical risk; focus on capital preservation.")
                     
                     st.write(f"EMA Crossover Distance: {st_ma_data.ema_crossover_distance:+.2f}%")
                     st.caption(f"Last updated: {st_ma_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -456,6 +436,7 @@ with tab_shortterm:
     try:
         from market_trend_shortterm import (
             get_shortterm_market_condition,
+            get_market_subphase as get_shortterm_subphase,
             ShortTermMarketCondition,
             ShortTermMarketTrendConfig,
             get_tactical_allocation_adjustment,
@@ -475,11 +456,11 @@ with tab_shortterm:
         
         if vst_condition != ShortTermMarketCondition.UNKNOWN and vst_ema_data:
             # Display market condition with color coding
+            st_subphase = get_shortterm_subphase(vst_ema_data)
             vst_condition_colors = {
-                ShortTermMarketCondition.BULL: ("🟢", "#21c354", "Bull Market"),
-                ShortTermMarketCondition.WARNING_NEGATIVE: ("🟡", "#ffa500", "Warning - Negative"),
-                ShortTermMarketCondition.WARNING_POSITIVE: ("🟡", "#ffa500", "Warning - Positive"),
-                ShortTermMarketCondition.BEAR: ("🔴", "#ff4b4b", "Bear Market"),
+                ShortTermMarketCondition.BULL: ("🟢", "#21c354", f"Bull ({st_subphase})"),
+                ShortTermMarketCondition.NEUTRAL: ("⚪", "#808080", f"Neutral ({st_subphase})"),
+                ShortTermMarketCondition.BEAR: ("🔴", "#ff4b4b", f"Bear ({st_subphase})"),
             }
             
             vst_icon, vst_color, vst_label = vst_condition_colors.get(
@@ -489,35 +470,25 @@ with tab_shortterm:
             # Market condition summary
             vst_col1, vst_col2, vst_col3, vst_col4 = st.columns(4)
             
+            _VAL = "font-size:1.6rem; font-weight:700; margin:2px 0 0;"
+            _LBL = "font-size:0.75rem; color:#57606a; margin:0; text-transform:uppercase; letter-spacing:0.04em;"
+
             with vst_col1:
-                st.markdown(f"**Market Condition**")
-                st.markdown(f"<h3 style='color: {vst_color}; margin: 0;'>{vst_icon} {vst_label}</h3>", unsafe_allow_html=True)
+                st.markdown(f"<p style='{_LBL}'>Market Condition</p><p style='{_VAL} color:{vst_color};'>{vst_icon} {vst_label}</p>", unsafe_allow_html=True)
             
             with vst_col2:
                 momentum_phase = get_market_momentum_phase(vst_ema_data)
-                st.metric(
-                    "Momentum Phase",
-                    momentum_phase,
-                    help="Current momentum phase based on trend duration and direction"
-                )
+                st.markdown(f"<p style='{_LBL}'>Momentum Phase</p><p style='{_VAL} color:{vst_color};'>{momentum_phase}</p>", unsafe_allow_html=True)
             
             with vst_col3:
                 allocation_adj = get_tactical_allocation_adjustment(vst_condition, vst_config)
-                st.metric(
-                    "Tactical Adjustment",
-                    f"{allocation_adj:+.1f}%",
-                    delta=f"Stock allocation",
-                    delta_color="normal" if allocation_adj >= 0 else "inverse",
-                    help="Suggested tactical adjustment to stock allocation based on current market condition"
-                )
+                st.markdown(f"<p style='{_LBL}'>Tactical Adjustment</p><p style='{_VAL} color:{vst_color};'>{allocation_adj:+.1f}%</p><p style='font-size:0.75rem; color:#57606a; margin:0;'>Stock allocation</p>", unsafe_allow_html=True)
             
             with vst_col4:
-                st.metric(
-                    "Confidence Score",
-                    f"{vst_ema_data.confidence * 100:.0f}%",
-                    help="Confidence in the current market condition assessment (0-100%)"
-                )
-            
+                _st_conf_pct = vst_ema_data.confidence * 100
+                _st_conf_color = "#ffa500" if _st_conf_pct <= 5 else ("#21c354" if vst_condition == ShortTermMarketCondition.BULL else ("#ff4b4b" if vst_condition == ShortTermMarketCondition.BEAR else "#808080"))
+                st.markdown(f"<p style='{_LBL}'>Confidence Score</p><p style='{_VAL} color:{_st_conf_color};'>{_st_conf_pct:.0f}%</p><p style='font-size:0.75rem; color:#57606a; margin:0;'>Strength of EMA slopes</p>", unsafe_allow_html=True)
+
             # Detailed metrics in expander
             with st.expander("📊 Detailed Short-Term Analysis", expanded=False):
                 vst_detail_col1, vst_detail_col2, vst_detail_col3 = st.columns(3)
@@ -531,36 +502,40 @@ with tab_shortterm:
                     st.write(f"Price vs 50-Day: {vst_ema_data.price_vs_long_ema:+.2f}%")
                 
                 with vst_detail_col2:
+                    def _slope_color_st(v):
+                        return "#21c354" if v > 0 else ("#ff4b4b" if v < 0 else "#808080")
                     st.markdown("**Trend Analysis**")
                     st.write(f"10-Day Trend: {vst_ema_data.short_trend.value.title()}")
                     st.write(f"50-Day Trend: {vst_ema_data.long_trend.value.title()}")
-                    st.write(f"10-Day Slope: {vst_ema_data.short_slope:+.3f}% per day")
-                    st.write(f"50-Day Slope: {vst_ema_data.long_slope:+.3f}% per day")
+                    st.markdown(f"10-Day Slope: <span style='color:{_slope_color_st(vst_ema_data.short_slope)}; font-weight:600;'>{vst_ema_data.short_slope:+.3f}% per day</span>", unsafe_allow_html=True)
+                    st.markdown(f"50-Day Slope: <span style='color:{_slope_color_st(vst_ema_data.long_slope)}; font-weight:600;'>{vst_ema_data.long_slope:+.3f}% per day</span>", unsafe_allow_html=True)
                     st.write(f"Days in Trend: {vst_ema_data.days_in_trend}")
                 
                 with vst_detail_col3:
                     st.markdown("**Tactical Guidance**")
                     
+                    vst_sp = get_shortterm_subphase(vst_ema_data)
                     if vst_condition == ShortTermMarketCondition.BULL:
-                        st.success(
-                            "✅ **Bull Market**: Both short and long-term trends are positive. "
-                            "Favorable environment for tactical positions. Consider maintaining or slightly increasing exposure."
-                        )
-                    elif vst_condition == ShortTermMarketCondition.WARNING_NEGATIVE:
-                        st.warning(
-                            "⚠️ **Early Warning**: Short-term trend turning negative while long-term remains positive. "
-                            "Consider reducing tactical exposure and tightening stop-losses. Monitor closely for further deterioration."
-                        )
-                    elif vst_condition == ShortTermMarketCondition.WARNING_POSITIVE:
-                        st.info(
-                            "ℹ️ **Recovery Attempt**: Short-term trend turning positive while long-term remains negative. "
-                            "Cautious optimism warranted. Wait for 50-day EMA confirmation before adding significant exposure."
-                        )
+                        if vst_sp == "Accumulation":
+                            st.success("✅ **Bull (Accumulation)**: 50-day trend up, 10-day momentum rising. Favorable for tactical positions — consider maintaining or adding exposure.")
+                        elif vst_sp == "Consolidating":
+                            st.success("✅ **Bull (Consolidating)**: 50-day trend up, 10-day momentum flat. Healthy pause — hold positions; wait for momentum to resume.")
+                        else:
+                            st.warning("⚠️ **Bull (Distribution)**: 50-day trend up but 10-day momentum fading. Tighten stop-losses; avoid adding new positions.")
+                    elif vst_condition == ShortTermMarketCondition.NEUTRAL:
+                        if vst_sp == "Accumulation":
+                            st.info("⚪ **Neutral (Accumulation)**: 50-day EMA flat, 10-day momentum rising. Possible breakout building — wait for 50-day confirmation before committing.")
+                        elif vst_sp == "Consolidating":
+                            st.info("⚪ **Neutral (Consolidating)**: Both EMAs flat. Sideways market — maintain positions; no directional action warranted.")
+                        else:
+                            st.warning("⚪ **Neutral (Distribution)**: 50-day EMA flat, 10-day momentum falling. Risk of breakdown — reduce tactical exposure.")
                     elif vst_condition == ShortTermMarketCondition.BEAR:
-                        st.error(
-                            "🔴 **Bear Market**: Both trends are negative. "
-                            "Defensive posture recommended. Avoid new long positions until trend reverses."
-                        )
+                        if vst_sp == "Accumulation":
+                            st.info("🔄 **Bear (Accumulation)**: 50-day trend down but 10-day bouncing. Possible relief rally — not a confirmed reversal; wait for 50-day EMA to turn.")
+                        elif vst_sp == "Consolidating":
+                            st.error("🛡️ **Bear (Consolidating)**: 50-day trend down, 10-day flat. Downtrend pausing — maintain defensive posture; avoid new long positions.")
+                        else:
+                            st.error("🔴 **Bear (Distribution)**: Both EMAs falling. Defensive posture; avoid new long positions until trend reverses.")
                     
                     st.write(f"EMA Crossover Distance: {vst_ema_data.ema_crossover_distance:+.2f}%")
                     st.caption(f"Last updated: {vst_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")

@@ -595,4 +595,4 @@ See [Performance Guide](technical/performance.md) for:
 
 ---
 
-[← Back to Guides](guides.md) | [Home](../index.md)
+[← Back to Guides](guides.md) | [Home](index.md)

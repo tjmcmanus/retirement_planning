@@ -364,4 +364,4 @@ Once installed and running:
 
 ---
 
-[← Back to Home](../index.md) | [Next: Features →](features.md)
+[← Back to Home](index.md) | [Next: Features →](features.md)

@@ -10,12 +10,13 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 ## 📚 Guide Categories
 
 ### Getting Started Guides
-- [Portfolio Data Entry Guide](../PORTFOLIO_DATA_ENTRY_GUIDE.md)
-- [Portfolio Analytics Guide](../PORTFOLIO_ANALYTICS_GUIDE.md)
-- [Portfolio Rebalancing Guide](../PORTFOLIO_REBALANCING_GUIDE.md)
+- [Portfolio Data Entry Guide](user/PORTFOLIO_DATA_ENTRY_GUIDE.md)
+- [Portfolio Analytics Guide](user/PORTFOLIO_ANALYTICS_GUIDE.md)
+- [Portfolio Rebalancing Guide](user/PORTFOLIO_REBALANCING_GUIDE.md)
 - [Brokerage Connections Guide](guides/brokerage-connections.md) ⭐ NEW
-- [Withdrawal Strategies Guide](../STRATEGY_README.md)
-- [Social Security Guide](../SSI_INTEGRATION_GUIDE.md)
+- [Market Trend Analysis Guide](user/MARKET_TREND_GUIDE.md) — regime labels, sub-phases, and tactical guidance
+- [Withdrawal Strategies Guide](user/STRATEGY_README.md)
+- [Social Security Guide](implementation/SSI_INTEGRATION_GUIDE.md)
 
 ### Advanced Guides
 - [BETR Roth Conversion](advanced/betr-guide.md)
@@ -47,18 +48,18 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 - One-click account updates
 
 **Quick Links:**
-- [SnapTrade Quick Start Guide](../SNAPTRADE_QUICKSTART.md)
-- [Implementation Summary](../SNAPTRADE_IMPLEMENTATION_SUMMARY.md)
-- [Integration Plan](../SNAPTRADE_INTEGRATION_PLAN.md)
+- [SnapTrade Quick Start Guide](user/SNAPTRADE_QUICKSTART.md)
+- [Implementation Summary](implementation/SNAPTRADE_IMPLEMENTATION_SUMMARY.md)
+- [Integration Plan](implementation/SNAPTRADE_INTEGRATION_PLAN.md)
 
 ### Portfolio Management
 
 **Essential Tasks:**
-1. [Adding a New Account](../PORTFOLIO_DATA_ENTRY_GUIDE.md#first-time-setup)
-2. [Updating Account Balances](../PORTFOLIO_DATA_ENTRY_GUIDE.md#monthly-update-workflow)
+1. [Adding a New Account](user/PORTFOLIO_DATA_ENTRY_GUIDE.md#first-time-setup)
+2. [Updating Account Balances](user/PORTFOLIO_DATA_ENTRY_GUIDE.md#monthly-update-workflow)
 3. [Connecting Brokerage Accounts](guides/brokerage-connections.md) ⭐ NEW
-4. [Rebalancing Your Portfolio](../PORTFOLIO_REBALANCING_GUIDE.md)
-5. [Tracking Performance](../PORTFOLIO_ANALYTICS_GUIDE.md)
+4. [Rebalancing Your Portfolio](user/PORTFOLIO_REBALANCING_GUIDE.md)
+5. [Tracking Performance](user/PORTFOLIO_ANALYTICS_GUIDE.md)
 
 **Key Features:**
 - Interactive holdings editor
@@ -153,7 +154,7 @@ Comprehensive step-by-step guides for using the Financial Planner application.
    - Merge with existing portfolio
    - Verify data accuracy
 
-**See:** [Complete SnapTrade Setup Guide](../SNAPTRADE_QUICKSTART.md)
+**See:** [Complete SnapTrade Setup Guide](user/SNAPTRADE_QUICKSTART.md)
 
 ### Tutorial 1: Setting Up Your First Plan
 
@@ -384,18 +385,19 @@ Explore pre-configured scenarios:
 ## Additional Resources
 
 ### Documentation
-- [Complete Solution Guide](../COMPLETE_SOLUTION_GUIDE.md)
-- [Configuration Guide](../CONFIG_GUIDE.md)
-- [SnapTrade Quick Start](../SNAPTRADE_QUICKSTART.md) ⭐ NEW
-- [SnapTrade Implementation Summary](../SNAPTRADE_IMPLEMENTATION_SUMMARY.md) ⭐ NEW
-- [Income & Expense Guide](../INCOME_EXPENSE_GUIDE.md)
-- [Portfolio Data Entry Guide](../PORTFOLIO_DATA_ENTRY_GUIDE.md)
+- [Complete Solution Guide](implementation/COMPLETE_SOLUTION_GUIDE.md)
+- [Configuration Guide](user/CONFIG_GUIDE.md)
+- [SnapTrade Quick Start](user/SNAPTRADE_QUICKSTART.md) ⭐ NEW
+- [SnapTrade Implementation Summary](implementation/SNAPTRADE_IMPLEMENTATION_SUMMARY.md) ⭐ NEW
+- [Income & Expense Guide](user/INCOME_EXPENSE_GUIDE.md)
+- [Portfolio Data Entry Guide](user/PORTFOLIO_DATA_ENTRY_GUIDE.md)
 
 ### Implementation Guides
-- [Bucket Strategy Guide](../BUCKET_STRATEGY_GUIDE.md)
-- [HSA Integration Guide](../HSA_INTEGRATION_GUIDE.md)
-- [LTC Planning Guide](../LTC_PLANNING_GUIDE.md)
-- [Single Person Mode Guide](../SINGLE_PERSON_MODE_GUIDE.md)
+- [Market Trend Analysis Guide](user/MARKET_TREND_GUIDE.md) — Bull / Neutral / Bear regimes and Accumulation / Consolidating / Distribution sub-phases
+- [Bucket Strategy Guide](user/BUCKET_STRATEGY_GUIDE.md)
+- [HSA Integration Guide](implementation/HSA_INTEGRATION_GUIDE.md)
+- [LTC Planning Guide](implementation/LTC_PLANNING_GUIDE.md)
+- [Single Person Mode Guide](user/SINGLE_PERSON_MODE_GUIDE.md)
 
 ### Technical Documentation
 - [API Reference](api-reference.md)
@@ -412,4 +414,4 @@ Explore pre-configured scenarios:
 
 ---
 
-[← Back to Home](../index.md) | [Next: API Reference →](api-reference.md)
+[← Back to Home](index.md) | [Next: API Reference →](api-reference.md)
