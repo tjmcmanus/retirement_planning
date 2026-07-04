@@ -129,6 +129,24 @@ def get_ira_limits(year):
    return ira_limits_df
 
 
+def get_fica_limits(year: int) -> pd.DataFrame:
+   """
+   Get FICA (Social Security + Medicare) wage base and rates for a given year.
+
+   Reads from fica_limits.csv.  When *year* is beyond the last row in the CSV
+   the caller should extrapolate using ``cola_rate_estimate`` (see
+   ``strategy.calculate_payroll_taxes`` for the reference implementation).
+
+   Returns a DataFrame with columns:
+   - ss_wage_base: Social Security (OASDI) wage base for the year
+   - ss_employee_rate: Employee OASDI rate (6.2 % by statute)
+   - medicare_rate: Employee Medicare rate (1.45 % by statute)
+   - cola_rate_estimate: AWI-based annual growth rate for projecting wage base
+   """
+   fica_df = pd.read_csv('fica_limits.csv')
+   return fica_df[fica_df['year'] == year]
+
+
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
 def get_net_worth(ret_date):
