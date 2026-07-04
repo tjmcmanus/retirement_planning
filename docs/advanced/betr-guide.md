@@ -433,4 +433,4 @@ Focus on:
 
 ---
 
-[← Back to Guides](../guides.md) | [Home](../../index.md)
+[← Back to Guides](../guides.md) | [Home](../index.md)

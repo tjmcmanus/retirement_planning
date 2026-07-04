@@ -365,10 +365,10 @@ def load_bucket_config(config_mgr: Optional[ConfigManager] = None) -> BucketConf
     market_trend_section = bucket_section.get("market_trend_adjustment", {})
     market_trend_config = MarketTrendConfig(
         enabled=market_trend_section.get("enabled", True),
-        short_ma_weeks=market_trend_section.get("short_ma_weeks", 10),
-        long_ma_weeks=market_trend_section.get("long_ma_weeks", 50),
+        short_ema_weeks=market_trend_section.get("short_ma_weeks", 10),
+        long_ema_weeks=market_trend_section.get("long_ma_weeks", 50),
         bull_adjustment=market_trend_section.get("bull_adjustment", 0.0),
-        warning_adjustment=market_trend_section.get("warning_adjustment", -10.0),
+        neutral_adjustment=market_trend_section.get("warning_adjustment", -10.0),
         bear_adjustment=market_trend_section.get("bear_adjustment", -20.0),
     )
     

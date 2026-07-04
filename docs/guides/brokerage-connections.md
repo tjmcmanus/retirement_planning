@@ -416,9 +416,9 @@ schedule_sync(user_id="default", frequency="daily", time="06:00")
 ## Additional Resources
 
 ### Documentation
-- [SnapTrade Quick Start](../../SNAPTRADE_QUICKSTART.md)
-- [Implementation Summary](../../SNAPTRADE_IMPLEMENTATION_SUMMARY.md)
-- [Integration Plan](../../SNAPTRADE_INTEGRATION_PLAN.md)
+- [SnapTrade Quick Start](../user/SNAPTRADE_QUICKSTART.md)
+- [Implementation Summary](../implementation/SNAPTRADE_IMPLEMENTATION_SUMMARY.md)
+- [Integration Plan](../implementation/SNAPTRADE_INTEGRATION_PLAN.md)
 
 ### External Resources
 - [SnapTrade Documentation](https://docs.snaptrade.com)
@@ -454,4 +454,4 @@ A: Your manually entered data remains intact. You can continue using the applica
 
 ---
 
-[← Back to Guides](../guides.md) | [Next: Portfolio Analytics →](../../PORTFOLIO_ANALYTICS_GUIDE.md)
+[← Back to Guides](../guides.md) | [Next: Portfolio Analytics →](../user/PORTFOLIO_ANALYTICS_GUIDE.md)

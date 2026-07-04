@@ -49,12 +49,11 @@ MIN_STATE_DURATION_WEEKS = 2  # Minimum weeks in state before transition
 # ---------------------------------------------------------------------------
 
 class LongTermMarketCondition(Enum):
-    """Long-term market condition states based on EMA trends."""
-    BULL = "bull"  # Both EMAs positive - strong uptrend
-    WARNING_NEGATIVE = "warning_negative"  # 8-month down, 18-month up - early warning
-    WARNING_POSITIVE = "warning_positive"  # 8-month up, 18-month down - recovery attempt
-    BEAR = "bear"  # Both EMAs negative - sustained downtrend
-    UNKNOWN = "unknown"  # Unable to determine (data issues)
+    """Long-term market condition states. Driven solely by the long (18-month) EMA."""
+    BULL = "bull"       # 18-month EMA positive — long trend intact
+    NEUTRAL = "neutral" # 18-month EMA flat — no clear direction
+    BEAR = "bear"       # 18-month EMA negative — sustained downtrend
+    UNKNOWN = "unknown" # Unable to determine (data issues)
 
 
 class LongTermTrendDirection(Enum):
@@ -95,8 +94,8 @@ class LongTermMarketTrendConfig:
     min_state_duration_weeks: int = MIN_STATE_DURATION_WEEKS
     enabled: bool = True
     # Strategic allocation adjustment percentages for each market state
-    bull_adjustment: float = 0.0  # No adjustment in bull market
-    warning_adjustment: float = -5.0  # Reduce stocks by 5% in warning states
+    bull_adjustment: float = 0.0    # No adjustment in bull market
+    neutral_adjustment: float = 0.0  # No adjustment when consolidating
     bear_adjustment: float = -15.0  # Reduce stocks by 15% in bear market
 
 
@@ -319,25 +318,34 @@ def calculate_longterm_emas(
 # Market Condition Determination
 # ---------------------------------------------------------------------------
 
+def get_market_subphase(ema_data: LongTermEMAData) -> str:
+    """
+    Return the market sub-phase label driven by the short (8-month) EMA direction.
+
+    Accumulation  — short EMA rising  (buyers stepping in)
+    Consolidating — short EMA flat    (no directional pressure)
+    Distribution  — short EMA falling (sellers taking over)
+    """
+    if ema_data.short_trend == LongTermTrendDirection.POSITIVE:
+        return "Accumulation"
+    elif ema_data.short_trend == LongTermTrendDirection.NEGATIVE:
+        return "Distribution"
+    else:
+        return "Consolidating"
+
+
 def determine_longterm_market_condition(ema_data: LongTermEMAData) -> LongTermMarketCondition:
     """
     Determine long-term market condition based on EMA trends.
 
-    Uses three explicit states per EMA (POSITIVE / NEUTRAL / NEGATIVE) so that
-    flat/consolidating markets are not misclassified as BEAR.  When either EMA
-    is NEUTRAL the price position relative to the EMAs acts as the tiebreaker.
+    The long (18-month) EMA sets the regime; the short (8-month) EMA determines
+    the sub-phase (see get_market_subphase).
 
     Decision matrix:
-      Short       Long        Result
-      POSITIVE    POSITIVE    BULL
-      POSITIVE    NEUTRAL     BULL
-      NEUTRAL     POSITIVE    BULL
-      NEUTRAL     NEUTRAL     BULL if price > both EMAs, else WARNING_NEGATIVE
-      NEGATIVE    POSITIVE    WARNING_NEGATIVE
-      POSITIVE    NEGATIVE    WARNING_POSITIVE
-      NEGATIVE    NEUTRAL     WARNING_NEGATIVE
-      NEUTRAL     NEGATIVE    WARNING_NEGATIVE
-      NEGATIVE    NEGATIVE    BEAR
+      Long EMA    Result
+      POSITIVE    BULL
+      NEUTRAL     NEUTRAL
+      NEGATIVE    BEAR
 
     Args:
         ema_data: EMA data
@@ -345,52 +353,12 @@ def determine_longterm_market_condition(ema_data: LongTermEMAData) -> LongTermMa
     Returns:
         LongTermMarketCondition enum value
     """
-    short = ema_data.short_trend
-    long  = ema_data.long_trend
-
-    P = LongTermTrendDirection.POSITIVE
-    N = LongTermTrendDirection.NEGATIVE
-    U = LongTermTrendDirection.NEUTRAL
-
-    # --- Unambiguous cases ---
-    if short == P and long == P:
+    if ema_data.long_trend == LongTermTrendDirection.POSITIVE:
         return LongTermMarketCondition.BULL
-
-    if short == N and long == N:
+    elif ema_data.long_trend == LongTermTrendDirection.NEGATIVE:
         return LongTermMarketCondition.BEAR
-
-    if short == N and long == P:
-        return LongTermMarketCondition.WARNING_NEGATIVE
-
-    if short == P and long == N:
-        return LongTermMarketCondition.WARNING_POSITIVE
-
-    # --- Cases involving NEUTRAL ---
-    # Both neutral: use price position vs EMAs as tiebreaker
-    if short == U and long == U:
-        if ema_data.price_vs_short_ema > 0 and ema_data.price_vs_long_ema > 0:
-            return LongTermMarketCondition.BULL
-        else:
-            return LongTermMarketCondition.WARNING_NEGATIVE
-
-    # Short neutral, long positive → leaning bullish
-    if short == U and long == P:
-        return LongTermMarketCondition.BULL
-
-    # Short positive, long neutral → leaning bullish
-    if short == P and long == U:
-        return LongTermMarketCondition.BULL
-
-    # Short neutral, long negative → caution
-    if short == U and long == N:
-        return LongTermMarketCondition.WARNING_NEGATIVE
-
-    # Short negative, long neutral → caution
-    if short == N and long == U:
-        return LongTermMarketCondition.WARNING_NEGATIVE
-
-    # Fallback (should never reach here given the enum only has 3 values)
-    return LongTermMarketCondition.WARNING_NEGATIVE
+    else:
+        return LongTermMarketCondition.NEUTRAL
 
 
 def get_longterm_market_condition(
@@ -453,8 +421,7 @@ def get_strategic_allocation_adjustment(
     """
     adjustments = {
         LongTermMarketCondition.BULL: config.bull_adjustment,
-        LongTermMarketCondition.WARNING_NEGATIVE: config.warning_adjustment,
-        LongTermMarketCondition.WARNING_POSITIVE: config.warning_adjustment,
+        LongTermMarketCondition.NEUTRAL: config.neutral_adjustment,
         LongTermMarketCondition.BEAR: config.bear_adjustment,
         LongTermMarketCondition.UNKNOWN: 0.0,
     }
@@ -466,38 +433,13 @@ def get_strategic_allocation_adjustment(
 
 def get_market_cycle_phase(ema_data: LongTermEMAData) -> str:
     """
-    Determine the current market cycle phase based on EMA data.
-    
-    Args:
-        ema_data: EMA data
-        
-    Returns:
-        Market cycle phase description
+    Return a combined condition + sub-phase label, e.g. 'Bull (Accumulation)'.
+
+    This is a convenience wrapper used by the dashboard Market Cycle Phase metric.
     """
-    if ema_data.short_trend == LongTermTrendDirection.POSITIVE and ema_data.long_trend == LongTermTrendDirection.POSITIVE:
-        if ema_data.months_in_trend >= 12:
-            return "Late Bull Market (Extended Uptrend)"
-        elif ema_data.months_in_trend >= 6:
-            return "Mid Bull Market (Sustained Uptrend)"
-        else:
-            return "Early Bull Market (New Uptrend)"
-    
-    elif ema_data.short_trend == LongTermTrendDirection.NEGATIVE and ema_data.long_trend == LongTermTrendDirection.POSITIVE:
-        return "Market Correction (Early Warning)"
-    
-    elif ema_data.short_trend == LongTermTrendDirection.POSITIVE and ema_data.long_trend == LongTermTrendDirection.NEGATIVE:
-        return "Market Recovery Attempt (Uncertain)"
-    
-    elif ema_data.short_trend == LongTermTrendDirection.NEGATIVE and ema_data.long_trend == LongTermTrendDirection.NEGATIVE:
-        if ema_data.months_in_trend >= 12:
-            return "Late Bear Market (Extended Downtrend)"
-        elif ema_data.months_in_trend >= 6:
-            return "Mid Bear Market (Sustained Downtrend)"
-        else:
-            return "Early Bear Market (New Downtrend)"
-    
-    else:
-        return "Transitional Phase (Unclear Direction)"
+    condition = determine_longterm_market_condition(ema_data)
+    subphase  = get_market_subphase(ema_data)
+    return f"{condition.value.title()} ({subphase})"
 
 
 # ---------------------------------------------------------------------------
@@ -520,11 +462,10 @@ def format_longterm_market_summary(
     """
     if ema_data is None:
         return f"Long-Term Market Condition: {condition.value.upper()} (data unavailable)"
-    
-    cycle_phase = get_market_cycle_phase(ema_data)
-    
-    summary = f"""Long-Term Market Condition: {condition.value.upper()}
-Market Cycle Phase: {cycle_phase}
+
+    subphase = get_market_subphase(ema_data)
+
+    summary = f"""Long-Term Market Condition: {condition.value.upper()} ({subphase})
 
 Current SPY Price: ${ema_data.current_price:.2f}
 8-Month EMA: ${ema_data.short_ema:.2f} ({ema_data.short_trend.value}, {ema_data.short_slope:+.2f}%/month)
@@ -560,31 +501,43 @@ def get_strategic_recommendations(
     
     recommendations = []
     
+    subphase = get_market_subphase(ema_data)
+
     if condition == LongTermMarketCondition.BULL:
-        recommendations.append("✅ Favorable environment for equity exposure")
-        recommendations.append("📊 Consider maintaining target stock allocation")
-        if ema_data.months_in_trend >= 12:
-            recommendations.append("⚠️ Extended bull market - review risk tolerance")
-            recommendations.append("💰 Consider taking profits on overperforming positions")
-    
-    elif condition == LongTermMarketCondition.WARNING_NEGATIVE:
-        recommendations.append("⚠️ Early warning signal - monitor closely")
-        recommendations.append("🛡️ Consider reducing equity exposure by 5-10%")
-        recommendations.append("💵 Build cash reserves for potential opportunities")
-        recommendations.append("📋 Review and rebalance portfolio")
-    
-    elif condition == LongTermMarketCondition.WARNING_POSITIVE:
-        recommendations.append("🔄 Market attempting recovery - remain cautious")
-        recommendations.append("⏳ Wait for confirmation before increasing equity exposure")
-        recommendations.append("📊 Monitor for sustained uptrend (2-3 months)")
-    
+        if subphase == "Accumulation":
+            recommendations.append("✅ Bull (Accumulation): 18-month trend up, 8-month momentum rising — favorable environment for full equity exposure")
+            recommendations.append("📈 Consider maintaining or adding to target stock allocation")
+        elif subphase == "Consolidating":
+            recommendations.append("✅ Bull (Consolidating): 18-month trend up, 8-month momentum flat — healthy pause in long-term uptrend")
+            recommendations.append("📊 Hold current allocation; avoid major changes until momentum resumes")
+        else:  # Distribution
+            recommendations.append("⚠️ Bull (Distribution): 18-month trend up but 8-month momentum fading — monitor for regime change")
+            recommendations.append("🛡️ Review overweight positions; avoid increasing equity exposure until momentum stabilises")
+
+    elif condition == LongTermMarketCondition.NEUTRAL:
+        if subphase == "Accumulation":
+            recommendations.append("⚪ Neutral (Accumulation): 18-month EMA flat, 8-month momentum rising — possible early new bull forming")
+            recommendations.append("⏳ Monitor closely; wait for 18-month EMA to turn positive before increasing allocation")
+        elif subphase == "Consolidating":
+            recommendations.append("⚪ Neutral (Consolidating): Both EMAs flat — long-term market in sideways consolidation")
+            recommendations.append("📊 Maintain current allocation; avoid major strategic shifts until a trend establishes")
+        else:  # Distribution
+            recommendations.append("⚪ Neutral (Distribution): 18-month EMA flat, 8-month momentum falling — risk of bear transition")
+            recommendations.append("🛡️ Consider reducing equity exposure; build cash reserves as a precaution")
+
     elif condition == LongTermMarketCondition.BEAR:
-        recommendations.append("🛡️ Defensive posture recommended")
-        recommendations.append("💵 Maintain higher cash allocation")
-        recommendations.append("📉 Consider reducing equity exposure by 10-20%")
-        if ema_data.months_in_trend >= 6:
-            recommendations.append("💎 Prepare for potential buying opportunities")
-    
+        if subphase == "Accumulation":
+            recommendations.append("🔄 Bear (Accumulation): 18-month trend down but 8-month bouncing — possible recovery attempt, not confirmed")
+            recommendations.append("⏳ Wait for 18-month EMA to turn positive before increasing exposure")
+        elif subphase == "Consolidating":
+            recommendations.append("🛡️ Bear (Consolidating): 18-month trend down, 8-month flat — downtrend pausing, not reversing")
+            recommendations.append("💵 Maintain defensive posture and higher cash allocation")
+        else:  # Distribution
+            recommendations.append("🛡️ Bear (Distribution): Both EMAs falling — sustained long-term downtrend in force")
+            recommendations.append("📉 Defensive posture; consider reducing equity exposure by 10-20%")
+            if ema_data.months_in_trend >= 6:
+                recommendations.append("💎 Prepare for potential long-term buying opportunities at value prices")
+
     else:
         recommendations.append("❓ Market direction unclear - maintain current allocation")
     

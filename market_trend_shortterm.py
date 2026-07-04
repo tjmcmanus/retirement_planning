@@ -49,12 +49,11 @@ MIN_STATE_DURATION_HOURS = 4  # Minimum hours in state before transition
 # ---------------------------------------------------------------------------
 
 class ShortTermMarketCondition(Enum):
-    """Short-term market condition states based on EMA trends."""
-    BULL = "bull"  # Both EMAs positive - strong uptrend
-    WARNING_NEGATIVE = "warning_negative"  # 10-day down, 50-day up - early warning
-    WARNING_POSITIVE = "warning_positive"  # 10-day up, 50-day down - recovery attempt
-    BEAR = "bear"  # Both EMAs negative - sustained downtrend
-    UNKNOWN = "unknown"  # Unable to determine (data issues)
+    """Short-term market condition states. Driven solely by the long (50-day) EMA."""
+    BULL = "bull"       # 50-day EMA positive — long trend intact
+    NEUTRAL = "neutral" # 50-day EMA flat — no clear direction
+    BEAR = "bear"       # 50-day EMA negative — sustained downtrend
+    UNKNOWN = "unknown" # Unable to determine (data issues)
 
 
 class ShortTermTrendDirection(Enum):
@@ -95,8 +94,8 @@ class ShortTermMarketTrendConfig:
     min_state_duration_hours: int = MIN_STATE_DURATION_HOURS
     enabled: bool = True
     # Tactical allocation adjustment percentages for each market state
-    bull_adjustment: float = 0.0  # No adjustment in bull market
-    warning_adjustment: float = -3.0  # Reduce stocks by 3% in warning states
+    bull_adjustment: float = 0.0   # No adjustment in bull market
+    neutral_adjustment: float = 0.0  # No adjustment when consolidating
     bear_adjustment: float = -8.0  # Reduce stocks by 8% in bear market
 
 
@@ -315,25 +314,34 @@ def calculate_shortterm_emas(
 # Market Condition Determination
 # ---------------------------------------------------------------------------
 
+def get_market_subphase(ema_data: ShortTermEMAData) -> str:
+    """
+    Return the market sub-phase label driven by the short (10-day) EMA direction.
+
+    Accumulation  — short EMA rising  (buyers stepping in)
+    Consolidating — short EMA flat    (no directional pressure)
+    Distribution  — short EMA falling (sellers taking over)
+    """
+    if ema_data.short_trend == ShortTermTrendDirection.POSITIVE:
+        return "Accumulation"
+    elif ema_data.short_trend == ShortTermTrendDirection.NEGATIVE:
+        return "Distribution"
+    else:
+        return "Consolidating"
+
+
 def determine_shortterm_market_condition(ema_data: ShortTermEMAData) -> ShortTermMarketCondition:
     """
     Determine short-term market condition based on EMA trends.
 
-    Uses three explicit states per EMA (POSITIVE / NEUTRAL / NEGATIVE) so that
-    flat/consolidating markets are not misclassified as BEAR.  When either EMA
-    is NEUTRAL the price position relative to the EMAs acts as the tiebreaker.
+    The long (50-day) EMA sets the regime; the short (10-day) EMA determines
+    the sub-phase (see get_market_subphase).
 
     Decision matrix:
-      Short       Long        Result
-      POSITIVE    POSITIVE    BULL
-      POSITIVE    NEUTRAL     BULL  (price above both; short trend healthy)
-      NEUTRAL     POSITIVE    BULL  (long trend driving; price above)
-      NEUTRAL     NEUTRAL     BULL if price > both EMAs, else WARNING_NEGATIVE
-      NEGATIVE    POSITIVE    WARNING_NEGATIVE
-      POSITIVE    NEGATIVE    WARNING_POSITIVE
-      NEGATIVE    NEUTRAL     WARNING_NEGATIVE
-      NEUTRAL     NEGATIVE    WARNING_NEGATIVE
-      NEGATIVE    NEGATIVE    BEAR
+      Long EMA    Result
+      POSITIVE    BULL
+      NEUTRAL     NEUTRAL
+      NEGATIVE    BEAR
 
     Args:
         ema_data: EMA data
@@ -341,52 +349,12 @@ def determine_shortterm_market_condition(ema_data: ShortTermEMAData) -> ShortTer
     Returns:
         ShortTermMarketCondition enum value
     """
-    short = ema_data.short_trend
-    long  = ema_data.long_trend
-
-    P = ShortTermTrendDirection.POSITIVE
-    N = ShortTermTrendDirection.NEGATIVE
-    U = ShortTermTrendDirection.NEUTRAL
-
-    # --- Unambiguous cases ---
-    if short == P and long == P:
+    if ema_data.long_trend == ShortTermTrendDirection.POSITIVE:
         return ShortTermMarketCondition.BULL
-
-    if short == N and long == N:
+    elif ema_data.long_trend == ShortTermTrendDirection.NEGATIVE:
         return ShortTermMarketCondition.BEAR
-
-    if short == N and long == P:
-        return ShortTermMarketCondition.WARNING_NEGATIVE
-
-    if short == P and long == N:
-        return ShortTermMarketCondition.WARNING_POSITIVE
-
-    # --- Cases involving NEUTRAL ---
-    # Both neutral: use price position vs EMAs as tiebreaker
-    if short == U and long == U:
-        if ema_data.price_vs_short_ema > 0 and ema_data.price_vs_long_ema > 0:
-            return ShortTermMarketCondition.BULL
-        else:
-            return ShortTermMarketCondition.WARNING_NEGATIVE
-
-    # Short neutral, long positive → leaning bullish
-    if short == U and long == P:
-        return ShortTermMarketCondition.BULL
-
-    # Short positive, long neutral → leaning bullish
-    if short == P and long == U:
-        return ShortTermMarketCondition.BULL
-
-    # Short neutral, long negative → caution
-    if short == U and long == N:
-        return ShortTermMarketCondition.WARNING_NEGATIVE
-
-    # Short negative, long neutral → caution
-    if short == N and long == U:
-        return ShortTermMarketCondition.WARNING_NEGATIVE
-
-    # Fallback (should never reach here given the enum only has 3 values)
-    return ShortTermMarketCondition.WARNING_NEGATIVE
+    else:
+        return ShortTermMarketCondition.NEUTRAL
 
 
 def get_shortterm_market_condition(
@@ -449,8 +417,7 @@ def get_tactical_allocation_adjustment(
     """
     adjustments = {
         ShortTermMarketCondition.BULL: config.bull_adjustment,
-        ShortTermMarketCondition.WARNING_NEGATIVE: config.warning_adjustment,
-        ShortTermMarketCondition.WARNING_POSITIVE: config.warning_adjustment,
+        ShortTermMarketCondition.NEUTRAL: config.neutral_adjustment,
         ShortTermMarketCondition.BEAR: config.bear_adjustment,
         ShortTermMarketCondition.UNKNOWN: 0.0,
     }
@@ -462,38 +429,13 @@ def get_tactical_allocation_adjustment(
 
 def get_market_momentum_phase(ema_data: ShortTermEMAData) -> str:
     """
-    Determine the current market momentum phase based on EMA data.
-    
-    Args:
-        ema_data: EMA data
-        
-    Returns:
-        Market momentum phase description
+    Return a combined condition + sub-phase label, e.g. 'Bull (Accumulation)'.
+
+    This is a convenience wrapper used by the dashboard Momentum Phase metric.
     """
-    if ema_data.short_trend == ShortTermTrendDirection.POSITIVE and ema_data.long_trend == ShortTermTrendDirection.POSITIVE:
-        if ema_data.days_in_trend >= 15:
-            return "Strong Upward Momentum (Extended)"
-        elif ema_data.days_in_trend >= 7:
-            return "Sustained Upward Momentum"
-        else:
-            return "Building Upward Momentum"
-    
-    elif ema_data.short_trend == ShortTermTrendDirection.NEGATIVE and ema_data.long_trend == ShortTermTrendDirection.POSITIVE:
-        return "Weakening Momentum (Caution)"
-    
-    elif ema_data.short_trend == ShortTermTrendDirection.POSITIVE and ema_data.long_trend == ShortTermTrendDirection.NEGATIVE:
-        return "Momentum Reversal Attempt"
-    
-    elif ema_data.short_trend == ShortTermTrendDirection.NEGATIVE and ema_data.long_trend == ShortTermTrendDirection.NEGATIVE:
-        if ema_data.days_in_trend >= 15:
-            return "Strong Downward Momentum (Extended)"
-        elif ema_data.days_in_trend >= 7:
-            return "Sustained Downward Momentum"
-        else:
-            return "Building Downward Momentum"
-    
-    else:
-        return "Neutral Momentum (Consolidating)"
+    condition = determine_shortterm_market_condition(ema_data)
+    subphase  = get_market_subphase(ema_data)
+    return f"{condition.value.title()} ({subphase})"
 
 
 # ---------------------------------------------------------------------------
@@ -516,11 +458,10 @@ def format_shortterm_market_summary(
     """
     if ema_data is None:
         return f"Short-Term Market Condition: {condition.value.upper()} (data unavailable)"
-    
-    momentum_phase = get_market_momentum_phase(ema_data)
-    
-    summary = f"""Short-Term Market Condition: {condition.value.upper()}
-Market Momentum Phase: {momentum_phase}
+
+    subphase = get_market_subphase(ema_data)
+
+    summary = f"""Short-Term Market Condition: {condition.value.upper()} ({subphase})
 
 Current SPY Price: ${ema_data.current_price:.2f}
 10-Day EMA: ${ema_data.short_ema:.2f} ({ema_data.short_trend.value}, {ema_data.short_slope:+.3f}%/day)
@@ -556,31 +497,43 @@ def get_tactical_recommendations(
     
     recommendations = []
     
+    subphase = get_market_subphase(ema_data)
+
     if condition == ShortTermMarketCondition.BULL:
-        recommendations.append("✅ Strong short-term momentum - favorable for tactical positions")
-        recommendations.append("📊 Consider maintaining or slightly increasing exposure")
-        if ema_data.days_in_trend >= 15:
-            recommendations.append("⚠️ Extended run - watch for reversal signals")
-            recommendations.append("💰 Consider taking profits on short-term trades")
-    
-    elif condition == ShortTermMarketCondition.WARNING_NEGATIVE:
-        recommendations.append("⚠️ Short-term momentum weakening - reduce tactical exposure")
-        recommendations.append("🛡️ Consider tightening stop-losses on active positions")
-        recommendations.append("💵 Build cash for potential buying opportunities")
-        recommendations.append("📋 Review and trim overextended positions")
-    
-    elif condition == ShortTermMarketCondition.WARNING_POSITIVE:
-        recommendations.append("🔄 Short-term bounce attempt - remain cautious")
-        recommendations.append("⏳ Wait for 50-day EMA confirmation before adding exposure")
-        recommendations.append("📊 Monitor for sustained momentum (3-5 days)")
-    
+        if subphase == "Accumulation":
+            recommendations.append("✅ Bull (Accumulation): 50-day trend up, short-term momentum rising — favorable for new or increased positions")
+            recommendations.append("📈 Consider adding to or maintaining full tactical exposure")
+        elif subphase == "Consolidating":
+            recommendations.append("✅ Bull (Consolidating): 50-day trend up, short-term momentum flat — healthy pause within uptrend")
+            recommendations.append("📊 Hold current positions; wait for momentum to resume before adding")
+        else:  # Distribution
+            recommendations.append("⚠️ Bull (Distribution): 50-day trend up but short-term momentum fading — watch for trend change")
+            recommendations.append("🛡️ Consider tightening stop-losses; avoid new positions until momentum stabilises")
+
+    elif condition == ShortTermMarketCondition.NEUTRAL:
+        if subphase == "Accumulation":
+            recommendations.append("⚪ Neutral (Accumulation): 50-day EMA flat, short-term momentum rising — possible early breakout building")
+            recommendations.append("⏳ Monitor closely; wait for 50-day EMA to turn positive before committing")
+        elif subphase == "Consolidating":
+            recommendations.append("⚪ Neutral (Consolidating): Both EMAs flat — market in sideways consolidation")
+            recommendations.append("📊 Maintain current positions; avoid new directional bets until a trend establishes")
+        else:  # Distribution
+            recommendations.append("⚪ Neutral (Distribution): 50-day EMA flat, short-term momentum falling — risk of breakdown")
+            recommendations.append("🛡️ Reduce tactical exposure; build cash in case of transition to Bear")
+
     elif condition == ShortTermMarketCondition.BEAR:
-        recommendations.append("🛡️ Defensive posture for short-term positions")
-        recommendations.append("💵 Maintain higher cash allocation")
-        recommendations.append("📉 Avoid new long positions until trend reverses")
-        if ema_data.days_in_trend >= 10:
-            recommendations.append("💎 Watch for oversold conditions and reversal signals")
-    
+        if subphase == "Accumulation":
+            recommendations.append("🔄 Bear (Accumulation): 50-day trend down but short-term bouncing — possible relief rally, not confirmed reversal")
+            recommendations.append("⏳ Wait for 50-day EMA to turn positive before adding exposure")
+        elif subphase == "Consolidating":
+            recommendations.append("🛡️ Bear (Consolidating): 50-day trend down, short-term flat — downtrend pausing, not reversing")
+            recommendations.append("💵 Maintain defensive posture; avoid new long positions")
+        else:  # Distribution
+            recommendations.append("🛡️ Bear (Distribution): Both EMAs falling — sustained downtrend in force")
+            recommendations.append("📉 Defensive posture; maintain higher cash; avoid new long positions")
+            if ema_data.days_in_trend >= 10:
+                recommendations.append("💎 Watch for oversold conditions and reversal signals")
+
     else:
         recommendations.append("❓ Short-term direction unclear - maintain current positions")
     
