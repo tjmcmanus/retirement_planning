@@ -924,7 +924,14 @@ DAF_COMBINED_DEDUCTION_LIMIT_PCT: float = 0.60
 DAF_MIN_GAIN_FOR_DONATION: float = 500.0
 
 # Minimum holding period (days) for a security to qualify as long-term
-# appreciated property for DAF donation (IRS requires > 1 year).
+# appreciated property for DAF donation (IRS §170: held "more than 1 year").
+#
+# The filter uses `Days Held >= DAF_MIN_HOLDING_DAYS`, so the threshold must
+# be 366 — not 365 — because 365 days is exactly 1 year (not *more* than 1
+# year).  A security bought on Jan 15 and sold on Jan 15 the following year
+# is held 365 days and does NOT qualify; 366 days always qualifies regardless
+# of whether a leap year falls in the holding period.  This is intentionally
+# conservative: it never promotes a short-term holding to long-term status.
 DAF_MIN_HOLDING_DAYS: int = 366
 
 

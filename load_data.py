@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 from datetime import datetime
+from dateutil import parser as _dateutil_parser
 import logging
 import os
 import threading as _threading
@@ -29,9 +30,20 @@ MAX_MONTH = 12
 MIN_YEAR = 1900
 MAX_YEAR = 2100
 
+def _config_filing_status() -> str:
+    """Return the user's filing status from ConfigManager, falling back to MFJ."""
+    try:
+        from config import get_config_manager
+        return get_config_manager().get_filing_status()
+    except Exception:
+        return 'married_filing_jointly'
+
+
 #@st.cache(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
-def get_income_tax_brackets(year, filing_status='married_filing_jointly'):
+def get_income_tax_brackets(year, filing_status=None):
+   if filing_status is None:
+       filing_status = _config_filing_status()
    dfyear = pd.read_csv('income_rates.csv')
    df = dfyear[(dfyear['year'] == year) & (dfyear['filing_status'] == filing_status)]
    #print(df.head())
@@ -39,7 +51,9 @@ def get_income_tax_brackets(year, filing_status='married_filing_jointly'):
 
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
-def get_cap_gains_brackets(year, filing_status='married_filing_jointly'):
+def get_cap_gains_brackets(year, filing_status=None):
+   if filing_status is None:
+       filing_status = _config_filing_status()
    cgdfyear= pd.read_csv('cap_gains.csv')
    cgdf = cgdfyear[(cgdfyear['year'] == year) & (cgdfyear['filing_status'] == filing_status)]
    #print(cgdf.head())
@@ -47,7 +61,7 @@ def get_cap_gains_brackets(year, filing_status='married_filing_jointly'):
  
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
-def get_std_deduction(year, filing_status='married_filing_jointly'):
+def get_std_deduction(year, filing_status=None):
     stddectdfyear =pd.read_csv('standard.csv')
     
     # Schema validation: Check for required columns
@@ -64,6 +78,8 @@ def get_std_deduction(year, filing_status='married_filing_jointly'):
             f"Please run migrate_standard_csv.py to update the file format."
         )
     
+    if filing_status is None:
+        filing_status = _config_filing_status()
     stddectdf = stddectdfyear[(stddectdfyear['year'] == year) & (stddectdfyear['filing_status'] == filing_status)]
     
     if stddectdf.empty:
@@ -129,12 +145,13 @@ def get_net_worth(ret_date):
          in the portfolio truth data.
    """
    try:
-       # Parse the date string to extract month and year
+       # Parse the date string — handles both M/D/YYYY and MM/DD/YYYY
        date_obj = datetime.strptime(ret_date, '%m/%d/%Y')
    except ValueError:
        try:
-           date_obj = datetime.strptime(ret_date, '%m/%d/%Y')
-       except ValueError:
+           # Fallback: dateutil handles single-digit months/days cross-platform
+           date_obj = _dateutil_parser.parse(ret_date, dayfirst=False)
+       except (ValueError, OverflowError):
            logger.error(f"Invalid date format: {ret_date}. Expected M/D/YYYY or MM/DD/YYYY")
            return 0, 0, 0, 0, 0, 0, 0
    

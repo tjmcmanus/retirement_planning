@@ -39,6 +39,10 @@ def _cfg_default(section: str, key: str, fallback: Any) -> Any:
         from config import get_config_manager
         return get_config_manager().get(section, key, fallback)
     except Exception:
+        logger.debug(
+            "Could not read %s/%s from ConfigManager, using fallback %r",
+            section, key, fallback, exc_info=True,
+        )
         return fallback
 
 

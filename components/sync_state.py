@@ -64,7 +64,8 @@ class SyncState:
         if self.state['last_sync']:
             try:
                 return datetime.fromisoformat(self.state['last_sync'])
-            except:
+            except ValueError:
+                logger.debug("Could not parse last_sync timestamp %r", self.state['last_sync'])
                 return None
         return None
     
@@ -87,8 +88,9 @@ class SyncState:
             # Use pandas hash_pandas_object if available
             import pandas.util as pd_util
             new_hash = int(pd_util.hash_pandas_object(new_data).sum())
-        except:
-            # Fallback to simple hash
+        except AttributeError:
+            # Fallback to simple hash if pandas util API unavailable
+            logger.debug("hash_pandas_object unavailable, falling back to str hash")
             new_hash = hash(str(new_data.to_dict()))
         
         old_hash = self.state.get('holdings_hash')

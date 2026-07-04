@@ -19,8 +19,11 @@ Sub-tabs (st.tabs within the page):
 """
 from __future__ import annotations
 
+import logging
 from typing import cast
 import calendar
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1055,14 +1058,20 @@ def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
         # Get standard deduction for this year
         from load_data import get_std_deduction
         try:
-            std_ded_df = get_std_deduction(year, filing_status)
-            if not std_ded_df.empty:
-                std_ded = float(std_ded_df['deduction'].iloc[0])
-            else:
-                std_ded = 24800  # Fallback
-        except:
-            # Fallback to approximate standard deduction for MFJ
-            std_ded = 24800  # Approximate for married filing jointly
+            std_ded = float(get_std_deduction(year, filing_status)['deduction'].iloc[0])
+        except Exception:
+            logger.warning(
+                "Standard deduction not found for year=%s filing_status=%s; "
+                "using CSV fallback for current year",
+                year, filing_status, exc_info=True,
+            )
+            try:
+                import datetime
+                std_ded = float(
+                    get_std_deduction(datetime.date.today().year, filing_status)['deduction'].iloc[0]
+                )
+            except Exception:
+                std_ded = float(get_std_deduction(2026, filing_status)['deduction'].iloc[0])
         
         # Taxable Income = AGI - Standard Deduction - DAF (if itemizing)
         # Note: DAF only provides benefit if itemized deductions exceed standard deduction
@@ -1715,18 +1724,25 @@ def render_tax_rates_chart(tax_data: dict) -> None:
     filing_status = config_mgr.get("tax_info", "filing_status", "married_filing_jointly")
     
     try:
-        std_ded_df = get_std_deduction(selected_year, filing_status)
-        if not std_ded_df.empty:
-            std_ded = float(std_ded_df['deduction'].iloc[0])
-        else:
-            std_ded = 33500  # Fallback for MFJ
-    except:
-        std_ded = 33500  # Fallback for MFJ
+        std_ded = float(get_std_deduction(selected_year, filing_status)['deduction'].iloc[0])
+    except Exception:
+        logger.warning(
+            "Standard deduction not found for year=%s filing_status=%s; "
+            "using CSV fallback for current year",
+            selected_year, filing_status, exc_info=True,
+        )
+        try:
+            import datetime
+            std_ded = float(
+                get_std_deduction(datetime.date.today().year, filing_status)['deduction'].iloc[0]
+            )
+        except Exception:
+            std_ded = float(get_std_deduction(2026, filing_status)['deduction'].iloc[0])
     
     # Get property tax from config
     try:
         property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
-    except:
+    except (KeyError, AttributeError, TypeError):
         property_tax = 0.0
     
     # Calculate itemized deductions (DAF + SALT)
