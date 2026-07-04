@@ -36,6 +36,8 @@ def _config_filing_status() -> str:
         from config import get_config_manager
         return get_config_manager().get_filing_status()
     except Exception:
+        logger.debug("ConfigManager unavailable; defaulting to married_filing_jointly",
+                     exc_info=True)
         return 'married_filing_jointly'
 
 

@@ -502,10 +502,11 @@ def score_securities_for_liquidation(
     current_agi: float,
     filing_status: str,
     recent_sales: Optional[List[Dict[str, Any]]] = None,
+    year: Optional[int] = None,
 ) -> List[SecurityScore]:
     """
     Score all securities in an account for liquidation suitability.
-    
+
     Args:
         portfolio_df: Portfolio DataFrame with holdings
         withdrawal_amount: Amount needed to withdraw
@@ -514,23 +515,26 @@ def score_securities_for_liquidation(
         current_agi: Current AGI for LTCG rate determination
         filing_status: Tax filing status
         recent_sales: Recent sales for wash sale detection
-    
+        year: Tax year for bracket lookup (defaults to current calendar year)
+
     Returns:
         List of SecurityScore objects, sorted by total_score (descending)
     """
     if recent_sales is None:
         recent_sales = []
-    
+    if year is None:
+        year = datetime.now().year
+
     # Filter to specified account
     account_holdings = portfolio_df[portfolio_df['account_type'] == account_type].copy()
-    
+
     if account_holdings.empty:
         logger.warning(f"No holdings found in {account_type} account")
         return []
-    
+
     # Get LTCG rate brackets
     try:
-        ltcg_brackets = get_cap_gains_brackets(filing_status)
+        ltcg_brackets = get_cap_gains_brackets(year, filing_status)
     except Exception as e:
         logger.error(f"Error getting LTCG brackets: {e}")
         ltcg_brackets = pd.DataFrame()

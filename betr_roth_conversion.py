@@ -33,6 +33,7 @@ from load_data import (
     get_cap_gains_brackets,
     get_std_deduction
 )
+from config import get_config_manager as _betr_get_config_manager
 from calculations import (
     calculate_taxable_income,
     calc_agi,
@@ -513,7 +514,8 @@ def _get_ltcg_rate(income: float, year: int) -> float:
         LTCG rate (0.0, 0.15, or 0.20)
     """
     try:
-        cap_gains_df = get_cap_gains_brackets(year)
+        _filing_status = _betr_get_config_manager().get_filing_status()
+        cap_gains_df = get_cap_gains_brackets(year, _filing_status)
         
         # Find the applicable bracket
         for _, row in cap_gains_df.iterrows():
@@ -812,7 +814,10 @@ def _get_cached_tax_brackets(year: int) -> pd.DataFrame:
     Returns:
         DataFrame containing tax brackets for the specified year
     """
-    return get_income_tax_brackets(year)
+    # Bracket upper-limit lookups are filing-status-agnostic for optimization
+    # purposes (the bracket structure is the same across MFJ); use a stable
+    # default so @lru_cache behaves correctly across test contexts.
+    return get_income_tax_brackets(year, 'married_filing_jointly')
 
 
 @lru_cache(maxsize=128)

@@ -30,13 +30,13 @@ def clear_streamlit_cache():
             if file.endswith('.pyc'):
                 try:
                     os.remove(os.path.join(root, file))
-                except:
+                except OSError:
                     pass
         # Remove __pycache__ directories
         if '__pycache__' in dirs:
             try:
                 shutil.rmtree(os.path.join(root, '__pycache__'))
-            except:
+            except OSError:
                 pass
     
     print("\n✓ Cache cleared successfully!")
