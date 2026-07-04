@@ -171,6 +171,13 @@ NIIT_THRESHOLDS: Dict[str, int] = {
 # Minimum age for Medicare eligibility (fixed by statute)
 MEDICARE_ELIGIBILITY_AGE: int = 65
 
+# Social Security / OASDI payroll tax constants
+# 2024 wage base: $168,600 (per SSA Notice 2023-75); employee share: 6.2 %
+# Wage base grows ~3.5 % per year (SSA AWI historical average)
+SS_WAGE_BASE_2024: int = 168_600
+SS_WAGE_BASE_COLA_RATE: float = 0.035   # annual growth rate for projection
+SS_EMPLOYEE_TAX_RATE: float = 0.062
+
 # Medicare Part D base premium (annual; updated each year by CMS)
 PART_D_ANNUAL_BASE_PREMIUM: int = 480   # ~$40/month average
 
@@ -1289,10 +1296,11 @@ def calculate_payroll_taxes(wages: float, year: int = 2024) -> Tuple[float, Dict
         state = 'FL'
 
     # ── Social Security (OASDI) ────────────────────────────────────────────────
-    # 2024 wage base: $168,600; employee share: 6.2 %
-    # Inflate wage base by ~3.5 % per year beyond 2024
-    ss_wage_base = 168_600 * (1.035 ** max(0, year - 2024))
-    ss_tax = min(wages, ss_wage_base) * 0.062
+    # Inflate wage base by SS_WAGE_BASE_COLA_RATE per year beyond 2024
+    ss_wage_base = SS_WAGE_BASE_2024 * (
+        (1 + SS_WAGE_BASE_COLA_RATE) ** max(0, year - 2024)
+    )
+    ss_tax = min(wages, ss_wage_base) * SS_EMPLOYEE_TAX_RATE
 
     # ── Medicare ──────────────────────────────────────────────────────────────
     # 1.45 % on all wages; additional 0.9 % on wages > $250k (MFJ)

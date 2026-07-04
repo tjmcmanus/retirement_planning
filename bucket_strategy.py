@@ -314,7 +314,7 @@ def estimate_annual_taxes(
             return 0
         
         # Get tax brackets and calculate tax
-        tax_brackets = get_income_tax_brackets(current_year)
+        tax_brackets = get_income_tax_brackets(current_year, 'married_filing_jointly')
         result = calculate_taxable_income(agi, tax_brackets)
         
         # Add estimated state tax (assume 5% effective rate on AGI)

@@ -43,7 +43,6 @@ class TaxCalculator(ITaxCalculator):
                 from calculations import (
                     calculate_taxable_income,
                     calculate_cap_gains,
-                    calculate_irmma_penalty
                 )
                 
                 self._get_income_tax_brackets_raw = get_income_tax_brackets
@@ -51,7 +50,6 @@ class TaxCalculator(ITaxCalculator):
                 self._get_std_deduction = get_std_deduction
                 self._calculate_taxable_income = calculate_taxable_income
                 self._calculate_cap_gains = calculate_cap_gains
-                self._calculate_irmma_penalty = calculate_irmma_penalty
                 
             except ImportError as e:
                 logger.warning(f"Could not import tax data functions: {e}")
@@ -59,19 +57,13 @@ class TaxCalculator(ITaxCalculator):
     
     def _get_income_tax_brackets(self, filing_status: str, year: int):
         """
-        Get income tax brackets filtered by filing status.
-        
-        Wraps the raw function to handle DataFrame filtering and iteration.
+        Get income tax brackets for the given filing status and year.
+
+        Delegates directly to the raw function, which already filters by both
+        year and filing_status, so no manual post-filter is needed.
         """
-        import pandas as pd
-        
-        brackets_df = self._get_income_tax_brackets_raw(year)
-        
-        # Filter for filing status
-        filtered = brackets_df[brackets_df['filing_status'] == filing_status]
-        
-        # Convert to list of dicts for iteration
-        return [row.to_dict() for _, row in filtered.iterrows()]
+        brackets_df = self._get_income_tax_brackets_raw(year, filing_status)
+        return [row.to_dict() for _, row in brackets_df.iterrows()]
     
     def calculate_federal_tax(
         self,
@@ -123,7 +115,7 @@ class TaxCalculator(ITaxCalculator):
             # Update tracking variables
             remaining_income -= taxable_in_bracket
             max_rate = rate
-            upper_bracket_limit = upper
+            upper_bracket_limit = float(upper)
             
             logger.debug(
                 f"Bracket {i}: ${lower:,.0f}-${upper:,.0f} @ {rate:.1%}, "
@@ -160,7 +152,7 @@ class TaxCalculator(ITaxCalculator):
             return 0.0
         
         try:
-            brackets = self._get_cap_gains_brackets(filing_status, year)
+            brackets = self._get_cap_gains_brackets(year, filing_status)
         except Exception as e:
             logger.error(f"Error getting capital gains brackets: {e}")
             raise
@@ -279,14 +271,6 @@ class TaxCalculator(ITaxCalculator):
             return 0.0, 0.0
         
         try:
-            # Use imported function if available
-            if hasattr(self, '_calculate_irmma_penalty'):
-                result = self._calculate_irmma_penalty(magi, filing_status, year)
-                if isinstance(result, tuple):
-                    return result
-                return result, 0.0
-            
-            # Fallback: simple IRMAA calculation
             return self._simple_irmaa_calculation(magi, filing_status, year)
             
         except Exception as e:
@@ -305,7 +289,7 @@ class TaxCalculator(ITaxCalculator):
         Uses approximate 2024 thresholds (should be replaced with actual data).
         """
         # 2024 IRMAA thresholds (approximate)
-        if filing_status == 'married':
+        if filing_status in ('married', 'married_filing_jointly'):
             thresholds = [
                 (206000, 0),
                 (258000, 69.90 * 12),
@@ -331,7 +315,7 @@ class TaxCalculator(ITaxCalculator):
                 break
         
         # For married filing jointly, split between spouses
-        if filing_status == 'married':
+        if filing_status in ('married', 'married_filing_jointly'):
             return penalty / 2, penalty / 2
         else:
             return penalty, 0.0
@@ -373,9 +357,10 @@ class TaxCalculator(ITaxCalculator):
         
         # Add additional deduction for age 65+
         additional = 0.0
+        _is_married = filing_status in ('married', 'married_filing_jointly')
         if age_primary >= 65:
-            additional += 1950 if filing_status == 'married' else 1850
-        if age_spouse >= 65 and filing_status == 'married':
+            additional += 1950 if _is_married else 1850
+        if age_spouse >= 65 and _is_married:
             additional += 1950
         
         return base_deduction + additional

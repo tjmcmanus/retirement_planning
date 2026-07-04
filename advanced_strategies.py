@@ -272,8 +272,8 @@ def project_single_year_tax(
         # full filtered DataFrame directly.  Cast to pd.DataFrame to satisfy
         # the type checker (the cached functions return DataFrame but pyright
         # infers a broader type from the cache decorator).
-        tax_brackets: pd.DataFrame = pd.DataFrame(get_income_tax_brackets(year))
-        cg_brackets: pd.DataFrame = pd.DataFrame(get_cap_gains_brackets(year))
+        tax_brackets: pd.DataFrame = pd.DataFrame(get_income_tax_brackets(year, filing_status))
+        cg_brackets: pd.DataFrame = pd.DataFrame(get_cap_gains_brackets(year, filing_status))
 
         # standard.csv has columns: year, filing_status, deduction
         # get_std_deduction_by_year returns a plain float

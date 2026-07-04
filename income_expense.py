@@ -136,7 +136,7 @@ def _get_tax_data(year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     logger.debug(f"Retrieved standard deduction data for year {year}")
     
     # Get tax bracket data
-    taxratedf = get_income_tax_brackets(year)
+    taxratedf = get_income_tax_brackets(year, filing_status)
     if taxratedf is None or taxratedf.empty:
         logger.error(f"Failed to retrieve tax brackets for year {year}")
         raise RuntimeError(f"Failed to retrieve tax brackets for year {year}")

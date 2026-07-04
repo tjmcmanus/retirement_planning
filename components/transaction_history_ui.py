@@ -79,7 +79,7 @@ def _calculate_gains_losses(transactions_df: pd.DataFrame) -> pd.DataFrame:
                 'strike': strike,
                 'full_symbol': symbol
             }
-        except:
+        except (ValueError, IndexError):
             return None
     
     # Initialize columns
