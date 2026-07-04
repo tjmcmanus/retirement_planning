@@ -75,7 +75,8 @@ from load_data import (
     get_std_deduction,
     get_medicare_costs,
     get_atm_costs,
-    get_networth_by_month
+    get_networth_by_month,
+    get_fica_limits,
 )
 from config import get_config_manager
 from calculations import (
@@ -170,13 +171,6 @@ NIIT_THRESHOLDS: Dict[str, int] = {
 
 # Minimum age for Medicare eligibility (fixed by statute)
 MEDICARE_ELIGIBILITY_AGE: int = 65
-
-# Social Security / OASDI payroll tax constants
-# 2024 wage base: $168,600 (per SSA Notice 2023-75); employee share: 6.2 %
-# Wage base grows ~3.5 % per year (SSA AWI historical average)
-SS_WAGE_BASE_2024: int = 168_600
-SS_WAGE_BASE_COLA_RATE: float = 0.035   # annual growth rate for projection
-SS_EMPLOYEE_TAX_RATE: float = 0.062
 
 # Medicare Part D base premium (annual; updated each year by CMS)
 PART_D_ANNUAL_BASE_PREMIUM: int = 480   # ~$40/month average
@@ -1296,11 +1290,25 @@ def calculate_payroll_taxes(wages: float, year: int = 2024) -> Tuple[float, Dict
         state = 'FL'
 
     # ── Social Security (OASDI) ────────────────────────────────────────────────
-    # Inflate wage base by SS_WAGE_BASE_COLA_RATE per year beyond 2024
-    ss_wage_base = SS_WAGE_BASE_2024 * (
-        (1 + SS_WAGE_BASE_COLA_RATE) ** max(0, year - 2024)
-    )
-    ss_tax = min(wages, ss_wage_base) * SS_EMPLOYEE_TAX_RATE
+    # Look up the wage base from fica_limits.csv; fall back to projecting from
+    # the most recent CSV row when the year isn't covered yet.
+    _fica_df = get_fica_limits(year)
+    if not _fica_df.empty:
+        ss_wage_base     = float(_fica_df['ss_wage_base'].iloc[0])
+        _ss_rate         = float(_fica_df['ss_employee_rate'].iloc[0])
+        _cola_rate       = float(_fica_df['cola_rate_estimate'].iloc[0])
+    else:
+        # Year beyond CSV range: project from last known row
+        import pandas as _pd
+        _all = _pd.read_csv('fica_limits.csv')
+        _last = _all.iloc[-1]
+        _base_year       = int(_last['year'])
+        _cola_rate       = float(_last['cola_rate_estimate'])
+        ss_wage_base     = float(_last['ss_wage_base']) * (
+            (1 + _cola_rate) ** max(0, year - _base_year)
+        )
+        _ss_rate         = float(_last['ss_employee_rate'])
+    ss_tax = min(wages, ss_wage_base) * _ss_rate
 
     # ── Medicare ──────────────────────────────────────────────────────────────
     # 1.45 % on all wages; additional 0.9 % on wages > $250k (MFJ)
