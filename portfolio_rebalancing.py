@@ -41,7 +41,8 @@ import numpy as np
 import pandas as pd
 from typing import cast
 
-from load_data import _fetch_current_prices
+import datetime
+from load_data import _fetch_current_prices, get_ira_limits
 from portfolio import getPortfolioData
 
 logger = logging.getLogger(__name__)
@@ -951,17 +952,21 @@ def _actions_redirect_contributions(
     actions: list[RebalanceAction] = []
     priority = start_priority
 
-    # Realistic annual contribution limits (2026)
+    # Look up IRA contribution limit for the current year from ira_limits.csv
+    _current_year = datetime.date.today().year
+    _ira_df = get_ira_limits(_current_year)
+    _ira_base = int(_ira_df["ira_contribution_base"].iloc[0]) if not _ira_df.empty else 7000
+
     ANNUAL_LIMITS = {
-        ROTH: 7000,          # Roth IRA limit
-        TRADITIONAL: 7000,   # Traditional IRA limit
+        ROTH: _ira_base,
+        TRADITIONAL: _ira_base,
         BROKERAGE: float('inf'),  # No limit for taxable accounts
     }
 
     for uw in under_weight:
         contrib_acct = _CONTRIBUTION_ACCOUNT.get(uw.asset_class, TRADITIONAL)
         needed = abs(uw.delta_value)
-        annual_limit = ANNUAL_LIMITS.get(contrib_acct, 7000)
+        annual_limit = ANNUAL_LIMITS.get(contrib_acct, _ira_base)
         
         # Show realistic annual contribution amount
         realistic_amount = min(needed, annual_limit)
