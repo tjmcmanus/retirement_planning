@@ -33,6 +33,15 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _cfg_default(section: str, key: str, fallback: Any) -> Any:
+    """Read a value from ConfigManager, falling back silently if unavailable."""
+    try:
+        from config import get_config_manager
+        return get_config_manager().get(section, key, fallback)
+    except Exception:
+        return fallback
+
+
 # ============================================================================
 # Data Models
 # ============================================================================
@@ -268,8 +277,16 @@ class Scenario:
     is_baseline: bool = False
     
     # Financial Parameters
-    initial_portfolio: float = 1_500_000.0
-    annual_expenses: float = 80_000.0
+    initial_portfolio: float = field(
+        default_factory=lambda: _cfg_default(
+            "financial_assumptions", "expected_total_portfolio", 1_500_000.0
+        )
+    )
+    annual_expenses: float = field(
+        default_factory=lambda: float(
+            _cfg_default("financial_assumptions", "expected_annual_expenses", 80_000.0)
+        )
+    )
     inflation_rate: float = 0.029
     portfolio_allocation: dict[str, float] = field(default_factory=lambda: {
         "stocks": 0.70,
@@ -280,7 +297,11 @@ class Scenario:
     # Personal Parameters
     person1_age: int = 62
     person2_age: int | None = None
-    retirement_age: int = 62
+    retirement_age: int = field(
+        default_factory=lambda: int(
+            _cfg_default("personal_info", "person1_retirement_age", 62)
+        )
+    )
     plan_to_age: int = 95
     is_single: bool = False
     
@@ -430,15 +451,24 @@ class Scenario:
             created_at=data.get("created_at", datetime.now().isoformat()),
             modified_at=data.get("modified_at", datetime.now().isoformat()),
             is_baseline=data.get("is_baseline", False),
-            initial_portfolio=financial.get("initial_portfolio", 1_500_000.0),
-            annual_expenses=financial.get("annual_expenses", 80_000.0),
+            initial_portfolio=financial.get(
+                "initial_portfolio",
+                _cfg_default("financial_assumptions", "expected_total_portfolio", 1_500_000.0),
+            ),
+            annual_expenses=financial.get(
+                "annual_expenses",
+                float(_cfg_default("financial_assumptions", "expected_annual_expenses", 80_000.0)),
+            ),
             inflation_rate=financial.get("inflation_rate", 0.029),
             portfolio_allocation=financial.get("portfolio_allocation", {
                 "stocks": 0.70, "bonds": 0.25, "cash": 0.05
             }),
             person1_age=personal.get("person1_age", 62),
             person2_age=personal.get("person2_age"),
-            retirement_age=personal.get("retirement_age", 62),
+            retirement_age=personal.get(
+                "retirement_age",
+                int(_cfg_default("personal_info", "person1_retirement_age", 62)),
+            ),
             plan_to_age=personal.get("plan_to_age", 95),
             is_single=personal.get("is_single", False),
             social_security=SocialSecurityConfig.from_dict(
@@ -712,10 +742,16 @@ class ScenarioManager:
             return []
     
     def _save_scenario(self, scenario: Scenario):
-        """Save scenario to JSON file."""
+        """Save scenario to JSON file atomically (write-then-replace)."""
         file_path = self._get_scenario_path(scenario.id)
-        with open(file_path, "w") as f:
-            json.dump(scenario.to_dict(), f, indent=2)
+        tmp_path = file_path.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(scenario.to_dict(), f, indent=2)
+            tmp_path.replace(file_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
     
     def _get_scenario_path(self, scenario_id: str) -> Path:
         """Get file path for a scenario ID."""

@@ -17,11 +17,14 @@ from components.schwab_data_transformer import SchwabDataTransformer
 from components.credential_manager import CredentialManager
 
 
-# Skip all tests if credentials not available
-pytestmark = pytest.mark.skipif(
-    not os.getenv("SCHWAB_APP_KEY") or not os.getenv("SCHWAB_APP_SECRET"),
-    reason="Schwab credentials not configured"
-)
+# Skip all tests if credentials not available; mark all as integration tests
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.getenv("SCHWAB_APP_KEY") or not os.getenv("SCHWAB_APP_SECRET"),
+        reason="Schwab credentials not configured",
+    ),
+]
 
 
 class TestSchwabLiveConnection:

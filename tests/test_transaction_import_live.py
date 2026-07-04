@@ -22,6 +22,9 @@ import os
 import sys
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import pytest
+
+pytestmark = pytest.mark.integration
 
 # Load environment variables
 load_dotenv()

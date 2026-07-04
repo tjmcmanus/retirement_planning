@@ -118,7 +118,7 @@ def db_load_all(db_path: Path = DB_PATH) -> pd.DataFrame:
         )
         conn.close()
         return df
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.error(f"db_load_all failed: {exc}")
         return pd.DataFrame(columns=HOLDINGS_COLUMNS)
 
@@ -151,7 +151,7 @@ def db_get_by_month(
         )
         conn.close()
         return df
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.error(f"db_get_by_month({month}, {year}) failed: {exc}")
         return pd.DataFrame(columns=HOLDINGS_COLUMNS)
 
@@ -177,7 +177,7 @@ def db_get_latest_month_year(db_path: Path = DB_PATH) -> tuple[int, int]:
         conn.close()
         if row:
             return int(row["month"]), int(row["year"])
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.error(f"db_get_latest_month_year failed: {exc}")
     now = datetime.now()
     return now.month, now.year
@@ -218,7 +218,7 @@ def db_upsert(rows: pd.DataFrame, db_path: Path = DB_PATH) -> int:
         conn.commit()
         n = len(rows)
         logger.info(f"db_upsert: wrote {n} rows")
-    except Exception as exc:
+    except sqlite3.Error as exc:
         conn.rollback()
         logger.error(f"db_upsert failed: {exc}")
         raise
@@ -268,7 +268,7 @@ def db_overwrite_month(
             n = len(rows)
         conn.commit()
         logger.info(f"db_overwrite_month({month}/{year}): wrote {n} rows")
-    except Exception as exc:
+    except sqlite3.Error as exc:
         conn.rollback()
         logger.error(f"db_overwrite_month failed: {exc}")
         raise
@@ -305,7 +305,7 @@ def db_delete_row(
         )
         conn.commit()
         deleted = cur.rowcount > 0
-    except Exception as exc:
+    except sqlite3.Error as exc:
         conn.rollback()
         logger.error(f"db_delete_row failed: {exc}")
         return False
@@ -411,7 +411,7 @@ def _write_csv_backup(db_path: Path = DB_PATH) -> None:
         df = db_load_all(db_path)
         df.to_csv(str(CSV_BACKUP_PATH), index=False)
         logger.debug(f"_write_csv_backup: wrote {len(df)} rows to {CSV_BACKUP_PATH}")
-    except Exception as exc:
+    except OSError as exc:
         logger.warning(f"_write_csv_backup failed (non-fatal): {exc}")
 
 

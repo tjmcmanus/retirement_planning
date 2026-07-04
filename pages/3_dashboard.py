@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import calendar as _calendar
 import json as _json
+import logging
 import os as _os
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -654,6 +657,7 @@ with tab_statement:
     try:
         _nw_detailed_df, _ = get_networth_by_month(curr_month, curr_year)
     except Exception:
+        logger.warning("Failed to load detailed net worth for statement tab", exc_info=True)
         _nw_detailed_df = pd.DataFrame()
     render_net_worth_statement(networth, _nw_detailed_df)
 
@@ -748,6 +752,7 @@ try:
         _re_props     = _cfg.get("real_estate", "properties", []) or []
         _re_total_rri = sum(float(p.get("purchase_price", 0) or 0) for p in _re_props)
     except Exception:
+        logger.warning("Failed to sum real estate values for retirement readiness score", exc_info=True)
         _re_total_rri = 0.0
     _total_assets  = _current_nw + _re_total_rri
     _funding_pct   = min(_total_assets / _target_port * 100, 100) if _target_port > 0 else 0.0
@@ -777,6 +782,7 @@ try:
             _core_done = sum(1 for k in _core_checks if _assess.get(k, False))
             _estate_score = min((_ep_done / _ep_tot * 70 if _ep_tot > 0 else 0) + (_core_done / len(_core_checks) * 30), 100)
     except Exception:
+        logger.warning("Failed to compute estate planning score", exc_info=True)
         _estate_score = 0.0
 
     _trad_bal      = float(networth["tax_deferred"].iloc[-1]) if not networth.empty else 0.0
