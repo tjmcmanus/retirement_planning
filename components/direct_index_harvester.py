@@ -22,7 +22,6 @@ import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
-import yaml
 from pathlib import Path
 
 import pandas as pd
@@ -159,7 +158,22 @@ def load_config() -> Dict:
                 }
             }
         }
-    
+
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        logger.warning("PyYAML not installed, using default direct indexing config")
+        return {
+            'direct_indexing': {
+                'thresholds': {
+                    'loss_threshold_pct': DEFAULT_LOSS_THRESHOLD_PCT,
+                    'min_loss_amount': DEFAULT_MIN_LOSS_AMOUNT,
+                    'enable_gains_harvesting': True,
+                    'gains_threshold_pct': DEFAULT_GAINS_THRESHOLD_PCT
+                }
+            }
+        }
+
     with open(CONFIG_PATH, 'r') as f:
         return yaml.safe_load(f)
 
