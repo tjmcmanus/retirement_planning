@@ -35,7 +35,7 @@ def _config_filing_status() -> str:
     try:
         from config import get_config_manager
         return get_config_manager().get_filing_status()
-    except Exception:
+    except (ImportError, AttributeError):
         logger.debug("ConfigManager unavailable; defaulting to married_filing_jointly",
                      exc_info=True)
         return 'married_filing_jointly'
@@ -99,6 +99,48 @@ def get_medicare_costs(year):
    #print(irmaadf.head())
    return irmaadf
 
+@st.cache_data()
+def get_medicare_premiums(year: int) -> pd.DataFrame:
+    """Load Medigap, out-of-pocket, and LTC premium data for a given year.
+
+    Reads ``medicare_premiums.csv``, which contains one row per calendar year
+    with the following columns:
+
+    * ``medigap_annual``          – Annual Medigap supplemental premium (per person)
+    * ``oop_healthy``             – Annual out-of-pocket costs, healthy status
+    * ``oop_average``             – Annual out-of-pocket costs, average status
+    * ``oop_chronic``             – Annual out-of-pocket costs, chronic status
+    * ``ltc_annual_per_person``   – Annual LTC insurance premium (per person)
+    * ``ltc_escalation_rate``     – Annual LTC premium escalation rate (decimal)
+    * ``ltc_base_year``           – Base year the ``ltc_annual_per_person`` value applies to
+
+    When *year* is not present in the CSV the function falls back to the most
+    recent available row, so projections for future years continue to work even
+    before CMS publishes updated figures.
+
+    Args:
+        year: Calendar year to retrieve premiums for.
+
+    Returns:
+        Single-row DataFrame for *year* (or nearest prior year).
+        Empty DataFrame if the CSV cannot be read.
+    """
+    try:
+        df = pd.read_csv('medicare_premiums.csv')
+        row = df[df['year'] == year]
+        if row.empty:
+            # Fall back to the most recent year available
+            prior = df[df['year'] <= year]
+            row = prior.sort_values('year').tail(1) if not prior.empty else df.sort_values('year').tail(1)
+        return row
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "Could not load medicare_premiums.csv for year %d: %s", year, exc
+        )
+        return pd.DataFrame()
+
+
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
 @st.cache_data()
 def get_atm_costs(year):
@@ -145,6 +187,32 @@ def get_fica_limits(year: int) -> pd.DataFrame:
    """
    fica_df = pd.read_csv('fica_limits.csv')
    return fica_df[fica_df['year'] == year]
+
+
+@st.cache_data()
+def get_qbi_limits(year: int) -> pd.DataFrame:
+    """Load QBI §199A phase-out thresholds for a given year from qbi_limits.csv.
+
+    Columns returned:
+    * ``mfj_phase_out_start``    – MFJ phase-out range start
+    * ``mfj_phase_out_end``      – MFJ phase-out range end
+    * ``single_phase_out_start`` – Single/HOH phase-out range start
+    * ``single_phase_out_end``   – Single/HOH phase-out range end
+
+    When *year* is beyond the last CSV row the most recent available row is
+    returned so projections for future years continue to work without a code
+    change.  Returns an empty DataFrame if the CSV cannot be read.
+    """
+    try:
+        df = pd.read_csv('qbi_limits.csv')
+        row = df[df['year'] == year]
+        if row.empty:
+            prior = df[df['year'] <= year]
+            row = prior.sort_values('year').tail(1) if not prior.empty else df.sort_values('year').tail(1)
+        return row
+    except Exception as _e:
+        logger.warning("Could not load qbi_limits.csv for year %d: %s", year, _e)
+        return pd.DataFrame()
 
 
 #@st.cache_data(allow_output_mutation=True, show_spinner=True)
@@ -290,7 +358,7 @@ def _auto_migrate_if_needed() -> None:
         n = migrate_from_csv(csv)
         logger.info(f"Auto-migrated {n} rows from portfolio_data_truth.csv → portfolio.db")
     except Exception as exc:
-        logger.warning(f"Auto-migration failed (non-fatal): {exc}")
+        logger.warning(f"Auto-migration failed (non-fatal): {exc}", exc_info=True)
 
 # Run auto-migration once at module import time
 _auto_migrate_if_needed()
@@ -419,7 +487,7 @@ def _fetch_prices(symbols: list[str], target_date: Optional[datetime] = None) ->
     try:
         tickers = yf.Tickers(' '.join(tradeable_symbols))
     except Exception as e:
-        logger.error(f"Failed to initialize yfinance Tickers: {e}")
+        logger.error(f"Failed to initialize yfinance Tickers: {e}", exc_info=True)
         return {symbol: None for symbol in symbols}
     
     for symbol in tradeable_symbols:
@@ -441,7 +509,7 @@ def _fetch_prices(symbols: list[str], target_date: Optional[datetime] = None) ->
                              (f" on {target_date.date()}" if target_date else ""))
                 price_map[symbol] = None
         except Exception as e:
-            logger.warning(f"Could not fetch price for {symbol}: {e}")
+            logger.warning(f"Could not fetch price for {symbol}: {e}", exc_info=True)
             price_map[symbol] = None
     
     return price_map
@@ -493,7 +561,7 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     try:
         portfolio_data = get_portfolio_truth_by_month(month, year)
     except Exception as e:
-        logger.error(f"Failed to load portfolio data for {month}/{year}: {e}")
+        logger.error(f"Failed to load portfolio data for {month}/{year}: {e}", exc_info=True)
         raise RuntimeError(f"Could not load portfolio data: {e}") from e
     
     # Early return if no data
@@ -542,7 +610,7 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
                     if price is not None:
                         detailed_df.loc[detailed_df['symbol'] == symbol, 'current_price'] = price
             except Exception as e:
-                logger.warning(f"Error fetching historical prices for {month}/{year}: {e}")
+                logger.warning(f"Error fetching historical prices for {month}/{year}: {e}", exc_info=True)
         
         stored_count = stored_price_mask.sum()
         logger.info(f"Using {stored_count} stored prices for {month}/{year}")
@@ -564,7 +632,7 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
                 successful_fetches = sum(1 for p in price_map.values() if p is not None)
                 logger.info(f"Fetched {successful_fetches}/{len(unique_symbols)} current prices for {month}/{year}")
             except Exception as e:
-                logger.warning(f"Error fetching current prices, using purchase prices as fallback: {e}")
+                logger.warning(f"Error fetching current prices, using purchase prices as fallback: {e}", exc_info=True)
     
     # Set CASH to 1.0 (handle both 'CASH' and 'MF:CASH')
     detailed_df.loc[detailed_df['symbol'].isin(CASH_SYMBOLS), 'current_price'] = CASH_PRICE
@@ -632,7 +700,7 @@ def save_networth_cache(networth_df: pd.DataFrame, num_months: int) -> None:
         out["_cache_ts"] = datetime.utcnow().isoformat()
         out.to_parquet(NETWORTH_CACHE_FILE, index=False)
     except Exception as exc:
-        print(f"[networth cache] save failed: {exc}")
+        logger.warning(f"[networth cache] save failed: {exc}", exc_info=True)
 
 
 def load_networth_cache(num_months: int) -> pd.DataFrame:
@@ -657,6 +725,9 @@ def load_networth_cache(num_months: int) -> pd.DataFrame:
 
         cached = pd.read_parquet(NETWORTH_CACHE_FILE)
 
+        if cached.empty:
+            return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
         # Validate num_months key
         cached_nm = int(cached["_cache_num_months"].iloc[0]) if "_cache_num_months" in cached.columns else -1
         if cached_nm != num_months:
@@ -680,7 +751,7 @@ def load_networth_cache(num_months: int) -> pd.DataFrame:
         return result
 
     except Exception as exc:
-        print(f"[networth cache] load failed: {exc}")
+        logger.warning(f"[networth cache] load failed: {exc}", exc_info=True)
         return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
 
 
@@ -706,7 +777,7 @@ def _rebuild_networth_and_cache(
         if not nw_df.empty:
             save_networth_cache(nw_df, num_months)
     except Exception as exc:
-        print(f"[networth cache] background rebuild failed: {exc}")
+        logger.warning(f"[networth cache] background rebuild failed: {exc}", exc_info=True)
     finally:
         done_event.set()
 

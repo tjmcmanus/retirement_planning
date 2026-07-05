@@ -25,6 +25,7 @@ Version: 1.0
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
@@ -45,83 +46,99 @@ logger = logging.getLogger(__name__)
 # Cache database path
 CACHE_DB_PATH = Path(__file__).parent / "data" / "factor_cache.db"
 
+_CREATE_CACHE_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS factor_cache (
+        symbol TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        timestamp REAL NOT NULL
+    )
+"""
+
+# Thread-local storage: one persistent connection per thread, matching the
+# pattern used in portfolio_db.py.  WAL mode lets readers and the one writer
+# proceed concurrently without contention; _cache_lock still serialises writes
+# so that INSERT/DELETE pairs within a single logical operation remain atomic.
+_cache_tls = threading.local()
+
+# Serialize write operations (INSERT/DELETE) so concurrent Streamlit threads
+# cannot produce "database is locked" errors on partial writes.
+_cache_lock = threading.Lock()
+
+
+def _get_cache_conn() -> sqlite3.Connection:
+    """Return a persistent, thread-local connection to the factor cache DB.
+
+    The connection is created on first use within a thread and reused for all
+    subsequent calls.  Schema initialisation runs only once per connection.
+    """
+    if not hasattr(_cache_tls, "conn") or _cache_tls.conn is None:
+        CACHE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(CACHE_DB_PATH), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute(_CREATE_CACHE_TABLE_SQL)
+        conn.commit()
+        _cache_tls.conn = conn
+        logger.debug("_get_cache_conn: opened new connection to %s", CACHE_DB_PATH)
+    return _cache_tls.conn
+
+
 def _init_cache_db():
     """Initialize cache database if it doesn't exist."""
-    CACHE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    
-    conn = sqlite3.connect(CACHE_DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS factor_cache (
-            symbol TEXT PRIMARY KEY,
-            data TEXT NOT NULL,
-            timestamp REAL NOT NULL
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+    _get_cache_conn()  # connection creation handles schema init
+
 
 def _get_cached_data(symbol: str) -> Optional[Dict[str, Any]]:
     """Retrieve cached factor data if still valid."""
     try:
-        conn = sqlite3.connect(CACHE_DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT data, timestamp FROM factor_cache WHERE symbol = ?",
-            (symbol,)
-        )
-        result = cursor.fetchone()
-        conn.close()
-        
+        conn = _get_cache_conn()
+        with _cache_lock:
+            cursor = conn.execute(
+                "SELECT data, timestamp FROM factor_cache WHERE symbol = ?",
+                (symbol,)
+            )
+            result = cursor.fetchone()
+
         if result:
             data_json, timestamp = result
             cache_age_hours = (datetime.now().timestamp() - timestamp) / 3600
-            
+
             if cache_age_hours < CACHE_DURATION_HOURS:
                 return json.loads(data_json)
-        
+
         return None
     except Exception as e:
         logger.warning(f"Error reading cache for {symbol}: {e}")
         return None
 
+
 def _save_to_cache(symbol: str, data: Dict[str, Any]):
     """Save factor data to cache."""
     try:
-        conn = sqlite3.connect(CACHE_DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "INSERT OR REPLACE INTO factor_cache (symbol, data, timestamp) VALUES (?, ?, ?)",
-            (symbol, json.dumps(data), datetime.now().timestamp())
-        )
-        
-        conn.commit()
-        conn.close()
+        conn = _get_cache_conn()
+        with _cache_lock:
+            conn.execute(
+                "INSERT OR REPLACE INTO factor_cache (symbol, data, timestamp) VALUES (?, ?, ?)",
+                (symbol, json.dumps(data), datetime.now().timestamp())
+            )
+            conn.commit()
     except Exception as e:
         logger.warning(f"Error saving cache for {symbol}: {e}")
 
+
 def _clear_old_cache():
-    """Remove cache entries older than MAX_CACHE_SIZE."""
+    """Remove cache entries beyond MAX_CACHE_SIZE."""
     try:
-        conn = sqlite3.connect(CACHE_DB_PATH)
-        cursor = conn.cursor()
-        
-        # Keep only the most recent MAX_CACHE_SIZE entries
-        cursor.execute("""
-            DELETE FROM factor_cache
-            WHERE symbol NOT IN (
-                SELECT symbol FROM factor_cache
-                ORDER BY timestamp DESC
-                LIMIT ?
-            )
-        """, (MAX_CACHE_SIZE,))
-        
-        conn.commit()
-        conn.close()
+        conn = _get_cache_conn()
+        with _cache_lock:
+            conn.execute("""
+                DELETE FROM factor_cache
+                WHERE symbol NOT IN (
+                    SELECT symbol FROM factor_cache
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                )
+            """, (MAX_CACHE_SIZE,))
+            conn.commit()
     except Exception as e:
         logger.warning(f"Error clearing old cache: {e}")
 

@@ -178,6 +178,22 @@ class MonteCarloInputs:
     n_simulations: int = 10_000
     random_seed: Optional[int] = None
 
+    def __post_init__(self) -> None:
+        if self.initial_portfolio < 0:
+            raise ValueError(f"initial_portfolio must be >= 0, got {self.initial_portfolio}")
+        if self.annual_withdrawal < 0:
+            raise ValueError(f"annual_withdrawal must be >= 0, got {self.annual_withdrawal}")
+        if self.start_age < 0:
+            raise ValueError(f"start_age must be >= 0, got {self.start_age}")
+        if self.end_age <= self.start_age:
+            raise ValueError(
+                f"end_age ({self.end_age}) must be greater than start_age ({self.start_age})"
+            )
+        if not (0.0 <= self.inflation_rate <= 1.0):
+            raise ValueError(f"inflation_rate must be between 0 and 1, got {self.inflation_rate}")
+        if self.n_simulations < 1:
+            raise ValueError(f"n_simulations must be >= 1, got {self.n_simulations}")
+
 
 @dataclass
 class SimulationYear:

@@ -31,13 +31,15 @@ from functools import lru_cache
 from load_data import (
     get_income_tax_brackets,
     get_cap_gains_brackets,
-    get_std_deduction
+    get_std_deduction,
+    get_medicare_costs,
 )
 from config import get_config_manager as _betr_get_config_manager
 from calculations import (
     calculate_taxable_income,
     calc_agi,
-    getUpperIncomeRate
+    getUpperIncomeRate,
+    calculate_irmma_penalty,
 )
 
 # Configure logging
@@ -99,6 +101,10 @@ class BETRInputs:
     # Tax year for bracket lookups (optional, defaults to current year)
     tax_year: Optional[int] = None  # Year for tax bracket data lookup
 
+    # IRMAA cliff inputs (optional — leave at defaults if not yet on Medicare)
+    magi_before_conversion: float = 0.0  # MAGI in tax_year *before* the conversion
+    people_on_medicare: int = 0          # 0 = skip IRMAA check; 1 or 2 = apply surcharge
+
 
 @dataclass
 class BETRResults:
@@ -117,6 +123,9 @@ class BETRResults:
     
     # Analysis details
     analysis_notes: List[str]      # Detailed notes about the analysis
+
+    # IRMAA cost (present value of incremental Medicare surcharge triggered by the conversion)
+    irmaa_surcharge_pv: float = 0.0   # $0 when IRMAA is not applicable
 
 def _validate_numeric_input(
     value,
@@ -487,6 +496,16 @@ def calculate_betr_rate(
         conversion_amount, annual_return, years, ordinary_income_tax_rate
     )
 
+    # Guard against zero/negative conversion_fv before dividing.
+    # conversion_fv = conversion_amount * (1 + annual_return)^years reaches zero
+    # when annual_return == -1.0 (total loss), which passes _validate_conversion_inputs.
+    if result.conversion_fv <= 0:
+        raise ValueError(
+            f"conversion_fv={result.conversion_fv:,.6f} is non-positive "
+            f"(annual_return={annual_return}, years={years}); "
+            "BETR is undefined for a total-loss return assumption."
+        )
+
     # Calculate BETR: 1 - (After-Tax FV / Conversion FV)
     betr = 1 - (result.after_tax_fv / result.conversion_fv)
 
@@ -524,9 +543,98 @@ def _get_ltcg_rate(income: float, year: int) -> float:
         
         # If income exceeds all brackets, return highest rate
         return 0.20
-    except Exception as e:
-        logger.warning(f"Could not lookup LTCG rate for year {year}, using 15% default: {e}")
+    except (OSError, KeyError, ValueError) as e:
+        logger.warning(f"Could not lookup LTCG rate for year {year}, using 15% default: {e}", exc_info=True)
         return 0.15  # Conservative default
+
+
+def _calculate_irmaa_conversion_cost(
+    magi_before: float,
+    conversion_amount: float,
+    people: int,
+    tax_year: int,
+    annual_return: float,
+) -> Tuple[float, str]:
+    """Return the present-value cost of the incremental IRMAA surcharge triggered
+    by adding *conversion_amount* to MAGI.
+
+    Background
+    ----------
+    IRMAA is assessed two years in arrears: a conversion in *tax_year* affects
+    Medicare premiums in *tax_year + 2*.  The surcharge applies for exactly one
+    calendar year (the premium year), so the PV is simply the incremental annual
+    surcharge discounted back two years at *annual_return*.
+
+    The function tries to look up IRMAA brackets for *tax_year + 2* from the
+    data file; if that year is absent it falls back to the most recent available
+    year (IRMAA brackets are projected forward in irmaa.csv several years).
+
+    Args:
+        magi_before:       MAGI *before* the Roth conversion (in tax_year).
+        conversion_amount: Size of the conversion (added to MAGI for IRMAA).
+        people:            Number of people on Medicare (1 or 2).
+        tax_year:          The year the conversion is made.
+        annual_return:     Discount rate (same as the portfolio return assumption).
+
+    Returns:
+        Tuple of (present_value_cost, human_readable_note).
+        Returns (0.0, '') when no incremental IRMAA is triggered.
+    """
+    if people <= 0 or magi_before < 0 or conversion_amount <= 0:
+        return 0.0, ''
+
+    magi_after = magi_before + conversion_amount
+    irmaa_year = tax_year + 2  # Two-year look-back rule
+
+    # Load IRMAA brackets for the premium year; fall back to the latest available year.
+    try:
+        brackets = get_medicare_costs(irmaa_year)
+        if brackets.empty:
+            # Year not in CSV — use the highest year present
+            import pandas as _pd
+            all_brackets = _pd.read_csv('irmaa.csv')
+            latest_year = int(all_brackets['year'].max())
+            brackets = get_medicare_costs(latest_year)
+            if brackets.empty:
+                logger.warning("IRMAA data unavailable — skipping IRMAA cost in BETR")
+                return 0.0, ''
+            logger.debug(
+                f"IRMAA brackets for {irmaa_year} not found; using {latest_year} as proxy"
+            )
+    except (OSError, KeyError, ValueError) as exc:
+        logger.warning(f"Could not load IRMAA data: {exc} — skipping IRMAA cost in BETR", exc_info=True)
+        return 0.0, ''
+
+    # Build a slim lookup DataFrame containing only the three columns that
+    # calculate_irmma_penalty expects: lower, upper, part_b_monthly.
+    # We combine Part B + Part D surcharges so the full Medicare cost increase
+    # is captured (Part D IRMAA is a meaningful additional cost at higher brackets).
+    brackets = brackets.copy()
+    if 'part_d_irmaa_monthly' in brackets.columns:
+        brackets['part_b_monthly'] = (
+            brackets['part_b_monthly'] + brackets['part_d_irmaa_monthly']
+        )
+    lookup = brackets[['lower', 'upper', 'part_b_monthly']].copy()
+
+    annual_before = calculate_irmma_penalty(magi_before, lookup, people)
+    annual_after  = calculate_irmma_penalty(magi_after,  lookup, people)
+    annual_delta  = annual_after - annual_before
+
+    if annual_delta <= 0:
+        return 0.0, ''
+
+    # Discount the one-year surcharge back two years (it hits in tax_year + 2)
+    discount_factor = (1 + annual_return) ** 2
+    pv_cost = annual_delta / discount_factor
+
+    note = (
+        f"IRMAA cliff: conversion raises MAGI from ${magi_before:,.0f} to "
+        f"${magi_after:,.0f}, triggering an incremental Medicare surcharge of "
+        f"${annual_delta:,.0f}/yr in {irmaa_year} "
+        f"(PV cost = ${pv_cost:,.0f} discounted at {annual_return:.1%})"
+    )
+    logger.info(f"IRMAA conversion cost: annual_delta=${annual_delta:,.2f}, PV=${pv_cost:,.2f}")
+    return pv_cost, note
 
 
 def calculate_betr(inputs: BETRInputs) -> BETRResults:
@@ -709,7 +817,51 @@ def calculate_betr(inputs: BETRInputs) -> BETRResults:
             logger.info(f"Base BETR (no growth): {betr:.4%}")
     
     logger.info(f"Step 4 Result - Base BETR: {betr:.4%}")
-    
+
+    # Step 4b: Adjust BETR for IRMAA cliff cost
+    # A Roth conversion raises MAGI in tax_year; under the two-year look-back rule
+    # IRMAA premiums increase in tax_year+2.  We compute the PV of that one-year
+    # surcharge (Part B + Part D) and reduce the effective Roth future value by it,
+    # which raises the BETR threshold to properly account for this hidden cost.
+    logger.info("--- Step 4b: Adjust BETR for IRMAA Cliff Cost ---")
+    irmaa_pv = 0.0
+    if inputs.people_on_medicare > 0 and inputs.magi_before_conversion > 0:
+        irmaa_pv, irmaa_note = _calculate_irmaa_conversion_cost(
+            magi_before=inputs.magi_before_conversion,
+            conversion_amount=inputs.conversion_amount,
+            people=inputs.people_on_medicare,
+            tax_year=tax_year,
+            annual_return=inputs.annual_return,
+        )
+        if irmaa_pv > 0:
+            # Reduce the effective after-tax Roth future value so the BETR formula
+            # absorbs the Medicare cost.  The adjustment mirrors how conversion_tax
+            # is already embedded in roth_future_net via the opportunity-cost path.
+            if inputs.pay_from_taxable:
+                _atfv = calculate_conversion_after_tax_future_value(
+                    inputs.conversion_amount,
+                    inputs.annual_return,
+                    inputs.years_to_withdrawal,
+                    inputs.current_marginal_rate,
+                )
+                if _atfv.conversion_fv > 0:
+                    betr = 1 - (
+                        (_atfv.after_tax_fv - irmaa_pv) / _atfv.conversion_fv
+                    )
+            else:
+                # Paying from IRA path: deduct IRMAA PV from roth_future_net
+                roth_future_net_adj = roth_future_net - irmaa_pv
+                if traditional_future_gross > 0:
+                    betr = 1 - (roth_future_net_adj / traditional_future_gross)
+            analysis_notes.append(irmaa_note)
+            logger.info(f"IRMAA adjustment applied: PV=${irmaa_pv:,.2f}, BETR → {betr:.4%}")
+        else:
+            logger.info("No IRMAA bracket change triggered by this conversion")
+    else:
+        logger.info("IRMAA check skipped (people_on_medicare=0 or no magi_before_conversion)")
+
+    logger.info(f"Step 4b Result - BETR after IRMAA adjustment: {betr:.4%}")
+
     # Step 5: Adjust BETR for nontaxable basis
     logger.info("--- Step 5: Adjust BETR for Nontaxable Basis ---")
     if inputs.nontaxable_basis > 0:
@@ -799,6 +951,7 @@ def calculate_betr(inputs: BETRInputs) -> BETRResults:
         traditional_future_value=traditional_future_net,
         roth_future_value=roth_future_net,
         taxable_account_impact=conversion_tax if inputs.pay_from_taxable else 0,
+        irmaa_surcharge_pv=irmaa_pv,
         analysis_notes=analysis_notes
     )
 

@@ -36,44 +36,101 @@ from typing import Dict, Tuple, Optional, List, Any, Union, Iterator, Sequence, 
 from dataclasses import dataclass, field, asdict, replace
 from enum import Enum
 
-# Dynamic Security Selection Integration
-# Note: Import is deferred to avoid circular dependency
-SMART_SELECTION_AVAILABLE = False
-withdraw_from_brokerage_smart = None
-should_use_smart_selection = None
-format_liquidation_summary_for_log = None
-DEFAULT_TARGET_ALLOCATION = {'Cash': 10.0, 'Bonds': 30.0, 'Stocks': 60.0}
+# ---------------------------------------------------------------------------
+# Dynamic Security Selection — lazy-initialised singleton registry
+# ---------------------------------------------------------------------------
+# Deferred import avoids a circular dependency with security_selection_integration.
+# Encapsulating all mutable state in SmartSelectionRegistry makes each instance
+# independent, so tests can create a fresh registry without reloading the module.
 
-def _init_smart_selection():
-    """Initialize smart selection module (deferred import to avoid circular dependency)."""
-    global SMART_SELECTION_AVAILABLE, withdraw_from_brokerage_smart
-    global should_use_smart_selection, format_liquidation_summary_for_log, DEFAULT_TARGET_ALLOCATION
-    
-    if SMART_SELECTION_AVAILABLE:
-        return  # Already initialized
-    
-    try:
-        from security_selection_integration import (
-            withdraw_from_brokerage_smart as _withdraw,
-            should_use_smart_selection as _should_use,
-            format_liquidation_summary_for_log as _format,
-            DEFAULT_TARGET_ALLOCATION as _default_alloc,
-        )
-        withdraw_from_brokerage_smart = _withdraw
-        should_use_smart_selection = _should_use
-        format_liquidation_summary_for_log = _format
-        DEFAULT_TARGET_ALLOCATION = _default_alloc
-        SMART_SELECTION_AVAILABLE = True
-        logger.info("Smart security selection enabled")
-    except ImportError as e:
-        logger.warning(f"Security selection module not available: {e}, using FIFO fallback")
-        SMART_SELECTION_AVAILABLE = False
+class SmartSelectionRegistry:
+    """Lazy-initialised holder for the optional security-selection integration.
+
+    Call :meth:`init` (or access any property) to attempt the deferred import.
+    The result is cached on the instance, so the import is attempted at most
+    once per registry object — never at module import time.
+
+    For tests that need an isolated state, instantiate a new registry directly::
+
+        reg = SmartSelectionRegistry()
+        reg._available = True          # inject a stub
+        reg._withdraw  = my_stub_fn
+    """
+
+    _DEFAULT_ALLOCATION = {'Cash': 10.0, 'Bonds': 30.0, 'Stocks': 60.0}
+
+    def __init__(self) -> None:
+        self._initialised: bool = False
+        self._available: bool = False
+        self._withdraw = None
+        self._should_use = None
+        self._format_summary = None
+        self._default_allocation: dict = dict(self._DEFAULT_ALLOCATION)
+
+    def init(self) -> None:
+        """Attempt the deferred import once; silently falls back on ImportError."""
+        if self._initialised:
+            return
+        self._initialised = True          # set before the import so re-entrant calls are safe
+        try:
+            from security_selection_integration import (
+                withdraw_from_brokerage_smart as _withdraw,
+                should_use_smart_selection as _should_use,
+                format_liquidation_summary_for_log as _format,
+                DEFAULT_TARGET_ALLOCATION as _default_alloc,
+            )
+            self._withdraw = _withdraw
+            self._should_use = _should_use
+            self._format_summary = _format
+            self._default_allocation = _default_alloc
+            self._available = True
+            logger.info("Smart security selection enabled")
+        except ImportError as e:
+            logger.warning(f"Security selection module not available: {e}, using FIFO fallback")
+
+    # ------------------------------------------------------------------
+    # Properties — each one triggers init() so callers need not call it
+    # explicitly.  The one at line 2791 previously relied on an earlier
+    # call having run _init_smart_selection(); the property ensures it is
+    # always initialised on first access regardless of call order.
+    # ------------------------------------------------------------------
+
+    @property
+    def available(self) -> bool:
+        self.init()
+        return self._available
+
+    @property
+    def withdraw(self):
+        self.init()
+        return self._withdraw
+
+    @property
+    def should_use(self):
+        self.init()
+        return self._should_use
+
+    @property
+    def format_summary(self):
+        self.init()
+        return self._format_summary
+
+    @property
+    def default_allocation(self) -> dict:
+        self.init()
+        return self._default_allocation
+
+
+# Module-level singleton — all production code uses this instance.
+# Tests that need isolation should instantiate SmartSelectionRegistry() directly.
+_smart_selection = SmartSelectionRegistry()
 
 from load_data import (
     get_income_tax_brackets,
     get_cap_gains_brackets,
     get_std_deduction,
     get_medicare_costs,
+    get_medicare_premiums,
     get_atm_costs,
     get_networth_by_month,
     get_fica_limits,
@@ -172,33 +229,56 @@ NIIT_THRESHOLDS: Dict[str, int] = {
 # Minimum age for Medicare eligibility (fixed by statute)
 MEDICARE_ELIGIBILITY_AGE: int = 65
 
-# Medicare Part D base premium (annual; updated each year by CMS)
-PART_D_ANNUAL_BASE_PREMIUM: int = 480   # ~$40/month average
-
-# Medigap supplemental insurance premium (annual estimate)
-MEDIGAP_ANNUAL_PREMIUM: int = 2_400     # ~$200/month average
-
-# Medicare Part B standard monthly premium (2024; updated annually by CMS).
-# Used as the fallback when IRMAA bracket data is unavailable.
-PART_B_MONTHLY_STANDARD_PREMIUM: float = 174.70
-
 # Minimum age for penalty-free withdrawals from Traditional IRA / 401k (IRC §72(t))
 EARLY_WITHDRAWAL_PENALTY_AGE: float = 59.5
 
-# ACA marketplace premium estimate per person per month (pre-Medicare)
-# Annualised: ACA_MONTHLY_PREMIUM_PER_PERSON * 12 = $12,000/year
-ACA_MONTHLY_PREMIUM_PER_PERSON: int = 1_000
+# ---------------------------------------------------------------------------
+# Year-dependent Medicare/healthcare premiums
+# ---------------------------------------------------------------------------
+# These values are loaded from medicare_premiums.csv and irmaa.csv at runtime
+# so that CMS annual updates require only a CSV edit, not a code change.
+# The helper _get_medicare_premiums_row(year) provides a safe single access
+# point with a hardcoded fallback for use when the CSV is unavailable.
 
-# Annual out-of-pocket healthcare costs by health status
-OOP_COSTS_BY_HEALTH_STATUS: Dict[str, int] = {
-    'healthy': 4_000,
-    'average': 6_500,
-    'chronic': 12_000,
+_MEDICARE_PREMIUMS_FALLBACK: Dict[str, Any] = {
+    'medigap_annual':       2_400,
+    'oop_healthy':          4_000,
+    'oop_average':          6_500,
+    'oop_chronic':         12_000,
+    'ltc_annual_per_person': 3_500,
+    'ltc_escalation_rate':   0.05,
+    'ltc_base_year':        2024,
+    # FPL 2024 actuals; updated annually via medicare_premiums.csv
+    'fpl_base':            19_267,
+    'fpl_per_person':       6_900,
 }
-OOP_COST_DEFAULT: int = OOP_COSTS_BY_HEALTH_STATUS['average']
 
-# Long-term care insurance annual premium per person (average estimate)
-LTC_ANNUAL_PREMIUM_PER_PERSON: int = 3_500
+
+def _get_medicare_premiums_row(year: int) -> Dict[str, Any]:
+    """Return a dict of year-specific premium values from medicare_premiums.csv.
+
+    Falls back to :data:`_MEDICARE_PREMIUMS_FALLBACK` when the CSV is absent
+    or does not contain the requested year, so the simulation can still run
+    while logging a warning.
+    """
+    try:
+        row_df = get_medicare_premiums(year)
+        if not row_df.empty:
+            row = row_df.iloc[0]
+            return {
+                'medigap_annual':        float(row['medigap_annual']),
+                'oop_healthy':           float(row['oop_healthy']),
+                'oop_average':           float(row['oop_average']),
+                'oop_chronic':           float(row['oop_chronic']),
+                'ltc_annual_per_person': float(row['ltc_annual_per_person']),
+                'ltc_escalation_rate':   float(row['ltc_escalation_rate']),
+                'ltc_base_year':         int(row['ltc_base_year']),
+                'fpl_base':              float(row['fpl_base']),
+                'fpl_per_person':        float(row['fpl_per_person']),
+            }
+    except Exception as _e:
+        logger.warning("Could not load medicare_premiums.csv for year %d: %s — using built-in defaults", year, _e)
+    return dict(_MEDICARE_PREMIUMS_FALLBACK)
 
 # IRMAA uses a 2-year lookback: the surcharge applied in year N is based on
 # MAGI reported in year N-2.  This constant makes that window explicit and
@@ -209,6 +289,13 @@ _IRMAA_LOOKBACK_YEARS: int = 2
 # Avoids triggering taxable distributions for trivially small shortfalls.
 # Used by both replenish_cash_buffer() and replenish_brokerage_buffer().
 _BUFFER_REPLENISHMENT_MIN_DEFICIT: float = 100.0
+
+# Fraction of the post-withdrawal brokerage account value below which a
+# depleted tax lot is treated as zero and removed.  Scales with account size
+# so a $1M account uses a ~$1 threshold while a $10M account uses ~$10,
+# avoiding false "phantom lots" caused by floating-point residuals.
+# A hard floor of $0.01 is kept to handle near-empty accounts.
+_LOT_CLEANUP_MIN_FRACTION: float = 0.000001  # 0.0001% of account value
 
 # Maximum fraction of the Traditional balance that may be distributed to the
 # brokerage buffer in a single year.  Caps the ordinary-income tax hit.
@@ -344,9 +431,9 @@ class BrokerageAccount:
         
         Returns:
             Ratio of gains to total value (0.0 to 1.0)
-            Falls back to 0.40 if account is empty
+            Falls back to 0.40 if account is empty or has non-positive value
         """
-        if self.total_value == 0:
+        if self.total_value <= 0:
             return BROKERAGE_LTCG_RATIO  # Fallback to 40% assumption
         return self.total_gains / self.total_value
     
@@ -473,8 +560,11 @@ class BrokerageAccount:
                 f"basis ${basis_from_lot:,.0f}, gain ${gains_from_lot:,.0f}"
             )
         
-        # Clean up depleted transactions (keep lots with >$0.01 to avoid floating point issues)
-        self.transactions = [t for t in self.transactions if t.current_value > 0.01]
+        # Clean up depleted transactions.  The threshold scales with the
+        # post-withdrawal account value so floating-point residuals are
+        # correctly discarded regardless of portfolio size.
+        lot_cleanup_threshold = max(0.01, self.total_value * _LOT_CLEANUP_MIN_FRACTION)
+        self.transactions = [t for t in self.transactions if t.current_value > lot_cleanup_threshold]
         
         logger.info(
             f"Year {year}: Withdrew ${amount:,.0f} from brokerage "
@@ -484,6 +574,166 @@ class BrokerageAccount:
         
         return basis_returned, ltcg_realized
     
+    def withdraw_highest_gain(self, amount: float, year: int) -> Tuple[float, float]:
+        """
+        Withdraw using HIFO (Highest-gain-first) order.
+
+        Used exclusively for DAF donations: donating appreciated securities to a
+        DAF eliminates the capital gain entirely (no LTCG recognised by the donor),
+        so removing the highest-gain lots first maximises the tax benefit and leaves
+        behind a portfolio with a higher basis ratio.  Subsequent Brokerage → Cash
+        withdrawals (FIFO) therefore realise less taxable LTCG.
+
+        Args:
+            amount: Fair-market value to transfer to the DAF
+            year:   Current year (for logging)
+
+        Returns:
+            Tuple of (basis_donated, gain_eliminated)
+            - basis_donated:    Tax basis of the lots removed (informational)
+            - gain_eliminated:  Embedded gain that would have been taxable on a
+                                normal sale but is completely avoided via the DAF
+        """
+        if amount <= 0:
+            return 0.0, 0.0
+
+        if amount > self.total_value:
+            logger.warning(
+                f"Year {year}: DAF donation ${amount:,.0f} exceeds brokerage "
+                f"balance ${self.total_value:,.0f}; capping at available balance."
+            )
+            amount = self.total_value
+
+        # Sort lots highest gain-percentage first so the most appreciated
+        # securities are donated first (maximises gain elimination per dollar).
+        sorted_txns = sorted(
+            self.transactions,
+            key=lambda t: t.calculate_gain() / t.current_value if t.current_value > 0 else 0.0,
+            reverse=True,
+        )
+
+        remaining = amount
+        basis_donated = 0.0
+        gain_eliminated = 0.0
+
+        for txn in sorted_txns:
+            if remaining <= 0:
+                break
+            if txn.current_value <= 0:
+                continue
+
+            withdraw_from_lot = min(remaining, txn.current_value)
+            lot_ratio = withdraw_from_lot / txn.current_value
+            basis_from_lot = txn.cost_basis * lot_ratio
+            gain_from_lot = withdraw_from_lot - basis_from_lot
+
+            basis_donated += basis_from_lot
+            gain_eliminated += gain_from_lot
+
+            txn.current_value -= withdraw_from_lot
+            txn.cost_basis -= basis_from_lot
+            remaining -= withdraw_from_lot
+
+            logger.debug(
+                f"  DAF HIFO: donated ${withdraw_from_lot:,.0f} from "
+                f"{txn.source} lot (year {txn.transfer_date}, "
+                f"held {txn.years_held} yrs): "
+                f"basis ${basis_from_lot:,.0f}, gain eliminated ${gain_from_lot:,.0f}"
+            )
+
+        # Remove depleted lots
+        lot_cleanup_threshold = max(0.01, self.total_value * _LOT_CLEANUP_MIN_FRACTION)
+        self.transactions = [
+            t for t in self.transactions if t.current_value > lot_cleanup_threshold
+        ]
+
+        logger.info(
+            f"Year {year}: DAF HIFO donation ${amount:,.0f} from brokerage — "
+            f"basis donated ${basis_donated:,.0f}, "
+            f"gain eliminated ${gain_eliminated:,.0f} "
+            f"(ltcg ratio after: {self.ltcg_ratio:.1%})"
+        )
+        return basis_donated, gain_eliminated
+
+    def withdraw_lowest_gain(self, amount: float, year: int) -> Tuple[float, float]:
+        """
+        Withdraw using LOFO (Lowest-gain-first) order.
+
+        Used for Brokerage → Cash transfers in pre-fund years.  In a pre-fund year
+        the DAF has already claimed (or will claim) the highest-gain lots via HIFO.
+        When filling the cash buffer, selling the lowest-gain lots next minimises the
+        LTCG recognised in that year, keeping AGI as low as possible alongside the
+        large Traditional distribution.
+
+        Args:
+            amount: Amount to withdraw to cash
+            year:   Current year (for logging)
+
+        Returns:
+            Tuple of (basis_returned, ltcg_realized)
+            - basis_returned: Tax-free return of cost basis
+            - ltcg_realized:  Taxable long-term capital gains realised
+        """
+        if amount <= 0:
+            return 0.0, 0.0
+
+        if amount > self.total_value:
+            logger.warning(
+                f"Year {year}: LOFO withdrawal ${amount:,.0f} exceeds brokerage "
+                f"balance ${self.total_value:,.0f}; capping at available balance."
+            )
+            amount = self.total_value
+
+        # Sort lots lowest gain-percentage first to minimise LTCG per dollar withdrawn.
+        sorted_txns = sorted(
+            self.transactions,
+            key=lambda t: t.calculate_gain() / t.current_value if t.current_value > 0 else 0.0,
+            reverse=False,
+        )
+
+        remaining = amount
+        basis_returned = 0.0
+        ltcg_realized = 0.0
+
+        for txn in sorted_txns:
+            if remaining <= 0:
+                break
+            if txn.current_value <= 0:
+                continue
+
+            withdraw_from_lot = min(remaining, txn.current_value)
+            lot_ratio = withdraw_from_lot / txn.current_value
+            basis_from_lot = txn.cost_basis * lot_ratio
+            gain_from_lot = withdraw_from_lot - basis_from_lot
+
+            basis_returned += basis_from_lot
+            ltcg_realized += gain_from_lot
+
+            txn.current_value -= withdraw_from_lot
+            txn.cost_basis -= basis_from_lot
+            remaining -= withdraw_from_lot
+
+            logger.debug(
+                f"  LOFO cash: withdrew ${withdraw_from_lot:,.0f} from "
+                f"{txn.source} lot (year {txn.transfer_date}, "
+                f"held {txn.years_held} yrs): "
+                f"basis ${basis_from_lot:,.0f}, gain ${gain_from_lot:,.0f}"
+            )
+
+        # Remove depleted lots
+        lot_cleanup_threshold = max(0.01, self.total_value * _LOT_CLEANUP_MIN_FRACTION)
+        self.transactions = [
+            t for t in self.transactions if t.current_value > lot_cleanup_threshold
+        ]
+
+        logger.info(
+            f"Year {year}: LOFO cash withdrawal ${amount:,.0f} from brokerage — "
+            f"basis returned ${basis_returned:,.0f}, "
+            f"LTCG realized ${ltcg_realized:,.0f} "
+            f"(ltcg ratio: {ltcg_realized/amount:.1%} of withdrawal)"
+        )
+        return basis_returned, ltcg_realized
+
     def get_summary(self) -> Dict[str, Any]:
         """
         Get account summary for reporting.
@@ -512,6 +762,52 @@ class BrokerageAccount:
                 if self.transactions else 0
             )
         }
+
+
+def apply_daf_to_brokerage_account(
+    balances: 'PortfolioBalances',
+    daf_contribution: float,
+    year: int,
+    brokerage_account: Optional['BrokerageAccount'] = None,
+) -> 'PortfolioBalances':
+    """
+    Deduct a DAF contribution from the brokerage (taxable) account and update
+    lot-level cost-basis tracking using HIFO (highest-gain-first) order.
+
+    Donating appreciated securities to a DAF is more tax-efficient than selling
+    them: the embedded capital gain is completely eliminated (no LTCG recognised),
+    and the donor still deducts the full fair-market value.  Selecting the
+    highest-gain lots first maximises the eliminated gain per dollar donated.
+    After the donation, the remaining portfolio has a higher basis ratio, which
+    permanently lowers the LTCG recognised on all future Brokerage → Cash
+    withdrawals.
+
+    Args:
+        balances:           Current portfolio balances.
+        daf_contribution:   Amount being transferred to the DAF this year.
+        year:               Current calendar year (for logging).
+        brokerage_account:  Live BrokerageAccount lot tracker.  When supplied,
+                            HIFO lot removal keeps the tracker in sync with the
+                            scalar balance.  When None (no tracker available),
+                            only the scalar balance is updated.
+
+    Returns:
+        Updated PortfolioBalances with taxable reduced by daf_contribution.
+    """
+    if daf_contribution <= 0:
+        return balances
+
+    # Remove highest-gain lots from the tracker (tax-free via DAF donation)
+    if brokerage_account is not None:
+        brokerage_account.withdraw_highest_gain(daf_contribution, year)
+
+    return PortfolioBalances(
+        cash=balances.cash,
+        taxable=balances.taxable - daf_contribution,
+        traditional=balances.traditional,
+        roth=balances.roth,
+        daf=balances.daf,
+    )
 
 
 def initialize_brokerage_account(
@@ -688,37 +984,38 @@ def calculate_ss_taxable_amount(ss_benefits: float, agi_without_ss: float,
 def calculate_preretirement_healthcare_for_year(year: int, age_primary: int, age_spouse: int) -> float:
     """
     Calculate total pre-retirement (working) healthcare premium for a given year.
-    
+
     This covers employer or private insurance while still working, before retirement.
-    
+    In the retirement year the premium is prorated by the fraction of the year the
+    person is still employed (derived from the configured retirement date).
+
     Args:
         year: Current year
         age_primary: Primary person's age
         age_spouse: Spouse's age
-    
+
     Returns:
-        Annual pre-retirement healthcare premium cost (sum of both people if applicable)
+        Annual pre-retirement healthcare premium cost, prorated in the retirement year
     """
     config_mgr = get_config_manager()
-    
-    # Get retirement ages
-    person1_retirement_age = config_mgr.get("personal_info", "person1_retirement_age", 62)
-    person2_retirement_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
-    
+
     # Get pre-retirement healthcare premiums
     person1_monthly_premium = config_mgr.get("healthcare", "person1_preretirement_insurance_monthly", 0)
     person2_monthly_premium = config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0)
-    
+
     total_annual_premium = 0.0
-    
-    # Person 1: pre-retirement healthcare applies if still working (before retirement age)
-    if age_primary < person1_retirement_age and person1_monthly_premium > 0:
-        total_annual_premium += person1_monthly_premium * 12
-    
-    # Person 2: pre-retirement healthcare applies if still working (before retirement age)
-    if age_spouse > 0 and age_spouse < person2_retirement_age and person2_monthly_premium > 0:
-        total_annual_premium += person2_monthly_premium * 12
-    
+
+    # Person 1: prorate by the fraction of the year still employed
+    p1_fraction = config_mgr.get_retirement_fraction(1, year)
+    if p1_fraction > 0 and person1_monthly_premium > 0:
+        total_annual_premium += person1_monthly_premium * 12 * p1_fraction
+
+    # Person 2: prorate by the fraction of the year still employed
+    if age_spouse > 0:
+        p2_fraction = config_mgr.get_retirement_fraction(2, year)
+        if p2_fraction > 0 and person2_monthly_premium > 0:
+            total_annual_premium += person2_monthly_premium * 12 * p2_fraction
+
     return total_annual_premium
 
 
@@ -1071,6 +1368,8 @@ def optimize_rmd_lookback(strategies: list,
                             filing_status = config_mgr.get_filing_status()
                             tax_brackets = get_income_tax_brackets(year_strategy.year)
                             std_deduction_df = get_std_deduction(year_strategy.year, filing_status)
+                            if std_deduction_df.empty:
+                                raise ValueError(f"No standard deduction data for year {year_strategy.year}")
                             std_deduction = std_deduction_df.iloc[0]['deduction']
                             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year_strategy.year))
                             
@@ -1159,7 +1458,12 @@ def optimize_rmd_lookback(strategies: list,
                             logger.info(f"  Tax recalculation: AGI increased by ${max_additional_conversion:,.2f}")
                             logger.info(f"  New AGI: ${year_strategy.agi:,.2f}, New Federal Tax: ${year_strategy.federal_tax:,.2f}, New State Tax: ${year_strategy.state_tax:,.2f}")
                         except Exception as e:
-                            logger.warning(f"  Could not recalculate taxes after optimization: {e}")
+                            raise RuntimeError(
+                                f"Year {year_strategy.year}: tax recalculation failed after "
+                                f"RMD-lookback conversion adjustment — projection data is "
+                                f"incomplete for this year. "
+                                f"Original error: {e}"
+                            ) from e
                         
                         total_additional_conversions += max_additional_conversion
                         years_adjusted += 1
@@ -1178,7 +1482,7 @@ def optimize_rmd_lookback(strategies: list,
                                    f"additional conversion not recommended")
                         
                 except Exception as e:
-                    logger.warning(f"Year {year_strategy.year}: BETR verification failed: {e}")
+                    raise
         
         adjusted_strategies.append(year_strategy)
     
@@ -1301,6 +1605,8 @@ def calculate_payroll_taxes(wages: float, year: int = 2024) -> Tuple[float, Dict
         # Year beyond CSV range: project from last known row
         import pandas as _pd
         _all = _pd.read_csv('fica_limits.csv')
+        if _all.empty:
+            raise ValueError("fica_limits.csv is empty; cannot project payroll taxes")
         _last = _all.iloc[-1]
         _base_year       = int(_last['year'])
         _cola_rate       = float(_last['cola_rate_estimate'])
@@ -1536,18 +1842,16 @@ def calculate_amt(income: float, conversions: float, deductions: float,
     
     params = AMT_PARAMS.get(filing_status, AMT_PARAMS['married_filing_jointly'])
     
-    # Step 1: Calculate regular tax (simplified - use existing function)
-    try:
-        _tax_brackets = get_income_tax_brackets(year)
-        result = calculate_taxable_income(
-            income + conversions - deductions,
-            pd.DataFrame(_tax_brackets)
-        )
-        regular_tax = result.total_tax
-    except (ValueError, TypeError, KeyError) as e:
-        # Fallback to simple calculation
-        logging.warning(f"calculate_taxable_income failed, using fallback: {e}")
-        regular_tax = (income + conversions - deductions) * 0.24
+    # Step 1: Calculate regular tax using bracket data for the requested year.
+    # No fallback: a missing or malformed bracket table means the AMT figure
+    # would be materially wrong, so we raise rather than silently substitute
+    # a flat 24% rate that could misstate tax by tens of thousands of dollars.
+    _tax_brackets = get_income_tax_brackets(year)
+    result = calculate_taxable_income(
+        income + conversions - deductions,
+        pd.DataFrame(_tax_brackets)
+    )
+    regular_tax = result.total_tax
     
     # Step 2: Calculate AMTI (Alternative Minimum Taxable Income)
     amti = income + conversions
@@ -1648,18 +1952,6 @@ class _IrmaaResolved(NamedTuple):
     part_d_monthly_total: float   # Part D base + IRMAA surcharge, monthly
 
 
-# Sentinel returned by _resolve_irmaa when no IRMAA bracket matches (e.g. the
-# CSV is unavailable or the year is out of range).  Centralising the fallback
-# values here eliminates the duplicate _IrmaaResolved(...) literal that
-# previously appeared in both _resolve_irmaa and calculate_medicare_costs.
-_STANDARD_IRMAA_RESOLVED = _IrmaaResolved(
-    annual_irmaa_penalty=0.0,
-    part_b_monthly=PART_B_MONTHLY_STANDARD_PREMIUM,
-    part_a_monthly=0.0,
-    part_d_monthly_total=PART_D_ANNUAL_BASE_PREMIUM / 12,
-)
-
-
 def _resolve_irmaa(
     magi: float,
     irmaa_bracket_df: pd.DataFrame,
@@ -1674,9 +1966,10 @@ def _resolve_irmaa(
     * ``part_d_base_monthly`` — CMS national base Part D beneficiary premium
     * ``part_d_irmaa_monthly``— income-tiered Part D IRMAA surcharge
 
-    A single loop finds the matched bracket and extracts all four values at once,
-    replacing the previous two-pass pattern (``calculate_irmma_penalty`` + a
-    second ``.loc[]`` scan).
+    A single loop finds the matched bracket and extracts all four values at once.
+    The standard (lowest-bracket) premium is derived from the first row of the
+    DataFrame rather than a hardcoded constant, so ``irmaa.csv`` is the single
+    source of truth for Part B and Part D base rates.
 
     ``annual_irmaa_penalty`` is returned as a **per-person** value (``part_b *
     12``).  The caller is responsible for multiplying by the number of
@@ -1690,14 +1983,20 @@ def _resolve_irmaa(
             ``part_d_irmaa_monthly`` as returned by :func:`get_medicare_costs`.
 
     Returns:
-        :class:`_IrmaaResolved` namedtuple.  Falls back to
-        :data:`_STANDARD_IRMAA_RESOLVED` when no bracket matches.
+        :class:`_IrmaaResolved` namedtuple.  Falls back to the lowest bracket
+        row (standard premium, no surcharge) when no bracket matches.
     """
     cols = ['lower', 'upper', 'part_b_monthly', 'part_a_monthly',
             'part_d_base_monthly', 'part_d_irmaa_monthly']
+    # The lowest-bracket row (MAGI = 0) carries the CMS standard premiums.
+    # Derive the standard Part B monthly from the CSV so that any CMS update
+    # is captured by editing irmaa.csv alone, without touching this file.
+    standard_part_b = float(irmaa_bracket_df[cols[2]].iloc[0]) if not irmaa_bracket_df.empty else 0.0
+    standard_part_d = float(irmaa_bracket_df['part_d_base_monthly'].iloc[0]) if not irmaa_bracket_df.empty else 0.0
+
     for lower, upper, part_b, part_a, part_d_base, part_d_irmaa in irmaa_bracket_df[cols].values:
         if lower <= magi <= upper:
-            annual_penalty = max(0.0, (float(part_b) - PART_B_MONTHLY_STANDARD_PREMIUM) * 12)   # per-person; caller multiplies by eligible count
+            annual_penalty = max(0.0, (float(part_b) - standard_part_b) * 12)  # per-person; caller multiplies by eligible count
             part_d_total   = float(part_d_base) + float(part_d_irmaa)
             return _IrmaaResolved(
                 annual_irmaa_penalty=annual_penalty,
@@ -1705,8 +2004,13 @@ def _resolve_irmaa(
                 part_a_monthly=float(part_a),
                 part_d_monthly_total=part_d_total,
             )
-    # Fallback: no bracket matched — use statutory standard premiums
-    return _STANDARD_IRMAA_RESOLVED
+    # Fallback: no bracket matched — return standard premium (no surcharge)
+    return _IrmaaResolved(
+        annual_irmaa_penalty=0.0,
+        part_b_monthly=standard_part_b,
+        part_a_monthly=0.0,
+        part_d_monthly_total=standard_part_d,
+    )
 
 
 def _medicare_costs_for_person(
@@ -1716,12 +2020,14 @@ def _medicare_costs_for_person(
     part_a_monthly: float,
     part_d_monthly_total: float,
     has_medigap: bool,
+    medigap_annual: float = 2_400,
 ) -> Tuple[Dict[str, float], float]:
     """Return (breakdown_slice, subtotal) for one Medicare-eligible person.
 
     All premium inputs come from the matched ``irmaa.csv`` bracket row via
     :func:`_resolve_irmaa`, making ``irmaa.csv`` the single source of truth for
-    Part A, Part B, and Part D costs.
+    Part A, Part B, and Part D costs.  ``medigap_annual`` comes from
+    ``medicare_premiums.csv`` via :func:`_get_medicare_premiums_row`.
 
     Args:
         age: Person's current age.
@@ -1730,6 +2036,7 @@ def _medicare_costs_for_person(
         part_a_monthly: Monthly Part A premium (0 for premium-free Part A).
         part_d_monthly_total: Monthly Part D cost (base + IRMAA surcharge).
         has_medigap: Whether the person carries Medigap supplemental coverage.
+        medigap_annual: Annual Medigap premium from ``medicare_premiums.csv``.
 
     Returns:
         Tuple of (breakdown_slice, subtotal) where breakdown_slice contains the
@@ -1742,7 +2049,7 @@ def _medicare_costs_for_person(
     part_a   = part_a_monthly * 12
     part_b   = part_b_monthly * 12
     part_d   = part_d_monthly_total * 12
-    medigap  = MEDIGAP_ANNUAL_PREMIUM if has_medigap else 0.0
+    medigap  = medigap_annual if has_medigap else 0.0
     subtotal = part_a + part_b + part_d + medigap
 
     return {
@@ -1780,6 +2087,10 @@ def calculate_medicare_costs(age_primary: int,
     """
     logger.debug(f"Calculating Medicare costs for year {year}, ages {age_primary}/{age_spouse}")
 
+    # --- Load Medigap annual premium from medicare_premiums.csv ---------------
+    premiums = _get_medicare_premiums_row(year)
+    medigap_annual = premiums['medigap_annual']
+
     # --- Load IRMAA bracket table (I/O — isolated in its own try/except) ------
     try:
         irmaa_bracket_df = get_medicare_costs(year - 2)
@@ -1791,21 +2102,21 @@ def calculate_medicare_costs(age_primary: int,
     # _resolve_irmaa returns a per-person annual_irmaa_penalty; we multiply by
     # the actual number of Medicare-eligible persons below (after the helper
     # calls) so that mixed-age couples are handled correctly.
-    if isinstance(irmaa_bracket_df, pd.DataFrame):
+    if isinstance(irmaa_bracket_df, pd.DataFrame) and not irmaa_bracket_df.empty:
         resolved = _resolve_irmaa(magi_two_years_ago, irmaa_bracket_df)
     else:
-        resolved = _STANDARD_IRMAA_RESOLVED
+        resolved = _IrmaaResolved(annual_irmaa_penalty=0.0, part_b_monthly=0.0, part_a_monthly=0.0, part_d_monthly_total=0.0)
 
     # --- Compute per-person costs via the shared helper -----------------------
     primary_slice, primary_subtotal = _medicare_costs_for_person(
         age_primary, "primary",
         resolved.part_b_monthly, resolved.part_a_monthly,
-        resolved.part_d_monthly_total, has_medigap,
+        resolved.part_d_monthly_total, has_medigap, medigap_annual,
     )
     spouse_slice, spouse_subtotal = _medicare_costs_for_person(
         age_spouse, "spouse",
         resolved.part_b_monthly, resolved.part_a_monthly,
-        resolved.part_d_monthly_total, has_medigap,
+        resolved.part_d_monthly_total, has_medigap, medigap_annual,
     )
 
     total_cost = primary_subtotal + spouse_subtotal
@@ -2050,32 +2361,44 @@ def calculate_total_healthcare_costs(age_primary: int,
     # their configured ACA age window, so no guard is needed here.
     aca_cost = calculate_aca_premium_for_year(year, age_primary, age_spouse)
 
-    # --- Out-of-pocket expenses -------------------------------------------
-    # Falls back to OOP_COST_DEFAULT ("average") for unrecognised health_status values.
-    base_oop_cost: int = OOP_COSTS_BY_HEALTH_STATUS.get(health_status, OOP_COST_DEFAULT)
-    
+    # --- Out-of-pocket expenses (from medicare_premiums.csv) -------------------
+    _premiums = _get_medicare_premiums_row(year)
+    _oop_by_status = {
+        'healthy': _premiums['oop_healthy'],
+        'average': _premiums['oop_average'],
+        'chronic': _premiums['oop_chronic'],
+    }
+    base_oop_cost = _oop_by_status.get(health_status, _premiums['oop_average'])
+
     # Apply age-based adjustment to out-of-pocket costs
     # Healthcare costs increase with age (inverse of discretionary spending)
     from calculations import calculate_household_age_adjusted_healthcare_costs
     from config import get_config_manager
-    
+
     config_mgr = get_config_manager()
     is_single = config_mgr.get("personal_info", "is_single_person", False)
-    
+
     oop_cost = calculate_household_age_adjusted_healthcare_costs(
         float(base_oop_cost),
         age_primary,
         age_spouse if age_spouse > 0 else None,
         is_single
     )
-    
+
     logger.debug(
         f"Out-of-pocket healthcare: base=${base_oop_cost:,.0f}, "
         f"age-adjusted=${oop_cost:,.0f} (ages {age_primary}/{age_spouse})"
     )
 
-    # --- Long-term care insurance premiums --------------------------------
-    ltc_cost = LTC_ANNUAL_PREMIUM_PER_PERSON * status.total_persons if has_ltc_insurance else 0.0
+    # --- Long-term care insurance premiums (from medicare_premiums.csv) --------
+    # The CSV stores the premium at ltc_base_year; escalate to the current year
+    # at ltc_escalation_rate to account for historically high LTC premium growth.
+    ltc_base_year      = _premiums['ltc_base_year']
+    ltc_escalation     = _premiums['ltc_escalation_rate']
+    ltc_base_premium   = _premiums['ltc_annual_per_person']
+    ltc_years_elapsed  = max(0, year - ltc_base_year)
+    ltc_premium        = ltc_base_premium * ((1 + ltc_escalation) ** ltc_years_elapsed)
+    ltc_cost = ltc_premium * status.total_persons if has_ltc_insurance else 0.0
 
     breakdown = HealthcareCostBreakdown(
         medicare=medicare_cost,
@@ -2768,13 +3091,13 @@ def replenish_cash_buffer(balances: PortfolioBalances,
         if brokerage_account is not None and transfer > 0:
             try:
                 # Try smart selection first if available
-                if SMART_SELECTION_AVAILABLE and should_use_smart_selection(portfolio_df, 'Brokerage'):
-                    basis_returned, ltcg_realized, plan = withdraw_from_brokerage_smart(
+                if _smart_selection.available and _smart_selection.should_use(portfolio_df, 'Brokerage'):
+                    basis_returned, ltcg_realized, plan = _smart_selection.withdraw(
                         amount=transfer,
                         brokerage_account=brokerage_account,
                         portfolio_df=portfolio_df,
                         year=year,
-                        target_allocation=target_allocation or DEFAULT_TARGET_ALLOCATION,
+                        target_allocation=target_allocation or _smart_selection.default_allocation,
                         current_agi=current_agi,
                         filing_status=filing_status,
                         recent_sales=recent_sales or [],
@@ -2794,8 +3117,8 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                     transactions['brokerage_ltcg'] = ltcg_realized
                     logger.info(f"  FIFO: ${transfer:,.0f} from Brokerage to Cash: "
                                f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
-            except Exception as e:
-                logger.warning(f"  Error in withdrawal: {e}, using estimated LTCG")
+            except (KeyError, AttributeError) as e:
+                logger.warning("Brokerage cost-basis unavailable (%s); estimating LTCG at %.0f%%", e, BROKERAGE_LTCG_RATIO * 100)
                 transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
                 logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash "
                            f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG)")
@@ -3290,6 +3613,18 @@ def rebalance_accounts(balances: PortfolioBalances,
 
     logger.info(f"  Cash after deductions: ${balances.cash:,.2f}")
 
+    dl.add("tax_strategy", "Annual Cash Outflow",
+           f"Deducted ${total_cash_outflow:,.0f} from cash",
+           "All mandatory outflows deducted from the cash account at the start of the year "
+           "before any replenishment is assessed.",
+           expenses=f"${expenses:,.0f}",
+           federal_tax=f"${federal_tax:,.0f}",
+           irmaa_penalty=f"${irmaa_penalty:,.0f}",
+           aca_premium=f"${aca_premium:,.0f}",
+           medical_costs=f"${medical_costs:,.0f}",
+           total_outflow=f"${total_cash_outflow:,.0f}",
+           cash_after=f"${balances.cash:,.0f}")
+
     # Step 2: Optimized buffer replenishment strategy
     # Check if Brokerage can cover cash needs AND maintain its own buffer
     cash_target, brokerage_target = calculate_cash_buffer_targets(expenses)
@@ -3307,6 +3642,16 @@ def rebalance_accounts(balances: PortfolioBalances,
     # If Brokerage cannot maintain buffer after cash: route Traditional directly to Cash for the shortfall
     if cash_deficit > 0 and brokerage_deficit_after_cash > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
         # Brokerage can't cover both - use optimized routing
+        dl.add("cash_replenishment", "Routing Decision: Optimised",
+               "Traditional → Cash direct routing selected",
+               "Brokerage balance is insufficient to both cover the cash deficit and maintain its "
+               "own buffer target. Routing Traditional directly to Cash avoids double taxation "
+               "(ordinary income on Trad→Broker followed by LTCG on Broker→Cash).",
+               cash_deficit=f"${cash_deficit:,.0f}",
+               brokerage_balance=f"${balances.taxable:,.0f}",
+               brokerage_target=f"${brokerage_target:,.0f}",
+               brokerage_after_cash=f"${brokerage_after_cash:,.0f}",
+               brokerage_deficit_after_cash=f"${brokerage_deficit_after_cash:,.0f}")
         logger.info(f"Year {year}: Optimized routing - Brokerage insufficient for both cash and buffer")
         logger.info(f"  Cash deficit: ${cash_deficit:,.0f}")
         logger.info(f"  Brokerage balance: ${balances.taxable:,.0f}")
@@ -3333,44 +3678,53 @@ def rebalance_accounts(balances: PortfolioBalances,
             if brokerage_account is not None and transfer > 0:
                 try:
                     # Try smart selection first if available
-                    _init_smart_selection()
-                    if (SMART_SELECTION_AVAILABLE and should_use_smart_selection is not None
-                        and should_use_smart_selection(portfolio_df, 'Brokerage')):
-                        if withdraw_from_brokerage_smart is not None:
-                            basis_returned, ltcg_realized, plan = withdraw_from_brokerage_smart(
-                                amount=transfer,
-                                brokerage_account=brokerage_account,
-                                portfolio_df=portfolio_df,
-                                year=year,
-                                target_allocation=target_allocation or DEFAULT_TARGET_ALLOCATION,
-                                current_agi=current_agi,
-                                filing_status=filing_status,
-                                recent_sales=recent_sales or [],
-                            )
-                            transactions['brokerage_ltcg'] = ltcg_realized
-                            
-                            if plan:
-                                logger.info(f"  Smart selection used for ${transfer:,.0f} withdrawal:")
-                                logger.info(f"    Securities: {len(plan.securities)}")
-                                logger.info(f"    Basis: ${basis_returned:,.0f}, LTCG: ${ltcg_realized:,.0f}")
-                                logger.info(f"    Tax impact: ${plan.estimated_tax:,.0f}")
-                                logger.info(f"    Drift improvement: {plan.drift_improvement:+.2f}%")
-                                
-                                if format_liquidation_summary_for_log is not None:
-                                    dl.add("brokerage_withdrawal", "Smart Security Selection",
-                                           f"Withdrew ${transfer:,.0f} using intelligent selection",
-                                           format_liquidation_summary_for_log(plan))
-                            else:
-                                logger.info(f"  FIFO fallback used: ${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
+                    if (_smart_selection.available
+                            and _smart_selection.should_use(portfolio_df, 'Brokerage')):
+                        basis_returned, ltcg_realized, plan = _smart_selection.withdraw(
+                            amount=transfer,
+                            brokerage_account=brokerage_account,
+                            portfolio_df=portfolio_df,
+                            year=year,
+                            target_allocation=target_allocation or _smart_selection.default_allocation,
+                            current_agi=current_agi,
+                            filing_status=filing_status,
+                            recent_sales=recent_sales or [],
+                        )
+                        transactions['brokerage_ltcg'] = ltcg_realized
+
+                        if plan:
+                            logger.info(f"  Smart selection used for ${transfer:,.0f} withdrawal:")
+                            logger.info(f"    Securities: {len(plan.securities)}")
+                            logger.info(f"    Basis: ${basis_returned:,.0f}, LTCG: ${ltcg_realized:,.0f}")
+                            logger.info(f"    Tax impact: ${plan.estimated_tax:,.0f}")
+                            logger.info(f"    Drift improvement: {plan.drift_improvement:+.2f}%")
+
+                            if _smart_selection.format_summary is not None:
+                                dl.add("brokerage_withdrawal", "Smart Security Selection",
+                                       f"Withdrew ${transfer:,.0f} using intelligent selection",
+                                       _smart_selection.format_summary(plan))
                         else:
-                            # Fallback to FIFO
-                            basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
+                            logger.info(f"  FIFO fallback used: ${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
+                            dl.add("brokerage_replenishment", "Brokerage Withdrawal: FIFO (smart fallback)",
+                                   f"FIFO used for ${transfer:,.0f} withdrawal",
+                                   "Smart selection ran but returned no liquidation plan; "
+                                   "fell back to FIFO cost-lot ordering.",
+                                   transferred=f"${transfer:,.0f}",
+                                   basis_returned=f"${basis_returned:,.0f}",
+                                   ltcg_realized=f"${ltcg_realized:,.0f}")
                     else:
                         # Fallback to FIFO
                         basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
                         transactions['brokerage_ltcg'] = ltcg_realized
                         logger.info(f"  FIFO withdrawal: ${transfer:,.0f} from Brokerage to Cash: "
                                    f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
+                        dl.add("brokerage_replenishment", "Brokerage Withdrawal: FIFO",
+                               f"FIFO used for ${transfer:,.0f} withdrawal",
+                               "Smart selection not available or not applicable; "
+                               "using FIFO cost-lot ordering.",
+                               transferred=f"${transfer:,.0f}",
+                               basis_returned=f"${basis_returned:,.0f}",
+                               ltcg_realized=f"${ltcg_realized:,.0f}")
                 except Exception as e:
                     logger.warning(f"  Error in withdrawal: {e}, using estimated LTCG")
                     transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
@@ -3460,6 +3814,15 @@ def rebalance_accounts(balances: PortfolioBalances,
         
     else:
         # Normal flow - Brokerage can handle it
+        dl.add("cash_replenishment", "Routing Decision: Normal",
+               "Normal flow selected — Brokerage → Cash, then Traditional → Brokerage",
+               "Brokerage has sufficient funds to cover the cash deficit and maintain its buffer "
+               "target. Using the standard priority order: Brokerage first (lower tax cost), "
+               "then Traditional to refill Brokerage.",
+               cash_deficit=f"${cash_deficit:,.0f}",
+               brokerage_balance=f"${balances.taxable:,.0f}",
+               cash_target=f"${cash_target:,.0f}",
+               brokerage_target=f"${brokerage_target:,.0f}")
         logger.info(f"Year {year}: Normal routing - Brokerage sufficient for cash and buffer")
         
         # Step 2a: Replenish cash buffer (after expenses paid)
@@ -3487,6 +3850,20 @@ def rebalance_accounts(balances: PortfolioBalances,
     if roth_conversion > 0:
         balances = execute_roth_conversion(balances, roth_conversion, year)
         transactions['conversion_executed'] = roth_conversion
+        dl.add("roth_conversion", "Roth Conversion Executed",
+               f"Converted ${roth_conversion:,.0f} Traditional → Roth",
+               "Roth conversion amount was determined by the BETR algorithm for this life stage. "
+               "Executed after buffer replenishment so that the conversion does not compete with "
+               "near-term cash needs. The converted amount is taxable as ordinary income in this year.",
+               conversion_amount=f"${roth_conversion:,.0f}",
+               traditional_after=f"${balances.traditional:,.0f}",
+               roth_after=f"${balances.roth:,.0f}")
+    else:
+        dl.add("roth_conversion", "Roth Conversion Skipped",
+               "No conversion this year",
+               "BETR algorithm determined no conversion was beneficial, or the stage does not "
+               "permit conversions (e.g. Stage 1 Accumulation with active wages).",
+               conversion_amount="$0")
 
     # Step 5: Log all fund movements
     logger.info(f"Year {year}: Transaction Summary")
@@ -3837,43 +4214,47 @@ class WithdrawalStrategyEngine:
             person2_birth_year = int(person2_birth_date.split('-')[0])
             age_spouse = year - person2_birth_year
             
-            # Calculate retirement years for both people
+            # Calculate wages from config - prorate the retirement year via the
+            # configured retirement date (fraction of year still employed).
             config_mgr = get_config_manager()
-            person1_retirement_age = config_mgr.get("personal_info", "person1_retirement_age", 67)
-            person2_retirement_age = config_mgr.get("personal_info", "person2_retirement_age", 62)
-            person1_retirement_year = person1_birth_year + person1_retirement_age
-            person2_retirement_year = person2_birth_year + person2_retirement_age
-            
-            # Calculate wages from config - check each person's retirement status individually
             wages = 0
             person1_wages_this_year = 0
             person2_wages_this_year = 0
-            
+
             person1_base_wages = config_mgr.get("income", "person1_annual_wages", 0)
             person2_base_wages = config_mgr.get("income", "person2_annual_wages", 0)
             wage_inflation_rate = config_mgr.get("income", "wage_inflation_rate", 3.0) / 100.0
-            
+
             # Apply wage inflation from start_year to current year
             years_elapsed = year - start_year
             inflation_multiplier = (1 + wage_inflation_rate) ** years_elapsed
-            
-            # Check if person1 is still working (before their retirement year)
-            if year < person1_retirement_year and person1_base_wages > 0:
-                person1_wages_this_year = person1_base_wages * inflation_multiplier
-            
-            # Check if person2 is still working (before their retirement year)
-            if year < person2_retirement_year and person2_base_wages > 0:
-                person2_wages_this_year = person2_base_wages * inflation_multiplier
-            
+
+            # Fraction of the year each person is still employed (0.0–1.0).
+            # Partial year on retirement year is prorated by days worked.
+            p1_fraction = config_mgr.get_retirement_fraction(1, year)
+            p2_fraction = config_mgr.get_retirement_fraction(2, year)
+
+            if p1_fraction > 0 and person1_base_wages > 0:
+                person1_wages_this_year = person1_base_wages * inflation_multiplier * p1_fraction
+
+            if p2_fraction > 0 and person2_base_wages > 0:
+                person2_wages_this_year = person2_base_wages * inflation_multiplier * p2_fraction
+
             # Total household wages
             wages = person1_wages_this_year + person2_wages_this_year
-            
+
             if wages > 0:
-                logger.info(f"Year {year} Wages: Person1=${person1_wages_this_year:,.2f} "
-                          f"({'working' if person1_wages_this_year > 0 else 'retired'}), "
-                          f"Person2=${person2_wages_this_year:,.2f} "
-                          f"({'working' if person2_wages_this_year > 0 else 'retired'}), "
-                          f"Total=${wages:,.2f} (inflation factor: {inflation_multiplier:.4f})")
+                def _status(frac: float) -> str:
+                    if frac <= 0:      return 'retired'
+                    if frac < 1.0:     return f'partial ({frac:.1%})'
+                    return 'working'
+                logger.info(
+                    f"Year {year} Wages: Person1=${person1_wages_this_year:,.2f} "
+                    f"({_status(p1_fraction)}), "
+                    f"Person2=${person2_wages_this_year:,.2f} "
+                    f"({_status(p2_fraction)}), "
+                    f"Total=${wages:,.2f} (inflation factor: {inflation_multiplier:.4f})"
+                )
             
             has_wages = wages > 0
             
@@ -4295,7 +4676,8 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
         logger.info(f"\nBalances DataFrame (first {preview_rows} years):")
         logger.info("-" * 80)
         
-        for idx in range(preview_rows):
+        preview_rows_bal = min(preview_rows, len(balances_df))
+        for idx in range(preview_rows_bal):
             row = balances_df.iloc[idx]
             logger.info(f"\nYear {int(row['Year'])}:")
             logger.info(f"  {'Cash Balance':25s}: ${row['Cash Balance']:>12,.2f}")
@@ -4413,6 +4795,13 @@ def build_accumulation_strategy_display(start_year: Optional[int] = None,
         logger.info(f"Stages present: {strategy_df['Stage'].unique()}")
         strategy_df = strategy_df[strategy_df['Stage'].isin(list(accum_stages))].reset_index(drop=True)
         logger.info(f"After filtering: {len(strategy_df)} rows")
+        if strategy_df.empty:
+            # Current year is at or past retirement — no accumulation phase to show.
+            logger.info(
+                "No accumulation-stage years found (start_year >= retirement year). "
+                "Returning empty DataFrames."
+            )
+            return pd.DataFrame(), pd.DataFrame()
 
     logger.info("Creating balances DataFrame")
     try:
@@ -4442,11 +4831,16 @@ def calculate_aca_subsidy(magi: float, year: int, household_size: int = 2) -> Tu
     Returns:
         Tuple of (subsidy_amount, net_premium)
     """
-    # Federal Poverty Level (approximate, adjust annually)
-    fpl_2026 = 20440 + (7320 * (household_size - 1))  # Base + per additional person
-    
+    # Federal Poverty Level — loaded from medicare_premiums.csv so HHS annual
+    # updates require only a CSV edit.  Falls back to built-in constants when
+    # the CSV is unavailable.
+    if household_size < 1:
+        raise ValueError(f"household_size must be >= 1, got {household_size}")
+    _prem_row = _get_medicare_premiums_row(year)
+    fpl = _prem_row['fpl_base'] + _prem_row['fpl_per_person'] * (household_size - 1)
+
     # Calculate % of FPL
-    fpl_percentage = (magi / fpl_2026) * 100
+    fpl_percentage = (magi / fpl) * 100
     
     # Benchmark premium (Silver plan, approximate)
     benchmark_premium = 12000  # Annual premium for 2 people
@@ -4643,6 +5037,8 @@ def generate_strategy_summary(strategy_df: pd.DataFrame) -> Dict:
     Returns:
         Dictionary with summary statistics
     """
+    if strategy_df.empty:
+        raise ValueError("strategy_df is empty; cannot generate summary statistics")
     summary = {
         "total_years": len(strategy_df),
         "stages": strategy_df['Stage'].value_counts().to_dict(),

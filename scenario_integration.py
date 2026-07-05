@@ -115,6 +115,46 @@ def scenario_to_monte_carlo_inputs(
     )
 
 
+def _warn_out_of_range_events(scenario: Scenario) -> list[str]:
+    """Return a warning string for each life event whose age range falls
+    entirely or partially outside the simulation window
+    [retirement_age, plan_to_age].  Each warning is also emitted via the
+    module logger so it appears in server logs.
+
+    A life event is considered out-of-range when:
+    - ``start_age`` is beyond ``plan_to_age``  (event never reached), or
+    - ``end_age`` (if set) is before ``retirement_age``  (event already over).
+
+    Events that merely *start* before ``retirement_age`` but extend into the
+    simulation window are not flagged — their in-window portion is applied
+    normally by ``calculate_event_timeline``.
+    """
+    sim_start = scenario.retirement_age
+    sim_end = scenario.plan_to_age
+    warnings: list[str] = []
+
+    for event in scenario.life_events:
+        event_end = event.end_age if event.end_age is not None else event.start_age
+        if event.start_age > sim_end:
+            msg = (
+                f"Life event '{event.name}' starts at age {event.start_age}, "
+                f"which is beyond the simulation end age {sim_end} — "
+                "it will have no effect on the projection."
+            )
+            logger.warning(msg)
+            warnings.append(msg)
+        elif event_end < sim_start:
+            msg = (
+                f"Life event '{event.name}' ends at age {event_end}, "
+                f"which is before the simulation start age {sim_start} — "
+                "it will have no effect on the projection."
+            )
+            logger.warning(msg)
+            warnings.append(msg)
+
+    return warnings
+
+
 def run_scenario_monte_carlo(
     scenario: Scenario,
     n_simulations: int = 10_000,
@@ -129,10 +169,18 @@ def run_scenario_monte_carlo(
         include_life_events: Whether to include life event impacts
     
     Returns:
-        MonteCarloResult with simulation outcomes
+        MonteCarloResult with simulation outcomes.  Any life events whose age
+        range lies entirely outside [retirement_age, plan_to_age] are recorded
+        as warning strings in ``MonteCarloResult.notes``.
     """
     logger.info(f"Running Monte Carlo for scenario: {scenario.name}")
-    
+
+    # Validate life-event ages against the simulation window before running,
+    # so the user receives explicit warnings rather than silent no-ops.
+    out_of_range_warnings: list[str] = []
+    if scenario.life_events:
+        out_of_range_warnings = _warn_out_of_range_events(scenario)
+
     # Convert scenario to inputs
     mc_inputs = scenario_to_monte_carlo_inputs(scenario, n_simulations)
     
@@ -143,7 +191,12 @@ def run_scenario_monte_carlo(
     if include_life_events and scenario.life_events:
         logger.info(f"Adjusting for {len(scenario.life_events)} life events")
         result = adjust_monte_carlo_for_life_events(result, scenario)
-    
+
+    # Attach out-of-range warnings to the result notes so callers (including
+    # the UI) can surface them without re-examining every event.
+    if out_of_range_warnings:
+        result.notes = result.notes + out_of_range_warnings
+
     return result
 
 

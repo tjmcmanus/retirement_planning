@@ -13,11 +13,11 @@ from typing import Any, Optional, Tuple, Dict
 from ..base_strategy import BaseLifeStageStrategy
 from ..interfaces import ITaxCalculator, IAccountManager
 from ..models import PortfolioBalances, YearlyStrategy
+from .stage6_rmd import get_rmd_age
 
 logger = logging.getLogger(__name__)
 
 # Constants
-RMD_AGE = 73
 MEDICARE_AGE = 65
 TAXABLE_SS_RATE = 0.85  # Up to 85% of SS benefits are taxable
 BROKERAGE_LTCG_RATIO = 0.60  # Fallback: 60% LTCG
@@ -82,7 +82,11 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             True if collecting SS and older spouse is under RMD age
         """
         older_age = max(age_primary, age_spouse)
-        return (not has_wages and has_ss and older_age < RMD_AGE)
+        # RMD age depends on birth year (SECURE 2.0): 73 if born 1951–1959, 75 if born 1960+
+        birth_year_primary = year - age_primary
+        birth_year_spouse = year - age_spouse
+        rmd_age = get_rmd_age(max(birth_year_primary, birth_year_spouse))  # older person drives threshold
+        return (not has_wages and has_ss and older_age < rmd_age)
     
     def calculate_strategy(
         self,
@@ -151,7 +155,26 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         irmaa_penalty = self._calculate_irmaa_penalty(
             prior_magi, age_primary, age_spouse, year
         )
-        
+
+        # Calculate full healthcare costs (Medicare + IRMAA + Medigap + OOP + LTC)
+        # irmaa_penalty and aca_premium are kept separately for rebalancing/conversion logic;
+        # healthcare_total is the comprehensive figure stored on the strategy for reporting.
+        try:
+            from strategy import calculate_total_healthcare_costs
+            healthcare_total, _hc_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=prior_magi,
+                year=year,
+                filing_status=filing_status,
+                has_medigap=True
+            )
+            logger.info(f"Stage 5: Total healthcare costs=${healthcare_total:,.2f} "
+                        f"(IRMAA=${irmaa_penalty:,.2f})")
+        except Exception as e:
+            logger.warning(f"Stage 5: Could not calculate full healthcare costs, falling back: {e}")
+            healthcare_total = irmaa_penalty  # aca_premium not yet computed; added below if needed
+
         # Calculate buffer needs
         cash_need, taxable_need = self._calculate_buffer_needs(
             expenses, year, start_year, balances
@@ -255,17 +278,23 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             roth_conversion += daf_enhanced_conversion
             logger.info(f"Year {year}: DAF optimization - increased Roth conversion by ${daf_enhanced_conversion:,.0f}")
         
-        # Subtract DAF from brokerage before rebalancing
+        # Subtract DAF from brokerage before rebalancing (HIFO lot removal)
         balances_for_rebalance = balances_with_ss
         if daf_contribution > 0:
-            balances_for_rebalance = PortfolioBalances(
-                cash=balances_with_ss.cash,
-                taxable=balances_with_ss.taxable - daf_contribution,
-                traditional=balances_with_ss.traditional,
-                roth=balances_with_ss.roth,
-                daf=balances_with_ss.daf
-            )
-            logger.info(f"Year {year}: Subtracting DAF ${daf_contribution:,.0f} from Brokerage")
+            try:
+                from strategy import apply_daf_to_brokerage_account
+                balances_for_rebalance = apply_daf_to_brokerage_account(
+                    balances_with_ss, daf_contribution, year, brokerage_account
+                )
+            except ImportError:
+                balances_for_rebalance = PortfolioBalances(
+                    cash=balances_with_ss.cash,
+                    taxable=balances_with_ss.taxable - daf_contribution,
+                    traditional=balances_with_ss.traditional,
+                    roth=balances_with_ss.roth,
+                    daf=balances_with_ss.daf,
+                )
+            logger.info(f"Year {year}: DAF HIFO donation ${daf_contribution:,.0f} from Brokerage")
         
         # Execute account rebalancing
         new_balances, transactions = self._execute_rebalancing(
@@ -354,8 +383,8 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         # Log key decisions
         self._log_ss_income(strategy, ss_benefits, taxable_ss)
         self._log_irmaa_assessment(strategy, irmaa_penalty, prior_magi, age_primary, age_spouse, irmaa_headroom, year)
-        self._log_roth_conversion_decision(strategy, roth_conversion, optimal_amount, age_primary, age_spouse, aca_info, balances)
-        self._log_rmd_planning_outlook(strategy, age_primary, age_spouse, roth_conversion, balances)
+        self._log_roth_conversion_decision(strategy, roth_conversion, optimal_amount, age_primary, age_spouse, aca_info, balances, year)
+        self._log_rmd_planning_outlook(strategy, age_primary, age_spouse, roth_conversion, balances, year)
         
         if daf_contribution > 0 and daf_enhanced_conversion > 0:
             self._log_daf_conversion_enhancement(
@@ -379,7 +408,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         strategy.federal_tax = total_tax
         strategy.irmaa_penalty = irmaa_penalty
         strategy.aca_premium = aca_premium
-        strategy.healthcare_costs = irmaa_penalty + aca_premium  # Total healthcare costs for Stage 5
+        strategy.healthcare_costs = healthcare_total  # Full costs: Medicare + IRMAA + Medigap + OOP
         strategy.balances = new_balances
         strategy.state_tax = state_tax
         
@@ -689,12 +718,9 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         
         try:
             from betr_roth_conversion import optimize_conversion_amount, BETRInputs, calculate_betr
-            from config import get_config_manager
+            from calculations import get_stage_specific_conversion_rate
             
-            config_mgr = get_config_manager()
-            stage_max_conversion_rate = float(config_mgr.get(
-                "roth_conversion", "stage_specific_rates", {}
-            ).get(self.name, max_conversion_rate))
+            stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
             
             # Use BETR algorithm
             optimal_amount, betr_results = optimize_conversion_amount(
@@ -704,7 +730,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
                 year=year,
                 pay_from_taxable=True,
                 taxable_account_balance=balances.taxable,
-                years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 10,
+                years_to_withdrawal=(get_rmd_age(year - age_primary) - age_primary) if age_primary > 0 else 10,
                 annual_return=growth_rate - 1.0
             )
             
@@ -738,7 +764,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
                     traditional_ira_balance=balances.traditional,
                     pay_from_taxable=True,
                     taxable_account_balance=balances.taxable,
-                    years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 10,
+                    years_to_withdrawal=(get_rmd_age(year - age_primary) - age_primary) if age_primary > 0 else 10,
                     annual_return=growth_rate - 1.0
                 )
                 reduced_results = calculate_betr(reduced_inputs)
@@ -1056,11 +1082,15 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         age_primary: int,
         age_spouse: int,
         aca_info: Dict[str, Any],
-        balances: PortfolioBalances
+        balances: PortfolioBalances,
+        year: int = 0
     ) -> None:
         """Log Roth conversion decision."""
         older_age = max(age_primary, age_spouse)
-        years_to_rmd = max(0, RMD_AGE - older_age)
+        birth_year_primary = year - age_primary if year and age_primary else 1960
+        birth_year_spouse = year - age_spouse if year and age_spouse else 1960
+        rmd_age = get_rmd_age(max(birth_year_primary, birth_year_spouse))
+        years_to_rmd = max(0, rmd_age - older_age)
         
         if roth_conversion > 0 and roth_conversion < optimal_amount:
             constraint_reason = "IRMAA"
@@ -1097,11 +1127,15 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         age_primary: int,
         age_spouse: int,
         roth_conversion: float,
-        balances: PortfolioBalances
+        balances: PortfolioBalances,
+        year: int = 0
     ) -> None:
         """Log RMD planning outlook."""
         older_age = max(age_primary, age_spouse)
-        years_to_rmd = max(0, RMD_AGE - older_age)
+        birth_year_primary = year - age_primary if year and age_primary else 1960
+        birth_year_spouse = year - age_spouse if year and age_spouse else 1960
+        rmd_age = get_rmd_age(max(birth_year_primary, birth_year_spouse))
+        years_to_rmd = max(0, rmd_age - older_age)
         
         if years_to_rmd > 0 and years_to_rmd <= 10:
             projected_rmd = balances.traditional / 26.5
@@ -1111,7 +1145,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             
             self._log_decision(
                 strategy, 'rmd_decisions', 'RMD Planning Outlook',
-                f'{years_to_rmd} years until RMDs (age {RMD_AGE})',
+                f'{years_to_rmd} years until RMDs (age {rmd_age})',
                 f'At current conversion rate, could reduce first RMD from ${projected_rmd:,.0f} to ${projected_rmd_reduced:,.0f}',
                 years_to_rmd=years_to_rmd,
                 projected_first_rmd=projected_rmd_reduced

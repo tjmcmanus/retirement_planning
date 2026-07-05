@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,26 @@ HOLDINGS_COLUMNS = [
     "month", "year", "account_name", "account_type", "owner",
     "symbol", "name", "sector", "qty", "purchase_price", "purchase_date",
 ]
+
+# ---------------------------------------------------------------------------
+# SQL injection hardening
+# ---------------------------------------------------------------------------
+# Exhaustive whitelist of every identifier that may be interpolated into a
+# query string.  If a future refactor adds a column, it must be added here
+# explicitly — the assertion below will catch the omission at import time.
+_ALLOWED_COLUMNS: frozenset[str] = frozenset(HOLDINGS_COLUMNS)
+_ALLOWED_TABLE: str = "holdings"
+
+# Assert at import time: every entry in HOLDINGS_COLUMNS is in the whitelist.
+# This turns any future drift between the constant and the whitelist into an
+# immediate ImportError rather than a silent injection surface.
+_unknown = [c for c in HOLDINGS_COLUMNS if c not in _ALLOWED_COLUMNS]
+assert not _unknown, f"HOLDINGS_COLUMNS contains non-whitelisted identifiers: {_unknown}"
+
+# Pre-built SELECT column list reused by every read query — built once here
+# so the assertion runs exactly once and the string is not reconstructed on
+# every call.
+_HOLDINGS_SELECT: str = ", ".join(HOLDINGS_COLUMNS)
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -74,22 +95,43 @@ CREATE TABLE IF NOT EXISTS holdings (
 # Connection & Initialisation
 # ==============================================================================
 
+# Thread-local storage for persistent connections, keyed by resolved db_path.
+# Streamlit runs in a multi-threaded server; each thread gets its own
+# connection so no locking is needed between threads.
+_tls = threading.local()
+
+
 def get_db_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     """
-    Return a connection to portfolio.db, creating the file and schema if needed.
+    Return a persistent, thread-local connection to portfolio.db.
+
+    The connection is created on first use within a thread and reused for
+    all subsequent calls from that thread.  Schema initialisation
+    (PRAGMA journal_mode=WAL + CREATE TABLE IF NOT EXISTS) runs only once
+    per connection, not on every call.
 
     Args:
-        db_path: Override for testing (pass ':memory:' or a temp path).
+        db_path: Override for testing (pass Path(':memory:') or a temp path).
 
     Returns:
         sqlite3.Connection with row_factory set to sqlite3.Row.
     """
     path_str = str(db_path) if db_path != Path(":memory:") else ":memory:"
-    conn = sqlite3.connect(path_str)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute(_CREATE_TABLE_SQL)
-    conn.commit()
+
+    # _tls.conns is a dict[str, sqlite3.Connection] — one entry per db_path.
+    if not hasattr(_tls, "conns"):
+        _tls.conns: dict[str, sqlite3.Connection] = {}
+
+    conn = _tls.conns.get(path_str)
+    if conn is None:
+        conn = sqlite3.connect(path_str, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute(_CREATE_TABLE_SQL)
+        conn.commit()
+        _tls.conns[path_str] = conn
+        logger.debug(f"get_db_connection: opened new connection to {path_str!r}")
+
     return conn
 
 
@@ -112,11 +154,10 @@ def db_load_all(db_path: Path = DB_PATH) -> pd.DataFrame:
     try:
         conn = get_db_connection(db_path)
         df = pd.read_sql_query(
-            f"SELECT {', '.join(HOLDINGS_COLUMNS)} FROM holdings "
+            f"SELECT {_HOLDINGS_SELECT} FROM holdings "
             "ORDER BY year, month, account_name, symbol",
             conn,
         )
-        conn.close()
         return df
     except sqlite3.Error as exc:
         logger.error(f"db_load_all failed: {exc}")
@@ -143,13 +184,12 @@ def db_get_by_month(
     try:
         conn = get_db_connection(db_path)
         df = pd.read_sql_query(
-            f"SELECT {', '.join(HOLDINGS_COLUMNS)} FROM holdings "
+            f"SELECT {_HOLDINGS_SELECT} FROM holdings "
             "WHERE month = ? AND year = ? "
             "ORDER BY account_name, symbol",
             conn,
             params=(month, year),
         )
-        conn.close()
         return df
     except sqlite3.Error as exc:
         logger.error(f"db_get_by_month({month}, {year}) failed: {exc}")
@@ -174,7 +214,6 @@ def db_get_latest_month_year(db_path: Path = DB_PATH) -> tuple[int, int]:
             "SELECT month, year FROM holdings "
             "ORDER BY year DESC, month DESC LIMIT 1"
         ).fetchone()
-        conn.close()
         if row:
             return int(row["month"]), int(row["year"])
     except sqlite3.Error as exc:
@@ -222,8 +261,6 @@ def db_upsert(rows: pd.DataFrame, db_path: Path = DB_PATH) -> int:
         conn.rollback()
         logger.error(f"db_upsert failed: {exc}")
         raise
-    finally:
-        conn.close()
 
     _write_csv_backup(db_path)
     return n
@@ -272,8 +309,6 @@ def db_overwrite_month(
         conn.rollback()
         logger.error(f"db_overwrite_month failed: {exc}")
         raise
-    finally:
-        conn.close()
 
     _write_csv_backup(db_path)
     return n
@@ -309,8 +344,6 @@ def db_delete_row(
         conn.rollback()
         logger.error(f"db_delete_row failed: {exc}")
         return False
-    finally:
-        conn.close()
 
     if deleted:
         _write_csv_backup(db_path)
@@ -391,9 +424,21 @@ def _upsert_method(table, conn, keys, data_iter):
     Custom pandas to_sql method that uses INSERT OR REPLACE so the UNIQUE
     constraint on (month, year, account_name, symbol) is honoured.
     """
+    # Whitelist-guard both the table name and every column name before
+    # interpolating them into the query string.
+    if table.name != _ALLOWED_TABLE:
+        raise ValueError(
+            f"_upsert_method: unexpected table {table.name!r}; "
+            f"only {_ALLOWED_TABLE!r} is permitted."
+        )
+    unknown_cols = [k for k in keys if k not in _ALLOWED_COLUMNS]
+    if unknown_cols:
+        raise ValueError(
+            f"_upsert_method: column(s) not in whitelist: {unknown_cols}"
+        )
     cols = ", ".join(keys)
     placeholders = ", ".join(["?"] * len(keys))
-    sql = f"INSERT OR REPLACE INTO {table.name} ({cols}) VALUES ({placeholders})"
+    sql = f"INSERT OR REPLACE INTO {_ALLOWED_TABLE} ({cols}) VALUES ({placeholders})"
     conn.executemany(sql, data_iter)
 
 
@@ -478,7 +523,7 @@ def _fetch_name_and_sector(symbol: str) -> tuple[str, str]:
         return name, sector
 
     except Exception as exc:
-        logger.debug(f"_fetch_name_and_sector({symbol}): {exc}")
+        logger.debug(f"_fetch_name_and_sector({symbol}): {exc}", exc_info=True)
         return '', ''
 
 
@@ -545,7 +590,7 @@ def enrich_holdings(
             try:
                 results[sym] = fut.result()
             except Exception as exc:
-                logger.warning(f"enrich_holdings: fetch failed for {sym}: {exc}")
+                logger.warning(f"enrich_holdings: fetch failed for {sym}: {exc}", exc_info=True)
                 results[sym] = ('', '')
 
     enriched_rows = []

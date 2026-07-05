@@ -104,6 +104,12 @@ class ShortTermMarketTrendConfig:
 # ---------------------------------------------------------------------------
 
 _shortterm_condition_cache: Optional[Tuple[ShortTermMarketCondition, ShortTermEMAData, datetime]] = None
+_last_fetch_error_shortterm: Optional[str] = None
+
+
+def get_last_fetch_error_shortterm() -> Optional[str]:
+    """Return the most recent short-term market-data failure reason, or None on success."""
+    return _last_fetch_error_shortterm
 
 
 def _get_cached_shortterm_condition() -> Optional[Tuple[ShortTermMarketCondition, ShortTermEMAData]]:
@@ -162,6 +168,7 @@ def fetch_spy_shortterm_data(days: int) -> Optional[pd.DataFrame]:
     Returns:
         DataFrame with SPY price data, or None if fetch fails
     """
+    global _last_fetch_error_shortterm
     try:
         # Add 50% buffer to ensure we have enough data for EMA calculation
         fetch_days = int(days * 1.5)
@@ -174,14 +181,16 @@ def fetch_spy_shortterm_data(days: int) -> Optional[pd.DataFrame]:
         df = spy.history(start=start_date, end=end_date, interval="1d")
         
         if df.empty:
-            logger.error("No SPY data returned from yfinance for short-term analysis")
+            _last_fetch_error_shortterm = "No SPY price data returned from market data provider"
+            logger.error(_last_fetch_error_shortterm)
             return None
         
         logger.debug(f"Fetched {len(df)} days of SPY data for short-term analysis")
         return df
         
     except Exception as e:
-        logger.error(f"Error fetching SPY short-term data: {e}")
+        _last_fetch_error_shortterm = f"Short-term market data fetch failed: {e}"
+        logger.error(_last_fetch_error_shortterm, exc_info=True)
         return None
 
 
@@ -230,10 +239,12 @@ def calculate_shortterm_emas(
         lookback_days = 5
         if len(prices) >= lookback_days + 1:
             short_ema_prev = short_ema_series.iloc[-(lookback_days+1)]
-            short_slope = ((short_ema - short_ema_prev) / short_ema_prev) * 100 / lookback_days  # per day
-            
+            short_slope = (((short_ema - short_ema_prev) / short_ema_prev) * 100 / lookback_days
+                           if short_ema_prev != 0 else 0.0)  # per day
+
             long_ema_prev = long_ema_series.iloc[-(lookback_days+1)]
-            long_slope = ((long_ema - long_ema_prev) / long_ema_prev) * 100 / lookback_days  # per day
+            long_slope = (((long_ema - long_ema_prev) / long_ema_prev) * 100 / lookback_days
+                          if long_ema_prev != 0 else 0.0)  # per day
         else:
             short_slope = 0.0
             long_slope = 0.0
@@ -253,11 +264,11 @@ def calculate_shortterm_emas(
         )
         
         # Calculate price relative to EMAs
-        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100
-        price_vs_long_ema = ((current_price - long_ema) / long_ema) * 100
+        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100 if short_ema != 0 else 0.0
+        price_vs_long_ema  = ((current_price - long_ema)  / long_ema)  * 100 if long_ema  != 0 else 0.0
         
         # Calculate EMA crossover distance
-        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100
+        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100 if long_ema != 0 else 0.0
         
         # Calculate confidence score based on slope magnitudes
         # Higher slopes = higher confidence
@@ -271,6 +282,8 @@ def calculate_shortterm_emas(
         for i in range(2, min(21, len(short_ema_series))):  # Look back up to 20 days
             prev_ema = short_ema_series.iloc[-i]
             prev_prev_ema = short_ema_series.iloc[-(i+1)]
+            if prev_prev_ema == 0:
+                break
             prev_slope = ((prev_ema - prev_prev_ema) / prev_prev_ema) * 100
             
             if short_trend == ShortTermTrendDirection.POSITIVE and prev_slope > slope_threshold:
@@ -306,7 +319,8 @@ def calculate_shortterm_emas(
         return ema_data
         
     except Exception as e:
-        logger.error(f"Error calculating short-term EMAs: {e}")
+        _last_fetch_error_shortterm = f"Short-term EMA calculation failed: {e}"
+        logger.error(_last_fetch_error_shortterm, exc_info=True)
         return None
 
 
@@ -371,6 +385,8 @@ def get_shortterm_market_condition(
     Returns:
         Tuple of (ShortTermMarketCondition, ShortTermEMAData or None)
     """
+    global _last_fetch_error_shortterm
+
     if not config.enabled:
         logger.info("Short-term market trend analysis disabled in config")
         return ShortTermMarketCondition.UNKNOWN, None
@@ -385,9 +401,12 @@ def get_shortterm_market_condition(
     ema_data = calculate_shortterm_emas(config)
     
     if ema_data is None:
-        logger.warning("Unable to calculate short-term market condition, returning UNKNOWN")
+        reason = _last_fetch_error_shortterm or "Unknown error fetching short-term market data"
+        logger.warning("Unable to calculate short-term market condition, returning UNKNOWN. Reason: %s", reason)
         return ShortTermMarketCondition.UNKNOWN, None
-    
+
+    _last_fetch_error_shortterm = None
+
     condition = determine_shortterm_market_condition(ema_data)
     
     # Cache the result

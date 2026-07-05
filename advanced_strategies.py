@@ -29,8 +29,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from load_data import get_income_tax_brackets, get_cap_gains_brackets, get_std_deduction, get_ira_limits
-from calculations import calculate_taxable_income, getUpperIncomeRate, get_std_deduction_by_year
+from load_data import get_income_tax_brackets, get_cap_gains_brackets, get_std_deduction, get_ira_limits, get_qbi_limits
+from calculations import calculate_taxable_income, getUpperIncomeRate, get_std_deduction_by_year, _validate_age
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -71,12 +71,43 @@ EARLY_WITHDRAWAL_PENALTY_AGE: float = 59.5
 EARLY_WITHDRAWAL_PENALTY_RATE: float = 0.10
 
 QBI_DEDUCTION_RATE: float = 0.20
+# Phase-out thresholds are loaded from qbi_limits.csv at runtime.
+# These fallback constants (2026 actuals) are used only when the CSV is absent.
 QBI_PHASE_OUT_MFJ_START: int = 394_600
 QBI_PHASE_OUT_MFJ_END: int = 494_600
 QBI_PHASE_OUT_SINGLE_START: int = 197_300
 QBI_PHASE_OUT_SINGLE_END: int = 247_300
 QBI_W2_LIMIT_RATE: float = 0.50
 QBI_W2_UBIA_RATE: float = 0.25
+
+_QBI_LIMITS_FALLBACK = {
+    'mfj_phase_out_start':    QBI_PHASE_OUT_MFJ_START,
+    'mfj_phase_out_end':      QBI_PHASE_OUT_MFJ_END,
+    'single_phase_out_start': QBI_PHASE_OUT_SINGLE_START,
+    'single_phase_out_end':   QBI_PHASE_OUT_SINGLE_END,
+}
+
+
+def _get_qbi_phase_out(year: int, filing_status: str) -> tuple:
+    """Return (phase_out_start, phase_out_end) for *year* and *filing_status*.
+
+    Reads qbi_limits.csv via get_qbi_limits(); falls back to the 2026 hardcoded
+    constants when the CSV is unavailable, matching the pattern used by
+    _get_medicare_premiums_row() in strategy.py.
+    """
+    try:
+        row_df = get_qbi_limits(year)
+        if not row_df.empty:
+            row = row_df.iloc[0]
+            if filing_status == "married_filing_jointly":
+                return int(row['mfj_phase_out_start']), int(row['mfj_phase_out_end'])
+            else:
+                return int(row['single_phase_out_start']), int(row['single_phase_out_end'])
+    except Exception as _e:
+        logger.warning("Could not read QBI limits for year %d: %s — using built-in defaults", year, _e)
+    if filing_status == "married_filing_jointly":
+        return _QBI_LIMITS_FALLBACK['mfj_phase_out_start'], _QBI_LIMITS_FALLBACK['mfj_phase_out_end']
+    return _QBI_LIMITS_FALLBACK['single_phase_out_start'], _QBI_LIMITS_FALLBACK['single_phase_out_end']
 
 # IRS single-life annuity factors by age (simplified, for SEPP Fixed Annuitization)
 _SEPP_ANNUITY_FACTORS: Dict[int, float] = {
@@ -464,15 +495,14 @@ def _calculate_qbi_deduction(
     w2_wages: float = 0.0,
     ubia_qualified_property: float = 0.0,
     is_sstb: bool = False,
+    year: Optional[int] = None,
 ) -> float:
     """Internal QBI deduction helper (no breakdown)."""
     if qbi_income <= 0:
         return 0.0
 
-    if filing_status == "married_filing_jointly":
-        ps, pe = QBI_PHASE_OUT_MFJ_START, QBI_PHASE_OUT_MFJ_END
-    else:
-        ps, pe = QBI_PHASE_OUT_SINGLE_START, QBI_PHASE_OUT_SINGLE_END
+    import datetime as _dt
+    ps, pe = _get_qbi_phase_out(year or _dt.datetime.now().year, filing_status)
 
     base = qbi_income * QBI_DEDUCTION_RATE
 
@@ -487,12 +517,12 @@ def _calculate_qbi_deduction(
             w2_wages * QBI_W2_LIMIT_RATE,
             w2_wages * QBI_W2_UBIA_RATE + ubia_qualified_property * 0.025,
         )
-        phase_ratio = min(1.0, (total_income - ps) / (pe - ps))
+        phase_ratio = min(1.0, (total_income - ps) / (pe - ps)) if pe != ps else 1.0
         return max(0.0, base - phase_ratio * max(0.0, base - w2_limit))
 
     if total_income >= pe:
         return 0.0
-    phase_ratio = (total_income - ps) / (pe - ps)
+    phase_ratio = (total_income - ps) / (pe - ps) if pe != ps else 1.0
     return max(0.0, base * (1 - phase_ratio))
 
 
@@ -503,6 +533,7 @@ def calculate_qbi_deduction_full(
     ubia_qualified_property: float = 0.0,
     is_sstb: bool = False,
     filing_status: str = "married_filing_jointly",
+    year: Optional[int] = None,
 ) -> Dict:
     """
     Full QBI deduction calculation (IRC §199A) with detailed breakdown.
@@ -514,10 +545,12 @@ def calculate_qbi_deduction_full(
         ubia_qualified_property: Unadjusted basis of qualified property
         is_sstb: Whether the business is a Specified Service Trade or Business
         filing_status: Filing status
+        year: Tax year for phase-out threshold lookup (default: current year)
 
     Returns:
         Dict with keys: deduction, base_deduction, w2_limit, phase_out_pct, notes
     """
+    import datetime as _dt
     notes: List[str] = []
 
     if qbi_income <= 0:
@@ -527,10 +560,7 @@ def calculate_qbi_deduction_full(
     base = qbi_income * QBI_DEDUCTION_RATE
     notes.append(f"Base QBI deduction: ${qbi_income:,.0f} × 20% = ${base:,.0f}")
 
-    if filing_status == "married_filing_jointly":
-        ps, pe = QBI_PHASE_OUT_MFJ_START, QBI_PHASE_OUT_MFJ_END
-    else:
-        ps, pe = QBI_PHASE_OUT_SINGLE_START, QBI_PHASE_OUT_SINGLE_END
+    ps, pe = _get_qbi_phase_out(year or _dt.datetime.now().year, filing_status)
 
     if total_taxable_income <= ps:
         notes.append(
@@ -545,7 +575,7 @@ def calculate_qbi_deduction_full(
         return {"deduction": 0.0, "base_deduction": base, "w2_limit": 0.0,
                 "phase_out_pct": 1.0, "notes": notes}
 
-    phase_ratio = min(1.0, (total_taxable_income - ps) / (pe - ps))
+    phase_ratio = min(1.0, (total_taxable_income - ps) / (pe - ps)) if pe != ps else 1.0
     notes.append(f"Phase-out: {phase_ratio:.1%} through the phase-out range.")
 
     w2_limit = 0.0
@@ -639,16 +669,15 @@ def calculate_backdoor_roth(
     )
 
     # Check if direct Roth contribution is available (no backdoor needed)
+    # NOTE: backdoor is still *legal* when direct Roth is available, just unnecessary.
+    # We keep eligible=True so callers can present it as an option; the note in steps
+    # informs the user that a direct contribution is simpler.
 
     if magi <= roth_phase_out_start:
-        result.eligible = False
-        result.ineligible_reason = (
-            f"MAGI ${magi:,.0f} is below the Roth phase-out threshold "
-            f"${roth_phase_out_start:,.0f}. "
-            "You can contribute directly to a Roth IRA — backdoor strategy not needed."
-        )
         result.steps.append(
-            "✅ Direct Roth IRA contribution is available — no backdoor needed."
+            "ℹ️ Direct Roth IRA contribution is available (MAGI "
+            f"${magi:,.0f} is below the phase-out threshold "
+            f"${roth_phase_out_start:,.0f}) — backdoor strategy not required."
         )
         return result
 
@@ -663,7 +692,7 @@ def calculate_backdoor_roth(
 
     # Pro-rata rule: if pre-tax IRA balances exist, a portion of the conversion is taxable
     total_ira_balance = traditional_ira_balance + after_tax_ira_basis + contrib
-    if traditional_ira_balance > 0:
+    if traditional_ira_balance > 0 and total_ira_balance > 0:
         taxable_pct = traditional_ira_balance / total_ira_balance
         taxable_amount = contrib * taxable_pct
         estimated_tax_rate = 0.22
@@ -1080,6 +1109,7 @@ def calculate_sepp(
     Returns:
         SEPPCalculation with annual payment, duration, and tax impact
     """
+    _validate_age(age)
     result = SEPPCalculation(
         account_balance=account_balance,
         age=age,

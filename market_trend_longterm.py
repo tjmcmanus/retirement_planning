@@ -104,6 +104,12 @@ class LongTermMarketTrendConfig:
 # ---------------------------------------------------------------------------
 
 _longterm_condition_cache: Optional[Tuple[LongTermMarketCondition, LongTermEMAData, datetime]] = None
+_last_fetch_error_longterm: Optional[str] = None
+
+
+def get_last_fetch_error_longterm() -> Optional[str]:
+    """Return the most recent long-term market-data failure reason, or None on success."""
+    return _last_fetch_error_longterm
 
 
 def _get_cached_longterm_condition() -> Optional[Tuple[LongTermMarketCondition, LongTermEMAData]]:
@@ -162,6 +168,7 @@ def fetch_spy_longterm_data(months: int) -> Optional[pd.DataFrame]:
     Returns:
         DataFrame with SPY price data, or None if fetch fails
     """
+    global _last_fetch_error_longterm
     try:
         # Add 25% buffer to ensure we have enough data for EMA calculation
         days = int(months * 30 * 1.25)
@@ -174,14 +181,16 @@ def fetch_spy_longterm_data(months: int) -> Optional[pd.DataFrame]:
         df = spy.history(start=start_date, end=end_date)
         
         if df.empty:
-            logger.error("No SPY data returned from yfinance for long-term analysis")
+            _last_fetch_error_longterm = "No SPY price data returned from market data provider"
+            logger.error(_last_fetch_error_longterm)
             return None
         
         logger.debug(f"Fetched {len(df)} days of SPY data for long-term analysis")
         return df
         
     except Exception as e:
-        logger.error(f"Error fetching SPY long-term data: {e}")
+        _last_fetch_error_longterm = f"Long-term market data fetch failed: {e}"
+        logger.error(_last_fetch_error_longterm, exc_info=True)
         return None
 
 
@@ -234,10 +243,12 @@ def calculate_longterm_emas(
         lookback_days = 42
         if len(prices) >= lookback_days + 1:
             short_ema_prev = short_ema_series.iloc[-(lookback_days+1)]
-            short_slope = ((short_ema - short_ema_prev) / short_ema_prev) * 100 / 2  # per month
-            
+            short_slope = (((short_ema - short_ema_prev) / short_ema_prev) * 100 / 2
+                           if short_ema_prev != 0 else 0.0)  # per month
+
             long_ema_prev = long_ema_series.iloc[-(lookback_days+1)]
-            long_slope = ((long_ema - long_ema_prev) / long_ema_prev) * 100 / 2  # per month
+            long_slope = (((long_ema - long_ema_prev) / long_ema_prev) * 100 / 2
+                          if long_ema_prev != 0 else 0.0)  # per month
         else:
             short_slope = 0.0
             long_slope = 0.0
@@ -257,11 +268,11 @@ def calculate_longterm_emas(
         )
         
         # Calculate price relative to EMAs
-        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100
-        price_vs_long_ema = ((current_price - long_ema) / long_ema) * 100
+        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100 if short_ema != 0 else 0.0
+        price_vs_long_ema  = ((current_price - long_ema)  / long_ema)  * 100 if long_ema  != 0 else 0.0
         
         # Calculate EMA crossover distance
-        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100
+        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100 if long_ema != 0 else 0.0
         
         # Calculate confidence score based on slope magnitudes
         # Higher slopes = higher confidence
@@ -275,6 +286,8 @@ def calculate_longterm_emas(
         for i in range(2, min(13, len(short_ema_series))):  # Look back up to 12 months
             prev_ema = short_ema_series.iloc[-(i * 21)]  # ~1 month back
             prev_prev_ema = short_ema_series.iloc[-((i+1) * 21)]
+            if prev_prev_ema == 0:
+                break
             prev_slope = ((prev_ema - prev_prev_ema) / prev_prev_ema) * 100
             
             if short_trend == LongTermTrendDirection.POSITIVE and prev_slope > slope_threshold:
@@ -310,7 +323,8 @@ def calculate_longterm_emas(
         return ema_data
         
     except Exception as e:
-        logger.error(f"Error calculating long-term EMAs: {e}")
+        _last_fetch_error_longterm = f"Long-term EMA calculation failed: {e}"
+        logger.error(_last_fetch_error_longterm, exc_info=True)
         return None
 
 
@@ -375,6 +389,8 @@ def get_longterm_market_condition(
     Returns:
         Tuple of (LongTermMarketCondition, LongTermEMAData or None)
     """
+    global _last_fetch_error_longterm
+
     if not config.enabled:
         logger.info("Long-term market trend analysis disabled in config")
         return LongTermMarketCondition.UNKNOWN, None
@@ -389,9 +405,12 @@ def get_longterm_market_condition(
     ema_data = calculate_longterm_emas(config)
     
     if ema_data is None:
-        logger.warning("Unable to calculate long-term market condition, returning UNKNOWN")
+        reason = _last_fetch_error_longterm or "Unknown error fetching long-term market data"
+        logger.warning("Unable to calculate long-term market condition, returning UNKNOWN. Reason: %s", reason)
         return LongTermMarketCondition.UNKNOWN, None
-    
+
+    _last_fetch_error_longterm = None
+
     condition = determine_longterm_market_condition(ema_data)
     
     # Cache the result

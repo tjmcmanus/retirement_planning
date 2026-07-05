@@ -94,7 +94,14 @@ def calc_roth_conversions_tax(
     )
     return conversion_tax
 
-def calc_roth_conversions(maxrate, headroom_rate, uppermax, agi, headroom_max, lowerby):
+def calc_roth_conversions(
+    maxrate: float,
+    headroom_rate: float,
+    uppermax: float,
+    agi: float,
+    headroom_max: float,
+    lowerby: float,
+) -> tuple[float, float]:
     """
     Calculate Roth conversion amounts and associated tax with headroom adjustment.
     
@@ -133,7 +140,12 @@ def calc_roth_conversions(maxrate, headroom_rate, uppermax, agi, headroom_max, l
     
     return total_conversions, conversion_tax
     
-def calc_agi(joint_gross_income, interest, stddectdf, daf):
+def calc_agi(
+    joint_gross_income: float,
+    interest: float,
+    stddectdf: pd.DataFrame,
+    daf: float,
+) -> float:
     """
     Calculate Adjusted Gross Income (AGI) considering standard deduction and DAF contributions.
     
@@ -929,3 +941,54 @@ def calculate_household_age_adjusted_healthcare_costs(
     )
     
     return adjusted
+
+
+def _validate_age(age: int | float, max_age: int = 150) -> None:
+    """Raise ValueError if *age* is outside the plausible human range [0, max_age].
+
+    Args:
+        age:     Age value to validate (typically an int, but float is accepted
+                 to cover fractional ages such as 59.5).
+        max_age: Upper bound, inclusive.  Defaults to 150.
+
+    Raises:
+        ValueError: When ``age < 0`` or ``age > max_age``.
+    """
+    if age < 0 or age > max_age:
+        raise ValueError(
+            f"Age {age!r} is outside the valid range [0, {max_age}]."
+        )
+
+
+def get_stage_specific_conversion_rate(stage_name: str) -> float:
+    """
+    Get the stage-specific maximum Roth conversion tax rate from configuration.
+
+    Args:
+        stage_name: The life stage name (e.g., "Stage 1: Accumulation")
+
+    Returns:
+        Maximum conversion rate as a decimal (e.g., 0.12 for 12%)
+    """
+    from config import get_config_manager
+    config_mgr = get_config_manager()
+
+    stage_config_map = {
+        "Stage 1: Accumulation": "stage_1_max_conversion_rate",
+        "Stage 2: Prep for Retirement": "stage_2_max_conversion_rate",
+        "Stage 3: Early Retirement": "stage_3_max_conversion_rate",
+        "Stage 4: Medicare": "stage_4_max_conversion_rate",
+        "Stage 5: Social Security": "stage_5_max_conversion_rate",
+        "Stage 6: RMD": "stage_6_max_conversion_rate",
+        "Stage 7: Surviving Spouse": "stage_7_max_conversion_rate",
+    }
+
+    config_key = stage_config_map.get(stage_name)
+    if config_key:
+        rate_pct = config_mgr.get("tax_strategy", config_key, None)
+        if rate_pct is not None:
+            return float(rate_pct) / 100.0
+
+    # Fall back to global default
+    global_rate = config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)
+    return float(global_rate) / 100.0

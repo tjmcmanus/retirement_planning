@@ -95,9 +95,10 @@ class Stage1Accumulation(BaseLifeStageStrategy):
                 retirement_year_spouse if retirement_year_spouse is not None else year
             )
             years_to_retirement = latest_retirement_year - year
-            
-            # If within the prep window (1-10 years), Stage 2 should handle this year
-            if 0 < years_to_retirement <= self.PREP_WINDOW_YEARS:
+
+            # Yield to Stage 2 when within the prep window OR in the retirement year itself
+            # (years_to_retirement == 0 means we are IN the retirement year — Stage 2 owns it)
+            if 0 <= years_to_retirement <= self.PREP_WINDOW_YEARS:
                 return False
                 
         except Exception as e:
@@ -231,7 +232,10 @@ class Stage1Accumulation(BaseLifeStageStrategy):
         strategy.federal_tax = federal_tax
         strategy.state_tax = state_tax
         strategy.fica_tax = fica_tax
+        strategy.payroll_tax = fica_tax        # display field used by DataFrame builder
         strategy.roth_conversion = roth_conversion
+        strategy.wages_to_trad = contribution_401k
+        strategy.wages_to_roth = contribution_roth
         
         # Update balances after contributions and conversions
         strategy.traditional_balance = (

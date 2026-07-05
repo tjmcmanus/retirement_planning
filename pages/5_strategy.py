@@ -1058,7 +1058,10 @@ def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
         # Get standard deduction for this year
         from load_data import get_std_deduction
         try:
-            std_ded = float(get_std_deduction(year, filing_status)['deduction'].iloc[0])
+            _df = get_std_deduction(year, filing_status)
+            std_ded = float(_df['deduction'].iloc[0]) if not _df.empty else None
+            if std_ded is None:
+                raise ValueError(f"get_std_deduction returned empty for year={year}")
         except Exception:
             logger.warning(
                 "Standard deduction not found for year=%s filing_status=%s; "
@@ -1067,11 +1070,13 @@ def prepare_tax_analytics_data(strategy_df: pd.DataFrame, phase: str) -> dict:
             )
             try:
                 import datetime
-                std_ded = float(
-                    get_std_deduction(datetime.date.today().year, filing_status)['deduction'].iloc[0]
-                )
+                _df = get_std_deduction(datetime.date.today().year, filing_status)
+                std_ded = float(_df['deduction'].iloc[0]) if not _df.empty else None
+                if std_ded is None:
+                    raise ValueError("get_std_deduction returned empty for current year")
             except Exception:
-                std_ded = float(get_std_deduction(2026, filing_status)['deduction'].iloc[0])
+                _fallback_df = get_std_deduction(2026, filing_status)
+                std_ded = float(_fallback_df['deduction'].iloc[0]) if not _fallback_df.empty else 32200.0
         
         # Taxable Income = AGI - Standard Deduction - DAF (if itemizing)
         # Note: DAF only provides benefit if itemized deductions exceed standard deduction
@@ -1724,7 +1729,10 @@ def render_tax_rates_chart(tax_data: dict) -> None:
     filing_status = config_mgr.get("tax_info", "filing_status", "married_filing_jointly")
     
     try:
-        std_ded = float(get_std_deduction(selected_year, filing_status)['deduction'].iloc[0])
+        _df = get_std_deduction(selected_year, filing_status)
+        std_ded = float(_df['deduction'].iloc[0]) if not _df.empty else None
+        if std_ded is None:
+            raise ValueError(f"get_std_deduction returned empty for year={selected_year}")
     except Exception:
         logger.warning(
             "Standard deduction not found for year=%s filing_status=%s; "
@@ -1733,11 +1741,13 @@ def render_tax_rates_chart(tax_data: dict) -> None:
         )
         try:
             import datetime
-            std_ded = float(
-                get_std_deduction(datetime.date.today().year, filing_status)['deduction'].iloc[0]
-            )
+            _df = get_std_deduction(datetime.date.today().year, filing_status)
+            std_ded = float(_df['deduction'].iloc[0]) if not _df.empty else None
+            if std_ded is None:
+                raise ValueError("get_std_deduction returned empty for current year")
         except Exception:
-            std_ded = float(get_std_deduction(2026, filing_status)['deduction'].iloc[0])
+            _fallback_df = get_std_deduction(2026, filing_status)
+            std_ded = float(_fallback_df['deduction'].iloc[0]) if not _fallback_df.empty else 32200.0
     
     # Get property tax from config
     try:
@@ -2099,6 +2109,10 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 person2_name=accum_person2_name,
             )
 
+        if accum_strategy_df.empty:
+            st.info("ℹ️ You are in or past your retirement year — there is no accumulation phase left to display. Switch to the **Withdrawal** phase instead.")
+            st.stop()
+
         with long_term_tab:
             st.subheader("📊 Multi-Year Accumulation Plan")
             
@@ -2112,7 +2126,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
             
             # Interactive Sankey
             portfolio = get_portfolio_truth_by_month(curr_month, curr_year)
-            render_interactive_sankey(accum_strategy_df, cast(pd.DataFrame, portfolio), 
+            render_interactive_sankey(accum_strategy_df, cast(pd.DataFrame, portfolio),
                                     accum_annual_expenses, "accumulation")
             st.markdown("---")
             

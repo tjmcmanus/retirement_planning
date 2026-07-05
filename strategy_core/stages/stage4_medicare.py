@@ -11,12 +11,12 @@ from typing import Any, Optional
 from ..base_strategy import BaseLifeStageStrategy
 from ..interfaces import ITaxCalculator, IAccountManager
 from ..models import PortfolioBalances, YearlyStrategy
+from .stage6_rmd import get_rmd_age
 
 logger = logging.getLogger(__name__)
 
 # Constants
 MEDICARE_AGE = 65
-RMD_AGE = 73
 
 
 class Stage4Medicare(BaseLifeStageStrategy):
@@ -75,11 +75,15 @@ class Stage4Medicare(BaseLifeStageStrategy):
             True if this stage applies
         """
         older_age = max(age_primary, age_spouse)
+        # RMD age depends on birth year (SECURE 2.0): 73 if born 1951–1959, 75 if born 1960+
+        birth_year_primary = year - age_primary
+        birth_year_spouse = year - age_spouse
+        rmd_age = get_rmd_age(max(birth_year_primary, birth_year_spouse))  # older person drives threshold
         return (
-            not has_wages and 
+            not has_wages and
             not has_ss and
             (age_primary >= MEDICARE_AGE or age_spouse >= MEDICARE_AGE) and
-            older_age < RMD_AGE
+            older_age < rmd_age
         )
     
     def calculate_strategy(
@@ -162,7 +166,26 @@ class Stage4Medicare(BaseLifeStageStrategy):
         aca_premium = self._calculate_aca_premium(
             strategy, year, age_primary, age_spouse
         )
-        
+
+        # Calculate full healthcare costs (Medicare + IRMAA + Medigap + OOP + LTC)
+        # irmaa_penalty and aca_premium above are kept for rebalancing/conversion logic;
+        # healthcare_total is the comprehensive figure stored on the strategy for reporting.
+        try:
+            from strategy import calculate_total_healthcare_costs
+            healthcare_total, _hc_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=prior_magi,
+                year=year,
+                filing_status=filing_status,
+                has_medigap=True
+            )
+            logger.info(f"Stage 4: Total healthcare costs=${healthcare_total:,.2f} "
+                        f"(IRMAA=${irmaa_penalty:,.2f}, ACA=${aca_premium:,.2f})")
+        except Exception as e:
+            logger.warning(f"Stage 4: Could not calculate full healthcare costs, falling back: {e}")
+            healthcare_total = irmaa_penalty + aca_premium
+
         # Calculate anticipated buffer needs (lookahead)
         anticipated_needs = self._calculate_anticipated_buffer_needs(
             strategy,
@@ -237,8 +260,9 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 )
         
         # Subtract DAF from balances before rebalancing
+        # HIFO lot removal: donate highest-gain lots to DAF first
         balances_for_rebalance = self._apply_daf_contribution(
-            balances, daf_contribution
+            balances, daf_contribution, year, brokerage_account
         )
         
         # Estimate preliminary tax before rebalancing
@@ -296,14 +320,27 @@ class Stage4Medicare(BaseLifeStageStrategy):
             expenses
         )
         
-        # Add DAF contribution to DAF balance
+        # Deduct DAF contribution from Brokerage (HIFO lot removal) and credit DAF balance
         if daf_contribution > 0:
+            try:
+                from strategy import apply_daf_to_brokerage_account
+                new_balances = apply_daf_to_brokerage_account(
+                    new_balances, daf_contribution, year, brokerage_account
+                )
+            except ImportError:
+                new_balances = PortfolioBalances(
+                    cash=new_balances.cash,
+                    taxable=new_balances.taxable - daf_contribution,
+                    traditional=new_balances.traditional,
+                    roth=new_balances.roth,
+                    daf=new_balances.daf,
+                )
             new_balances = PortfolioBalances(
                 cash=new_balances.cash,
-                taxable=new_balances.taxable - daf_contribution,  # Subtract DAF from taxable
+                taxable=new_balances.taxable,
                 traditional=new_balances.traditional,
                 roth=new_balances.roth,
-                daf=new_balances.daf + daf_contribution
+                daf=new_balances.daf + daf_contribution,
             )
         
         # Apply growth to balances
@@ -321,7 +358,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
         strategy.daf_contribution = daf_contribution
         strategy.irmaa_penalty = irmaa_penalty
         strategy.aca_premium = aca_premium
-        strategy.healthcare_costs = irmaa_penalty + aca_premium  # Total healthcare costs for Stage 4
+        strategy.healthcare_costs = healthcare_total  # Full costs: Medicare + IRMAA + Medigap + OOP
         
         # Set transaction tracking
         strategy.traditional_to_cash = transactions['traditional_to_cash']
@@ -594,7 +631,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 year=year,
                 pay_from_taxable=True,
                 taxable_account_balance=taxable_balance,
-                years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 15,
+                years_to_withdrawal=(get_rmd_age(year - age_primary) - age_primary) if age_primary > 0 else 15,
                 annual_return=growth_rate - 1.0,
                 expected_future_rate=expected_future_rate
             )
@@ -625,7 +662,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
                         traditional_ira_balance=available_for_conversion,
                         pay_from_taxable=True,
                         taxable_account_balance=taxable_balance,
-                        years_to_withdrawal=(73 - age_primary) if age_primary > 0 else 15,
+                        years_to_withdrawal=(get_rmd_age(year - age_primary) - age_primary) if age_primary > 0 else 15,
                         annual_return=growth_rate - 1.0
                     )
                     reduced_results = calculate_betr(reduced_inputs)
@@ -924,18 +961,26 @@ class Stage4Medicare(BaseLifeStageStrategy):
     def _apply_daf_contribution(
         self,
         balances: PortfolioBalances,
-        daf_contribution: float
+        daf_contribution: float,
+        year: int = 0,
+        brokerage_account: Any = None,
     ) -> PortfolioBalances:
-        """Apply DAF contribution by reducing taxable balance."""
-        if daf_contribution > 0:
-            return PortfolioBalances(
-                cash=balances.cash,
-                taxable=balances.taxable - daf_contribution,
-                traditional=balances.traditional,
-                roth=balances.roth,
-                daf=balances.daf
+        """Apply DAF contribution using HIFO lot removal for maximum gain elimination."""
+        try:
+            from strategy import apply_daf_to_brokerage_account
+            return apply_daf_to_brokerage_account(
+                balances, daf_contribution, year, brokerage_account
             )
-        return balances
+        except ImportError:
+            if daf_contribution > 0:
+                return PortfolioBalances(
+                    cash=balances.cash,
+                    taxable=balances.taxable - daf_contribution,
+                    traditional=balances.traditional,
+                    roth=balances.roth,
+                    daf=balances.daf,
+                )
+            return balances
     
     def _execute_rebalancing(
         self,

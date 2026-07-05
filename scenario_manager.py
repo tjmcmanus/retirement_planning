@@ -18,6 +18,7 @@ Key Features:
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 import uuid
@@ -38,7 +39,7 @@ def _cfg_default(section: str, key: str, fallback: Any) -> Any:
     try:
         from config import get_config_manager
         return get_config_manager().get(section, key, fallback)
-    except Exception:
+    except (ImportError, AttributeError, KeyError):
         logger.debug(
             "Could not read %s/%s from ConfigManager, using fallback %r",
             section, key, fallback, exc_info=True,
@@ -578,8 +579,8 @@ class ScenarioManager:
             scenario = Scenario.from_dict(data)
             logger.debug(f"Loaded scenario: {scenario.name} (ID: {scenario_id})")
             return scenario
-        except Exception as e:
-            logger.error(f"Error loading scenario {scenario_id}: {e}")
+        except (OSError, json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.error(f"Error loading scenario {scenario_id}: {e}", exc_info=True)
             return None
     
     def list_scenarios(self) -> list[dict[str, Any]]:
@@ -602,8 +603,8 @@ class ScenarioManager:
                     "modified_at": data.get("modified_at"),
                     "is_baseline": data.get("is_baseline", False),
                 })
-            except Exception as e:
-                logger.error(f"Error reading scenario file {file_path}: {e}")
+            except (OSError, json.JSONDecodeError) as e:
+                logger.error(f"Error reading scenario file {file_path}: {e}", exc_info=True)
         
         # Sort by modified date (most recent first)
         scenarios.sort(key=lambda x: x.get("modified_at", ""), reverse=True)
@@ -741,8 +742,8 @@ class ScenarioManager:
             scenario_ids = data.get("scenario_ids", [])
             logger.debug(f"Decoded {len(scenario_ids)} scenarios from URL parameter")
             return scenario_ids
-        except Exception as e:
-            logger.error(f"Error decoding URL parameter: {e}")
+        except (binascii.Error, json.JSONDecodeError, KeyError, UnicodeDecodeError) as e:
+            logger.error(f"Error decoding URL parameter: {e}", exc_info=True)
             return []
     
     def _save_scenario(self, scenario: Scenario):
@@ -753,13 +754,22 @@ class ScenarioManager:
             with open(tmp_path, "w") as f:
                 json.dump(scenario.to_dict(), f, indent=2)
             tmp_path.replace(file_path)
-        except Exception:
+        except (OSError, IOError):
             tmp_path.unlink(missing_ok=True)
             raise
     
     def _get_scenario_path(self, scenario_id: str) -> Path:
-        """Get file path for a scenario ID."""
-        return self.storage_dir / f"{scenario_id}.json"
+        """Get file path for a scenario ID.
+
+        Raises ValueError if the resolved path escapes the storage directory,
+        defending against path-traversal attacks via crafted scenario IDs.
+        """
+        candidate = (self.storage_dir / f"{scenario_id}.json").resolve()
+        if not str(candidate).startswith(str(self.storage_dir.resolve())):
+            raise ValueError(
+                f"Invalid scenario_id {scenario_id!r}: resolves outside storage directory"
+            )
+        return candidate
 
 
 # ============================================================================
@@ -786,8 +796,8 @@ def create_baseline_from_config(config_manager) -> Scenario:
         initial_portfolio = float(cash + taxable + tax_deferred + tax_free)
         if initial_portfolio < 10_000:
             initial_portfolio = 1_500_000.0  # Default if no data
-    except Exception as e:
-        logger.warning(f"Could not load portfolio data: {e}")
+    except (RuntimeError, ValueError, KeyError) as e:
+        logger.warning(f"Could not load portfolio data: {e}", exc_info=True)
         initial_portfolio = 1_500_000.0  # Default
     
     # Get configuration values

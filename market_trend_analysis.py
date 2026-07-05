@@ -99,6 +99,18 @@ class MarketTrendConfig:
 # ---------------------------------------------------------------------------
 
 _market_condition_cache: Optional[Tuple[MarketCondition, MovingAverageData, datetime]] = None
+# Last error message from a failed fetch/calculation, cleared on success.
+_last_fetch_error: Optional[str] = None
+
+
+def get_last_fetch_error() -> Optional[str]:
+    """Return the most recent market-data failure reason, or None if last fetch succeeded.
+
+    Callers (UI pages, bucket strategy) can surface this string to inform the
+    user *why* market condition shows as UNKNOWN rather than showing a generic
+    "data unavailable" message.
+    """
+    return _last_fetch_error
 
 
 def _get_cached_condition() -> Optional[Tuple[MarketCondition, MovingAverageData]]:
@@ -157,6 +169,7 @@ def fetch_spy_data(weeks: int) -> Optional[pd.DataFrame]:
     Returns:
         DataFrame with SPY price data, or None if fetch fails
     """
+    global _last_fetch_error
     try:
         # Add 20% buffer to ensure we have enough data for MA calculation
         days = int(weeks * 7 * 1.2)
@@ -169,14 +182,16 @@ def fetch_spy_data(weeks: int) -> Optional[pd.DataFrame]:
         df = spy.history(start=start_date, end=end_date)
         
         if df.empty:
-            logger.error("No SPY data returned from yfinance")
+            _last_fetch_error = "No SPY price data returned from market data provider"
+            logger.error(_last_fetch_error)
             return None
         
         logger.debug(f"Fetched {len(df)} days of SPY data")
         return df
         
     except Exception as e:
-        logger.error(f"Error fetching SPY data: {e}")
+        _last_fetch_error = f"Market data fetch failed: {e}"
+        logger.error(_last_fetch_error, exc_info=True)
         return None
 
 
@@ -224,10 +239,12 @@ def calculate_moving_averages(
         # Compare current EMA to EMA from 4 weeks ago
         lookback_weeks = 4
         if len(weekly_df) >= lookback_weeks + 1:
-            short_slope = ((short_ema - short_ema_series.iloc[-(lookback_weeks + 1)]) /
-                           short_ema_series.iloc[-(lookback_weeks + 1)]) * 100 / lookback_weeks
-            long_slope  = ((long_ema  - long_ema_series.iloc[-(lookback_weeks + 1)]) /
-                           long_ema_series.iloc[-(lookback_weeks + 1)]) * 100 / lookback_weeks
+            short_ema_prev = short_ema_series.iloc[-(lookback_weeks + 1)]
+            long_ema_prev  = long_ema_series.iloc[-(lookback_weeks + 1)]
+            short_slope = (((short_ema - short_ema_prev) / short_ema_prev) * 100 / lookback_weeks
+                           if short_ema_prev != 0 else 0.0)
+            long_slope  = (((long_ema  - long_ema_prev)  / long_ema_prev)  * 100 / lookback_weeks
+                           if long_ema_prev  != 0 else 0.0)
         else:
             short_slope = 0.0
             long_slope  = 0.0
@@ -247,11 +264,11 @@ def calculate_moving_averages(
         )
 
         # Calculate price relative to EMAs
-        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100
-        price_vs_long_ema  = ((current_price - long_ema)  / long_ema)  * 100
+        price_vs_short_ema = ((current_price - short_ema) / short_ema) * 100 if short_ema != 0 else 0.0
+        price_vs_long_ema  = ((current_price - long_ema)  / long_ema)  * 100 if long_ema  != 0 else 0.0
 
         # Calculate EMA crossover distance
-        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100
+        ema_crossover_distance = ((short_ema - long_ema) / long_ema) * 100 if long_ema != 0 else 0.0
 
         # Calculate confidence score based on slope magnitudes
         # Scale: 0.0 (flat) to 1.0 (strong trend); 2% per week = very strong
@@ -299,7 +316,8 @@ def calculate_moving_averages(
         return ma_data
         
     except Exception as e:
-        logger.error(f"Error calculating moving averages: {e}")
+        _last_fetch_error = f"EMA calculation failed: {e}"
+        logger.error(_last_fetch_error, exc_info=True)
         return None
 
 
@@ -378,9 +396,14 @@ def get_market_condition(
     ma_data = calculate_moving_averages(config)
     
     if ma_data is None:
-        logger.warning("Unable to calculate market condition, returning UNKNOWN")
+        reason = _last_fetch_error or "Unknown error fetching market data"
+        logger.warning("Unable to calculate market condition, returning UNKNOWN. Reason: %s", reason)
         return MarketCondition.UNKNOWN, None
     
+    # Successful fetch — clear the stale error
+    global _last_fetch_error
+    _last_fetch_error = None
+
     condition = determine_market_condition(ma_data)
     
     # Cache the result

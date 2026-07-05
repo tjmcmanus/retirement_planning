@@ -192,6 +192,7 @@ with tab_longterm:
     try:
         from market_trend_longterm import (
             get_longterm_market_condition,
+            get_last_fetch_error_longterm,
             get_market_cycle_phase,
             get_market_subphase as get_longterm_subphase,
             get_strategic_allocation_adjustment,
@@ -294,10 +295,12 @@ with tab_longterm:
                     st.caption(f"Last updated: {lt_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
         
         else:
-            st.info(
+            _lt_err_reason = get_last_fetch_error_longterm()
+            st.warning(
                 "📊 Long-term market forecast data is currently unavailable. "
-                "This may be due to market data service issues or network connectivity. "
-                "The forecast will update automatically when data becomes available."
+                + (f"Reason: {_lt_err_reason}" if _lt_err_reason else
+                   "This may be due to market data service issues or network connectivity.")
+                + " The forecast will update automatically when data becomes available."
             )
 
     except Exception as lt_err:
@@ -317,6 +320,7 @@ with tab_intermediate:
     try:
         from market_trend_analysis import (
             get_market_condition,
+            get_last_fetch_error,
             get_market_subphase as get_intermediate_subphase,
             MarketCondition,
             MarketTrendConfig,
@@ -416,10 +420,12 @@ with tab_intermediate:
                     st.caption(f"Last updated: {st_ma_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
         
         else:
-            st.info(
+            _int_err_reason = get_last_fetch_error()
+            st.warning(
                 "📊 Intermediate-term market forecast data is currently unavailable. "
-                "This may be due to market data service issues or network connectivity. "
-                "The forecast will update automatically when data becomes available."
+                + (f"Reason: {_int_err_reason}" if _int_err_reason else
+                   "This may be due to market data service issues or network connectivity.")
+                + " The forecast will update automatically when data becomes available."
             )
 
     except Exception as st_err:
@@ -439,6 +445,7 @@ with tab_shortterm:
     try:
         from market_trend_shortterm import (
             get_shortterm_market_condition,
+            get_last_fetch_error_shortterm,
             get_market_subphase as get_shortterm_subphase,
             ShortTermMarketCondition,
             ShortTermMarketTrendConfig,
@@ -544,10 +551,12 @@ with tab_shortterm:
                     st.caption(f"Last updated: {vst_ema_data.calculation_date.strftime('%Y-%m-%d %H:%M:%S')}")
         
         else:
-            st.info(
+            _st_err_reason = get_last_fetch_error_shortterm()
+            st.warning(
                 "📊 Short-term market forecast data is currently unavailable. "
-                "This may be due to market data service issues or network connectivity. "
-                "The forecast will update automatically when data becomes available."
+                + (f"Reason: {_st_err_reason}" if _st_err_reason else
+                   "This may be due to market data service issues or network connectivity.")
+                + " The forecast will update automatically when data becomes available."
             )
 
     except Exception as vst_err:
@@ -614,7 +623,7 @@ with tab_trend:
     
     # Add month-over-month annotation
     _last_val  = float(networth['total'].iloc[-1])
-    _prev_val  = float(networth['total'].iloc[-2])
+    _prev_val  = float(networth['total'].iloc[-2]) if len(networth) > 1 else _last_val
     _mom_delta = _last_val - _prev_val
     _mom_pct_t = (_mom_delta / _prev_val * 100) if _prev_val else 0.0
     _arrow_clr = '#21c354' if _mom_delta >= 0 else '#ff4b4b'

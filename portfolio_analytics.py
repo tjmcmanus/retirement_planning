@@ -207,8 +207,11 @@ def calculate_money_weighted_return(
     Returns:
         Annualized or total money-weighted return as a decimal
     """
-    if portfolio_values.empty or cash_flows.empty:
+    if portfolio_values.empty or len(portfolio_values) < 2:
         return 0.0
+    if cash_flows.empty:
+        # No intermediate cash flows: MWR == TWR (buy-and-hold / simple total return)
+        return calculate_time_weighted_return(portfolio_values, annualize=annualize)
     
     portfolio_values = portfolio_values.sort_index()
     cash_flows = cash_flows.sort_index()
@@ -750,7 +753,8 @@ def calculate_portfolio_analytics(
     mwr = calculate_money_weighted_return(portfolio_values, cash_flows, annualize=True)
     
     # Total return
-    total_return_pct = ((portfolio_values.iloc[-1] / portfolio_values.iloc[0]) - 1) * 100
+    start_val = float(portfolio_values.iloc[0])
+    total_return_pct = ((float(portfolio_values.iloc[-1]) / start_val) - 1) * 100 if start_val != 0 else 0.0
     
     # Risk metrics
     volatility = calculate_volatility(portfolio_returns, annualize=True)

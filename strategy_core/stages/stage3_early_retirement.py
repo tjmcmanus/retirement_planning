@@ -177,84 +177,253 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 'estimated_ltcg': 0.0
             }
         
-        # Calculate available Traditional balance for conversion
-        available_for_conversion = max(
-            0, 
-            balances.traditional - anticipated_needs['total_traditional_need']
+        # ── DAF Traditional → Brokerage pre-fund sizing ───────────────────────
+        # Check whether a pre-fund distribution is required this year.
+        # When active it takes full precedence:
+        #   • Roth conversion is suppressed (the large Traditional withdrawal fills the bracket)
+        #   • Cash is funded directly from Traditional (not from Brokerage) so Brokerage stays intact
+        #   • Normal brokerage replenishment is bypassed (the pre-fund IS the funding event)
+        daf_trad_prefund = self._calculate_daf_trad_prefund(
+            strategy, age_primary, year, balances.traditional,
+            anticipated_needs['total_traditional_need']
         )
-        
-        # Calculate optimal Roth conversion using BETR
-        roth_conversion = self._calculate_betr_roth_conversion(
-            strategy,
-            available_for_conversion,
-            anticipated_needs,
-            max_conversion_rate,
-            age_primary,
-            balances.taxable,
-            growth_rate,
-            year
-        )
-        
-        # Calculate DAF contribution and optimization
-        daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
-            strategy,
-            age_primary,
-            age_spouse,
-            std_deduction,
-            state,
-            balances.taxable,
-            year,
-            filing_status
-        )
-        
-        # Apply DAF enhancement to Roth conversion if applicable
-        if daf_contribution > 0 and daf_tax_excess > 0 and roth_conversion > 0:
-            additional_conversion = min(
-                daf_tax_excess,
-                available_for_conversion - roth_conversion
+
+        if daf_trad_prefund > 0:
+            # ── PRE-FUND PATH ─────────────────────────────────────────────────
+            # Suppress Roth conversion — the big Traditional distribution consumes
+            # all available bracket space; stacking a conversion on top would push
+            # AGI above the target rate.
+            roth_conversion = 0.0
+            self._log_decision(
+                strategy,
+                'roth_conversion',
+                'Roth Conversion Suppressed (DAF Pre-Fund Year)',
+                'No conversion — DAF Trad→Brok pre-fund active',
+                f'A Traditional → Brokerage pre-fund of ${daf_trad_prefund:,.0f} is executing this year '
+                f'to build Brokerage liquidity for upcoming DAF contributions. The distribution itself '
+                f'fills the available tax bracket, so no additional Roth conversion is performed.',
+                daf_trad_prefund=daf_trad_prefund,
             )
-            if additional_conversion > 0:
-                roth_conversion += additional_conversion
-                self._log_daf_conversion_enhancement(
-                    strategy,
-                    daf_contribution,
-                    daf_tax_excess,
-                    additional_conversion,
-                    roth_conversion
+
+            # Step 1: Deduct expenses + ACA from cash.
+            # Clamp to zero; carry any shortfall into Step 2.
+            total_cash_outflow = expenses + aca_premium
+            cash_after_outflow = balances.cash - total_cash_outflow
+            outflow_shortfall = max(0.0, -cash_after_outflow)
+            new_balances = PortfolioBalances(
+                cash=max(0.0, cash_after_outflow),
+                taxable=balances.taxable,
+                traditional=balances.traditional,
+                roth=balances.roth,
+                daf=balances.daf,
+            )
+
+            # Step 2: Fill the cash buffer using Brokerage → Cash (LOFO — lowest-gain
+            # lots first).  This is more tax-efficient than pulling from Traditional
+            # because:
+            #   a) The Traditional distribution (Step 3) already generates a large
+            #      ordinary-income hit; adding more Traditional withdrawals here would
+            #      compound that.
+            #   b) Low-gain brokerage lots realise minimal LTCG (potentially 0% rate
+            #      for MFJ filers in Stage 3).
+            #   c) It preserves the highest-gain lots in Brokerage for future DAF
+            #      donations (HIFO), eliminating even more embedded gain tax-free.
+            from strategy import calculate_cash_buffer_targets
+            cash_target, _ = calculate_cash_buffer_targets(expenses)
+            cash_deficit = max(0.0, cash_target - new_balances.cash) + outflow_shortfall
+
+            brok_to_cash = 0.0
+            brok_ltcg = 0.0
+            trad_to_cash = 0.0
+
+            if cash_deficit > 100:
+                # How much Brokerage can provide without going below zero
+                # (Step 3 needs Brokerage intact to receive the pre-fund deposit,
+                # so we only use what is already there before the pre-fund.)
+                brok_available = new_balances.taxable
+                brok_transfer = min(cash_deficit, brok_available)
+
+                if brok_transfer > 0:
+                    if brokerage_account is not None:
+                        _, brok_ltcg = brokerage_account.withdraw_lowest_gain(brok_transfer, year)
+                    else:
+                        # No lot tracker — estimate LTCG at account-level ratio
+                        brok_ltcg = brok_transfer * getattr(brokerage_account, 'ltcg_ratio', 0.4) \
+                                    if brokerage_account else brok_transfer * 0.4
+                        brok_ltcg = 0.0  # no tracker means we can't compute it
+
+                    new_balances = PortfolioBalances(
+                        cash=new_balances.cash + brok_transfer,
+                        taxable=new_balances.taxable - brok_transfer,
+                        traditional=new_balances.traditional,
+                        roth=new_balances.roth,
+                        daf=new_balances.daf,
+                    )
+                    brok_to_cash = brok_transfer
+                    cash_deficit -= brok_transfer
+                    logger.info(
+                        f"Year {year}: Pre-fund path: ${brok_to_cash:,.0f} Brokerage → Cash "
+                        f"(LOFO, ${brok_ltcg:,.0f} LTCG realised)"
+                    )
+
+                # Any remaining deficit (Brokerage exhausted) falls back to Traditional
+                if cash_deficit > 100 and new_balances.traditional > 0:
+                    trad_to_cash = min(cash_deficit, new_balances.traditional)
+                    new_balances = PortfolioBalances(
+                        cash=new_balances.cash + trad_to_cash,
+                        taxable=new_balances.taxable,
+                        traditional=new_balances.traditional - trad_to_cash,
+                        roth=new_balances.roth,
+                        daf=new_balances.daf,
+                    )
+                    logger.info(
+                        f"Year {year}: Pre-fund path: ${trad_to_cash:,.0f} Traditional → Cash "
+                        f"(Brokerage insufficient; fallback)"
+                    )
+
+            # Step 3: Execute the pre-fund transfer Traditional → Brokerage
+            actual_prefund = min(daf_trad_prefund, new_balances.traditional)
+            if actual_prefund < daf_trad_prefund:
+                logger.warning(
+                    f"Year {year}: DAF pre-fund capped at ${actual_prefund:,.0f} "
+                    f"(wanted ${daf_trad_prefund:,.0f}, Traditional balance insufficient)"
                 )
-        
-        # Subtract DAF from balances before rebalancing
-        balances_for_rebalance = self._apply_daf_contribution(
-            balances, daf_contribution
-        )
-        
-        # Estimate preliminary tax before rebalancing
-        preliminary_tax = self._estimate_preliminary_tax(
-            expenses=expenses,
-            roth_conversion=roth_conversion,
-            anticipated_needs=anticipated_needs,
-            aca_premium=aca_premium,
-            filing_status=filing_status,
-            state=state,
-            year=year,
-            age_primary=age_primary,
-            age_spouse=age_spouse,
-            brokerage_account=brokerage_account
-        )
-        
-        # Execute account rebalancing with preliminary tax estimate
-        new_balances, transactions = self._execute_rebalancing(
-            strategy,
-            balances_for_rebalance,
-            expenses,
-            roth_conversion,
-            aca_premium,
-            preliminary_tax,
-            year,
-            age_primary,
-            brokerage_account
-        )
-        
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable + actual_prefund,
+                traditional=new_balances.traditional - actual_prefund,
+                roth=new_balances.roth,
+                daf=new_balances.daf,
+            )
+            logger.info(
+                f"Year {year}: DAF pre-fund executed: ${actual_prefund:,.0f} Traditional → Brokerage"
+            )
+
+            # Step 4: DAF bundling contribution — now that Brokerage is funded by the
+            # pre-fund, the bundled DAF contribution can fire in this same year if the
+            # balance is sufficient. Pass the post-prefund brokerage balance so the
+            # sufficiency check inside _calculate_daf_for_year uses the updated amount.
+            daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
+                strategy,
+                age_primary,
+                age_spouse,
+                std_deduction,
+                state,
+                new_balances.taxable,   # post-prefund brokerage balance
+                year,
+                filing_status,
+            )
+            if daf_contribution > 0:
+                new_balances = self._apply_daf_contribution(
+                    new_balances, daf_contribution, year, brokerage_account
+                )
+                new_balances = PortfolioBalances(
+                    cash=new_balances.cash,
+                    taxable=new_balances.taxable,
+                    traditional=new_balances.traditional,
+                    roth=new_balances.roth,
+                    daf=new_balances.daf + daf_contribution,
+                )
+                logger.info(
+                    f"Year {year}: DAF bundling contribution: ${daf_contribution:,.0f} from Brokerage"
+                )
+
+            # Build transaction dict matching the shape the rest of the method expects.
+            # brok_to_cash and brok_ltcg feed into _calculate_final_taxes so the LOFO
+            # LTCG is included in AGI correctly.
+            transactions = {
+                'brokerage_to_cash': brok_to_cash,
+                'traditional_to_cash': trad_to_cash,
+                'traditional_to_brokerage': actual_prefund,
+                'roth_to_cash': 0.0,
+                'roth_to_brokerage': 0.0,
+                'conversion_executed': 0.0,
+                'cash_replenishment': brok_to_cash + trad_to_cash,
+                'brokerage_replenishment': actual_prefund,
+                'brokerage_ltcg': brok_ltcg,
+                'taxes_paid': 0.0,
+            }
+
+        else:
+            # ── NORMAL PATH ───────────────────────────────────────────────────
+            # Calculate available Traditional balance for conversion
+            available_for_conversion = max(
+                0,
+                balances.traditional - anticipated_needs['total_traditional_need']
+            )
+
+            # Calculate optimal Roth conversion using BETR
+            roth_conversion = self._calculate_betr_roth_conversion(
+                strategy,
+                available_for_conversion,
+                anticipated_needs,
+                max_conversion_rate,
+                age_primary,
+                balances.taxable,
+                growth_rate,
+                year
+            )
+
+            # Calculate DAF contribution and optimization
+            daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
+                strategy,
+                age_primary,
+                age_spouse,
+                std_deduction,
+                state,
+                balances.taxable,
+                year,
+                filing_status
+            )
+
+            # Apply DAF enhancement to Roth conversion if applicable
+            if daf_contribution > 0 and daf_tax_excess > 0 and roth_conversion > 0:
+                additional_conversion = min(
+                    daf_tax_excess,
+                    available_for_conversion - roth_conversion
+                )
+                if additional_conversion > 0:
+                    roth_conversion += additional_conversion
+                    self._log_daf_conversion_enhancement(
+                        strategy,
+                        daf_contribution,
+                        daf_tax_excess,
+                        additional_conversion,
+                        roth_conversion
+                    )
+
+            # Subtract DAF from balances before rebalancing (HIFO lot removal)
+            balances_for_rebalance = self._apply_daf_contribution(
+                balances, daf_contribution, year, brokerage_account
+            )
+
+            # Estimate preliminary tax before rebalancing
+            preliminary_tax = self._estimate_preliminary_tax(
+                expenses=expenses,
+                roth_conversion=roth_conversion,
+                anticipated_needs=anticipated_needs,
+                aca_premium=aca_premium,
+                filing_status=filing_status,
+                state=state,
+                year=year,
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                brokerage_account=brokerage_account
+            )
+
+            # Execute account rebalancing with preliminary tax estimate
+            new_balances, transactions = self._execute_rebalancing(
+                strategy,
+                balances_for_rebalance,
+                expenses,
+                roth_conversion,
+                aca_premium,
+                preliminary_tax,
+                year,
+                age_primary,
+                brokerage_account
+            )
+
         # Ensure 90% standard deduction target is met
         new_balances, transactions = self._ensure_standard_deduction_target(
             strategy,
@@ -753,6 +922,85 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         
         return total_tax
     
+    def _calculate_daf_trad_prefund(
+        self,
+        strategy: YearlyStrategy,
+        age_primary: int,
+        year: int,
+        traditional_balance: float,
+        already_reserved: float,
+    ) -> float:
+        """
+        Return the Traditional → Brokerage distribution amount for DAF pre-funding.
+
+        Fires in every calendar year within [start_year, end_year] inclusive.
+        Year-based configuration removes all age/stage inference — what you set
+        in the UI is exactly what executes, no conversion needed.
+
+        Args:
+            strategy:            YearlyStrategy to log to
+            age_primary:         Primary person's age (informational only)
+            year:                Current calendar year
+            traditional_balance: Current Traditional IRA / 401k balance
+            already_reserved:    Amount already earmarked for normal buffer needs
+
+        Returns:
+            Pre-fund distribution amount (0 if not applicable this year)
+        """
+        try:
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+
+            enabled = bool(config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False))
+            if not enabled:
+                return 0.0
+
+            prefund_amount = float(config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0))
+            start_year = int(config_mgr.get("charitable_giving", "daf_trad_prefund_start_year", 9999))
+            end_year   = int(config_mgr.get("charitable_giving", "daf_trad_prefund_end_year",   0))
+
+            if prefund_amount <= 0:
+                return 0.0
+
+            if not (start_year <= year <= end_year):
+                return 0.0
+
+            # Cap to Traditional balance available after normal buffer needs
+            available = max(0.0, traditional_balance - already_reserved)
+            actual_amount = min(prefund_amount, available)
+
+            if actual_amount <= 0:
+                logger.info(
+                    f"Year {year}: DAF pre-fund skipped — insufficient Traditional balance "
+                    f"(available=${available:,.0f} after ${already_reserved:,.0f} reserved)"
+                )
+                return 0.0
+
+            logger.info(
+                f"Year {year}: DAF Trad→Brok pre-fund: ${actual_amount:,.0f} "
+                f"(year window {start_year}–{end_year}, age {age_primary})"
+            )
+            self._log_decision(
+                strategy,
+                'tax_strategy',
+                'DAF Traditional → Brokerage Pre-Fund',
+                f'Distribute ${actual_amount:,.0f} from Traditional → Brokerage',
+                f'Pre-funding Brokerage with a Traditional distribution in {year} '
+                f'(configured window {start_year}–{end_year}) to ensure Brokerage has '
+                f'sufficient liquidity to fund upcoming DAF contributions. '
+                f'Roth conversion is suppressed this year; the distribution is taxed '
+                f'as ordinary income.',
+                year=year,
+                prefund_amount=actual_amount,
+                window_start=start_year,
+                window_end=end_year,
+            )
+            return actual_amount
+
+        except Exception as e:
+            logger.warning(f"DAF trad prefund calculation failed: {e}")
+            return 0.0
+
     def _calculate_daf_optimization(
         self,
         strategy: YearlyStrategy,
@@ -845,27 +1093,44 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
     def _apply_daf_contribution(
         self,
         balances: PortfolioBalances,
-        daf_contribution: float
+        daf_contribution: float,
+        year: int = 0,
+        brokerage_account: Any = None,
     ) -> PortfolioBalances:
         """
-        Apply DAF contribution by reducing taxable balance.
-        
+        Apply DAF contribution by reducing taxable balance and removing the
+        highest-gain lots from the BrokerageAccount tracker (HIFO order).
+
+        Donating appreciated securities to a DAF eliminates the embedded capital
+        gain entirely.  Selecting the highest-gain lots first maximises the tax
+        benefit and leaves the remaining portfolio with a higher basis ratio,
+        permanently lowering LTCG on future Brokerage → Cash withdrawals.
+
         Args:
-            balances: Current balances
-            daf_contribution: DAF contribution amount
-            
+            balances:           Current portfolio balances.
+            daf_contribution:   Amount contributed to the DAF.
+            year:               Current year (passed through to lot tracker).
+            brokerage_account:  Live BrokerageAccount for HIFO lot removal.
+
         Returns:
-            Updated balances
+            Updated PortfolioBalances with taxable reduced by daf_contribution.
         """
-        if daf_contribution > 0:
-            return PortfolioBalances(
-                cash=balances.cash,
-                taxable=balances.taxable - daf_contribution,
-                traditional=balances.traditional,
-                roth=balances.roth,
-                daf=balances.daf
+        try:
+            from strategy import apply_daf_to_brokerage_account
+            return apply_daf_to_brokerage_account(
+                balances, daf_contribution, year, brokerage_account
             )
-        return balances
+        except ImportError:
+            # Fallback: scalar deduction only (no lot tracking)
+            if daf_contribution > 0:
+                return PortfolioBalances(
+                    cash=balances.cash,
+                    taxable=balances.taxable - daf_contribution,
+                    traditional=balances.traditional,
+                    roth=balances.roth,
+                    daf=balances.daf,
+                )
+            return balances
     
     def _execute_rebalancing(
         self,
