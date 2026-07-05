@@ -447,7 +447,8 @@ class Stage6RMD(BaseLifeStageStrategy):
             Dictionary with healthcare cost components
         """
         try:
-            from strategy import calculate_total_healthcare_costs
+            from strategy import calculate_total_healthcare_costs, get_health_status_from_config
+            _health_status = get_health_status_from_config()
 
             healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
                 age_primary=age_primary,
@@ -455,6 +456,7 @@ class Stage6RMD(BaseLifeStageStrategy):
                 magi_two_years_ago=prior_magi,
                 year=year,
                 filing_status=filing_status,
+                health_status=_health_status,
                 has_medigap=True
             )
 

@@ -170,10 +170,33 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         strategy.wages = wages
         strategy.ss_benefits = ss_benefits
         
-        # Calculate pre-retirement healthcare costs
-        healthcare_costs = self._calculate_preretirement_healthcare(
-            year, age_primary, age_spouse
-        )
+        # Calculate full healthcare costs (premiums + OOP).
+        # _calculate_preretirement_healthcare covers insured premiums only;
+        # calculate_total_healthcare_costs adds age-adjusted out-of-pocket costs
+        # (dental, vision, hearing, co-pays) on top of those premiums.
+        # IRMAA/Medicare will return $0 for under-65 persons, so passing prior_magi=0
+        # is safe here.
+        try:
+            from strategy import calculate_total_healthcare_costs, get_health_status_from_config
+            _health_status = get_health_status_from_config()
+            healthcare_total, _hc_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=0.0,  # No IRMAA pre-Medicare
+                year=year,
+                filing_status=filing_status,
+                health_status=_health_status,
+                has_medigap=False  # Not on Medicare yet
+            )
+            logger.info(f"Stage 2: Total healthcare costs=${healthcare_total:,.2f} "
+                        f"(premiums + OOP, health_status={_health_status})")
+        except Exception as e:
+            logger.warning(f"Stage 2: Could not calculate full healthcare costs, falling back: {e}")
+            healthcare_total = self._calculate_preretirement_healthcare(
+                year, age_primary, age_spouse
+            )
+
+        healthcare_costs = healthcare_total
         strategy.healthcare_costs = healthcare_costs
         
         # Get contribution rates from config

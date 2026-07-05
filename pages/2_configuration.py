@@ -1232,6 +1232,41 @@ with tab3:
             key="person1_medicare_eligible"
         )
         
+        st.markdown("---")
+        st.markdown("**Chronic Conditions (Out-of-Pocket Cost Adjustment)**")
+        st.caption(
+            "Checked conditions raise the out-of-pocket tier used for healthcare projections. "
+            "0 conditions → Healthy · Low-burden conditions → Average · High-burden conditions → Chronic."
+        )
+
+        _p1_saved_conditions = config_mgr.get("healthcare", "person1_conditions", []) or []
+
+        _CONDITIONS = [
+            ("high_blood_pressure", "High Blood Pressure",  "Weight 1 — manageable with medication"),
+            ("high_cholesterol",    "High Cholesterol",     "Weight 1 — manageable with medication"),
+            ("type2_diabetes",      "Type 2 Diabetes",      "Weight 2 — ongoing management required"),
+            ("type1_diabetes",      "Type 1 Diabetes",      "Weight 2 — ongoing management required"),
+            ("atherosclerosis",     "Atherosclerosis",      "Weight 2 — cardiovascular disease"),
+            ("copd",                "COPD",                 "Weight 2 — chronic lung disease"),
+            ("cancer",              "Cancer",               "Weight 2 — active or history of cancer"),
+            ("parkinsons",          "Parkinson's Disease",  "Weight 2 — progressive neurological"),
+            ("alzheimers",          "Alzheimer's Disease",  "Weight 2 — progressive neurological"),
+        ]
+
+        _p1_checked_conditions = []
+        _cond_cols_1a, _cond_cols_1b = st.columns(2)
+        for _i, (_key, _label, _tip) in enumerate(_CONDITIONS):
+            _col = _cond_cols_1a if _i % 2 == 0 else _cond_cols_1b
+            with _col:
+                if st.checkbox(_label, value=(_key in _p1_saved_conditions),
+                               help=_tip, key=f"p1_cond_{_key}"):
+                    _p1_checked_conditions.append(_key)
+
+        from strategy import derive_health_status
+        _p1_status = derive_health_status(_p1_checked_conditions)
+        _status_color = {"healthy": "🟢", "average": "🟡", "chronic": "🔴"}
+        st.caption(f"OOP Tier: {_status_color[_p1_status]} **{_p1_status.capitalize()}**")
+
         # Display calculated costs for person1
         if person1_aca_insurance_monthly > 0:
             annual_aca_cost_1 = person1_aca_insurance_monthly * 12
@@ -1359,7 +1394,31 @@ with tab3:
         else:
             person2_reviewed_medicare_guide = False
             person2_medicare_eligible = False
-        
+
+        if not is_single_person:
+            st.markdown("---")
+            st.markdown("**Chronic Conditions (Out-of-Pocket Cost Adjustment)**")
+            st.caption(
+                "Checked conditions raise the out-of-pocket tier used for healthcare projections. "
+                "0 conditions → Healthy · Low-burden conditions → Average · High-burden conditions → Chronic."
+            )
+
+            _p2_saved_conditions = config_mgr.get("healthcare", "person2_conditions", []) or []
+
+            _p2_checked_conditions = []
+            _cond_cols_2a, _cond_cols_2b = st.columns(2)
+            for _i, (_key, _label, _tip) in enumerate(_CONDITIONS):
+                _col = _cond_cols_2a if _i % 2 == 0 else _cond_cols_2b
+                with _col:
+                    if st.checkbox(_label, value=(_key in _p2_saved_conditions),
+                                   help=_tip, key=f"p2_cond_{_key}"):
+                        _p2_checked_conditions.append(_key)
+
+            _p2_status = derive_health_status(_p2_checked_conditions)
+            st.caption(f"OOP Tier: {_status_color[_p2_status]} **{_p2_status.capitalize()}**")
+        else:
+            _p2_checked_conditions = []
+
         # Display calculated costs for person2
         if person2_aca_insurance_monthly > 0:
             annual_aca_cost_2 = person2_aca_insurance_monthly * 12
@@ -5416,6 +5475,10 @@ with tab10:
                     config_mgr.get("healthcare", "person2_aca_end_age", 65)),
                 "person2_medicare_start_age": st.session_state.get("person2_medicare_start_age",
                     config_mgr.get("healthcare", "person2_medicare_start_age", 65)),
+                "person1_conditions": _p1_checked_conditions if "_p1_checked_conditions" in dir() else
+                    config_mgr.get("healthcare", "person1_conditions", []),
+                "person2_conditions": _p2_checked_conditions if "_p2_checked_conditions" in dir() else
+                    config_mgr.get("healthcare", "person2_conditions", []),
             })
 
             config_mgr.update_section("social_security", {

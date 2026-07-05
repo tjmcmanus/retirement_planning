@@ -494,7 +494,7 @@ The Dashboard shows three independent assessments of the S&P 500 (SPY) using exp
 | Neutral → | Negative ↓ | ⚪ Neutral (Distribution) | 18-month flat; 8-month falls | Consider reducing exposure; build cash |
 | Negative ↓ | Positive ↑ | 🔴 Bear (Accumulation) | 18-month negative; 8-month bounces | Recovery attempt; wait for 18-month confirmation |
 | Negative ↓ | Neutral → | 🔴 Bear (Consolidating) | 18-month negative; 8-month flattens | Defensive posture; higher cash |
-| Negative ↓ | Negative ↓ | 🔴 Bear (Distribution) | Both monthly EMAs falling | Reduce 10–20%; watch for value after 6+ months |
+| Negative ↓ | Negative ↓ | 🔴 Bear (Distribution) | Both monthly EMAs falling | Reduce up to 40%; watch for value after 6+ months |
 
 #### Suggested Tactical Allocation Adjustments
 
@@ -504,7 +504,7 @@ The Dashboard shows three independent assessments of the S&P 500 (SPY) using exp
 | Any | Neutral | 0% (no directional edge) |
 | Short-Term | Bear | −8% |
 | Intermediate | Bear | −20% |
-| Long-Term | Bear | −15% |
+| Long-Term | Bear | −40% |
 
 The sub-phase provides nuance: Bear (Distribution) that has persisted multiple periods strengthens the case for the full reduction; Bear (Accumulation) in early stages may warrant waiting.
 

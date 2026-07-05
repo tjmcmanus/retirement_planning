@@ -174,7 +174,7 @@ Tactical Guidance box which gives a plain-language action statement for the curr
 | Neutral → | Negative ↓ | ⚪ Neutral (Distribution) | Consider reducing exposure; build cash |
 | Negative ↓ | Positive ↑ | 🔴 Bear (Accumulation) | Recovery attempt; wait for 18-month confirmation |
 | Negative ↓ | Neutral → | 🔴 Bear (Consolidating) | Defensive posture; higher cash |
-| Negative ↓ | Negative ↓ | 🔴 Bear (Distribution) | Reduce 10–20%; watch for value opportunities after 6+ months |
+| Negative ↓ | Negative ↓ | 🔴 Bear (Distribution) | Reduce up to 40%; watch for value opportunities after 6+ months |
 
 ---
 

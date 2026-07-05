@@ -2313,6 +2313,89 @@ def _calculate_medicare(
     )
 
 
+# Chronic conditions that each contribute to the health_status scoring.
+# Weight 1 = manageable with medication; weight 2 = high management burden.
+_CONDITION_WEIGHTS: dict[str, int] = {
+    "high_blood_pressure":  1,
+    "high_cholesterol":     1,
+    "type2_diabetes":       2,
+    "type1_diabetes":       2,
+    "parkinsons":           2,
+    "alzheimers":           2,
+    "atherosclerosis":      2,
+    "copd":                 2,
+    "cancer":               2,
+}
+
+
+def derive_health_status(conditions: list[str]) -> str:
+    """Derive OOP health status tier from a list of chronic condition keys.
+
+    Scoring rules (total weight of active conditions):
+      0       → "healthy"
+      1–2     → "average"
+      3+      → "chronic"
+
+    Args:
+        conditions: List of condition keys from ``_CONDITION_WEIGHTS``
+                    (any unknown keys are ignored).
+
+    Returns:
+        One of ``"healthy"``, ``"average"``, or ``"chronic"``.
+    """
+    score = sum(_CONDITION_WEIGHTS.get(c, 0) for c in conditions)
+    if score == 0:
+        return "healthy"
+    if score <= 2:
+        return "average"
+    return "chronic"
+
+
+def get_household_health_status(
+    person1_conditions: list[str],
+    person2_conditions: list[str] | None = None,
+) -> str:
+    """Return the higher-severity health status for the household.
+
+    The OOP cost column in ``medicare_premiums.csv`` is a single household
+    figure, so we use the worst-case status between both persons.
+
+    Args:
+        person1_conditions: Condition keys for the primary person.
+        person2_conditions: Condition keys for the spouse; ``None`` if single.
+
+    Returns:
+        One of ``"healthy"``, ``"average"``, or ``"chronic"``.
+    """
+    _order = {"healthy": 0, "average": 1, "chronic": 2}
+    s1 = derive_health_status(person1_conditions)
+    s2 = derive_health_status(person2_conditions or [])
+    return s1 if _order[s1] >= _order[s2] else s2
+
+
+def get_health_status_from_config() -> str:
+    """Read chronic conditions from config and return household health status.
+
+    Reads ``healthcare.person1_conditions`` and ``healthcare.person2_conditions``
+    (stored as lists of condition key strings) and delegates to
+    :func:`get_household_health_status`.
+
+    Returns:
+        One of ``"healthy"``, ``"average"``, or ``"chronic"``.
+    """
+    try:
+        from config import get_config_manager
+        config_mgr = get_config_manager()
+        p1 = config_mgr.get("healthcare", "person1_conditions", []) or []
+        p2 = config_mgr.get("healthcare", "person2_conditions", []) or []
+        status = get_household_health_status(list(p1), list(p2))
+        logger.debug(f"Household health status: {status} (p1={p1}, p2={p2})")
+        return status
+    except Exception as e:
+        logger.warning(f"Could not derive health status from config: {e}")
+        return "average"
+
+
 def calculate_total_healthcare_costs(age_primary: int,
                                      age_spouse: int,
                                      magi_two_years_ago: float,

@@ -96,7 +96,7 @@ class LongTermMarketTrendConfig:
     # Strategic allocation adjustment percentages for each market state
     bull_adjustment: float = 0.0    # No adjustment in bull market
     neutral_adjustment: float = 0.0  # No adjustment when consolidating
-    bear_adjustment: float = -15.0  # Reduce stocks by 15% in bear market
+    bear_adjustment: float = -40.0  # Reduce stocks by 40% in bear market
 
 
 # ---------------------------------------------------------------------------

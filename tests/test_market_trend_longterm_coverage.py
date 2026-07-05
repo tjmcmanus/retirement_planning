@@ -104,9 +104,9 @@ class TestGetStrategicAllocationAdjustment:
         assert adj == 5.0
 
     def test_bear_returns_bear_adjustment(self):
-        config = LongTermMarketTrendConfig(bear_adjustment=-15.0)
+        config = LongTermMarketTrendConfig(bear_adjustment=-40.0)
         adj = get_strategic_allocation_adjustment(LongTermMarketCondition.BEAR, config)
-        assert adj == -15.0
+        assert adj == -40.0
 
     def test_neutral_returns_neutral_adjustment(self):
         config = LongTermMarketTrendConfig(neutral_adjustment=2.0)

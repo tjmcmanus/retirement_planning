@@ -149,11 +149,33 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         # Calculate minimum ordinary income target (90% of standard deduction)
         min_ordinary_income_target = std_deduction * 0.90
         
-        # Calculate ACA premium
+        # Calculate ACA premium (kept separate — used by rebalancing/conversion logic)
         aca_premium = self._calculate_aca_premium(
             strategy, year, age_primary, age_spouse
         )
-        
+
+        # Calculate full healthcare costs (ACA premium + age-adjusted OOP).
+        # aca_premium is preserved above for buffer/conversion sizing; healthcare_total
+        # is the comprehensive figure stored on the strategy for reporting.
+        # IRMAA/Medicare returns $0 for under-65 persons, so prior_magi=0 is safe.
+        try:
+            from strategy import calculate_total_healthcare_costs, get_health_status_from_config
+            _health_status = get_health_status_from_config()
+            healthcare_total, _hc_breakdown = calculate_total_healthcare_costs(
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                magi_two_years_ago=0.0,  # No IRMAA pre-Medicare
+                year=year,
+                filing_status=filing_status,
+                health_status=_health_status,
+                has_medigap=False  # Not on Medicare yet
+            )
+            logger.info(f"Stage 3: Total healthcare costs=${healthcare_total:,.2f} "
+                        f"(ACA=${aca_premium:,.2f} + OOP, health_status={_health_status})")
+        except Exception as e:
+            logger.warning(f"Stage 3: Could not calculate full healthcare costs, falling back: {e}")
+            healthcare_total = aca_premium
+
         # Calculate anticipated buffer needs (lookahead)
         anticipated_needs = self._calculate_anticipated_buffer_needs(
             strategy,
@@ -474,7 +496,7 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         strategy.roth_conversion = roth_conversion
         strategy.daf_contribution = daf_contribution
         strategy.aca_premium = aca_premium
-        strategy.healthcare_costs = aca_premium  # Total healthcare costs for Stage 3
+        strategy.healthcare_costs = healthcare_total  # Full costs: ACA/retiree premium + OOP
         
         # Set transaction tracking
         strategy.traditional_to_cash = transactions['traditional_to_cash']
