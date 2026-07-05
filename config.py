@@ -3,10 +3,11 @@ Configuration module for retirement planning application.
 Stores and manages application constants and user preferences.
 """
 
+import copy
 import json
 import os
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import datetime, date
+from typing import Dict, Any, Optional, Tuple
 
 # Default configuration file path
 CONFIG_FILE = "retirement_config.json"
@@ -17,12 +18,14 @@ DEFAULT_CONFIG = {
         "is_single_person": False,  # True if planning for single person, False for couple
         "person1_name": "Tom",
         "person1_birth_date": "1965-01-01",
-        "person1_retirement_age": 62,
-        "person1_retirement_year": 2026,  # Year of retirement
+        "person1_retirement_date": "2025-01-01",  # Planned retirement date (YYYY-MM-DD)
+        "person1_retirement_age": 62,             # Derived from retirement_date - birth_date
+        "person1_retirement_year": 2026,          # Year of retirement
         "person2_name": "Sarah",
         "person2_birth_date": "1967-01-01",
-        "person2_retirement_age": 62,
-        "person2_retirement_year": 2028,  # Year of retirement
+        "person2_retirement_date": "2027-01-01",  # Planned retirement date (YYYY-MM-DD)
+        "person2_retirement_age": 62,             # Derived from retirement_date - birth_date
+        "person2_retirement_year": 2028,          # Year of retirement
         "retirement_state": "FL",  # State for retirement (affects state tax calculations)
         # List of children: each entry is {"name": str, "birth_date": "YYYY-MM-DD"}
         "children": [],
@@ -137,6 +140,13 @@ DEFAULT_CONFIG = {
         "daf_annual_contribution": 0,
         "daf_contribution_start_age": 60,
         "daf_contribution_end_age": 75,
+        # Traditional→Brokerage pre-fund for DAF:
+        # Take a large Traditional distribution to Brokerage early in retirement so that
+        # the Brokerage account has the liquidity to fund upcoming DAF contributions.
+        "daf_trad_prefund_enabled": False,
+        "daf_trad_prefund_amount": 0,         # Annual distribution amount ($)
+        "daf_trad_prefund_start_year": 2027,  # First calendar year to distribute
+        "daf_trad_prefund_end_year": 2028,    # Last calendar year to distribute (inclusive)
     },
     "rebalancing_preferences": {
         "cash_symbol": "MF:CASH",
@@ -197,9 +207,9 @@ class ConfigManager:
                     return self._merge_with_defaults(config)
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Error loading config file: {e}. Using defaults.")
-                return DEFAULT_CONFIG.copy()
+                return copy.deepcopy(DEFAULT_CONFIG)
         else:
-            return DEFAULT_CONFIG.copy()
+            return copy.deepcopy(DEFAULT_CONFIG)
     
     def _merge_with_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -211,7 +221,7 @@ class ConfigManager:
         Returns:
             Merged configuration
         """
-        merged = DEFAULT_CONFIG.copy()
+        merged = copy.deepcopy(DEFAULT_CONFIG)
         for section, values in config.items():
             if section in merged and isinstance(values, dict):
                 merged[section].update(values)
@@ -373,40 +383,90 @@ class ConfigManager:
             return self.calculate_age(birth_date, as_of_date)
         return 0
     
+    def get_retirement_fraction(self, person_num: int, year: int) -> float:
+        """
+        Return the fraction of *year* that person *person_num* is still employed.
+
+        - If the person retires before the year starts  → 0.0
+        - If the person retires after the year ends     → 1.0
+        - If the person retires during *year*           → elapsed days / days-in-year
+          (from Jan 1 up to, but not including, the retirement date)
+
+        The retirement date is read from ``person{n}_retirement_date`` in
+        personal_info.  If that key is absent the function falls back to the
+        integer ``person{n}_retirement_year`` and returns 0.0 or 1.0 with no
+        partial-year proration (preserving the old behaviour for configs that
+        pre-date the retirement-date feature).
+
+        Args:
+            person_num: 1 or 2
+            year:       Calendar year to evaluate
+
+        Returns:
+            float in [0.0, 1.0]
+        """
+        ret_date_str = self.get("personal_info", f"person{person_num}_retirement_date", None)
+
+        if ret_date_str:
+            try:
+                ret_date = datetime.strptime(ret_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                ret_date = None
+        else:
+            ret_date = None
+
+        if ret_date is None:
+            # Fall back to integer retirement year (no partial-year proration)
+            ret_year = self.get("personal_info", f"person{person_num}_retirement_year",
+                                datetime.now().year)
+            return 0.0 if year >= ret_year else 1.0
+
+        ret_year = ret_date.year
+
+        if year < ret_year:
+            return 1.0          # fully working
+        if year > ret_year:
+            return 0.0          # fully retired
+
+        # Partial year: days worked = Jan 1 through the day before retirement_date
+        year_start = date(year, 1, 1)
+        days_in_year = 366 if (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)) else 365
+        days_worked = max(0, (ret_date - year_start).days)   # 0 if retired on Jan 1
+        return days_worked / days_in_year
+
     def get_annual_wages(self, year: int) -> float:
         """
         Get total annual wages for both persons in a given year.
-        
-        Wages are only counted if the person has not yet retired.
-        Applies wage inflation from current year to target year.
-        
+
+        Wages are only counted while the person is still employed.  In the
+        retirement year the wages are prorated by the fraction of the year
+        worked (derived from the configured retirement date).
+
         Args:
             year: Year to calculate wages for
-            
+
         Returns:
-            Total annual wages for both persons
+            Total annual wages for both persons (prorated in retirement year)
         """
         current_year = datetime.now().year
         wage_inflation_rate = self.get("income", "wage_inflation_rate", 3.0) / 100.0
-        
+
         total_wages = 0.0
-        
-        # Check person 1
-        person1_retirement_year = self.get("personal_info", "person1_retirement_year", current_year)
-        if year < person1_retirement_year:
+
+        # Person 1
+        fraction1 = self.get_retirement_fraction(1, year)
+        if fraction1 > 0:
             person1_base_wages = self.get("income", "person1_annual_wages", 0)
             years_diff = year - current_year
-            person1_wages = person1_base_wages * ((1 + wage_inflation_rate) ** years_diff)
-            total_wages += person1_wages
-        
-        # Check person 2
-        person2_retirement_year = self.get("personal_info", "person2_retirement_year", current_year)
-        if year < person2_retirement_year:
+            total_wages += person1_base_wages * ((1 + wage_inflation_rate) ** years_diff) * fraction1
+
+        # Person 2
+        fraction2 = self.get_retirement_fraction(2, year)
+        if fraction2 > 0:
             person2_base_wages = self.get("income", "person2_annual_wages", 0)
             years_diff = year - current_year
-            person2_wages = person2_base_wages * ((1 + wage_inflation_rate) ** years_diff)
-            total_wages += person2_wages
-        
+            total_wages += person2_base_wages * ((1 + wage_inflation_rate) ** years_diff) * fraction2
+
         return total_wages
     
     def has_wages_in_year(self, year: int) -> bool:
@@ -422,21 +482,83 @@ class ConfigManager:
         return self.get_annual_wages(year) > 0
 
 
-# Global configuration instance
+def retirement_date_to_age_and_year(retirement_date_str: str, birth_date_str: str) -> tuple:
+    """
+    Derive retirement_age (int) and retirement_year (int) from a retirement date string
+    and a birth date string, both in "YYYY-MM-DD" format.
+
+    The retirement_age is the age the person turns in the retirement year (birth year
+    subtracted from retirement year), which matches the convention used throughout the
+    rest of the codebase.
+
+    Returns:
+        (retirement_age, retirement_year)
+    """
+    try:
+        birth_year = int(birth_date_str.split("-")[0])
+        ret_year   = int(retirement_date_str.split("-")[0])
+        ret_age    = ret_year - birth_year
+        return ret_age, ret_year
+    except (AttributeError, ValueError, IndexError):
+        return 62, datetime.now().year
+
+
+def default_retirement_date(birth_date_str: str, default_age: int = 60) -> str:
+    """
+    Return the default planned retirement date as a "YYYY-MM-DD" string.
+
+    Defaults to the person's birthday in the year they turn *default_age*.
+    If birth_date_str is unparseable, returns the first day of (current year + default_age).
+
+    Args:
+        birth_date_str: Birth date in "YYYY-MM-DD" format.
+        default_age:    Age to retire at for the default (default 60).
+
+    Returns:
+        "YYYY-MM-DD" string.
+    """
+    try:
+        parts = birth_date_str.split("-")
+        birth_year  = int(parts[0])
+        birth_month = parts[1]
+        birth_day   = parts[2]
+        ret_year = birth_year + default_age
+        return f"{ret_year}-{birth_month}-{birth_day}"
+    except (AttributeError, ValueError, IndexError):
+        return f"{datetime.now().year + default_age}-01-01"
+
+
+# Module-level cache — valid within a single process/worker lifetime.
 _config_manager = None
+
+_SESSION_KEY = "_retirement_config_manager"
 
 
 def get_config_manager() -> ConfigManager:
     """
-    Get global configuration manager instance.
-    
+    Get the configuration manager instance.
+
+    The instance is stored in st.session_state so it survives Streamlit
+    re-runs within the same browser session.  A module-level reference is
+    kept as a fast fallback for code that calls this outside a Streamlit
+    request context (e.g. unit tests or CLI scripts).
+
     Returns:
         ConfigManager instance
     """
     global _config_manager
-    if _config_manager is None:
-        _config_manager = ConfigManager()
-    return _config_manager
+    try:
+        import streamlit as st
+        if _SESSION_KEY not in st.session_state:
+            # First access this session — load from file.
+            st.session_state[_SESSION_KEY] = ConfigManager()
+        _config_manager = st.session_state[_SESSION_KEY]
+        return _config_manager
+    except (ImportError, AttributeError):
+        # Not running inside Streamlit — fall back to module-level global.
+        if _config_manager is None:
+            _config_manager = ConfigManager()
+        return _config_manager
 
 
 def get_value_with_session_override(section: str, key: str, session_key: str, default: Any = None) -> Any:
@@ -465,8 +587,14 @@ def get_value_with_session_override(section: str, key: str, session_key: str, de
 
 
 def reload_config() -> None:
-    """Reload configuration from file."""
+    """Reload configuration from file, replacing both the session and module cache."""
     global _config_manager
-    _config_manager = ConfigManager()
+    fresh = ConfigManager()
+    _config_manager = fresh
+    try:
+        import streamlit as st
+        st.session_state[_SESSION_KEY] = fresh
+    except (ImportError, AttributeError):
+        pass
 
 # Made with Bob

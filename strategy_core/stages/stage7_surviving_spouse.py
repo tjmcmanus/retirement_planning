@@ -15,7 +15,6 @@ from ..models import PortfolioBalances, YearlyStrategy
 logger = logging.getLogger(__name__)
 
 # Constants
-RMD_AGE = 73
 MEDICARE_AGE = 65
 TAXABLE_SS_RATE = 0.85  # Up to 85% of SS benefits are taxable
 BROKERAGE_LTCG_RATIO = 0.60  # Fallback: 60% LTCG
@@ -222,17 +221,23 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             balances_with_ss.taxable
         )
         
-        # Subtract DAF from brokerage before rebalancing
+        # Subtract DAF from brokerage before rebalancing (HIFO lot removal)
         balances_for_rebalance = balances_with_ss
         if daf_contribution > 0:
-            balances_for_rebalance = PortfolioBalances(
-                cash=balances_with_ss.cash,
-                taxable=balances_with_ss.taxable - daf_contribution,
-                traditional=balances_with_ss.traditional,
-                roth=balances_with_ss.roth,
-                daf=balances_with_ss.daf
-            )
-            logger.info(f"Year {year}: Subtracting DAF ${daf_contribution:,.0f} from Brokerage")
+            try:
+                from strategy import apply_daf_to_brokerage_account
+                balances_for_rebalance = apply_daf_to_brokerage_account(
+                    balances_with_ss, daf_contribution, year, brokerage_account
+                )
+            except ImportError:
+                balances_for_rebalance = PortfolioBalances(
+                    cash=balances_with_ss.cash,
+                    taxable=balances_with_ss.taxable - daf_contribution,
+                    traditional=balances_with_ss.traditional,
+                    roth=balances_with_ss.roth,
+                    daf=balances_with_ss.daf,
+                )
+            logger.info(f"Year {year}: DAF HIFO donation ${daf_contribution:,.0f} from Brokerage")
         
         # Execute account rebalancing
         new_balances, transactions = self._execute_rebalancing(
@@ -550,24 +555,16 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
         
         try:
             from load_data import get_income_tax_brackets
-            from config import get_config_manager
-            
-            config_mgr = get_config_manager()
-            
-            # Get stage-specific conversion rate (default 15% for Stage 7)
-            try:
-                stage_max_conversion_rate = float(config_mgr.get(
-                    "tax_strategy", "stage_7_max_conversion_rate", 15
-                )) / 100.0
-            except Exception:
-                stage_max_conversion_rate = 0.15
-            
+            from calculations import get_stage_specific_conversion_rate
+
+            stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
+
             tax_brackets = get_income_tax_brackets(year)
-            
-            # Find the target bracket
+
+            # Find the target bracket (rate column is decimal, e.g. 0.15)
             target_bracket_max = 0
             for _, row in tax_brackets.iterrows():
-                if row['rate'] <= stage_max_conversion_rate * 100:
+                if row['rate'] <= stage_max_conversion_rate:
                     target_bracket_max = row['max']
             
             # Calculate conversion room

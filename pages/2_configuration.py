@@ -11,7 +11,7 @@ import os
 import shutil
 import zipfile
 import io
-from config import get_config_manager, reload_config
+from config import get_config_manager, reload_config, retirement_date_to_age_and_year, default_retirement_date
 from components.navbar import navbar
 from portfolio import build_portfolio_display
 from portfolio_data_entry import (
@@ -119,17 +119,27 @@ with tab1:
             ),
             key="person1_birth_date"
         )
-        person1_retirement_age = st.number_input(
-            "Planned Retirement Age",
-            min_value=50,
-            max_value=75,
-            value=config_mgr.get("personal_info", "person1_retirement_age", 67),
-            key="person1_retirement_age"
+        # Resolve the stored retirement date (fall back to 60th birthday if not set)
+        _p1_birth_str = person1_birth_date.strftime("%Y-%m-%d")
+        _p1_ret_date_str = config_mgr.get(
+            "personal_info", "person1_retirement_date",
+            default_retirement_date(_p1_birth_str)
         )
-        
-        # Display current age
-        current_age_1 = config_mgr.calculate_age(person1_birth_date.strftime("%Y-%m-%d"))
-        st.info(f"Current Age: {current_age_1} years")
+        person1_retirement_date = st.date_input(
+            "Planned Retirement Date",
+            value=datetime.strptime(_p1_ret_date_str, "%Y-%m-%d"),
+            help="The date you plan to retire. Defaults to your 60th birthday.",
+            key="person1_retirement_date"
+        )
+        person1_retirement_age, _ = retirement_date_to_age_and_year(
+            person1_retirement_date.strftime("%Y-%m-%d"), _p1_birth_str
+        )
+
+        # Display current age and years to retirement
+        current_age_1 = config_mgr.calculate_age(_p1_birth_str)
+        years_to_ret_1 = person1_retirement_date.year - datetime.now().year
+        st.info(f"Current Age: {current_age_1} years · Retirement Age: {person1_retirement_age} · "
+                f"{'Retiring in ' + str(years_to_ret_1) + ' year(s)' if years_to_ret_1 > 0 else 'Retirement year reached'}")
     
     with col2:
         if not is_single_person:
@@ -147,22 +157,35 @@ with tab1:
                 ),
                 key="person2_birth_date"
             )
-            person2_retirement_age = st.number_input(
-                "Planned Retirement Age",
-                min_value=50,
-                max_value=75,
-                value=config_mgr.get("personal_info", "person2_retirement_age", 62),
-                key="person2_retirement_age"
+            # Resolve the stored retirement date (fall back to 60th birthday if not set)
+            _p2_birth_str = person2_birth_date.strftime("%Y-%m-%d")
+            _p2_ret_date_str = config_mgr.get(
+                "personal_info", "person2_retirement_date",
+                default_retirement_date(_p2_birth_str)
             )
-            
-            # Display current age
-            current_age_2 = config_mgr.calculate_age(person2_birth_date.strftime("%Y-%m-%d"))
-            st.info(f"Current Age: {current_age_2} years")
+            person2_retirement_date = st.date_input(
+                "Planned Retirement Date",
+                value=datetime.strptime(_p2_ret_date_str, "%Y-%m-%d"),
+                help="The date they plan to retire. Defaults to their 60th birthday.",
+                key="person2_retirement_date"
+            )
+            person2_retirement_age, _ = retirement_date_to_age_and_year(
+                person2_retirement_date.strftime("%Y-%m-%d"), _p2_birth_str
+            )
+
+            # Display current age and years to retirement
+            current_age_2 = config_mgr.calculate_age(_p2_birth_str)
+            years_to_ret_2 = person2_retirement_date.year - datetime.now().year
+            st.info(f"Current Age: {current_age_2} years · Retirement Age: {person2_retirement_age} · "
+                    f"{'Retiring in ' + str(years_to_ret_2) + ' year(s)' if years_to_ret_2 > 0 else 'Retirement year reached'}")
         else:
             # Set default values for person2 when in single mode
             person2_name = ""
             person2_birth_date = datetime.strptime("1967-01-01", "%Y-%m-%d")
-            person2_retirement_age = 62
+            person2_retirement_date = datetime.strptime(
+                default_retirement_date("1967-01-01"), "%Y-%m-%d"
+            )
+            person2_retirement_age = 60
             st.subheader("Spouse/Partner")
             st.info("👤 Single person mode - spouse/partner information hidden")
     
@@ -4093,7 +4116,10 @@ accumulation years, early retirement, or as part of your estate plan.
             )
 
             # ── Optimal bundling suggestion ────────────────────────────────
-            _rmd_age = 73
+            # RMD age is birth-year-aware (SECURE 2.0): 73 for born 1951–1959, 75 for born 1960+
+            _p1_birth_year = config_mgr.get("social_security", "person1_birth_year", 1960)
+            from strategy_core.stages.stage6_rmd import get_rmd_age as _get_rmd_age
+            _rmd_age = _get_rmd_age(_p1_birth_year)
             _giving_years = max(1, daf_contribution_end_age - daf_contribution_start_age)
             _std_ded = 30_000  # 2025 MFJ standard deduction reference
 
@@ -4130,9 +4156,9 @@ accumulation years, early retirement, or as part of your estate plan.
                         help=f"Over your {_giving_years}-year contribution window "
                              f"(age {daf_contribution_start_age}–{daf_contribution_end_age}).",
                     )
-                    # Total Lifetime DAF Contributions = giving from start age to age 73
-                    # (after 73, QCDs from Traditional IRA take over — see QCD Potential above)
-                    _sug_daf_end = min(73, charitable_giving_end_age)
+                    # Total Lifetime DAF Contributions = giving from start age to RMD age
+                    # (after RMD age, QCDs from Traditional IRA take over — see QCD Potential above)
+                    _sug_daf_end = min(_rmd_age, charitable_giving_end_age)
                     _sug_daf_years = max(0, _sug_daf_end - charitable_giving_start_age)
                     _sug_daf_total = annual_charitable_giving * _sug_daf_years
                     st.metric(
@@ -4143,7 +4169,7 @@ accumulation years, early retirement, or as part of your estate plan.
                             f"({_sug_daf_years} yrs × ${annual_charitable_giving:,.0f}/yr). "
                             f"Funded via {_num_bundles} bundled DAF contribution(s) of "
                             f"${_opt_bundle_amt:,.0f} each (every {_opt_interval} years) from "
-                            f"Brokerage/cash. After age 73, QCDs from your Traditional IRA "
+                            f"Brokerage/cash. After age {_rmd_age}, QCDs from your Traditional IRA "
                             f"satisfy giving tax-free. "
                             f"Matches 'Total DAF Contributions' in the Charitable Giving Summary above."
                         ),
@@ -4163,7 +4189,112 @@ accumulation years, early retirement, or as part of your estate plan.
             else:
                 daf_annual_contribution = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
         
-    
+    # ── Traditional → Brokerage Pre-fund for DAF ──────────────────────────────
+    if has_daf:
+        st.markdown("---")
+        st.subheader("🏦 Traditional → Brokerage Pre-Fund for DAF")
+        st.markdown(
+            "Early in retirement, while in a low income tax bracket and before Medicare/IRMAA "
+            "thresholds apply, you can take a **large Traditional (IRA/401k) distribution to Brokerage** "
+            "to build up the cash that will later fund your DAF contributions. "
+            "This is separate from Roth conversions — the distributed amount is taxed as ordinary income "
+            "and deposited into your Brokerage account."
+        )
+
+        daf_trad_prefund_enabled = st.checkbox(
+            "Enable Traditional → Brokerage pre-fund distributions for DAF",
+            value=config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False),
+            key="daf_trad_prefund_enabled",
+            help=(
+                "When enabled, the strategy will take additional Traditional distributions to "
+                "Brokerage each year in the specified age window, in addition to any Roth conversions. "
+                "This pre-builds the Brokerage balance needed to fund upcoming DAF contributions."
+            ),
+        )
+
+        # Compute defaults: retirement year + 1 through retirement year + 1
+        _p1_ret_yr_default = int(config_mgr.get("personal_info", "person1_retirement_year",
+                                                  datetime.now().year + 1))
+        _pf_start_yr_default = int(config_mgr.get(
+            "charitable_giving", "daf_trad_prefund_start_year", _p1_ret_yr_default + 1))
+        _pf_end_yr_default = int(config_mgr.get(
+            "charitable_giving", "daf_trad_prefund_end_year", _p1_ret_yr_default + 2))
+
+        # Initialize with saved defaults regardless of checkbox state
+        daf_trad_prefund_amount     = config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0)
+        daf_trad_prefund_start_year = _pf_start_yr_default
+        daf_trad_prefund_end_year   = _pf_end_yr_default
+
+        if daf_trad_prefund_enabled:
+            _pf_col1, _pf_col2, _pf_col3 = st.columns(3)
+
+            with _pf_col1:
+                daf_trad_prefund_amount = st.number_input(
+                    "Annual Distribution Amount ($)",
+                    min_value=0,
+                    max_value=5_000_000,
+                    value=config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0),
+                    step=5_000,
+                    key="daf_trad_prefund_amount",
+                    help=(
+                        "Amount to distribute from Traditional to Brokerage each year "
+                        "during the pre-fund window (start year through end year, inclusive). "
+                        "Roth conversions are suppressed in these years."
+                    ),
+                )
+
+            with _pf_col2:
+                daf_trad_prefund_start_year = st.number_input(
+                    "Start Year",
+                    min_value=datetime.now().year,
+                    max_value=datetime.now().year + 50,
+                    value=_pf_start_yr_default,
+                    step=1,
+                    key="daf_trad_prefund_start_year",
+                    help="First calendar year to distribute Traditional → Brokerage for DAF pre-funding.",
+                )
+
+            with _pf_col3:
+                daf_trad_prefund_end_year = st.number_input(
+                    "End Year",
+                    min_value=datetime.now().year,
+                    max_value=datetime.now().year + 50,
+                    value=_pf_end_yr_default,
+                    step=1,
+                    key="daf_trad_prefund_end_year",
+                    help=(
+                        "Last calendar year to distribute (inclusive). "
+                        "Stop before Medicare starts (typically the year you turn 65) "
+                        "to avoid IRMAA surcharges."
+                    ),
+                )
+
+            _pf_years = max(0, daf_trad_prefund_end_year - daf_trad_prefund_start_year + 1)
+
+            if daf_trad_prefund_amount > 0 and _pf_years > 0:
+                if daf_trad_prefund_end_year < daf_trad_prefund_start_year:
+                    st.error("⛔ **End Year must be ≥ Start Year.**")
+                else:
+                    _pf_total = daf_trad_prefund_amount * _pf_years
+                    st.info(
+                        f"📊 **Pre-fund summary**: ${daf_trad_prefund_amount:,.0f}/yr × "
+                        f"{_pf_years} yr(s) "
+                        f"({daf_trad_prefund_start_year}–{daf_trad_prefund_end_year}) = "
+                        f"**${_pf_total:,.0f} total** transferred from Traditional → Brokerage. "
+                        f"These years will have no Roth conversion. "
+                        f"The distribution is taxed as ordinary income."
+                    )
+                    # Medicare IRMAA warning: income from the distribution year shows up 2 yrs
+                    # later in IRMAA lookback; warn if end year is late enough to matter.
+                    _medicare_year = _p1_ret_yr_default + max(0, 65 - person1_retirement_age)
+                    if daf_trad_prefund_end_year >= _medicare_year:
+                        st.warning(
+                            f"⚠️ Distributions in {_medicare_year} or later may affect IRMAA "
+                            f"surcharges (Medicare Part B premium uses a 2-year income lookback). "
+                            f"Consider ending pre-fund distributions by {_medicare_year - 1}."
+                        )
+
+
     # ── Charitable Giving Summary (rendered into placeholder above the config inputs) ──
     if annual_charitable_giving > 0 or (has_daf and daf_initial_contribution > 0) or (has_daf and daf_annual_contribution > 0):
         # ── Split giving into DAF window (pre-73) and QCD window (73+) ───
@@ -5161,15 +5292,32 @@ with tab10:
         st.subheader("Configuration Management")
         
         if st.button("💾 Save All Changes", type="primary", width='stretch'):
+            # --- Derive retirement age + year from the chosen retirement dates ---
+            _p1_bdate = st.session_state.get("person1_birth_date", person1_birth_date)
+            _p1_bdate_str = _p1_bdate.strftime("%Y-%m-%d") if hasattr(_p1_bdate, "strftime") else str(_p1_bdate)
+            _p1_rdate = st.session_state.get("person1_retirement_date", person1_retirement_date)
+            _p1_rdate_str = _p1_rdate.strftime("%Y-%m-%d") if hasattr(_p1_rdate, "strftime") else str(_p1_rdate)
+            _p1_ret_age, _p1_ret_year = retirement_date_to_age_and_year(_p1_rdate_str, _p1_bdate_str)
+
+            _p2_bdate = st.session_state.get("person2_birth_date", person2_birth_date)
+            _p2_bdate_str = _p2_bdate.strftime("%Y-%m-%d") if hasattr(_p2_bdate, "strftime") else str(_p2_bdate)
+            _p2_rdate = st.session_state.get("person2_retirement_date", person2_retirement_date)
+            _p2_rdate_str = _p2_rdate.strftime("%Y-%m-%d") if hasattr(_p2_rdate, "strftime") else str(_p2_rdate)
+            _p2_ret_age, _p2_ret_year = retirement_date_to_age_and_year(_p2_rdate_str, _p2_bdate_str)
+
             # Update all configuration values
             config_mgr.update_section("personal_info", {
                 "is_single_person": st.session_state.get("is_single_person", is_single_person),
                 "person1_name": st.session_state.get("person1_name", person1_name),
-                "person1_birth_date": st.session_state.get("person1_birth_date", person1_birth_date).strftime("%Y-%m-%d"),
-                "person1_retirement_age": st.session_state.get("person1_retirement_age", person1_retirement_age),
+                "person1_birth_date": _p1_bdate_str,
+                "person1_retirement_date": _p1_rdate_str,
+                "person1_retirement_age": _p1_ret_age,
+                "person1_retirement_year": _p1_ret_year,
                 "person2_name": st.session_state.get("person2_name", person2_name),
-                "person2_birth_date": st.session_state.get("person2_birth_date", person2_birth_date).strftime("%Y-%m-%d"),
-                "person2_retirement_age": st.session_state.get("person2_retirement_age", person2_retirement_age),
+                "person2_birth_date": _p2_bdate_str,
+                "person2_retirement_date": _p2_rdate_str,
+                "person2_retirement_age": _p2_ret_age,
+                "person2_retirement_year": _p2_ret_year,
                 "retirement_state": st.session_state.get("retirement_state", retirement_state),
                 "children": _valid_children,
                 "surviving_spouse_mode": st.session_state.get("surviving_spouse_mode", False),
@@ -5177,51 +5325,108 @@ with tab10:
                 "date_of_death": st.session_state.get("date_of_death").strftime("%Y-%m-%d") if st.session_state.get("date_of_death") and hasattr(st.session_state.get("date_of_death"), 'strftime') else None,
             })
             
+            # Resolve living expense widget values — these live in nested sub-tabs and may
+            # not be bound as local variables if the user hasn't visited those sub-tabs yet.
+            # Fall back to session_state (set by the widget key) then to the saved config.
+            _living = config_mgr.get("expenses", "living_expenses", {})
+            _ent = config_mgr.get("expenses", "entertainment_expenses", {})
+
+            _property_tax         = st.session_state.get("property_tax",         _living.get("property_tax", 0))
+            _homeowners_insurance = st.session_state.get("homeowners_insurance",  _living.get("homeowners_insurance", 0))
+            _auto_insurance       = st.session_state.get("auto_insurance",        _living.get("auto_insurance", 0))
+            _food_groceries       = st.session_state.get("food_groceries",        _living.get("food_groceries", 0))
+            _utilities_phone      = st.session_state.get("utilities_phone",       _living.get("utilities_phone", 0))
+            _utilities_internet   = st.session_state.get("utilities_internet",    _living.get("utilities_internet", 0))
+            _utilities_cable      = st.session_state.get("utilities_cable",       _living.get("utilities_cable", 0))
+            _utilities_electric   = st.session_state.get("utilities_electric",    _living.get("utilities_electric", 0))
+            _utilities_gas        = st.session_state.get("utilities_gas",         _living.get("utilities_gas", 0))
+            _utilities_water      = st.session_state.get("utilities_water",       _living.get("utilities_water", 0))
+            _gifts_donations      = st.session_state.get("gifts_donations",       _living.get("gifts_donations", 0))
+            _other_living         = st.session_state.get("other_living",          _living.get("other_living", 0))
+
+            _travel_vacations          = st.session_state.get("travel_vacations",          _ent.get("travel_vacations", 0))
+            _dining_out                = st.session_state.get("dining_out",                _ent.get("dining_out", 0))
+            _clothing                  = st.session_state.get("clothing",                  _ent.get("clothing", 0))
+            _hobbies                   = st.session_state.get("hobbies",                   _ent.get("hobbies", 0))
+            _entertainment_other       = st.session_state.get("entertainment_other",       _ent.get("entertainment_other", 0))
+            _retirement_decline_enabled = st.session_state.get("retirement_decline_enabled", _ent.get("retirement_decline_enabled", True))
+            _retirement_decline_percent = st.session_state.get("retirement_decline_percent", _ent.get("retirement_decline_percent", 30))
+            _retirement_decline_start_age = st.session_state.get("retirement_decline_start_age", _ent.get("retirement_decline_start_age", 65))
+
+            # big_ticket valid_items: use what the editor produced if the sub-tab was visited,
+            # otherwise fall back to the already-saved list from config.
+            _valid_items = valid_items if "valid_items" in dir() else config_mgr.get("expenses", "big_ticket_items", [])
+
             # Calculate total annual expenses from detailed breakdown
-            total_living = (
-                property_tax + homeowners_insurance + auto_insurance + food_groceries +
-                utilities_phone + utilities_internet + utilities_cable + utilities_electric +
-                utilities_gas + utilities_water + gifts_donations + other_living
+            _total_living = (
+                _property_tax + _homeowners_insurance + _auto_insurance + _food_groceries +
+                _utilities_phone + _utilities_internet + _utilities_cable + _utilities_electric +
+                _utilities_gas + _utilities_water + _gifts_donations + _other_living
             )
-            total_entertainment = (
-                travel_vacations + dining_out + clothing + hobbies + entertainment_other
+            _total_entertainment = (
+                _travel_vacations + _dining_out + _clothing + _hobbies + _entertainment_other
             )
-            calculated_total_expenses = total_living + total_entertainment
-            
-            # Use calculated total if it's greater than 0, otherwise use the manual input
-            final_annual_expenses = calculated_total_expenses if calculated_total_expenses > 0 else expected_annual_expenses
-            
+            _calculated_total_expenses = _total_living + _total_entertainment
+
+            # Use calculated total if > 0, otherwise fall back to whatever is already saved
+            _saved_annual_expenses = config_mgr.get("financial_assumptions", "expected_annual_expenses",
+                                                     st.session_state.get("expected_annual_expenses", 0))
+            final_annual_expenses = _calculated_total_expenses if _calculated_total_expenses > 0 else _saved_annual_expenses
+
             config_mgr.update_section("financial_assumptions", {
                 "expected_annual_expenses": final_annual_expenses,
-                "expense_inflation_rate": expense_inflation_rate,
-                "expected_rate_of_return": expected_rate_of_return,
-                "years_of_expenses_in_cash": years_of_expenses_in_cash,
-                "brokerage_rebalance_trigger_multiplier": brokerage_rebalance_trigger_multiplier,
-                "accumulation_cash_buffer_months": accumulation_cash_buffer_months,
+                "expense_inflation_rate": st.session_state.get("expense_inflation_rate",
+                    config_mgr.get("financial_assumptions", "expense_inflation_rate", 3.0)),
+                "expected_rate_of_return": st.session_state.get("expected_rate_of_return",
+                    config_mgr.get("financial_assumptions", "expected_rate_of_return", 6.0)),
+                "years_of_expenses_in_cash": st.session_state.get("years_of_expenses_in_cash",
+                    config_mgr.get("financial_assumptions", "years_of_expenses_in_cash", 4)),
+                "brokerage_rebalance_trigger_multiplier": st.session_state.get("brokerage_rebalance_trigger_multiplier",
+                    config_mgr.get("financial_assumptions", "brokerage_rebalance_trigger_multiplier", 1.0)),
+                "accumulation_cash_buffer_months": st.session_state.get("accumulation_cash_buffer_months",
+                    config_mgr.get("financial_assumptions", "accumulation_cash_buffer_months", 6)),
             })
-            
+
             config_mgr.update_section("healthcare", {
-                "person1_preretirement_coverage_type": person1_preretirement_coverage_type,
-                "person1_preretirement_insurance_monthly": person1_preretirement_insurance_monthly,
-                "person1_retirement_coverage_type": person1_retirement_coverage_type,
-                "person1_aca_insurance_monthly": person1_aca_insurance_monthly,
-                "person1_aca_start_age": person1_aca_start_age,
-                "person1_aca_end_age": person1_aca_end_age,
-                "person1_medicare_start_age": person1_medicare_start_age,
-                "person2_preretirement_coverage_type": person2_preretirement_coverage_type,
-                "person2_preretirement_insurance_monthly": person2_preretirement_insurance_monthly,
-                "person2_retirement_coverage_type": person2_retirement_coverage_type,
-                "person2_aca_insurance_monthly": person2_aca_insurance_monthly,
-                "person2_aca_start_age": person2_aca_start_age,
-                "person2_aca_end_age": person2_aca_end_age,
-                "person2_medicare_start_age": person2_medicare_start_age,
+                "person1_preretirement_coverage_type": st.session_state.get("person1_preretirement_coverage_type",
+                    config_mgr.get("healthcare", "person1_preretirement_coverage_type", "None")),
+                "person1_preretirement_insurance_monthly": st.session_state.get("person1_preretirement_insurance_monthly",
+                    config_mgr.get("healthcare", "person1_preretirement_insurance_monthly", 0)),
+                "person1_retirement_coverage_type": st.session_state.get("person1_retirement_coverage_type",
+                    config_mgr.get("healthcare", "person1_retirement_coverage_type", "None")),
+                "person1_aca_insurance_monthly": st.session_state.get("person1_aca_insurance_monthly",
+                    config_mgr.get("healthcare", "person1_aca_insurance_monthly", 0)),
+                "person1_aca_start_age": st.session_state.get("person1_aca_start_age",
+                    config_mgr.get("healthcare", "person1_aca_start_age", 62)),
+                "person1_aca_end_age": st.session_state.get("person1_aca_end_age",
+                    config_mgr.get("healthcare", "person1_aca_end_age", 65)),
+                "person1_medicare_start_age": st.session_state.get("person1_medicare_start_age",
+                    config_mgr.get("healthcare", "person1_medicare_start_age", 65)),
+                "person2_preretirement_coverage_type": st.session_state.get("person2_preretirement_coverage_type",
+                    config_mgr.get("healthcare", "person2_preretirement_coverage_type", "None")),
+                "person2_preretirement_insurance_monthly": st.session_state.get("person2_preretirement_insurance_monthly",
+                    config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0)),
+                "person2_retirement_coverage_type": st.session_state.get("person2_retirement_coverage_type",
+                    config_mgr.get("healthcare", "person2_retirement_coverage_type", "None")),
+                "person2_aca_insurance_monthly": st.session_state.get("person2_aca_insurance_monthly",
+                    config_mgr.get("healthcare", "person2_aca_insurance_monthly", 0)),
+                "person2_aca_start_age": st.session_state.get("person2_aca_start_age",
+                    config_mgr.get("healthcare", "person2_aca_start_age", 62)),
+                "person2_aca_end_age": st.session_state.get("person2_aca_end_age",
+                    config_mgr.get("healthcare", "person2_aca_end_age", 65)),
+                "person2_medicare_start_age": st.session_state.get("person2_medicare_start_age",
+                    config_mgr.get("healthcare", "person2_medicare_start_age", 65)),
             })
-            
+
             config_mgr.update_section("social_security", {
-                "person1_ssi_age": person1_ssi_age,
-                "person1_ssi_amount": person1_ssi_amount,
-                "person2_ssi_age": person2_ssi_age,
-                "person2_ssi_amount": person2_ssi_amount,
+                "person1_ssi_age": st.session_state.get("person1_ssi_age",
+                    config_mgr.get("social_security", "person1_ssi_age", 70)),
+                "person1_ssi_amount": st.session_state.get("person1_ssi_amount",
+                    config_mgr.get("social_security", "person1_ssi_amount", 0)),
+                "person2_ssi_age": st.session_state.get("person2_ssi_age",
+                    config_mgr.get("social_security", "person2_ssi_age", 70)),
+                "person2_ssi_amount": st.session_state.get("person2_ssi_amount",
+                    config_mgr.get("social_security", "person2_ssi_amount", 0)),
                 # SS Optimization fields
                 "person1_birth_year": st.session_state.get("person1_birth_year_opt", 1960),
                 "person1_gender": st.session_state.get("person1_gender_opt", 'M'),
@@ -5234,9 +5439,12 @@ with tab10:
             })
             
             config_mgr.update_section("income", {
-                "person1_annual_wages": person1_annual_wages,
-                "person2_annual_wages": person2_annual_wages,
-                "wage_inflation_rate": wage_inflation_rate,
+                "person1_annual_wages": st.session_state.get("person1_annual_wages",
+                    config_mgr.get("income", "person1_annual_wages", 0)),
+                "person2_annual_wages": st.session_state.get("person2_annual_wages",
+                    config_mgr.get("income", "person2_annual_wages", 0)),
+                "wage_inflation_rate": st.session_state.get("wage_inflation_rate",
+                    config_mgr.get("income", "wage_inflation_rate", 3.0)),
                 "contribution_401k_percent": st.session_state.get("contribution_401k_percent", config_mgr.get("income", "contribution_401k_percent", 10.0)),
                 "contribution_roth_percent": st.session_state.get("contribution_roth_percent", config_mgr.get("income", "contribution_roth_percent", 5.0)),
                 "contribution_brokerage_percent": st.session_state.get("contribution_brokerage_percent", config_mgr.get("income", "contribution_brokerage_percent", 5.0)),
@@ -5245,54 +5453,82 @@ with tab10:
             # Save expenses configuration
             config_mgr.update_section("expenses", {
                 "living_expenses": {
-                    "property_tax": property_tax,
-                    "homeowners_insurance": homeowners_insurance,
-                    "auto_insurance": auto_insurance,
-                    "food_groceries": food_groceries,
-                    "utilities_phone": utilities_phone,
-                    "utilities_internet": utilities_internet,
-                    "utilities_cable": utilities_cable,
-                    "utilities_electric": utilities_electric,
-                    "utilities_gas": utilities_gas,
-                    "utilities_water": utilities_water,
-                    "gifts_donations": gifts_donations,
-                    "other_living": other_living,
+                    "property_tax": _property_tax,
+                    "homeowners_insurance": _homeowners_insurance,
+                    "auto_insurance": _auto_insurance,
+                    "food_groceries": _food_groceries,
+                    "utilities_phone": _utilities_phone,
+                    "utilities_internet": _utilities_internet,
+                    "utilities_cable": _utilities_cable,
+                    "utilities_electric": _utilities_electric,
+                    "utilities_gas": _utilities_gas,
+                    "utilities_water": _utilities_water,
+                    "gifts_donations": _gifts_donations,
+                    "other_living": _other_living,
                 },
-                "big_ticket_items": valid_items,
+                "big_ticket_items": _valid_items,
                 "entertainment_expenses": {
-                    "travel_vacations": travel_vacations,
-                    "dining_out": dining_out,
-                    "clothing": clothing,
-                    "hobbies": hobbies,
-                    "entertainment_other": entertainment_other,
-                    "retirement_decline_enabled": retirement_decline_enabled,
-                    "retirement_decline_percent": retirement_decline_percent,
-                    "retirement_decline_start_age": retirement_decline_start_age,
+                    "travel_vacations": _travel_vacations,
+                    "dining_out": _dining_out,
+                    "clothing": _clothing,
+                    "hobbies": _hobbies,
+                    "entertainment_other": _entertainment_other,
+                    "retirement_decline_enabled": _retirement_decline_enabled,
+                    "retirement_decline_percent": _retirement_decline_percent,
+                    "retirement_decline_start_age": _retirement_decline_start_age,
                 },
             })
-            
+
             config_mgr.update_section("tax_strategy", {
-                "max_roth_conversion_tax_rate": max_roth_conversion_tax_rate,
-                "stage_1_max_conversion_rate": stage_1_rate,
-                "stage_2_max_conversion_rate": stage_2_rate,
-                "stage_3_max_conversion_rate": stage_3_rate,
-                "stage_4_max_conversion_rate": stage_4_rate,
-                "stage_5_max_conversion_rate": stage_5_rate,
-                "stage_6_max_conversion_rate": stage_6_rate,
-                "stage_7_max_conversion_rate": stage_7_rate,
+                "max_roth_conversion_tax_rate": st.session_state.get("max_roth_conversion_tax_rate",
+                    config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)),
+                "stage_1_max_conversion_rate": st.session_state.get("stage_1_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_1_max_conversion_rate", 32)),
+                "stage_2_max_conversion_rate": st.session_state.get("stage_2_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_2_max_conversion_rate", 24)),
+                "stage_3_max_conversion_rate": st.session_state.get("stage_3_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_3_max_conversion_rate", 12)),
+                "stage_4_max_conversion_rate": st.session_state.get("stage_4_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_4_max_conversion_rate", 12)),
+                "stage_5_max_conversion_rate": st.session_state.get("stage_5_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_5_max_conversion_rate", 22)),
+                "stage_6_max_conversion_rate": st.session_state.get("stage_6_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_6_max_conversion_rate", 10)),
+                "stage_7_max_conversion_rate": st.session_state.get("stage_7_conversion_rate",
+                    config_mgr.get("tax_strategy", "stage_7_max_conversion_rate", 15)),
             })
-            
+
             config_mgr.update_section("charitable_giving", {
-                "annual_charitable_giving": annual_charitable_giving,
-                "charitable_giving_start_age": charitable_giving_start_age,
-                "charitable_giving_end_age": charitable_giving_end_age,
-                "charitable_giving_inflation_rate": charitable_giving_inflation_rate,
-                "has_daf": has_daf,
-                "daf_provider": daf_provider,
-                "daf_initial_contribution": daf_initial_contribution,
+                "annual_charitable_giving": st.session_state.get("annual_charitable_giving",
+                    config_mgr.get("charitable_giving", "annual_charitable_giving", 0)),
+                "charitable_giving_start_age": st.session_state.get("charitable_giving_start_age",
+                    config_mgr.get("charitable_giving", "charitable_giving_start_age", 65)),
+                "charitable_giving_end_age": st.session_state.get("charitable_giving_end_age",
+                    config_mgr.get("charitable_giving", "charitable_giving_end_age", 95)),
+                "charitable_giving_inflation_rate": st.session_state.get("charitable_giving_inflation_rate",
+                    config_mgr.get("charitable_giving", "charitable_giving_inflation_rate", 2.0)),
+                "has_daf": st.session_state.get("has_daf",
+                    config_mgr.get("charitable_giving", "has_daf", False)),
+                "daf_provider": st.session_state.get("daf_provider",
+                    config_mgr.get("charitable_giving", "daf_provider", "")),
+                "daf_initial_contribution": st.session_state.get("daf_initial_contribution",
+                    config_mgr.get("charitable_giving", "daf_initial_contribution", 0)),
+                # daf_annual_contribution is a local variable computed from the bundling
+                # suggestion above — use it directly so the calculated value is saved even
+                # when the user hasn't interacted with a widget for this field.
                 "daf_annual_contribution": daf_annual_contribution,
-                "daf_contribution_start_age": daf_contribution_start_age,
-                "daf_contribution_end_age": daf_contribution_end_age,
+                "daf_contribution_start_age": st.session_state.get("daf_contribution_start_age",
+                    config_mgr.get("charitable_giving", "daf_contribution_start_age", 60)),
+                "daf_contribution_end_age": st.session_state.get("daf_contribution_end_age",
+                    config_mgr.get("charitable_giving", "daf_contribution_end_age", 75)),
+                "daf_trad_prefund_enabled": st.session_state.get("daf_trad_prefund_enabled",
+                    config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False)),
+                "daf_trad_prefund_amount": st.session_state.get("daf_trad_prefund_amount",
+                    config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0)),
+                "daf_trad_prefund_start_year": st.session_state.get("daf_trad_prefund_start_year",
+                    config_mgr.get("charitable_giving", "daf_trad_prefund_start_year", datetime.now().year + 1)),
+                "daf_trad_prefund_end_year": st.session_state.get("daf_trad_prefund_end_year",
+                    config_mgr.get("charitable_giving", "daf_trad_prefund_end_year", datetime.now().year + 2)),
             })
             
             # Save bucket strategy configuration
@@ -5329,7 +5565,9 @@ with tab10:
                 st.success("✅ Configuration saved successfully!")
                 
                 # Generate SSI schedule if SSI amounts are configured
-                if person1_ssi_amount > 0 or person2_ssi_amount > 0:
+                _p1_ssi_amount = st.session_state.get("person1_ssi_amount", config_mgr.get("social_security", "person1_ssi_amount", 0))
+                _p2_ssi_amount = st.session_state.get("person2_ssi_amount", config_mgr.get("social_security", "person2_ssi_amount", 0))
+                if _p1_ssi_amount > 0 or _p2_ssi_amount > 0:
                     try:
                         with st.spinner("Generating SSI schedule..."):
                             # Generate schedule from current year to 30 years out

@@ -26,6 +26,7 @@ from ssi_calculator import (
     MAX_BENEFIT_AGE,
     DEFAULT_COLA_RATE
 )
+from calculations import _validate_age
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,7 @@ def calculate_earnings_test_impact(
     Returns:
         EarningsTestImpact with reduction details
     """
+    _validate_age(age)
     if age >= fra:
         return EarningsTestImpact(
             annual_earnings=annual_earnings,

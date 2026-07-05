@@ -45,11 +45,14 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from config import ConfigManager, get_config_manager
-from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
+from calculations import get_rmd_value
+from strategy_core.stages.stage6_rmd import get_rmd_age as _get_rmd_age_by_birth_year
+from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year, get_networth_by_month
 from market_trend_analysis import (
     MarketCondition,
     MarketTrendConfig,
     get_market_condition,
+    get_last_fetch_error,
     get_allocation_adjustment,
 )
 from portfolio import getPortfolioData
@@ -114,6 +117,7 @@ class BucketConfig:
     annual_expenses: float = 50000  # From config
     annual_healthcare: float = 0  # Annual healthcare costs
     annual_taxes: float = 0  # Estimated annual tax burden
+    annual_rmd: float = 0  # Required Minimum Distribution (mandatory withdrawal at age >= RMD age)
     annual_wages: float = 0  # Annual wage income (person1 + person2)
     annual_ssi: float = 0  # Annual Social Security income
     annual_pension: float = 0  # Annual pension income
@@ -141,16 +145,22 @@ class BucketConfig:
         Returns:
             Annual cash needed from portfolio (can be negative if inflows exceed outflows)
         """
-        total_outflows = self.annual_expenses + self.annual_healthcare + self.annual_taxes
+        total_outflows = (
+            self.annual_expenses
+            + self.annual_healthcare
+            + self.annual_taxes
+            + self.annual_rmd  # Mandatory IRS withdrawal — funds cannot stay in the account
+        )
         total_inflows = self.annual_wages + self.annual_ssi + self.annual_pension + self.annual_annuities
         cash_needed = total_outflows - total_inflows
-        
+
         logger.debug(
             f"Cash needed calculation: "
             f"Outflows=${total_outflows:,.0f} "
             f"(expenses=${self.annual_expenses:,.0f} + "
             f"healthcare=${self.annual_healthcare:,.0f} + "
-            f"taxes=${self.annual_taxes:,.0f}) - "
+            f"taxes=${self.annual_taxes:,.0f} + "
+            f"rmd=${self.annual_rmd:,.0f}) - "
             f"Inflows=${total_inflows:,.0f} "
             f"(wages=${self.annual_wages:,.0f} + "
             f"SSI=${self.annual_ssi:,.0f} + "
@@ -376,6 +386,28 @@ def load_bucket_config(config_mgr: Optional[ConfigManager] = None) -> BucketConf
     annual_expenses = config_mgr.get("financial_assumptions", "expected_annual_expenses", 50000)
     annual_healthcare = config_mgr.get("healthcare", "aca_insurance_monthly", 0) * 12
     annual_taxes = estimate_annual_taxes(annual_expenses, config_mgr)
+
+    # RMD outflow: mandatory when person1's age >= SECURE Act 2.0 RMD start age (birth-year-aware)
+    annual_rmd = 0.0
+    person1_age = config_mgr.get_person_age(1)
+    current_year = datetime.now().year
+    person1_birth_year = current_year - person1_age if person1_age > 0 else current_year
+    rmd_start_age = _get_rmd_age_by_birth_year(person1_birth_year)
+    if person1_age >= rmd_start_age:
+        try:
+            _, nw_summary = get_networth_by_month(datetime.now().month, current_year)
+            traditional_balance = (
+                nw_summary[nw_summary['account_type'] == 'Traditional']['market_value'].sum()
+                if not nw_summary.empty else 0.0
+            )
+            rmd_rate = get_rmd_value(person1_age)  # IRS distribution rate for this age
+            annual_rmd = traditional_balance * rmd_rate
+            logger.info(
+                f"RMD calculated: age={person1_age}, traditional_balance=${traditional_balance:,.0f}, "
+                f"rate={rmd_rate:.4f}, annual_rmd=${annual_rmd:,.0f}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not calculate RMD for bucket config: {e}. Defaulting to 0.")
     
     # Load inflows
     annual_wages = (
@@ -405,6 +437,7 @@ def load_bucket_config(config_mgr: Optional[ConfigManager] = None) -> BucketConf
         annual_expenses=annual_expenses,
         annual_healthcare=annual_healthcare,
         annual_taxes=annual_taxes,
+        annual_rmd=annual_rmd,
         annual_wages=annual_wages,
         annual_ssi=annual_ssi,
         annual_pension=annual_pension,
@@ -695,7 +728,7 @@ def analyze_portfolio_buckets(
     bucket_3_target = max(0, total_value - bucket_1_target - bucket_2_target)
     
     # Calculate total outflows and inflows for logging
-    total_outflows = config.annual_expenses + config.annual_healthcare + config.annual_taxes
+    total_outflows = config.annual_expenses + config.annual_healthcare + config.annual_taxes + config.annual_rmd
     total_inflows = config.annual_wages + config.annual_ssi + config.annual_pension + config.annual_annuities
     
     logger.info(
@@ -704,6 +737,13 @@ def analyze_portfolio_buckets(
     )
     
     # Apply market trend adjustments if enabled
+    if market_condition == MarketCondition.UNKNOWN:
+        _reason = get_last_fetch_error()
+        if _reason:
+            logger.warning("Market trend data unavailable, using default allocation. Reason: %s", _reason)
+        else:
+            logger.info("Market trend data unavailable, using default allocation")
+
     if market_condition and market_condition != MarketCondition.UNKNOWN:
         adjustment = get_allocation_adjustment(market_condition, config.market_trend_config)
         if adjustment != 0:

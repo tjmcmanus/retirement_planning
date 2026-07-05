@@ -147,6 +147,7 @@ class SecurityScore:
     ltcg_rate: float
     is_long_term: bool
     estimated_tax: float
+    is_roth_qualified: bool = True  # False when Roth 5-year / age-59½ rules not met
     
     def __repr__(self) -> str:
         return (
@@ -283,6 +284,48 @@ class LiquidationPlan:
 
 
 # ==============================================================================
+# ROTH QUALIFIED DISTRIBUTION RULE
+# ==============================================================================
+
+# IRC §408A(d)(2): a Roth IRA distribution is "qualified" (tax-free, penalty-free)
+# only when BOTH conditions are satisfied:
+#   1. The account owner is at least age 59½ (or meets another exception), AND
+#   2. The Roth IRA was first established at least 5 years before the distribution.
+# Failing either test means earnings are taxed as ordinary income plus a 10% penalty.
+ROTH_QUALIFIED_MIN_AGE: float = 59.5
+ROTH_QUALIFIED_MIN_YEARS: float = 5.0
+
+# Score applied to non-qualified Roth withdrawals: same as short-term gains because
+# the IRS treatment (ordinary income + 10% penalty on earnings) is equally costly.
+TAX_SCORE_NON_QUALIFIED_ROTH = TAX_SCORE_STCG
+
+
+def can_withdraw_roth_tax_free(
+    age: float,
+    roth_account_age_years: float,
+) -> bool:
+    """Return True only when a Roth distribution would be fully qualified.
+
+    A distribution is qualified — and therefore tax-free and penalty-free — when
+    **both** of the following hold under IRC §408A(d)(2):
+
+    1. The account owner has reached age 59½ (or qualifies for another exception
+       such as disability or first-time home purchase; this function checks only
+       the most common age-based exception).
+    2. The Roth IRA has been open for at least 5 tax years.
+
+    Args:
+        age:                  Account owner's current age (fractional years OK).
+        roth_account_age_years: Years since the Roth IRA was first funded
+                              (fractional OK; use 0.0 if unknown to be conservative).
+
+    Returns:
+        True when both conditions are satisfied; False otherwise.
+    """
+    return age >= ROTH_QUALIFIED_MIN_AGE and roth_account_age_years >= ROTH_QUALIFIED_MIN_YEARS
+
+
+# ==============================================================================
 # SCORING FUNCTIONS
 # ==============================================================================
 
@@ -291,6 +334,7 @@ def calculate_tax_efficiency_score(
     holding_period_days: int,
     ltcg_rate: float,
     account_type: str,
+    is_roth_qualified: bool = True,
 ) -> float:
     """
     Calculate tax efficiency score (0-100).
@@ -302,13 +346,21 @@ def calculate_tax_efficiency_score(
         holding_period_days: Days held
         ltcg_rate: Long-term capital gains rate (0.0, 0.15, 0.20)
         account_type: Account type (Brokerage, Traditional, Roth)
+        is_roth_qualified: True when the Roth 5-year and age-59½ rules are met.
+                           Defaults to True so existing callers are unaffected.
     
     Returns:
         Score from 0-100
     """
-    # Tax-advantaged accounts have no current tax impact
-    if account_type in ['Traditional', 'Roth']:
+    # Traditional: always tax-deferred — no *current* tax impact on withdrawal
+    if account_type == 'Traditional':
         return TAX_SCORE_GAIN_0PCT
+
+    # Roth: tax-free only when the qualified-distribution rules are satisfied.
+    # A non-qualified distribution incurs ordinary income tax + 10% penalty on
+    # earnings — score it identically to short-term capital gains (worst case).
+    if account_type == 'Roth':
+        return TAX_SCORE_GAIN_0PCT if is_roth_qualified else TAX_SCORE_NON_QUALIFIED_ROTH
     
     # Loss positions are most tax-efficient (harvest losses)
     if unrealized_gain_loss < 0:
@@ -503,6 +555,8 @@ def score_securities_for_liquidation(
     filing_status: str,
     recent_sales: Optional[List[Dict[str, Any]]] = None,
     year: Optional[int] = None,
+    age: Optional[float] = None,
+    roth_account_age_years: Optional[float] = None,
 ) -> List[SecurityScore]:
     """
     Score all securities in an account for liquidation suitability.
@@ -516,6 +570,12 @@ def score_securities_for_liquidation(
         filing_status: Tax filing status
         recent_sales: Recent sales for wash sale detection
         year: Tax year for bracket lookup (defaults to current calendar year)
+        age: Account owner's current age (fractional OK).  Required to enforce
+             the Roth age-59½ qualified-distribution rule.  When None the rule
+             is not enforced (conservative callers should always supply this).
+        roth_account_age_years: Years since the Roth account was first funded.
+             Required to enforce the 5-year qualified-distribution rule.  When
+             None the rule is not enforced.
 
     Returns:
         List of SecurityScore objects, sorted by total_score (descending)
@@ -524,6 +584,32 @@ def score_securities_for_liquidation(
         recent_sales = []
     if year is None:
         year = datetime.now().year
+
+    # Determine Roth qualified-distribution status once for all holdings.
+    # When caller supplies both age and roth_account_age_years we can make a
+    # definitive determination; when either is missing we default to True
+    # (qualified) to stay backward-compatible, but log a warning so operators
+    # know to supply the data.
+    if account_type == 'Roth':
+        if age is not None and roth_account_age_years is not None:
+            roth_qualified = can_withdraw_roth_tax_free(age, roth_account_age_years)
+            if not roth_qualified:
+                logger.warning(
+                    "Roth liquidation requested but distribution is NOT qualified: "
+                    "age=%.1f (need ≥%.1f), roth_account_age=%.1f yrs (need ≥%.1f). "
+                    "Earnings will incur ordinary income tax + 10%% penalty.",
+                    age, ROTH_QUALIFIED_MIN_AGE,
+                    roth_account_age_years, ROTH_QUALIFIED_MIN_YEARS,
+                )
+        else:
+            roth_qualified = True
+            logger.debug(
+                "Roth qualified-distribution check skipped for %s account "
+                "(age or roth_account_age_years not supplied).",
+                account_type,
+            )
+    else:
+        roth_qualified = True  # Irrelevant for non-Roth accounts
 
     # Filter to specified account
     account_holdings = portfolio_df[portfolio_df['account_type'] == account_type].copy()
@@ -602,7 +688,8 @@ def score_securities_for_liquidation(
         
         # Calculate individual scores
         tax_score = calculate_tax_efficiency_score(
-            unrealized_gain_loss, holding_period_days, ltcg_rate, account_type
+            unrealized_gain_loss, holding_period_days, ltcg_rate, account_type,
+            is_roth_qualified=roth_qualified,
         )
         rebal_score = calculate_rebalancing_score(current_alloc_pct, target_alloc_pct)
         liquidity_score = calculate_liquidity_score(symbol, asset_class)
@@ -639,6 +726,7 @@ def score_securities_for_liquidation(
             ltcg_rate=ltcg_rate,
             is_long_term=is_long_term,
             estimated_tax=estimated_tax,
+            is_roth_qualified=roth_qualified,
         )
         
         scores.append(score)
@@ -720,7 +808,11 @@ def create_liquidation_plan(
             if not allow_partial_shares:
                 # Skip if we can't do partial shares and this would overshoot
                 continue
-            
+
+            if security.current_price <= 0:
+                logger.warning("Skipping %s: current_price is %s", security.symbol, security.current_price)
+                continue
+
             shares_to_sell = remaining_need / security.current_price
             amount_to_liquidate = remaining_need
             is_partial = True
@@ -819,6 +911,21 @@ def create_liquidation_plan(
     
     if any(liq.is_wash_sale_risk for liq in liquidations if hasattr(liq, 'is_wash_sale_risk')):
         notes.append("Warning: Some securities have wash sale risk")
+
+    # Warn when any Roth liquidation is non-qualified (will trigger taxes/penalty)
+    if account_type == 'Roth':
+        non_qualified = [
+            s for s in scored_securities
+            if not getattr(s, 'is_roth_qualified', True)
+            and any(liq.symbol == s.symbol for liq in liquidations)
+        ]
+        if non_qualified:
+            syms = ", ".join(s.symbol for s in non_qualified)
+            notes.append(
+                f"Warning: Non-qualified Roth distribution — earnings on {syms} "
+                f"will be subject to ordinary income tax plus a 10% early-withdrawal "
+                f"penalty (IRC §408A). Ensure age ≥ 59½ and Roth account is ≥ 5 years old."
+            )
     
     # Create plan
     plan = LiquidationPlan(
@@ -898,7 +1005,7 @@ def optimize_multi_account_withdrawal(
         # Determine how much to withdraw from this account
         withdrawal_from_account = min(remaining_need, available)
         
-        # Score securities
+        # Score securities — pass Roth qualified-distribution data when available
         scored = score_securities_for_liquidation(
             portfolio_df,
             withdrawal_from_account,
@@ -907,6 +1014,8 @@ def optimize_multi_account_withdrawal(
             tax_context.get('agi', 0),
             tax_context.get('filing_status', 'single'),
             tax_context.get('recent_sales', []),
+            age=tax_context.get('age'),
+            roth_account_age_years=tax_context.get('roth_account_age_years'),
         )
         
         if not scored:

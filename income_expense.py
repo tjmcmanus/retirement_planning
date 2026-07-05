@@ -148,48 +148,44 @@ def _get_tax_data(year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
 def calculate_taxes(income: float, daf: float, year: int) -> float:
     """
     Calculate taxes based on income, donor advised fund contributions, and year.
-    
+
     Args:
         income: Total taxable income
         daf: Donor Advised Fund contribution amount
         year: Tax year for calculation
-        
+
     Returns:
-        float: Calculated tax amount (returns 0.0 on error)
-        
+        float: Calculated tax amount
+
     Raises:
-        No exceptions raised - errors are logged and 0.0 is returned
+        ValueError: If *income*, *daf*, or *year* are invalid.
+        RuntimeError: If tax bracket or standard-deduction CSV data is missing
+            for the requested year.
     """
-    try:
-        logger.debug(f"calculate_taxes inputs: income={income:,.2f}, daf={daf:,.2f}, year={year}")
-        
-        # Validate and normalize inputs
-        income, daf, year = _validate_tax_inputs(income, daf, year)
-        
-        # Retrieve tax data
-        stddectdf, taxratedf = _get_tax_data(year)
-        
-        # Calculate standard deduction
-        std_dect = calculate_std_deduction(income, stddectdf)
-        logger.debug(f"Standard deduction calculated: {std_dect:,.2f}")
-        
-        # Calculate taxable income after standard deduction
-        taxable_income = income - std_dect
-        
-        # Calculate AGI (Adjusted Gross Income) after DAF contribution
-        agi = taxable_income - daf
-        logger.debug(f"AGI calculated: {agi:,.2f} (income={income:,.2f} - std_dect={std_dect:,.2f} - daf={daf:,.2f})")
-        
-        # Calculate taxes based on AGI
-        result = calculate_taxable_income(agi, taxratedf)
-        logger.debug(f"Taxes calculated: {result.total_tax:,.2f}, maxrate={result.max_rate}, uppermax={result.upper_max:,.2f}")
-        
-        return result.total_tax
-        
-    except Exception as e:
-        logger.error(f"Error in calculate_taxes ({type(e).__name__}): {e}. "
-                     f"Inputs - income: {income}, daf: {daf}, year: {year}")
-        return 0.0
+    logger.debug(f"calculate_taxes inputs: income={income:,.2f}, daf={daf:,.2f}, year={year}")
+
+    # Validate and normalize inputs (raises ValueError on bad inputs)
+    income, daf, year = _validate_tax_inputs(income, daf, year)
+
+    # Retrieve tax data (raises RuntimeError when CSV data is absent)
+    stddectdf, taxratedf = _get_tax_data(year)
+
+    # Calculate standard deduction
+    std_dect = calculate_std_deduction(income, stddectdf)
+    logger.debug(f"Standard deduction calculated: {std_dect:,.2f}")
+
+    # Calculate taxable income after standard deduction
+    taxable_income = income - std_dect
+
+    # Calculate AGI (Adjusted Gross Income) after DAF contribution
+    agi = taxable_income - daf
+    logger.debug(f"AGI calculated: {agi:,.2f} (income={income:,.2f} - std_dect={std_dect:,.2f} - daf={daf:,.2f})")
+
+    # Calculate taxes based on AGI
+    result = calculate_taxable_income(agi, taxratedf)
+    logger.debug(f"Taxes calculated: {result.total_tax:,.2f}, maxrate={result.max_rate}, uppermax={result.upper_max:,.2f}")
+
+    return result.total_tax
 
 def _load_portfolio_data(current_month: int, current_year: int) -> dict[str, float]:
     """
@@ -261,7 +257,7 @@ def _calculate_rmd_and_update_trad(trad_value: float, t_age: float,
     # Calculate RMD based on age
     rmd_distribution = get_rmd_value(t_age)
     if rmd_distribution > 0:
-        rmd = int(trad_value / rmd_distribution)
+        rmd = round(trad_value / rmd_distribution)
 
         # Adjust RMD based on other distributions
         if rmd > conversions + planned_dist:

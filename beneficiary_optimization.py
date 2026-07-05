@@ -23,6 +23,7 @@ import os
 from typing import Dict, List, Tuple, Optional, NamedTuple, Literal
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
+from calculations import _validate_age
 
 # Configure logging
 log_level = logging.getLevelName(os.getenv('LOG_LEVEL', 'WARNING'))
@@ -162,6 +163,7 @@ def get_life_expectancy(age: int, table: str = 'uniform') -> float:
     Returns:
         Life expectancy in years
     """
+    _validate_age(age)
     if table == 'uniform':
         lookup_table = UNIFORM_LIFETIME_TABLE
     else:
@@ -282,41 +284,63 @@ def calculate_inherited_ira_10_year_rule(
     beneficiary_tax_rate: float = 0.24,
     annual_growth_rate: float = 0.07,
     account_type: str = 'Traditional IRA',
+    owner_died_after_rbd: bool = False,
 ) -> InheritedIRAResult:
     """
     Calculate inherited IRA distributions under 10-year rule (SECURE Act).
-    
-    Non-spouse beneficiaries (non-EDBs) must withdraw entire balance within 10 years.
-    No annual RMDs required, but entire balance must be withdrawn by end of year 10.
-    
+
+    Non-spouse beneficiaries (non-EDBs) must withdraw the entire balance within 10 years.
+
+    SECURE Act 2.0 clarification:
+    - If the owner died *before* their Required Beginning Date (RBD), no annual RMDs are
+      required; the beneficiary just needs to empty the account by the end of year 10.
+    - If the owner died *on or after* their RBD, annual RMDs are required in years 1-9
+      based on the beneficiary's single life expectancy, with the full remaining balance
+      distributed by December 31 of year 10.
+
     Args:
         initial_balance: Starting IRA balance
-        beneficiary_age: Age of beneficiary
+        beneficiary_age: Age of beneficiary at date of owner's death
         beneficiary_tax_rate: Marginal tax rate
         annual_growth_rate: Expected annual return
         account_type: Type of account
-        
+        owner_died_after_rbd: True if owner died on or after their Required Beginning Date
+
     Returns:
         InheritedIRAResult with 10-year distribution analysis
     """
     is_roth = 'Roth' in account_type
-    
-    # Strategy: Equal annual distributions to minimize tax bracket creep
-    annual_distribution = initial_balance / 10
-    
+
+    # Initial life expectancy for RMD calculation when owner died after RBD
+    life_expectancy = get_life_expectancy(beneficiary_age, 'single') if owner_died_after_rbd else None
+
+    # Strategy when owner died before RBD: equal annual distributions to minimize bracket creep
+    annual_distribution_flat = initial_balance / 10
+
     annual_distributions = []
     balance = initial_balance
     total_taxes = 0.0
-    
+    remaining_le = life_expectancy  # decremented by 1 each year per IRS rules
+
     for year in range(1, 11):
         # Growth for the year
         growth = balance * annual_growth_rate
         balance += growth
-        
-        # Distribution
-        distribution = min(annual_distribution, balance)
+
+        # Determine required distribution
+        if year == 10:
+            # Year 10: must distribute entire remaining balance
+            distribution = balance
+        elif owner_died_after_rbd and remaining_le is not None and remaining_le > 0:
+            # Annual RMD required: balance / remaining life expectancy
+            distribution = min(balance / remaining_le, balance)
+            remaining_le -= 1.0
+        else:
+            # No annual RMD required; use equal-split strategy
+            distribution = min(annual_distribution_flat, balance)
+
         balance -= distribution
-        
+
         # Tax (Roth is tax-free)
         if is_roth:
             tax = 0.0
@@ -324,9 +348,9 @@ def calculate_inherited_ira_10_year_rule(
         else:
             tax = distribution * beneficiary_tax_rate
             after_tax_distribution = distribution - tax
-        
+
         total_taxes += tax
-        
+
         annual_distributions.append({
             'year': year,
             'beginning_balance': balance + distribution - growth,

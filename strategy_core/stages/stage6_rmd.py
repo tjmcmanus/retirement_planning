@@ -181,9 +181,9 @@ class Stage6RMD(BaseLifeStageStrategy):
         
         # Initial income includes RMD (required) and taxable SS
         total_income = taxable_ss + rmd_amount
-        
-        # Calculate withdrawal need after SS and RMD
-        withdrawal_need = max(0, expenses + healthcare_costs['irmaa_penalty'] - ss_benefits - rmd_amount)
+
+        # Calculate withdrawal need after SS, RMD, and full healthcare costs
+        withdrawal_need = max(0, expenses + healthcare_costs['total'] - ss_benefits - rmd_amount)
         
         # Harvest LTCG if beneficial (at 15% bracket, not 0% - RMD fills lower brackets)
         ltcg_harvested, basis_returned, balances = self._harvest_ltcg_for_withdrawals(
@@ -224,17 +224,23 @@ class Stage6RMD(BaseLifeStageStrategy):
             balances_with_ss.taxable
         )
         
-        # Subtract DAF from brokerage before rebalancing
+        # Subtract DAF from brokerage before rebalancing (HIFO lot removal)
         balances_for_rebalance = balances_with_ss
         if daf_contribution > 0:
-            balances_for_rebalance = PortfolioBalances(
-                cash=balances_with_ss.cash,
-                taxable=balances_with_ss.taxable - daf_contribution,
-                traditional=balances_with_ss.traditional,
-                roth=balances_with_ss.roth,
-                daf=balances_with_ss.daf
-            )
-            logger.info(f"Year {year}: Subtracting DAF contribution ${daf_contribution:,.0f} from Brokerage before rebalancing")
+            try:
+                from strategy import apply_daf_to_brokerage_account
+                balances_for_rebalance = apply_daf_to_brokerage_account(
+                    balances_with_ss, daf_contribution, year, brokerage_account
+                )
+            except ImportError:
+                balances_for_rebalance = PortfolioBalances(
+                    cash=balances_with_ss.cash,
+                    taxable=balances_with_ss.taxable - daf_contribution,
+                    traditional=balances_with_ss.traditional,
+                    roth=balances_with_ss.roth,
+                    daf=balances_with_ss.daf,
+                )
+            logger.info(f"Year {year}: DAF HIFO donation ${daf_contribution:,.0f} from Brokerage")
         
         # Execute account rebalancing
         new_balances, transactions = self._execute_rebalancing(
@@ -348,6 +354,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         strategy.agi = agi
         strategy.magi = magi
         strategy.federal_tax = total_tax
+        strategy.healthcare_costs = healthcare_costs['total']
         strategy.irmaa_penalty = healthcare_costs['irmaa_penalty']
         strategy.aca_premium = healthcare_costs['aca_premium']
         strategy.balances = new_balances
@@ -441,7 +448,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         """
         try:
             from strategy import calculate_total_healthcare_costs
-            
+
             healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
                 age_primary=age_primary,
                 age_spouse=age_spouse,
@@ -450,25 +457,27 @@ class Stage6RMD(BaseLifeStageStrategy):
                 filing_status=filing_status,
                 has_medigap=True
             )
-            
+
             medical_costs = healthcare_breakdown.medicare
             aca_premium = healthcare_breakdown.pre_medicare + healthcare_breakdown.preretirement_working
             irmaa_penalty = healthcare_breakdown.medicare_detail.get('irmaa_penalty', 0.0)
-            
+
             if medical_costs > 0:
                 logger.info(f"Stage 6: Medicare costs=${medical_costs:,.2f} (IRMAA=${irmaa_penalty:,.2f})")
-            
+
             return {
                 'medical_costs': medical_costs,
                 'aca_premium': aca_premium,
-                'irmaa_penalty': irmaa_penalty
+                'irmaa_penalty': irmaa_penalty,
+                'total': healthcare_total,
             }
         except Exception as e:
             logger.warning(f"Could not calculate healthcare costs: {e}")
             return {
                 'medical_costs': 0.0,
                 'aca_premium': 0.0,
-                'irmaa_penalty': 0.0
+                'irmaa_penalty': 0.0,
+                'total': 0.0,
             }
     
     def _calculate_buffer_needs(
@@ -616,15 +625,9 @@ class Stage6RMD(BaseLifeStageStrategy):
             from config import get_config_manager
             import pandas as pd
             
-            config_mgr = get_config_manager()
-            
             # Get stage-specific conversion rate
-            try:
-                stage_max_conversion_rate = float(config_mgr.get(
-                    "roth_conversion", "stage_specific_rates", {}
-                ).get(self.name, 0.22))
-            except Exception:
-                stage_max_conversion_rate = 0.22
+            from calculations import get_stage_specific_conversion_rate
+            stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
             
             tax_brackets = pd.DataFrame(get_income_tax_brackets(year))
             irmaa_brackets = get_medicare_costs(year)

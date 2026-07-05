@@ -21,6 +21,10 @@ import pandas as pd
 import numpy as np
 from enum import Enum
 
+from load_data import get_income_tax_brackets, get_std_deduction
+from config import get_config_manager as _wso_get_config_manager
+from strategy_core.stages.stage6_rmd import get_rmd_age
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +126,109 @@ class MultiYearPlan:
 # TAX PROJECTION
 # ==============================================================================
 
+def _marginal_rate_from_brackets(estimated_agi: float, year: int) -> float:
+    """Return the marginal income-tax rate for *estimated_agi* in *year*.
+
+    Looks up the bracket table for the given year from income_rates.csv (via the
+    cached ``get_income_tax_brackets`` loader).  Falls back to the previous year
+    if the requested year is not in the file, and ultimately falls back to a
+    hardcoded 2024 table if the data file is unavailable entirely.
+    """
+    try:
+        brackets = get_income_tax_brackets(year)
+        if brackets.empty:
+            # Year not yet in CSV — step back one year at a time until we find data
+            for fallback_year in range(year - 1, year - 5, -1):
+                brackets = get_income_tax_brackets(fallback_year)
+                if not brackets.empty:
+                    logger.debug(
+                        "Tax brackets for %d unavailable; using %d as proxy",
+                        year, fallback_year,
+                    )
+                    break
+        if not brackets.empty:
+            # Walk brackets in rate order (ascending lower bound); CSV rows have a
+            # sentinel row with lower==0, upper==0, rate==0.0 — skip it.
+            for _, row in brackets.sort_values('lower').iterrows():
+                if row['upper'] == 0:
+                    continue
+                if estimated_agi <= row['upper']:
+                    return float(row['rate'])
+            # AGI exceeds all bracket uppers — return the top rate
+            return float(brackets['rate'].max())
+    except (OSError, KeyError, ValueError) as exc:
+        logger.warning("Could not load tax brackets for %d: %s — using hardcoded 2024 MFJ table", year, exc, exc_info=True)
+
+    # Hard-coded 2024 MFJ fallback (only reached when CSV is unavailable)
+    if estimated_agi < 23200:
+        return 0.10
+    if estimated_agi < 94300:
+        return 0.12
+    if estimated_agi < 201050:
+        return 0.22
+    if estimated_agi < 383900:
+        return 0.24
+    if estimated_agi < 487450:
+        return 0.32
+    if estimated_agi < 731200:
+        return 0.35
+    return 0.37
+
+
+def _std_deduction_for_year(year: int) -> float:
+    """Return the standard deduction for *year* (MFJ by default).
+
+    Falls back to the nearest available year when the exact year is missing,
+    and ultimately falls back to the 2024 MFJ value of $29,200.
+    """
+    try:
+        df = get_std_deduction(year)
+        if not df.empty:
+            return float(df.iloc[0]['deduction'])
+    except ValueError:
+        # Year not in CSV — try the previous year
+        for fallback_year in range(year - 1, year - 5, -1):
+            try:
+                df = get_std_deduction(fallback_year)
+                if not df.empty:
+                    logger.debug(
+                        "Standard deduction for %d unavailable; using %d as proxy",
+                        year, fallback_year,
+                    )
+                    return float(df.iloc[0]['deduction'])
+            except ValueError:
+                continue
+    except (OSError, KeyError, ValueError) as exc:
+        logger.warning("Could not load standard deduction for %d: %s — using 2024 MFJ default", year, exc, exc_info=True)
+    return 29200.0  # 2024 MFJ fallback
+
+
+def _spouse_age_in_year(year: int) -> int:
+    """Return the spouse's (person 2) age in *year* using the configured birth date.
+
+    Returns 0 when:
+    - the household is configured as single (``is_single_person=True``), or
+    - person 2 has no birth date in config.
+
+    This matches the ``age_spouse > 0`` sentinel convention used throughout
+    the rest of the codebase (e.g. strategy.py, optimize_irmaa_exposure).
+    """
+    try:
+        cfg = _wso_get_config_manager()
+        if cfg.get("personal_info", "is_single_person", False):
+            return 0
+        person2_birth_date = cfg.get("personal_info", "person2_birth_date", "")
+        if not person2_birth_date:
+            return 0
+        person2_birth_year = int(person2_birth_date.split('-')[0])
+        return year - person2_birth_year
+    except (ImportError, AttributeError, ValueError) as exc:
+        logger.warning(
+            "Could not determine spouse age for year %d: %s — defaulting to 0", year, exc, exc_info=True
+        )
+        return 0
+
+
 def project_future_taxes(
     current_year: int,
     current_age: int,
@@ -160,8 +267,9 @@ def project_future_taxes(
         year = current_year + i
         age = current_age + i
         
-        # Determine if RMDs apply (age 73+)
-        has_rmd = age >= 73
+        # Determine if RMDs apply — age threshold depends on birth year (SECURE 2.0)
+        birth_year = current_year - current_age  # constant across the loop
+        has_rmd = age >= get_rmd_age(birth_year)
         rmd_amount = 0.0
         
         if has_rmd and trad_bal > 0:
@@ -178,31 +286,21 @@ def project_future_taxes(
         # Estimate AGI (simplified)
         estimated_agi = estimated_income + additional_needed
         
-        # Estimate marginal rate based on AGI (simplified brackets)
-        if estimated_agi < 22000:
-            marginal_rate = 0.10
-        elif estimated_agi < 89075:
-            marginal_rate = 0.12
-        elif estimated_agi < 190750:
-            marginal_rate = 0.22
-        elif estimated_agi < 364200:
-            marginal_rate = 0.24
-        elif estimated_agi < 462500:
-            marginal_rate = 0.32
-        elif estimated_agi < 693750:
-            marginal_rate = 0.35
-        else:
-            marginal_rate = 0.37
-        
+        # Look up marginal rate from the data-file bracket table for this year
+        marginal_rate = _marginal_rate_from_brackets(estimated_agi, year)
+
         # Estimate effective rate (rough approximation)
         effective_rate = marginal_rate * 0.7  # Simplified
-        
+
+        # Standard deduction for this specific year (inflation-adjusted via CSV)
+        std_deduction = _std_deduction_for_year(year)
+
         projections.append(TaxProjection(
             year=year,
             age_primary=age,
-            age_spouse=age - 2,  # Assume 2-year age gap
+            age_spouse=_spouse_age_in_year(year),
             estimated_income=estimated_income,
-            estimated_deductions=29200,  # Standard deduction (2024 MFJ)
+            estimated_deductions=std_deduction,
             estimated_agi=estimated_agi,
             marginal_rate=marginal_rate,
             effective_rate=effective_rate,
@@ -210,8 +308,20 @@ def project_future_taxes(
             rmd_amount=rmd_amount
         ))
         
-        # Project balances forward
-        trad_bal = (trad_bal - rmd_amount) * growth_rate
+        # Project balances forward.
+        # Floor trad_bal at zero before applying growth: the RMD approximation
+        # (rmd_rate = 1 / (110.5 - age)) can exceed the remaining balance at
+        # advanced ages, producing a negative value that then compounds each
+        # subsequent year and hides the actual depletion event.
+        pre_rmd = trad_bal - rmd_amount
+        if pre_rmd < 0.0:
+            logger.warning(
+                "Traditional balance depleted in year %d (age %d): "
+                "balance $%.2f is less than RMD $%.2f — capping at zero.",
+                year, age, trad_bal, rmd_amount,
+            )
+            pre_rmd = 0.0
+        trad_bal = pre_rmd * growth_rate
         roth_bal = roth_bal * growth_rate
         tax_bal = tax_bal * growth_rate
     
@@ -301,6 +411,47 @@ def find_optimal_conversion_amount(
 # IRMAA OPTIMIZATION
 # ==============================================================================
 
+def _load_irmaa_brackets_for_year(medicare_year: int) -> list:
+    """
+    Load IRMAA brackets for *medicare_year* from irmaa.csv.
+
+    Returns a list of dicts with keys ``lower``, ``upper``, ``monthly_premium``
+    (Part B total monthly premium). Falls back to the hardcoded ``IRMAA_BRACKETS_MFJ``
+    constant if the CSV does not contain data for the requested year.
+    """
+    try:
+        from load_data import get_medicare_costs
+        df = get_medicare_costs(medicare_year)
+        if df.empty:
+            # Try the most recent available year as a proxy
+            import pandas as _pd
+            all_df = _pd.read_csv('irmaa.csv')
+            available_years = sorted(all_df['year'].unique())
+            if not available_years:
+                raise ValueError("irmaa.csv is empty")
+            proxy_year = max(y for y in available_years if y <= medicare_year) \
+                if any(y <= medicare_year for y in available_years) \
+                else available_years[0]
+            df = all_df[all_df['year'] == proxy_year].copy()
+            logger.info(
+                "IRMAA data not found for %d; using %d as proxy", medicare_year, proxy_year
+            )
+        brackets = []
+        for _, row in df.iterrows():
+            brackets.append({
+                'lower': float(row['lower']),
+                'upper': float(row['upper']),
+                'monthly_premium': float(row['part_b_monthly']),
+            })
+        return sorted(brackets, key=lambda b: b['lower'])
+    except Exception:
+        logger.warning(
+            "Could not load IRMAA brackets for year %d from CSV; using hardcoded 2024 values",
+            medicare_year, exc_info=True,
+        )
+        return IRMAA_BRACKETS_MFJ
+
+
 def optimize_irmaa_exposure(
     year: int,
     projected_magi: float,
@@ -309,13 +460,13 @@ def optimize_irmaa_exposure(
 ) -> Optional[IRMAAOptimization]:
     """
     Optimize MAGI to avoid or minimize IRMAA penalties
-    
+
     Args:
-        year: Tax year
+        year: Tax year (IRMAA applies 2 years later, so year+2 brackets are used)
         projected_magi: Projected MAGI
         age_primary: Primary person's age
         age_spouse: Spouse's age
-    
+
     Returns:
         IRMAAOptimization if optimization possible, None otherwise
     """
@@ -323,42 +474,45 @@ def optimize_irmaa_exposure(
     medicare_year = year + 2
     age_primary_medicare = age_primary + 2
     age_spouse_medicare = age_spouse + 2
-    
+
     if age_primary_medicare < 65 and age_spouse_medicare < 65:
         return None  # Not on Medicare yet
-    
+
+    # Load year-appropriate brackets from CSV (falls back to hardcoded 2024 constants)
+    brackets = _load_irmaa_brackets_for_year(medicare_year)
+
     # Find current bracket
     current_bracket = None
     next_bracket = None
-    
-    for i, bracket in enumerate(IRMAA_BRACKETS_MFJ):
+
+    for i, bracket in enumerate(brackets):
         if bracket['lower'] <= projected_magi < bracket['upper']:
             current_bracket = bracket
-            if i + 1 < len(IRMAA_BRACKETS_MFJ):
-                next_bracket = IRMAA_BRACKETS_MFJ[i + 1]
+            if i + 1 < len(brackets):
+                next_bracket = brackets[i + 1]
             break
-    
+
     if not current_bracket:
         return None
-    
+
     # Check if close to next threshold
     if next_bracket:
         distance_to_threshold = next_bracket['lower'] - projected_magi
-        
+
         if 0 < distance_to_threshold < 10000:  # Within $10k of threshold
             # Calculate annual savings from staying below threshold
             current_premium = current_bracket['monthly_premium']
             next_premium = next_bracket['monthly_premium']
             monthly_increase = next_premium - current_premium
             annual_savings = monthly_increase * 12 * 2  # 2 people on Medicare
-            
+
             strategies = [
                 f"Reduce Roth conversions by ${distance_to_threshold:,.0f}",
                 "Harvest tax losses to offset gains",
                 "Increase charitable contributions",
                 "Defer income to next year if possible"
             ]
-            
+
             return IRMAAOptimization(
                 year=year,
                 current_magi=projected_magi,
@@ -368,7 +522,7 @@ def optimize_irmaa_exposure(
                 annual_savings=annual_savings,
                 strategies=strategies
             )
-    
+
     return None
 
 
@@ -400,8 +554,13 @@ def optimize_aca_subsidy(
     if age_primary >= 65 and age_spouse >= 65:
         return None
     
-    # Approximate FPL for 2-person household
-    fpl = 20000  # Simplified
+    # Federal Poverty Level — loaded from medicare_premiums.csv so HHS annual
+    # updates require only a CSV edit, matching the fix applied to strategy.py.
+    from strategy import _get_medicare_premiums_row as _get_prem_row
+    _prem_row = _get_prem_row(year)
+    fpl = _prem_row['fpl_base'] + _prem_row['fpl_per_person'] * (household_size - 1)
+    if fpl <= 0:
+        raise ValueError(f"FPL must be positive for year={year}, household_size={household_size}, got {fpl}")
     fpl_percentage = projected_magi / fpl
     
     # Check for optimization opportunities

@@ -10,6 +10,7 @@ import threading as _threading
 import logging
 import time
 from datetime import datetime
+from typing import Optional
 from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
 
 logger = logging.getLogger(__name__)
@@ -64,29 +65,39 @@ def get_current_price(symbol):
             return 1.0  # Treat as cash if no price data available
         return todays_data['Close'].iloc[0]
     except Exception as e:
-        # Catch HTTP 404 errors and other exceptions for invalid symbols
-        logger.warning(f"Error fetching price for {symbol}: {e}. Treating as cash (MF:CASH)")
+        # yfinance raises many undocumented exception types for HTTP errors, bad symbols, etc.
+        logger.warning(f"Error fetching price for {symbol}: {e}. Treating as cash (MF:CASH)", exc_info=True)
         return 1.0  # Treat invalid symbols as cash
 
-#@st.cache_data()
+@st.cache_data()
+def _get_symbol_row(symbol, month=None, year=None):
+    """Return the first portfolio row for *symbol* as a dict, or None if missing.
+
+    Callers that need multiple fields (qty, purchase_price, account_type…)
+    should call this once and index into the returned dict rather than making
+    separate per-field calls that each re-filter the full DataFrame.
+    """
+    df = getPortfolioData(month=month, year=year)
+    rows = df.loc[df['symbol'] == symbol]
+    if rows.empty:
+        logger.warning("Symbol %s not found in portfolio for %s/%s", symbol, month, year)
+        return None
+    return rows.iloc[0].to_dict()
+
+
 def get_qty(symbol, month=None, year=None):
-    df = getPortfolioData(month=month, year=year)
-    quantity = df.loc[df['symbol'] == symbol, 'qty'].iloc[0]
-    return quantity
+    row = _get_symbol_row(symbol, month=month, year=year)
+    return row['qty'] if row is not None else 0.0
 
-#@st.cache_data()
+
 def get_purchase_price(symbol, month=None, year=None):
-    df = getPortfolioData(month=month, year=year)
-    purchase_price = df.loc[df['symbol'] == symbol, 'purchase_price'].iloc[0]
-    #print("Purchase price is: {purchase_price}")
-    return purchase_price
+    row = _get_symbol_row(symbol, month=month, year=year)
+    return row['purchase_price'] if row is not None else 0.0
 
-#@st.cache_data()
+
 def get_tax_type(symbol, month=None, year=None):
-    df = getPortfolioData(month=month, year=year)
-    tax_type = df.loc[df['symbol'] == symbol, 'account_type'].iloc[0]
-    #print("tax_type price is: {tax_type}")
-    return tax_type
+    row = _get_symbol_row(symbol, month=month, year=year)
+    return row['account_type'] if row is not None else ''
 
 #@st.cache_data()
 def get_ticker_name(symbol, month=None, year=None):
@@ -107,7 +118,8 @@ def get_ticker_name(symbol, month=None, year=None):
         
         return short_name
     except Exception:
-        # Fallback to symbol if info fetch fails
+        # yfinance raises many undocumented exception types for network/bad-symbol errors
+        logger.warning("Error fetching ticker name for %s; returning raw symbol", symbol, exc_info=True)
         return symbol
 
 
@@ -116,10 +128,9 @@ def get_sector(symbol, month=None, year=None):
     if symbol == "MF:CASH":
         return "MF:Cash"
 
-    # Check stored sector first
-    df = getPortfolioData(month=month, year=year)
-    rows = df.loc[df['symbol'] == symbol, 'sector']
-    csv_sector = rows.iloc[0] if not rows.empty else ''
+    # Check stored sector first — reuse the cached row to avoid a second filter
+    row = _get_symbol_row(symbol, month=month, year=year)
+    csv_sector = row['sector'] if row is not None else ''
 
     # If stored sector is already good, use it as-is (user overrides honoured)
     _stale = {
@@ -145,7 +156,7 @@ def get_sector(symbol, month=None, year=None):
             elif info.get('categoryName', ''):
                 resolved = f"MF:{info['categoryName']}"
         except Exception:
-            pass
+            logger.debug("Error fetching mutual fund category for %s", symbol, exc_info=True)
 
     # Stocks / ETFs
     if resolved is None:
@@ -155,12 +166,13 @@ def get_sector(symbol, month=None, year=None):
             if sector:
                 resolved = sector
         except Exception:
-            pass
+            logger.debug("Error fetching sector for %s", symbol, exc_info=True)
 
     # Persist the resolved value so future cache builds skip this yfinance call
     if resolved:
         try:
             from portfolio_db import db_upsert
+            df = getPortfolioData(month=month, year=year)
             _persist_cols = [
                 'month', 'year', 'account_name', 'account_type', 'owner',
                 'symbol', 'name', 'sector', 'qty', 'purchase_price', 'purchase_date',
@@ -169,8 +181,8 @@ def get_sector(symbol, month=None, year=None):
             update_df = df[df['symbol'] == symbol][_present].copy()
             update_df['sector'] = resolved
             db_upsert(update_df)
-        except Exception:
-            pass   # persistence is best-effort; always return the resolved value
+        except (ImportError, OSError, Exception) as _persist_exc:
+            logger.debug("Sector persistence skipped for %s: %s", symbol, _persist_exc, exc_info=True)
         return resolved
 
     # Final fallbacks
@@ -179,16 +191,14 @@ def get_sector(symbol, month=None, year=None):
     return "Unknown"
 
 def calculate_current_value(symbol, month=None, year=None):
-    current_value = get_qty(symbol, month=month, year=year) * get_current_price(symbol)
-    #print(stock_value_port)
-    return current_value
+    return get_qty(symbol, month=month, year=year) * get_current_price(symbol)
 
 def calculate_cost_basis(symbol, month=None, year=None):
-    cost_basis = get_qty(symbol, month=month, year=year) * get_purchase_price(symbol, month=month, year=year)
-    #print(stock_value_port)
-    return cost_basis
+    row = _get_symbol_row(symbol, month=month, year=year)
+    if row is None:
+        return 0.0
+    return row['qty'] * row['purchase_price']
 
-#@st.cache_data()
 def get_current_dividend(symbol, month=None, year=None):
     # Cash holdings don't have dividends
     if symbol == "MF:CASH":
@@ -253,7 +263,7 @@ def get_effective_portfolio_month_year(month=None, year=None):
 
 
 @st.cache_data()
-def getPortfolioData(month=None, year=None):
+def getPortfolioData(month: Optional[int] = None, year: Optional[int] = None) -> pd.DataFrame:
     """
     Get portfolio data for a specific month and year.
     If month/year not provided, defaults to current month/year.
@@ -485,7 +495,7 @@ def save_portfolio_cache(portdf: pd.DataFrame, month: int, year: int) -> None:
         out.to_parquet(PORTFOLIO_CACHE_FILE, index=False)
     except Exception as exc:
         # Cache write failures are non-fatal — the app continues without cache.
-        print(f"[portfolio cache] save failed: {exc}")
+        logger.warning("[portfolio cache] save failed: %s", exc, exc_info=True)
 
 
 def load_portfolio_cache(month: int, year: int) -> pd.DataFrame:
@@ -511,6 +521,9 @@ def load_portfolio_cache(month: int, year: int) -> pd.DataFrame:
 
         cached = pd.read_parquet(PORTFOLIO_CACHE_FILE)
 
+        if cached.empty:
+            return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
         # Validate month/year key
         cached_month = int(cached["_cache_month"].iloc[0]) if "_cache_month" in cached.columns else -1
         cached_year  = int(cached["_cache_year"].iloc[0])  if "_cache_year"  in cached.columns else -1
@@ -530,7 +543,7 @@ def load_portfolio_cache(month: int, year: int) -> pd.DataFrame:
         return pd.DataFrame(cached[display_cols]).reset_index(drop=True)
 
     except Exception as exc:
-        print(f"[portfolio cache] load failed: {exc}")
+        logger.warning("[portfolio cache] load failed: %s", exc, exc_info=True)
         return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
 
@@ -550,7 +563,7 @@ def _rebuild_and_cache(month: int, year: int, done_event: "_threading.Event") ->
         if not portdf.empty:
             save_portfolio_cache(portdf, month, year)
     except Exception as exc:
-        print(f"[portfolio cache] background rebuild failed: {exc}")
+        logger.warning("[portfolio cache] background rebuild failed: %s", exc, exc_info=True)
     finally:
         done_event.set()
 
@@ -630,7 +643,7 @@ def backup_file(current_file_name, backup_filename):
     except FileExistsError:
         print(f"Error: A file named '{backup_filename}' already exists.")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        logger.warning("Unexpected error renaming %s → %s: %s", current_file_name, backup_filename, e, exc_info=True)
         
 def add_rows_to_portfolio(original_df,new_rows_df):
       df_merged = pd.concat([original_df, new_rows_df], ignore_index=True) 

@@ -99,9 +99,11 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
                 retirement_year_spouse if retirement_year_spouse is not None else year
             )
             years_to_retirement = latest_retirement_year - year
-            
-            return 0 < years_to_retirement <= self.PREP_WINDOW_YEARS
-            
+
+            # Include the retirement year itself (years_to_retirement == 0):
+            # the person works a partial year and contributions/taxes still apply.
+            return 0 <= years_to_retirement <= self.PREP_WINDOW_YEARS
+
         except Exception:
             return False
     
@@ -625,46 +627,55 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
     ) -> float:
         """
         Calculate pre-retirement healthcare costs for employed individuals.
-        
+
+        In the retirement year the premium is prorated by the fraction of the
+        year the person is still employed (from their configured retirement date).
+
         Args:
             year: Current year
             age_primary: Primary person's age
             age_spouse: Spouse's age
-            
+
         Returns:
-            Total annual healthcare costs
+            Total annual healthcare costs (prorated in retirement year)
         """
         try:
             from config import get_config_manager
             config_mgr = get_config_manager()
-            
+
             total_cost = 0.0
-            
-            # Get retirement years to determine if still working
-            person1_retirement_year = config_mgr.get("personal_info", "person1_retirement_year", 9999)
-            person2_retirement_year = config_mgr.get("personal_info", "person2_retirement_year", 9999)
-            
-            # Person 1 healthcare (if still working - includes retirement year)
-            if year <= person1_retirement_year:
+
+            # Person 1 healthcare — prorate by fraction of year still employed
+            p1_fraction = config_mgr.get_retirement_fraction(1, year)
+            if p1_fraction > 0:
                 coverage_type = config_mgr.get("healthcare", "person1_preretirement_coverage_type", "None")
                 if coverage_type != "None":
                     monthly_premium = float(config_mgr.get("healthcare", "person1_preretirement_insurance_monthly", 0))
-                    total_cost += monthly_premium * 12
-                    logger.debug(f"Person 1 pre-retirement healthcare: ${monthly_premium * 12:,.2f}/year ({coverage_type})")
-            
-            # Person 2 healthcare (if still working - includes retirement year)
-            if year <= person2_retirement_year:
+                    prorated = monthly_premium * 12 * p1_fraction
+                    total_cost += prorated
+                    logger.debug(
+                        f"Person 1 pre-retirement healthcare: ${prorated:,.2f}/year "
+                        f"(${monthly_premium * 12:,.2f} × {p1_fraction:.1%}, {coverage_type})"
+                    )
+
+            # Person 2 healthcare — prorate by fraction of year still employed
+            p2_fraction = config_mgr.get_retirement_fraction(2, year)
+            if p2_fraction > 0:
                 coverage_type = config_mgr.get("healthcare", "person2_preretirement_coverage_type", "None")
                 if coverage_type != "None":
                     monthly_premium = float(config_mgr.get("healthcare", "person2_preretirement_insurance_monthly", 0))
-                    total_cost += monthly_premium * 12
-                    logger.debug(f"Person 2 pre-retirement healthcare: ${monthly_premium * 12:,.2f}/year ({coverage_type})")
-            
+                    prorated = monthly_premium * 12 * p2_fraction
+                    total_cost += prorated
+                    logger.debug(
+                        f"Person 2 pre-retirement healthcare: ${prorated:,.2f}/year "
+                        f"(${monthly_premium * 12:,.2f} × {p2_fraction:.1%}, {coverage_type})"
+                    )
+
             if total_cost > 0:
                 logger.info(f"Year {year}: Pre-retirement healthcare costs: ${total_cost:,.2f}")
-            
+
             return total_cost
-            
+
         except Exception as e:
             logger.warning(f"Error calculating pre-retirement healthcare: {e}")
             return 0.0
