@@ -171,17 +171,20 @@ class Stage4Medicare(BaseLifeStageStrategy):
         # irmaa_penalty and aca_premium above are kept for rebalancing/conversion logic;
         # healthcare_total is the comprehensive figure stored on the strategy for reporting.
         try:
-            from strategy import calculate_total_healthcare_costs
+            from strategy import calculate_total_healthcare_costs, get_health_status_from_config
+            _health_status = get_health_status_from_config()
             healthcare_total, _hc_breakdown = calculate_total_healthcare_costs(
                 age_primary=age_primary,
                 age_spouse=age_spouse,
                 magi_two_years_ago=prior_magi,
                 year=year,
                 filing_status=filing_status,
+                health_status=_health_status,
                 has_medigap=True
             )
             logger.info(f"Stage 4: Total healthcare costs=${healthcare_total:,.2f} "
-                        f"(IRMAA=${irmaa_penalty:,.2f}, ACA=${aca_premium:,.2f})")
+                        f"(IRMAA=${irmaa_penalty:,.2f}, ACA=${aca_premium:,.2f}, "
+                        f"health_status={_health_status})")
         except Exception as e:
             logger.warning(f"Stage 4: Could not calculate full healthcare costs, falling back: {e}")
             healthcare_total = irmaa_penalty + aca_premium

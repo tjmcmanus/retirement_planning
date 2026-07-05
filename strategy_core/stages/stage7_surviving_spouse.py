@@ -418,8 +418,9 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
     ) -> dict:
         """Calculate healthcare costs for survivor (single person Medicare)."""
         try:
-            from strategy import calculate_total_healthcare_costs
-            
+            from strategy import calculate_total_healthcare_costs, get_health_status_from_config
+            _health_status = get_health_status_from_config()
+
             # For Stage 7, only one person on Medicare
             healthcare_total, healthcare_breakdown = calculate_total_healthcare_costs(
                 age_primary=survivor_age,
@@ -427,6 +428,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
                 magi_two_years_ago=prior_magi,
                 year=year,
                 filing_status=filing_status,
+                health_status=_health_status,
                 has_medigap=True
             )
             
