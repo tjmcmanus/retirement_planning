@@ -153,7 +153,7 @@ Expand **Detailed Analysis** to see raw EMA values, slopes (% per period), and a
 
 ## 4. Portfolio Hub
 
-Five tabs covering every aspect of portfolio management.
+Nine tabs covering every aspect of portfolio management.
 
 ### Tab 1: Overview
 
@@ -218,29 +218,218 @@ Shows the gap between current allocation and your target allocation, then recomm
 
 Options to **minimise tax impact** (harvest losses first, sell highest-basis lots) or **minimise deviation** from target regardless of tax cost.
 
-### Tab 5: Connections (SnapTrade Brokerage Sync)
+### Tab 5: Connections
 
-Securely connect your brokerage accounts for automatic portfolio synchronisation.
+The Connections tab is the central hub for linking brokerage accounts to the application so portfolio data can be pulled automatically — eliminating manual data entry. It contains three sub-tabs.
 
-**Supported institutions:** Charles Schwab, Fidelity, Vanguard, TD Ameritrade, E*TRADE, Merrill Edge, Interactive Brokers, Robinhood, 401k providers, and 12,000+ others.
+---
 
-**Setup steps:**
-1. Create a free account at [snaptrade.com](https://snaptrade.com)
-2. Obtain your Client ID and Consumer Key from the SnapTrade dashboard
-3. Generate an encryption key: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
-4. Add all three to `.env`:
-   ```
-   SNAPTRADE_CLIENT_ID=...
-   SNAPTRADE_CONSUMER_KEY=...
-   ENCRYPTION_KEY=...
-   ```
-5. Click **Connect Brokerage** in the Connections tab and complete OAuth
-6. Click **Sync Now** to pull current balances and holdings
+#### Sub-tab A: SnapTrade (Multi-Brokerage)
 
-**Security model:**
-- Read-only API access — no trades can be placed
-- Credentials are stored locally in AES-256 encrypted form
-- No data is uploaded to any external server
+Connects to 12,000+ financial institutions through SnapTrade's aggregation service, including Schwab, Fidelity, Vanguard, TD Ameritrade, E\*TRADE, Merrill Edge, Interactive Brokers, Robinhood, and most 401(k) record-keepers.
+
+##### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Python packages | `pip install snaptrade-python cryptography python-dotenv` |
+| SnapTrade account | Free tier supports up to 5 brokerage connections |
+| SnapTrade credentials | Client ID + Consumer Key from the developer dashboard |
+| Encryption key | Generated locally — never leaves your machine |
+
+##### Setup
+
+**Step 1 — Create a SnapTrade account**
+
+1. Visit [snaptrade.com](https://snaptrade.com) and sign up.
+2. In the dashboard, create a new application.
+3. Copy your **Client ID** and **Consumer Key**.
+4. Choose **Sandbox** for testing or **Production** for live brokerage data.
+
+**Step 2 — Generate an encryption key**
+
+Run once in a terminal:
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+Save the output — you will need it in the next step and cannot recover it later.
+
+**Step 3 — Configure `.env`**
+
+Add the following to the `.env` file in your project root (create it if absent):
+```bash
+# SnapTrade API credentials
+SNAPTRADE_CLIENT_ID=your_client_id_here
+SNAPTRADE_CONSUMER_KEY=your_consumer_key_here
+
+# Local encryption key
+ENCRYPTION_KEY=your_generated_key_here
+
+# Optional: pre-register a user so no interactive sign-up is needed
+SNAPTRADE_USER_ID=your_user_id
+SNAPTRADE_USER_SECRET=your_user_secret
+```
+
+Verify the file is gitignored:
+```bash
+grep -q "^\.env$" .gitignore && echo "protected" || echo "ADD .env TO .gitignore NOW"
+```
+
+**Step 4 — Restart the application**
+
+Stop and restart the Streamlit app so the new environment variables are loaded.
+
+##### Connecting your first account
+
+1. Navigate to **Portfolio Hub → Connections → SnapTrade (Multi-Brokerage)**.
+2. Click **Connect Brokerage** (or **Connect Account** if no credentials are pre-configured).
+3. Click the generated SnapTrade authorization link.
+4. Choose your brokerage and complete the OAuth login with your brokerage credentials.
+5. Return to the app and click **"I've completed authentication"**.
+6. The account card appears showing institution name, account type, and status.
+
+> **Personal API key note:** SnapTrade personal keys allow only one registered user. If you see a "userSecret" error, use the **Reset & Reconnect** button that appears automatically.
+
+##### Syncing holdings
+
+| Action | How |
+|---|---|
+| Sync a single account | Click **🔄 Sync Now** on the account card |
+| Sync all at once | Click **🔄 Sync All Accounts** |
+| Merge into portfolio | Review the preview table then click **💾 Merge with Portfolio** |
+
+After a merge, the Holdings tab reflects the updated data immediately. Holdings enrichment (name, sector) runs automatically via Yahoo Finance.
+
+##### Merge logic
+
+| Situation | Outcome |
+|---|---|
+| Same month/year/account/symbol, same quantity | Existing row kept unchanged |
+| Same month/year/account/symbol, quantity changed | Quantity updated |
+| New symbol not in portfolio | Row added |
+| Manually entered rows for other accounts | Preserved |
+
+---
+
+#### Sub-tab B: Schwab Direct
+
+For Schwab customers who want a **direct API connection** instead of going through SnapTrade. This provides real-time positions, live quotes, complete transaction history, and enriched purchase-date data — all without an intermediary service.
+
+##### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Schwab brokerage account | With online access enabled |
+| Schwab developer app | Created at [developer.schwab.com](https://developer.schwab.com) |
+| App Key + App Secret | From the Schwab developer portal |
+| Python package | `pip install schwab-py requests oauthlib` (optional but recommended) |
+
+##### Setting up a Schwab developer application
+
+1. Go to [developer.schwab.com](https://developer.schwab.com) and sign in with your regular Schwab credentials.
+2. Click **+ Create App**.
+3. Fill in the application name and description (personal use is fine).
+4. Set the **Callback URL** to `https://localhost:8080/callback` — this must match exactly what you configure in `.env`.
+5. Submit for review. Schwab typically approves personal apps within 1–3 business days.
+6. Once approved, copy the **App Key** (client ID) and **App Secret** from the app detail page.
+
+##### Configure `.env`
+
+Add to your `.env` file:
+```bash
+# Schwab Direct API credentials
+SCHWAB_APP_KEY=your_app_key_here
+SCHWAB_APP_SECRET=your_app_secret_here
+SCHWAB_CALLBACK_URL=https://localhost:8080/callback
+
+# Encryption key (if not already set for SnapTrade)
+ENCRYPTION_KEY=your_encryption_key_here
+```
+
+Restart the application after saving.
+
+##### OAuth authorization flow
+
+Schwab uses **OAuth 2.0 with PKCE** (Proof Key for Code Exchange). The app handles this automatically:
+
+1. Navigate to **Portfolio Hub → Connections → Schwab Direct**.
+2. Click **🔗 Authorize Schwab**.
+3. A Schwab authorization URL is generated — click it to open in your browser.
+4. Log in to Schwab and approve access.
+5. Your browser redirects to `https://localhost:8080/callback?code=...` — the page will appear blank or give an error (this is normal; you only need the URL).
+6. Copy the **entire URL** from the browser address bar.
+7. Paste it into the **"Callback URL"** field in the app.
+8. Click **Complete Authorization**.
+9. A success banner appears and your Schwab accounts are listed.
+
+Tokens are stored encrypted locally. Access tokens refresh automatically every 30 minutes; refresh tokens last 7 days (Schwab requirement — re-authorize weekly if using continuously).
+
+##### Syncing Schwab positions
+
+Once authorized, each account shows its total value and cash balance:
+
+| Control | Action |
+|---|---|
+| **🔄 Sync** (per account) | Fetches positions for that account; imports up to 365 days of transaction history to enrich purchase dates |
+| **🔄 Sync All Accounts** | Syncs all linked Schwab accounts at once |
+| **💾 Merge with Portfolio** | Applies the synced holdings preview to the portfolio database |
+| **🔌 Disconnect Schwab** | Revokes tokens and clears stored credentials (under Advanced Options) |
+
+##### Direct Index position sync
+
+The **Direct Index Position Sync** section (bottom of the Schwab Direct sub-tab) syncs executed direct-index positions into the local `rsp_holdings.db` database used by the Tax Harvesting scanner.
+
+| Setting | Description |
+|---|---|
+| Account name | Label assigned to the synced lots (default: "Schwab Brokerage") |
+| Replace existing lots | When checked, removes existing lots for each symbol before inserting fresh ones |
+| Update RSP prices | Also refreshes RSP constituent prices from live Schwab quotes |
+
+> **Prerequisite:** Complete the Schwab OAuth flow above before using this feature. The button will warn you if Schwab is not yet authenticated.
+
+---
+
+#### Sub-tab C: Auto-Sync Scheduler
+
+Configures automatic background synchronization so portfolio data stays current without manual intervention.
+
+| Control | Description |
+|---|---|
+| **Sync Frequency** | Hourly, Daily, Weekly, Monthly |
+| **Sync Time** | Time of day for scheduled syncs |
+| **Market Hours Only** | Restrict syncs to 9:30 AM–4:00 PM ET |
+| **▶️ Start Auto-Sync** | Starts the background scheduler using whichever connectors are active (SnapTrade and/or Schwab) |
+| **⏹️ Stop Auto-Sync** | Stops the scheduler |
+| **🔄 Sync Now** | Triggers an immediate sync outside the schedule |
+
+Status metrics (Last Sync, Total Syncs, Accounts Tracked) and a rolling sync history log are shown below the controls.
+
+---
+
+#### Security model (all connection types)
+
+| Protection | Detail |
+|---|---|
+| Authentication | OAuth 2.0 — your brokerage passwords are never seen by this app |
+| Permissions | Read-only — the app cannot place trades or move money |
+| Storage | Credentials kept in a local SQLite database, encrypted with AES-256 (Fernet) |
+| Key management | Encryption key lives only in your `.env` file; never transmitted |
+| Revocation | One-click disconnect immediately revokes tokens and deletes stored credentials |
+
+---
+
+#### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| "Encryption key not found" | `ENCRYPTION_KEY` missing from `.env` | Generate key and add to `.env`, restart app |
+| "SnapTrade credentials not found" | Missing `SNAPTRADE_CLIENT_ID` or `SNAPTRADE_CONSUMER_KEY` | Verify `.env` values match SnapTrade dashboard |
+| "Failed to generate auth link" | Wrong API credentials or environment mismatch | Double-check sandbox vs production setting |
+| "No holdings found to sync" | OAuth not fully completed, or account has no positions | Disconnect, reconnect, complete full OAuth flow |
+| "Personal API key — only one user allowed" | SnapTrade personal keys have a single-user limit | Add `SNAPTRADE_USER_ID` / `SNAPTRADE_USER_SECRET` to `.env`, or use **Reset & Reconnect** |
+| "Token expired" | Schwab refresh token >7 days old | Re-authorize via the OAuth flow (click Authorize Schwab again) |
+| Callback URL shows browser error | Normal — Schwab redirects to localhost which has no server | Copy the full URL from the address bar regardless |
+| Schwab DI sync warns "not authenticated" | Schwab OAuth not yet completed | Complete the authorization flow in the Schwab Direct sub-tab first |
 
 ---
 
@@ -250,15 +439,15 @@ The Strategy engine produces a year-by-year plan from today through life expecta
 
 ### 7-Stage Life-Cycle Model
 
-| Stage | Typical ages | Primary focus |
+| Stage | Activation condition | Primary focus |
 |---|---|---|
-| 1 — Accumulation | Working years | Maximise contributions, Roth conversions when bracket is low |
-| 2 — Pre-Retirement Prep | Last 2–5 working years | Begin repositioning; reduce equity risk; finalise SS timing |
-| 3 — Early Retirement | Retire → age 59½ | Draw taxable accounts; execute Roth conversion ladder; manage ACA subsidies |
-| 4 — Medicare Bridge | 59½ → Medicare start | Penalty-free IRA access; continued conversions; IRMAA awareness |
-| 5 — Social Security Bridge | Medicare → SS start | Coordinate SS claiming; spousal benefit; tax-efficient withdrawals |
-| 6 — RMD Management | 73+ | Required Minimum Distributions; QCDs; IRMAA management |
-| 7 — Surviving Spouse | After first death | Re-optimise single-filer brackets; survivor SS benefit; estate planning |
+| 1 — Accumulation | Employed; >10 years from retirement | Maximise contributions, Roth conversions when bracket is low |
+| 2 — Pre-Retirement Prep | Employed; within 10 years of last retirement date | Begin repositioning; balance Roth/Traditional/Taxable ratios; evaluate contribution type |
+| 3 — Early Retirement | No wages, no SS; **both** spouses under 65 | Draw taxable accounts; execute Roth conversion ladder; manage ACA subsidies |
+| 4 — Medicare Bridge | No wages, no SS; either spouse ≥ 65; older spouse below RMD age | Roth conversions with IRMAA awareness; 2-year IRMAA lookback planning |
+| 5 — Social Security | No wages; SS started; older spouse below RMD age | SS taxation (up to 85%); IRMAA optimisation; Roth conversions before RMDs |
+| 6 — RMD Management | Either spouse reaches RMD age (73 if born 1951–1959; 75 if born 1960+) | Required Minimum Distributions; QCDs; IRMAA management |
+| 7 — Surviving Spouse | Surviving spouse mode enabled; year after date of death | Re-optimise single-filer brackets; survivor SS benefit; inherited IRA RMDs |
 
 ### Output Columns (one row per year)
 
