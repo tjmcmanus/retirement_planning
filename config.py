@@ -15,138 +15,132 @@ CONFIG_FILE = "retirement_config.json"
 # Default configuration values
 DEFAULT_CONFIG = {
     "personal_info": {
-        "is_single_person": False,  # True if planning for single person, False for couple
+        "is_single_person": False,
         "person1_name": "Tom",
-        "person1_birth_date": "1965-01-01",
-        "person1_retirement_date": "2025-01-01",  # Planned retirement date (YYYY-MM-DD)
-        "person1_retirement_age": 62,             # Derived from retirement_date - birth_date
-        "person1_retirement_year": 2026,          # Year of retirement
+        "person1_birth_date": "1966-05-16",
+        "person1_retirement_date": "2026-10-02",
+        "person1_retirement_age": 60,
+        "person1_retirement_year": 2026,
         "person2_name": "Sarah",
-        "person2_birth_date": "1967-01-01",
-        "person2_retirement_date": "2027-01-01",  # Planned retirement date (YYYY-MM-DD)
-        "person2_retirement_age": 62,             # Derived from retirement_date - birth_date
-        "person2_retirement_year": 2028,          # Year of retirement
-        "retirement_state": "FL",  # State for retirement (affects state tax calculations)
-        # List of children: each entry is {"name": str, "birth_date": "YYYY-MM-DD"}
-        "children": [],
-        # Stage 7: Surviving Spouse configuration
-        "surviving_spouse_mode": False,  # True if planning for surviving spouse scenario
-        "decedent_person": None,  # "person1" or "person2" - which person is deceased
-        "date_of_death": None,  # "YYYY-MM-DD" - date of death for tax and benefit calculations
+        "person2_birth_date": "1967-03-22",
+        "person2_retirement_date": "2026-07-15",
+        "person2_retirement_age": 59,
+        "person2_retirement_year": 2026,
+        "retirement_state": "PA",
+        "children": [
+            {"name": "Edwin", "birth_date": "2000-07-09", "special_needs": False},
+        ],
+        "surviving_spouse_mode": False,
+        "decedent_person": None,
+        "date_of_death": None,
     },
     "financial_assumptions": {
-        "expected_annual_expenses": 50000,
+        "expected_annual_expenses": 148600,
         "expense_inflation_rate": 3.0,
         "expected_rate_of_return": 6.0,
-        "years_of_expenses_in_cash": 4,
+        "years_of_expenses_in_cash": 2,
         "accumulation_cash_buffer_months": 6,
-        "brokerage_rebalance_trigger_multiplier": 1.0,  # Multiplier of cash target to trigger brokerage replenishment (1.0 = same as cash target)
+        "brokerage_rebalance_trigger_multiplier": 1.0,
     },
     "income": {
-        "person1_annual_wages": 0,  # Annual wages/salary for person 1
-        "person2_annual_wages": 0,  # Annual wages/salary for person 2
-        "wage_inflation_rate": 3.0,  # Annual wage increase percentage
-        # Accumulation-phase contribution rates (% of gross wages, 0–100)
-        "contribution_401k_percent": 10.0,   # Pre-tax Traditional 401k contribution rate
-        "contribution_roth_percent": 5.0,    # Roth 401k / Roth IRA contribution rate
-        "contribution_brokerage_percent": 5.0,  # After-tax brokerage contribution rate
+        "person1_annual_wages": 250000,
+        "person2_annual_wages": 120000,
+        "wage_inflation_rate": 3.0,
+        "contribution_401k_percent": 10.0,
+        "contribution_roth_percent": 5.0,
+        "contribution_brokerage_percent": 5.0,
     },
     "expenses": {
-        # Living Expenses - expenses that do not go away in retirement
         "living_expenses": {
-            "property_tax": 0,
-            "homeowners_insurance": 0,
-            "auto_insurance": 0,
-            "food_groceries": 0,
-            "utilities_phone": 0,
-            "utilities_internet": 0,
+            "property_tax": 5000,
+            "homeowners_insurance": 1000,
+            "auto_insurance": 4000,
+            "food_groceries": 12000,
+            "utilities_phone": 2400,
+            "utilities_internet": 3600,
             "utilities_cable": 0,
-            "utilities_electric": 0,
-            "utilities_gas": 0,
-            "utilities_water": 0,
-            "gifts_donations": 0,
-            "other_living": 0,
+            "utilities_electric": 6000,
+            "utilities_gas": 3600,
+            "utilities_water": 3000,
+            "gifts_donations": 20000,
+            "other_living": 10000,
         },
-        # Big Ticket Items - major purchases that occur periodically
         "big_ticket_items": [
-            # Each item: {"name": str, "amount": float, "frequency_years": int, "start_year": int, "end_year": int}
-            # Example: {"name": "New Car", "amount": 35000, "frequency_years": 10, "start_year": 2025, "end_year": 2050}
+            {"name": "Sarah car", "amount": 70000.0, "frequency_years": 10, "start_year": 2021, "end_year": 2056},
+            {"name": "Tom car",   "amount": 70000.0, "frequency_years": 10, "start_year": 2024, "end_year": 2056},
         ],
-        # Entertainment Expenses - expenses that typically decline in retirement
         "entertainment_expenses": {
-            "travel_vacations": 0,
-            "dining_out": 0,
-            "clothing": 0,
-            "hobbies": 0,
-            "entertainment_other": 0,
-            # Retirement decline settings
+            "travel_vacations": 30000,
+            "dining_out": 18000,
+            "clothing": 10000,
+            "hobbies": 10000,
+            "entertainment_other": 10000,
             "retirement_decline_enabled": True,
-            "retirement_decline_percent": 30,  # Percentage reduction in retirement (0-100)
-            "retirement_decline_start_age": 65,  # Age when decline begins
+            "retirement_decline_percent": 20,
+            "retirement_decline_start_age": 72,
         },
     },
     "social_security": {
         "person1_ssi_age": 70,
-        "person1_ssi_amount": 0,
+        "person1_ssi_amount": 4205,
         "person2_ssi_age": 70,
-        "person2_ssi_amount": 0,
+        "person2_ssi_amount": 4205,
+        "person1_birth_year": 1960,
+        "person1_gender": "M",
+        "person1_life_expectancy": 84,
+        "person1_current_earnings": 0,
+        "person2_birth_year": 1962,
+        "person2_gender": "F",
+        "person2_life_expectancy": 87,
+        "person2_current_earnings": 0,
     },
     "healthcare": {
         "aca_insurance_monthly": 0,
         "aca_start_age": 62,
         "aca_end_age": 65,
         "medicare_start_age": 65,
-        "person1_preretirement_coverage_type": "None",  # Pre-retirement coverage type: "None", "Employer", or "ACA Marketplace"
-        "person1_preretirement_insurance_monthly": 0,  # Monthly premium for person1's pre-retirement insurance
-        "person1_retirement_coverage_type": "None",  # Retirement coverage type: "None", "Employer Retiree", or "ACA Marketplace"
-        "person1_aca_insurance_monthly": 0,  # Monthly premium for person1's retirement insurance
+        "person1_preretirement_coverage_type": "Employer",
+        "person1_preretirement_insurance_monthly": 400,
+        "person1_retirement_coverage_type": "Employer Retiree",
+        "person1_aca_insurance_monthly": 1000,
         "person1_aca_start_age": 62,
         "person1_aca_end_age": 65,
         "person1_medicare_start_age": 65,
-        "person2_preretirement_coverage_type": "None",  # Pre-retirement coverage type: "None", "Employer", or "ACA Marketplace"
-        "person2_preretirement_insurance_monthly": 0,  # Monthly premium for person2's pre-retirement insurance
-        "person2_retirement_coverage_type": "None",  # Retirement coverage type: "None", "Employer Retiree", or "ACA Marketplace"
-        "person2_aca_insurance_monthly": 0,  # Monthly premium for person2's retirement insurance
+        "person2_preretirement_coverage_type": "Employer",
+        "person2_preretirement_insurance_monthly": 200,
+        "person2_retirement_coverage_type": "Employer Retiree",
+        "person2_aca_insurance_monthly": 240,
         "person2_aca_start_age": 62,
         "person2_aca_end_age": 65,
         "person2_medicare_start_age": 65,
+        "person1_conditions": ["atherosclerosis"],
+        "person2_conditions": ["type1_diabetes"],
     },
     "tax_strategy": {
-        "max_roth_conversion_tax_rate": 12,  # Global default (used if stage-specific not set)
-        # Stage-specific Roth conversion tax rate limits (%)
-        # Stage 1: Accumulation (Employed, earning wages)
-        # Stage 2: Prep for Retirement (Employed, within 10 years of retirement)
-        # Stage 3: Early Retirement (Pre-Medicare, pre-SS, pre-RMD)
-        # Stage 4: Medicare Stage (IRMAA optimization)
-        # Stage 5: Social Security Stage (SS benefits + Medicare, pre-RMD)
-        # Stage 6: RMD Stage (Required Minimum Distributions)
-        # Stage 7: Surviving Spouse (Single filer, survivor benefits)
-        "stage_1_max_conversion_rate": 32,  # Accumulation
-        "stage_2_max_conversion_rate": 24,  # Prep for Retirement
-        "stage_3_max_conversion_rate": 12,  # Early Retirement
-        "stage_4_max_conversion_rate": 12,  # Medicare Stage
-        "stage_5_max_conversion_rate": 22,  # Social Security Stage
-        "stage_6_max_conversion_rate": 10,  # RMD Stage
-        "stage_7_max_conversion_rate": 15,  # Surviving Spouse Stage
+        "max_roth_conversion_tax_rate": 24,
+        "stage_1_max_conversion_rate": 32,
+        "stage_2_max_conversion_rate": 32,
+        "stage_3_max_conversion_rate": 32,
+        "stage_4_max_conversion_rate": 32,
+        "stage_5_max_conversion_rate": 24,
+        "stage_6_max_conversion_rate": 24,
+        "stage_7_max_conversion_rate": 15,
     },
     "charitable_giving": {
-        "annual_charitable_giving": 0,
-        "charitable_giving_start_age": 65,
+        "annual_charitable_giving": 30000,
+        "charitable_giving_start_age": 61,
         "charitable_giving_end_age": 95,
         "charitable_giving_inflation_rate": 2.0,
-        "has_daf": False,
+        "has_daf": True,
         "daf_provider": "",
-        "daf_initial_contribution": 0,
-        "daf_annual_contribution": 0,
-        "daf_contribution_start_age": 60,
+        "daf_initial_contribution": 230000,
+        "daf_annual_contribution": 60000,
+        "daf_contribution_start_age": 61,
         "daf_contribution_end_age": 75,
-        # Traditional→Brokerage pre-fund for DAF:
-        # Take a large Traditional distribution to Brokerage early in retirement so that
-        # the Brokerage account has the liquidity to fund upcoming DAF contributions.
-        "daf_trad_prefund_enabled": False,
-        "daf_trad_prefund_amount": 0,         # Annual distribution amount ($)
-        "daf_trad_prefund_start_year": 2027,  # First calendar year to distribute
-        "daf_trad_prefund_end_year": 2028,    # Last calendar year to distribute (inclusive)
+        "daf_trad_prefund_enabled": True,
+        "daf_trad_prefund_amount": 625000,
+        "daf_trad_prefund_start_year": 2027,
+        "daf_trad_prefund_end_year": 2027,
     },
     "rebalancing_preferences": {
         "cash_symbol": "MF:CASH",
@@ -158,8 +152,8 @@ DEFAULT_CONFIG = {
         "stocks_brokerage": "VTI (Vanguard Total Market ETF)",
     },
     "bucket_strategy": {
-        "enabled": False,
-        "bucket_1_years": 2,
+        "enabled": True,
+        "bucket_1_years": 2.0,
         "bucket_2_years": 8,
         "bucket_2_start_stock_pct": 10,
         "bucket_2_end_stock_pct": 80,
@@ -169,13 +163,35 @@ DEFAULT_CONFIG = {
             "long_ma_weeks": 50,
             "bull_adjustment": 0.0,
             "warning_adjustment": -10.0,
-            "bear_adjustment": -20.0
-        }
+            "bear_adjustment": -20.0,
+        },
+    },
+    "portfolio_accounts": {
+        "accounts": [
+            {"account_name": "Schwab-8457",                      "account_type": "Traditional", "owner": "Joint"},
+            {"account_name": "Schwab-6471",                      "account_type": "Roth",        "owner": "Sarah"},
+            {"account_name": "Schwab-5553",                      "account_type": "Roth",        "owner": "Tom"},
+            {"account_name": "PNC",                              "account_type": "Savings",     "owner": "Joint"},
+            {"account_name": "IBM Pension (Legecy)",             "account_type": "Traditional", "owner": "Tom"},
+            {"account_name": "IBM Pension",                      "account_type": "Traditional", "owner": "Tom"},
+            {"account_name": "IBM ESPP",                         "account_type": "Brokerage",   "owner": "Joint"},
+            {"account_name": "Highmark Pension (Legacy)",        "account_type": "Traditional", "owner": "Sarah"},
+            {"account_name": "Highmark Pension",                 "account_type": "Traditional", "owner": "Sarah"},
+            {"account_name": "Highmark 401k",                    "account_type": "Traditional", "owner": "Sarah"},
+            {"account_name": "CVS 401k",                         "account_type": "Traditional", "owner": "Sarah"},
+            {"account_name": "CAPGEMINI SAFE HARBOR 401(K) PLAN","account_type": "Traditional", "owner": "Sarah"},
+            {"account_name": "IBM 401(K) PLAN",                  "account_type": "Traditional", "owner": "Tom"},
+        ],
+    },
+    "real_estate": {
+        "properties": [
+            {"property_name": "McManus Home", "address": "1259 Denniston Street", "purchase_price": 280000},
+        ],
     },
     "metadata": {
         "last_updated": None,
-        "version": "1.0"
-    }
+        "version": "1.0",
+    },
 }
 
 
@@ -232,10 +248,33 @@ class ConfigManager:
     def save_config(self) -> bool:
         """
         Save current configuration to file.
-        
+
+        Before overwriting, the existing file is copied to the ``.backups/``
+        directory with a timestamp suffix so the previous state can always be
+        recovered.  The backup is silently skipped if no current file exists
+        (first-time save).
+
         Returns:
             True if successful, False otherwise
         """
+        import shutil
+        from pathlib import Path
+
+        # --- Backup existing config before overwriting ---
+        config_path = Path(self.config_file)
+        if config_path.exists():
+            try:
+                backup_dir = Path(".backups")
+                backup_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                stem = config_path.stem   # "retirement_config"
+                suffix = config_path.suffix  # ".json"
+                backup_path = backup_dir / f"{stem}_{timestamp}{suffix}"
+                shutil.copy2(config_path, backup_path)
+            except Exception as backup_exc:
+                # Backup failure is non-fatal — log it but continue with the save.
+                print(f"Warning: could not back up {self.config_file}: {backup_exc}")
+
         try:
             self.config["metadata"]["last_updated"] = datetime.now().isoformat()
             with open(self.config_file, 'w') as f:
@@ -297,8 +336,28 @@ class ConfigManager:
         self.config[section].update(values)
     
     def reset_to_defaults(self) -> None:
-        """Reset configuration to default values."""
-        self.config = DEFAULT_CONFIG.copy()
+        """Reset configuration to default values.
+
+        Backs up the current file to ``.backups/`` before resetting so the
+        previous state can always be recovered.
+        """
+        import shutil
+        from pathlib import Path
+
+        config_path = Path(self.config_file)
+        if config_path.exists():
+            try:
+                backup_dir = Path(".backups")
+                backup_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                stem = config_path.stem
+                suffix = config_path.suffix
+                backup_path = backup_dir / f"{stem}_{timestamp}{suffix}"
+                shutil.copy2(config_path, backup_path)
+            except Exception as backup_exc:
+                print(f"Warning: could not back up {self.config_file} before reset: {backup_exc}")
+
+        self.config = copy.deepcopy(DEFAULT_CONFIG)
     
     def export_config(self) -> str:
         """

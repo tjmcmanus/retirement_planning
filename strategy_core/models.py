@@ -14,33 +14,69 @@ from enum import Enum
 class PortfolioBalances:
     """
     Container for portfolio account balances.
-    
+
     Attributes:
         cash: Cash/money market balance
         taxable: Taxable brokerage account balance
-        traditional: Tax-deferred account balance (401k, Traditional IRA)
+        traditional: Tax-deferred account balance (401k, Traditional IRA) — combined total
         roth: Tax-free account balance (Roth IRA, Roth 401k)
         daf: Donor Advised Fund balance
+        traditional_person1: Tax-deferred balance owned by person 1 (Tom).
+            None until explicitly populated from the portfolio DB.
+        traditional_person2: Tax-deferred balance owned by person 2 (Sarah).
+            None until explicitly populated from the portfolio DB.
+
+    Per-person split notes
+    ----------------------
+    ``traditional_person1 + traditional_person2`` should equal ``traditional``
+    (aside from rounding).  When either is ``None`` callers fall back to a
+    proportional split of ``traditional`` based on the last known ratio, or to
+    a 70/30 heuristic derived from the current portfolio snapshot.
+
+    The combined ``traditional`` field is kept as the single source of truth for
+    all balance arithmetic so that existing code paths are unchanged.  The
+    per-person fields are *additive metadata* used only by Stage 6 RMD
+    calculations and the monthly calendar.
     """
     cash: float
     taxable: float
     traditional: float
     roth: float
     daf: float = 0.0
-    
+    # Per-person Traditional split — optional; None = not yet populated
+    traditional_person1: Optional[float] = None
+    traditional_person2: Optional[float] = None
+
     def total(self) -> float:
         """Calculate total portfolio value across all accounts"""
         return self.cash + self.taxable + self.traditional + self.roth + self.daf
-    
+
+    def person1_fraction(self) -> float:
+        """Fraction of traditional balance owned by person 1 (0.0–1.0).
+
+        Returns the exact fraction when per-person data is available, otherwise
+        falls back to 0.70 (Tom's approximate share from the July 2026 snapshot).
+        """
+        if (self.traditional_person1 is not None
+                and self.traditional_person2 is not None
+                and self.traditional > 0):
+            return self.traditional_person1 / self.traditional
+        return 0.70  # fallback: Tom ~70%, Sarah ~30%
+
     def to_dict(self) -> Dict[str, float]:
         """Convert to dictionary for serialization"""
         return asdict(self)
-    
+
     def __post_init__(self) -> None:
-        """Validate balances are non-negative"""
+        """Validate required balances are non-negative."""
         for field_name in ['cash', 'taxable', 'traditional', 'roth', 'daf']:
             value = getattr(self, field_name)
             if value < 0:
+                raise ValueError(f"{field_name} balance cannot be negative: {value}")
+        # Per-person fields are allowed to be None (not yet populated) or non-negative.
+        for field_name in ['traditional_person1', 'traditional_person2']:
+            value = getattr(self, field_name)
+            if value is not None and value < 0:
                 raise ValueError(f"{field_name} balance cannot be negative: {value}")
 
 
@@ -413,7 +449,9 @@ class YearlyStrategy:
     # Income sources
     wages: float = 0.0
     ss_benefits: float = 0.0
-    rmd_amount: float = 0.0
+    rmd_amount: float = 0.0        # combined RMD (both persons)
+    rmd_person1: float = 0.0       # person 1's individual RMD (Tom)
+    rmd_person2: float = 0.0       # person 2's individual RMD (Sarah)
     
     # Withdrawals
     cash_withdrawal: float = 0.0
@@ -568,10 +606,10 @@ class YearlyStrategy:
     def balances(self) -> PortfolioBalances:
         """
         Get account balances as a PortfolioBalances object.
-        
-        This property provides backward compatibility with code that expects
-        a balances attribute instead of individual balance fields.
-        
+
+        Returns a PortfolioBalances that carries the per-person traditional split
+        if it was previously stored on this strategy object via the setter.
+
         Returns:
             PortfolioBalances object with current account balances
         """
@@ -580,17 +618,21 @@ class YearlyStrategy:
             taxable=self.taxable_balance,
             traditional=self.traditional_balance,
             roth=self.roth_balance,
-            daf=self.daf_balance
+            daf=self.daf_balance,
+            traditional_person1=getattr(self, '_traditional_person1', None),
+            traditional_person2=getattr(self, '_traditional_person2', None),
         )
     
     @balances.setter
     def balances(self, value: PortfolioBalances) -> None:
         """
         Set account balances from a PortfolioBalances object.
-        
+
         This setter provides backward compatibility with code that sets
-        the balances attribute.
-        
+        the balances attribute.  The per-person traditional split carried on
+        ``value`` is preserved on this strategy object so Stage 6 calculations
+        can propagate it to subsequent years.
+
         Args:
             value: PortfolioBalances object with new balances
         """
@@ -599,6 +641,9 @@ class YearlyStrategy:
         self.traditional_balance = value.traditional
         self.roth_balance = value.roth
         self.daf_balance = value.daf
+        # Preserve per-person split so it survives the balance hand-off
+        self._traditional_person1 = value.traditional_person1
+        self._traditional_person2 = value.traditional_person2
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""

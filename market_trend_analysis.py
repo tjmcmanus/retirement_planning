@@ -382,6 +382,8 @@ def get_market_condition(
     Returns:
         Tuple of (MarketCondition, MovingAverageData or None)
     """
+    global _last_fetch_error
+
     if not config.enabled:
         logger.info("Market trend analysis disabled in config")
         return MarketCondition.UNKNOWN, None
@@ -401,7 +403,6 @@ def get_market_condition(
         return MarketCondition.UNKNOWN, None
     
     # Successful fetch — clear the stale error
-    global _last_fetch_error
     _last_fetch_error = None
 
     condition = determine_market_condition(ma_data)

@@ -162,9 +162,17 @@ class Stage6RMD(BaseLifeStageStrategy):
             year, age_primary, age_spouse, balances
         )
         
-        # Calculate RMD (mandatory distribution)
-        rmd_amount = self._calculate_rmd(age_primary, year, balances.traditional)
-        logger.debug(f"RMD amount: ${rmd_amount:,.2f}")
+        # Calculate per-person RMDs (mandatory distributions).
+        # Each spouse's RMD is computed from their own balance and their own
+        # age-based Uniform Lifetime Table factor (SECURE 2.0).
+        rmd_person1, rmd_person2 = self._calculate_rmd_per_person(
+            age_primary, age_spouse, year, balances
+        )
+        rmd_amount = rmd_person1 + rmd_person2
+        logger.debug(
+            f"RMD amounts — Person1: ${rmd_person1:,.2f}, "
+            f"Person2: ${rmd_person2:,.2f}, Combined: ${rmd_amount:,.2f}"
+        )
         
         # Calculate healthcare costs (Medicare for both at this stage)
         healthcare_costs = self._calculate_healthcare_costs(
@@ -261,9 +269,12 @@ class Stage6RMD(BaseLifeStageStrategy):
             
             self._log_decision(
                 strategy, 'rmd_decisions', 'Required Minimum Distribution',
-                f'${rmd_amount:,.0f} distributed from Traditional to Brokerage',
-                f'RMD is mandatory at age {age_primary}',
-                rmd_amount=rmd_amount
+                f'${rmd_amount:,.0f} distributed from Traditional to Brokerage '
+                f'(Person1: ${rmd_person1:,.0f}, Person2: ${rmd_person2:,.0f})',
+                f'RMD is mandatory — Person1 age {age_primary}, Person2 age {age_spouse}',
+                rmd_amount=rmd_amount,
+                rmd_person1=rmd_person1,
+                rmd_person2=rmd_person2,
             )
         
         # Apply growth
@@ -344,6 +355,8 @@ class Stage6RMD(BaseLifeStageStrategy):
         strategy.wages = 0
         strategy.ss_benefits = ss_benefits
         strategy.rmd_amount = rmd_amount
+        strategy.rmd_person1 = rmd_person1
+        strategy.rmd_person2 = rmd_person2
         strategy.traditional_withdrawal = trad_withdrawal
         strategy.taxable_withdrawal = transactions['brokerage_to_cash']
         strategy.roth_withdrawal = transactions['roth_to_cash'] + transactions['roth_to_brokerage']
@@ -379,50 +392,107 @@ class Stage6RMD(BaseLifeStageStrategy):
     
     # ==================== Helper Methods ====================
     
+    def _calculate_rmd_per_person(
+        self,
+        age_primary: int,
+        age_spouse: int,
+        year: int,
+        balances: PortfolioBalances,
+    ) -> Tuple[float, float]:
+        """
+        Calculate per-person Required Minimum Distributions (SECURE 2.0).
+
+        Each spouse's RMD is computed independently using:
+          • Their individual Traditional balance (from ``balances.traditional_person1/2``)
+          • Their own age and corresponding Uniform Lifetime Table divisor
+          • Their individual SECURE 2.0 RMD starting age (based on birth year)
+
+        When the per-person split is unavailable (fields are None), the combined
+        balance is apportioned using the last-known ownership fraction so the
+        calculation is always mathematically consistent with the combined total.
+
+        Args:
+            age_primary: Person 1's age (Tom)
+            age_spouse: Person 2's age (Sarah)
+            year: Current simulation year
+            balances: Portfolio balances (may carry per-person split)
+
+        Returns:
+            Tuple (rmd_person1, rmd_person2) — both are 0.0 when not yet required.
+        """
+        from calculations import get_rmd_value  # noqa: PLC0415
+
+        p1_fraction = balances.person1_fraction()
+
+        trad_p1 = (
+            balances.traditional_person1
+            if balances.traditional_person1 is not None
+            else balances.traditional * p1_fraction
+        )
+        trad_p2 = (
+            balances.traditional_person2
+            if balances.traditional_person2 is not None
+            else balances.traditional * (1.0 - p1_fraction)
+        )
+
+        def _one_rmd(age: int, balance: float, label: str) -> float:
+            birth_year = year - age
+            rmd_age = get_rmd_age(birth_year)
+            if age < rmd_age:
+                logger.info(
+                    f"RMD not required for {label}: age {age} < {rmd_age} "
+                    f"(born {birth_year})"
+                )
+                return 0.0
+            if balance <= 0:
+                logger.info(f"RMD not required for {label}: balance is ${balance:,.2f}")
+                return 0.0
+            try:
+                rate = get_rmd_value(age)
+                if rate > 0:
+                    rmd = balance / rate
+                    logger.info(
+                        f"RMD {label}: age={age}, balance=${balance:,.2f}, "
+                        f"divisor={rate}, RMD=${rmd:,.2f}"
+                    )
+                    return rmd
+                logger.warning(f"Invalid RMD divisor {rate} for {label} age {age}")
+                return 0.0
+            except Exception as exc:
+                logger.error(f"RMD calculation failed for {label}: {exc}", exc_info=True)
+                return 0.0
+
+        rmd_p1 = _one_rmd(age_primary, trad_p1, "Person1")
+        rmd_p2 = _one_rmd(age_spouse,  trad_p2, "Person2")
+        return rmd_p1, rmd_p2
+
     def _calculate_rmd(self, age_primary: int, year: int, traditional_balance: float) -> float:
         """
-        Calculate Required Minimum Distribution based on birth year.
-        
+        Single-person RMD helper — kept for backward compatibility with tests
+        that call this method directly.  New production code should call
+        ``_calculate_rmd_per_person`` instead.
+
         Args:
             age_primary: Primary person's age
             year: Current year
-            traditional_balance: Traditional IRA balance
-            
+            traditional_balance: Traditional IRA balance (single person)
+
         Returns:
             RMD amount
         """
-        logger.info(f"RMD calculation: age={age_primary}, year={year}, traditional_balance=${traditional_balance:,.2f}")
-        
-        # Calculate birth year and RMD age
+        from calculations import get_rmd_value  # noqa: PLC0415
+
         birth_year = year - age_primary
         rmd_age = get_rmd_age(birth_year)
-        
-        logger.info(f"Birth year: {birth_year}, RMD age: {rmd_age}")
-        
-        # Check age requirement
-        if age_primary < rmd_age:
-            logger.info(f"RMD not required: age {age_primary} < {rmd_age} (born {birth_year})")
+
+        if age_primary < rmd_age or traditional_balance <= 0:
             return 0.0
-        
-        # Check balance requirement
-        if traditional_balance <= 0:
-            logger.info(f"RMD not required: traditional balance is ${traditional_balance:,.2f}")
-            return 0.0
-        
+
         try:
-            from calculations import get_rmd_value
-            rmd_rate = get_rmd_value(age_primary)
-            logger.info(f"RMD rate for age {age_primary}: {rmd_rate}")
-            
-            if rmd_rate > 0 and traditional_balance > 0:
-                rmd = traditional_balance / rmd_rate
-                logger.info(f"RMD calculated: ${rmd:,.2f} (balance ${traditional_balance:,.2f} / rate {rmd_rate})")
-                return rmd
-            else:
-                logger.warning(f"Invalid RMD rate: {rmd_rate} for age {age_primary}")
-                return 0.0
-        except Exception as e:
-            logger.error(f"Error calculating RMD: {e}", exc_info=True)
+            rate = get_rmd_value(age_primary)
+            return traditional_balance / rate if rate > 0 else 0.0
+        except Exception as exc:
+            logger.error(f"Error calculating RMD: {exc}", exc_info=True)
             return 0.0
     
     def _calculate_healthcare_costs(
@@ -643,7 +713,7 @@ class Stage6RMD(BaseLifeStageStrategy):
             conversion_room = max(0, target_bracket_upper - total_income - std_deduction)
             
             if conversion_room > 10000 and balances.traditional > rmd_amount:
-                # Find next IRMAA threshold
+                # Find next IRMAA threshold based on projected current MAGI.
                 next_irmaa_threshold = float('inf')
                 for _, row in irmaa_brackets.iterrows():
                     if row['lower'] <= prior_magi <= row['upper']:
@@ -651,13 +721,26 @@ class Stage6RMD(BaseLifeStageStrategy):
                         if not next_brackets.empty:
                             next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                         break
-                
+
                 irmaa_headroom = next_irmaa_threshold - total_income - std_deduction
+                # Total room is the tighter of bracket ceiling and IRMAA headroom,
+                # capped at available balance minus the combined mandatory RMD.
                 safe_conversion = min(conversion_room, irmaa_headroom, balances.traditional - rmd_amount)
-                
+
                 if safe_conversion > 10000:
-                    roth_conversion = safe_conversion * 0.5  # Conservative: only 50% of room
-                    logger.debug(f"Roth conversion: ${roth_conversion:,.2f} (limited by RMD)")
+                    # Allocate 50 % of room conservatively, then split between
+                    # persons proportionally by balance so the larger account
+                    # (Tom's IBM 401k) takes the bigger conversion share.
+                    roth_conversion = safe_conversion * 0.5
+
+                    p1_frac = balances.person1_fraction()
+                    conv_p1 = roth_conversion * p1_frac
+                    conv_p2 = roth_conversion * (1.0 - p1_frac)
+
+                    logger.debug(
+                        f"Roth conversion: total=${roth_conversion:,.2f} "
+                        f"(Person1=${conv_p1:,.2f}, Person2=${conv_p2:,.2f})"
+                    )
         except Exception as e:
             logger.warning(f"Could not calculate Roth conversion: {e}")
         

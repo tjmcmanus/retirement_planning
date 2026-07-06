@@ -2863,10 +2863,20 @@ class PortfolioBalances:
     traditional: float  # Tax-deferred (401k, Traditional IRA)
     roth: float  # Tax-free (Roth IRA, Roth 401k)
     daf: float  # Donor Advised Fund
-    
+    traditional_person1: Optional[float] = None  # Per-person Traditional split (Tom)
+    traditional_person2: Optional[float] = None  # Per-person Traditional split (Sarah)
+
     def total(self) -> float:
         """Calculate total portfolio value"""
         return self.cash + self.taxable + self.traditional + self.roth + self.daf
+
+    def person1_fraction(self) -> float:
+        """Fraction of traditional balance owned by person 1."""
+        if (self.traditional_person1 is not None
+                and self.traditional_person2 is not None
+                and self.traditional > 0):
+            return self.traditional_person1 / self.traditional
+        return 0.70  # fallback: Tom ~70%, Sarah ~30%
 
 
 class BrokerageTransactionLog(TypedDict):
@@ -4465,8 +4475,26 @@ class WithdrawalStrategyEngine:
                           strategy.ltcg_harvested)
             magi_history[year] = current_magi
             
-            # Update for next year
-            balances = strategy.balances
+            # Update for next year — carry the per-person traditional split forward.
+            # After each year the combined balance shrinks/grows; we maintain the
+            # ratio so per-person RMD calculations remain accurate throughout the
+            # simulation without needing to re-query the DB each year.
+            _next_balances = strategy.balances
+            _p1_prev = getattr(balances, 'traditional_person1', None)
+            _p2_prev = getattr(balances, 'traditional_person2', None)
+            if _p1_prev is not None and _p2_prev is not None and balances.traditional > 0:
+                # Scale each person's share by the same ratio the combined balance moved.
+                _scale = _next_balances.traditional / balances.traditional
+                _next_balances = PortfolioBalances(
+                    cash=_next_balances.cash,
+                    taxable=_next_balances.taxable,
+                    traditional=_next_balances.traditional,
+                    roth=_next_balances.roth,
+                    daf=_next_balances.daf,
+                    traditional_person1=_p1_prev * _scale,
+                    traditional_person2=_p2_prev * _scale,
+                )
+            balances = _next_balances
             
             # Calculate age-adjusted expenses for next year
             # Import the age-adjustment function
@@ -4595,8 +4623,10 @@ class WithdrawalStrategyEngine:
                 'Federal Tax': s.federal_tax,
                 'State Tax': s.state_tax,
                 'Cash Balance': s.balances.cash,
-                # Additional withdrawal details
+                # Additional withdrawal details — combined + per-person RMDs
                 'RMD': s.rmd_amount,
+                'RMD Person1': s.rmd_person1,
+                'RMD Person2': s.rmd_person2,
                 'Taxable Withdrawal': s.taxable_withdrawal,
                 'Roth Withdrawal': s.roth_withdrawal,
                 'LTCG Harvested': s.ltcg_harvested,
@@ -4676,7 +4706,35 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
             traditional_balance = float(summary_df[summary_df['account_type'] == 'Traditional']['market_value'].sum())
             roth_balance = float(summary_df[summary_df['account_type'] == 'Roth']['market_value'].sum())
             daf_balance = 0
-            
+
+            # --- Per-person Traditional split from detailed holdings ---
+            # detailed_df carries owner + account_type + market_value for every lot.
+            # We read person names from kwargs (passed through from the page) so
+            # the split is always config-driven, not hard-coded.
+            try:
+                _p1_name = kwargs.get('person1_name') or get_config_manager().get('personal_info', 'person1_name', 'Tom')
+                _p2_name = kwargs.get('person2_name') or get_config_manager().get('personal_info', 'person2_name', 'Sarah')
+
+                def _trad_mv(owner: str) -> float:
+                    mask = (
+                        (detailed_df['account_type'] == 'Traditional') &
+                        (detailed_df['owner'] == owner)
+                    )
+                    return float(detailed_df.loc[mask, 'market_value'].sum())
+
+                trad_p1 = _trad_mv(_p1_name)
+                trad_p2 = _trad_mv(_p2_name)
+                # Any Traditional rows tagged 'Joint' are split 50/50
+                trad_joint = _trad_mv('Joint')
+                trad_p1 += trad_joint / 2.0
+                trad_p2 += trad_joint / 2.0
+
+                logger.info(f"Per-person Traditional split: {_p1_name}=${trad_p1:,.2f}, {_p2_name}=${trad_p2:,.2f}")
+            except Exception as _split_exc:
+                logger.warning(f"Could not compute per-person traditional split: {_split_exc}")
+                trad_p1 = None
+                trad_p2 = None
+
             logger.info(f"Initial account balances loaded:")
             logger.info(f"  Cash: ${cash_balance:,.2f}")
             logger.info(f"  Taxable (Brokerage): ${taxable_balance:,.2f}")
@@ -4684,13 +4742,15 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
             logger.info(f"  Roth: ${roth_balance:,.2f}")
             logger.info(f"  DAF: ${daf_balance:,.2f}")
             logger.info(f"  Total: ${cash_balance + taxable_balance + traditional_balance + roth_balance + daf_balance:,.2f}")
-            
+
             initial_balances = PortfolioBalances(
                 cash=cash_balance,
                 taxable=taxable_balance,
                 traditional=traditional_balance,
                 roth=roth_balance,
-                daf=daf_balance
+                daf=daf_balance,
+                traditional_person1=trad_p1,
+                traditional_person2=trad_p2,
             )
     except Exception as e:
         logger.error(f"Error loading portfolio data: {e}")

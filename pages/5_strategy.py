@@ -446,132 +446,211 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
         st.info("No significant financial events identified in this planning period.")
 
 
-def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int) -> pd.DataFrame:
+def create_monthly_execution_plan(
+    strategy_df: pd.DataFrame,
+    selected_year: int,
+    person1_name: str = "Person 1",
+    person2_name: str = "Person 2",
+) -> pd.DataFrame:
     """
     Create a month-by-month execution plan for a specific year.
-    
+
     Shows when to:
     - Make estimated tax payments
-    - Execute Roth conversions
-    - Take RMDs
+    - Execute Roth conversions (with per-person account attribution)
+    - Take RMDs (quarterly, with per-person breakdown)
+    - Replenish brokerage from Traditional (Trad→Brok)
+    - Withdraw Traditional to Cash (Trad→Cash)
     - Rebalance portfolio
     - Review and adjust strategy
+
+    Args:
+        strategy_df: Strategy DataFrame produced by build_*_strategy_display().
+        selected_year: The calendar year to build the plan for.
+        person1_name: Display name for the primary person (default "Person 1").
+        person2_name: Display name for the spouse (default "Person 2").
     """
     if strategy_df.empty:
         return pd.DataFrame()
-    
+
     # Find the row for the selected year
     year_data = strategy_df[strategy_df['Year'] == selected_year]
     if year_data.empty:
         return pd.DataFrame()
-    
+
     row = year_data.iloc[0]
-    
+
+    def _val(col: str) -> float:
+        """Return the numeric value of a column, or 0.0 if absent/null."""
+        v = row.get(col, 0)
+        try:
+            return float(v) if v is not None and v == v else 0.0  # v==v guards NaN
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Build a best-effort per-person attribution hint for Traditional-sourced actions.
+    # The strategy engine currently tracks a combined Traditional balance, so we use
+    # the portfolio ownership ratios (Tom ~70%, Sarah ~30%) as the attribution guide.
+    # When per-person RMD fields exist on the row they will be used directly.
+    rmd_p1 = _val('RMD Person1')   # populated if per-person RMDs are implemented
+    rmd_p2 = _val('RMD Person2')
+    rmd_total = _val('RMD')
+    if rmd_p1 == 0 and rmd_p2 == 0 and rmd_total > 0:
+        # Fall back to portfolio-derived split (Tom 70% / Sarah 30%)
+        rmd_p1 = rmd_total * 0.70
+        rmd_p2 = rmd_total * 0.30
+
+    trad_roth = _val('Trad→\nRoth')
+    trad_cash = _val('Trad→\nCash')
+    trad_brok = _val('Trad→\nBrok')
+
     # Create monthly plan
     monthly_plan = []
-    
+
     for month_num in range(1, 13):
         month_name = MONTH_NAMES[month_num - 1]
         actions = []
         amounts = []
-        
+
         # Q1 estimated taxes (April 15)
         if month_num == 4:
-            if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q1_fed = row['Federal Tax'] / 4
-                q1_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
-                q1_total = q1_fed + q1_state
-                if q1_state > 0:
+            fed = _val('Federal Tax')
+            if fed > 0:
+                q_fed = fed / 4
+                q_state = _val('State Tax') / 4
+                q_total = q_fed + q_state
+                if q_state > 0:
                     actions.append("📋 Q1 Estimated Tax Payment")
-                    amounts.append(f"${q1_total:,.0f} (Fed ${q1_fed:,.0f} + State ${q1_state:,.0f})")
+                    amounts.append(f"${q_total:,.0f} (Fed ${q_fed:,.0f} + State ${q_state:,.0f})")
                 else:
                     actions.append("📋 Q1 Estimated Tax Payment (Federal)")
-                    amounts.append(f"${q1_fed:,.0f}")
-        
+                    amounts.append(f"${q_fed:,.0f}")
+
         # Q2 estimated taxes (June 15)
         if month_num == 6:
-            if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q2_fed = row['Federal Tax'] / 4
-                q2_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
-                q2_total = q2_fed + q2_state
-                if q2_state > 0:
+            fed = _val('Federal Tax')
+            if fed > 0:
+                q_fed = fed / 4
+                q_state = _val('State Tax') / 4
+                q_total = q_fed + q_state
+                if q_state > 0:
                     actions.append("📋 Q2 Estimated Tax Payment")
-                    amounts.append(f"${q2_total:,.0f} (Fed ${q2_fed:,.0f} + State ${q2_state:,.0f})")
+                    amounts.append(f"${q_total:,.0f} (Fed ${q_fed:,.0f} + State ${q_state:,.0f})")
                 else:
                     actions.append("📋 Q2 Estimated Tax Payment (Federal)")
-                    amounts.append(f"${q2_fed:,.0f}")
-        
+                    amounts.append(f"${q_fed:,.0f}")
+
         # Q3 estimated taxes (September 15)
         if month_num == 9:
-            if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q3_fed = row['Federal Tax'] / 4
-                q3_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
-                q3_total = q3_fed + q3_state
-                if q3_state > 0:
+            fed = _val('Federal Tax')
+            if fed > 0:
+                q_fed = fed / 4
+                q_state = _val('State Tax') / 4
+                q_total = q_fed + q_state
+                if q_state > 0:
                     actions.append("📋 Q3 Estimated Tax Payment")
-                    amounts.append(f"${q3_total:,.0f} (Fed ${q3_fed:,.0f} + State ${q3_state:,.0f})")
+                    amounts.append(f"${q_total:,.0f} (Fed ${q_fed:,.0f} + State ${q_state:,.0f})")
                 else:
                     actions.append("📋 Q3 Estimated Tax Payment (Federal)")
-                    amounts.append(f"${q3_fed:,.0f}")
-        
-        # Roth conversions (spread throughout year, focus on low-income months)
-        if 'Trad→\nRoth' in row and row['Trad→\nRoth'] > 0:
-            # Spread conversions across Jan, Apr, Jul, Oct
-            if month_num in [1, 4, 7, 10]:
-                quarterly_conversion = row['Trad→\nRoth'] / 4
-                actions.append("🔄 Roth Conversion (Trad→Roth)")
-                amounts.append(f"${quarterly_conversion:,.0f}")
-        
-        # RMDs (must be taken by December 31, suggest monthly or quarterly)
-        if 'RMD' in row and row['RMD'] > 0:
-            if month_num in [3, 6, 9, 12]:  # Quarterly RMD distributions
-                quarterly_rmd = row['RMD'] / 4
-                actions.append("📊 RMD Distribution (Trad→Brokerage)")
-                amounts.append(f"${quarterly_rmd:,.0f}")
-        
-        # Traditional IRA withdrawals (monthly for living expenses)
-        if 'Trad→\nCash' in row and row['Trad→\nCash'] > 0:
-            monthly_withdrawal = row['Trad→\nCash'] / 12
-            if monthly_withdrawal > 1000:  # Only show if significant
-                actions.append("💵 Traditional → Cash (for expenses)")
-                amounts.append(f"${monthly_withdrawal:,.0f}")
-        
+                    amounts.append(f"${q_fed:,.0f}")
+
+        # Roth conversions — quarterly (Jan, Apr, Jul, Oct), with per-person attribution.
+        # Tom's IBM 401(k) is the primary source (~70%) due to its much larger balance;
+        # Sarah's Highmark 401k / CapGemini 401k contribute the remainder (~30%).
+        if trad_roth > 0 and month_num in [1, 4, 7, 10]:
+            q_conv = trad_roth / 4
+            p1_conv = q_conv * 0.70
+            p2_conv = q_conv * 0.30
+            actions.append(
+                f"🔄 Roth Conversion — {person1_name} (IBM 401k→Schwab Roth)"
+            )
+            amounts.append(f"${p1_conv:,.0f}")
+            actions.append(
+                f"🔄 Roth Conversion — {person2_name} (Highmark 401k→Schwab Roth)"
+            )
+            amounts.append(f"${p2_conv:,.0f}")
+
+        # RMDs — quarterly (Mar, Jun, Sep, Dec), per person, mandatory by Dec 31.
+        if rmd_total > 0 and month_num in [3, 6, 9, 12]:
+            q_p1 = rmd_p1 / 4
+            q_p2 = rmd_p2 / 4
+            actions.append(
+                f"📊 RMD — {person1_name} (IBM 401k → Brokerage, mandatory)"
+            )
+            amounts.append(f"${q_p1:,.0f}")
+            actions.append(
+                f"📊 RMD — {person2_name} (Highmark 401k → Brokerage, mandatory)"
+            )
+            amounts.append(f"${q_p2:,.0f}")
+
+        # Trad → Brokerage replenishment — quarterly (Jan, Apr, Jul, Oct).
+        # The engine moves Traditional funds to the brokerage buffer when the brokerage
+        # balance falls below its target; spread evenly across the year.
+        if trad_brok > 0 and month_num in [1, 4, 7, 10]:
+            q_brok = trad_brok / 4
+            # Attribute proportionally by balance size
+            p1_brok = q_brok * 0.70
+            p2_brok = q_brok * 0.30
+            actions.append(
+                f"📤 Trad→Brokerage — {person1_name} (IBM 401k → Schwab-8457)"
+            )
+            amounts.append(f"${p1_brok:,.0f}")
+            if p2_brok >= 500:
+                actions.append(
+                    f"📤 Trad→Brokerage — {person2_name} (Highmark 401k → Schwab-8457)"
+                )
+                amounts.append(f"${p2_brok:,.0f}")
+
+        # Trad → Cash (expense funding) — monthly, shown every month when active.
+        if trad_cash > 0:
+            monthly_cash = trad_cash / 12
+            if monthly_cash >= 500:
+                # Attribute to the person whose account is being tapped; default to
+                # the larger holder (Tom) for the full amount since the engine draws
+                # from the combined traditional balance.
+                actions.append(
+                    f"💵 Trad→Cash — {person1_name} (IBM 401k → PNC, for expenses)"
+                )
+                amounts.append(f"${monthly_cash:,.0f}")
+
         # Portfolio rebalancing (quarterly)
         if month_num in [3, 6, 9, 12]:
             actions.append("⚖️ Portfolio Rebalance Review")
             amounts.append("—")
-        
+
         # Annual strategy review (January and July)
         if month_num in [1, 7]:
             actions.append("📈 Strategy Review & Adjustment")
             amounts.append("—")
-        
+
         # Q4 estimated taxes (January 15 of following year)
         if month_num == 1:
-            if 'Federal Tax' in row and row['Federal Tax'] > 0:
-                q4_fed = row['Federal Tax'] / 4
-                q4_state = (row.get('State Tax', 0) / 4) if 'State Tax' in row else 0
-                q4_total = q4_fed + q4_state
-                if q4_state > 0:
+            fed = _val('Federal Tax')
+            if fed > 0:
+                q_fed = fed / 4
+                q_state = _val('State Tax') / 4
+                q_total = q_fed + q_state
+                if q_state > 0:
                     actions.append("📋 Q4 Estimated Tax Payment (Prior Year)")
-                    amounts.append(f"${q4_total:,.0f} (Fed ${q4_fed:,.0f} + State ${q4_state:,.0f})")
+                    amounts.append(f"${q_total:,.0f} (Fed ${q_fed:,.0f} + State ${q_state:,.0f})")
                 else:
                     actions.append("📋 Q4 Estimated Tax Payment (Prior Year, Federal)")
-                    amounts.append(f"${q4_fed:,.0f}")
-        
-        # Healthcare premium payments (monthly)
-        if 'Healthcare Cost' in row and row['Healthcare Cost'] > 0:
-            monthly_healthcare = row['Healthcare Cost'] / 12
-            if month_num == 1:  # Show in January as annual note
+                    amounts.append(f"${q_fed:,.0f}")
+
+        # Healthcare premium payments — shown in January as annual summary
+        if month_num == 1:
+            hc = _val('Healthcare Cost')
+            if hc > 0:
                 actions.append("🏥 Healthcare Premiums")
-                amounts.append(f"${monthly_healthcare:,.0f}/month")
-        
-        # DAF (Donor Advised Fund) contributions (typically made in December for tax deduction)
-        if 'DAF Contribution' in row and row['DAF Contribution'] > 0:
-            if month_num == 12:  # Suggest December for year-end tax planning
+                amounts.append(f"${hc / 12:,.0f}/month")
+
+        # DAF contributions — December for year-end tax deduction
+        if month_num == 12:
+            daf = _val('DAF Contribution')
+            if daf > 0:
                 actions.append("🎁 DAF Contribution (Charitable Giving)")
-                amounts.append(f"${row['DAF Contribution']:,.0f}")
-        
+                amounts.append(f"${daf:,.0f}")
+
         # Combine actions with their amounts for clearer display
         combined_actions = []
         for i, action in enumerate(actions):
@@ -579,14 +658,14 @@ def create_monthly_execution_plan(strategy_df: pd.DataFrame, selected_year: int)
                 combined_actions.append(f"{action}: **{amounts[i]}**")
             else:
                 combined_actions.append(action)
-        
+
         monthly_plan.append({
             'Month': month_name,
             'Actions': '\n\n'.join(combined_actions) if combined_actions else '—',
             'Amounts': '\n\n'.join(amounts) if amounts else '—',
             'Action_Count': len(actions)
         })
-    
+
     return pd.DataFrame(monthly_plan)
 
 
@@ -2194,7 +2273,11 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 key="accum_monthly_year"
             )
             
-            monthly_df = create_monthly_execution_plan(accum_strategy_df, selected_year_monthly)
+            monthly_df = create_monthly_execution_plan(
+                accum_strategy_df, selected_year_monthly,
+                person1_name=accum_person1_name,
+                person2_name=accum_person2_name,
+            )
             
             if not monthly_df.empty:
                 # Display as cards for better UX
@@ -2930,7 +3013,11 @@ else:
                 key="withdrawal_monthly_year"
             )
             
-            monthly_df_w = create_monthly_execution_plan(strategy_df_w, selected_year_monthly_w)
+            monthly_df_w = create_monthly_execution_plan(
+                strategy_df_w, selected_year_monthly_w,
+                person1_name=person1_name,
+                person2_name=person2_name,
+            )
             
             if not monthly_df_w.empty:
                 # Display as cards for better UX
