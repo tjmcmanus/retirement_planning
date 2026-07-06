@@ -1406,30 +1406,55 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 f"Difference=${tax_difference:,.0f}"
             )
         
-        # Deduct any additional tax from cash (or credit back if we over-estimated)
-        # If cash is insufficient, pull from taxable account
+        # Deduct any additional tax from cash (or credit back if we over-estimated).
+        # Cascade: Cash → Taxable → Traditional (last resort) so balances never go negative.
         new_cash = balances.cash - tax_difference
-        
+
         if new_cash < 0:
-            logger.warning(
-                f"Year {year}: Cash insufficient for tax adjustment "
-                f"(${balances.cash:,.2f} - ${tax_difference:,.2f} = ${new_cash:,.2f}). "
-                f"Pulling ${-new_cash:,.2f} from taxable account."
-            )
-            balances = PortfolioBalances(
-                cash=0,
-                taxable=balances.taxable + new_cash,  # new_cash is negative, so this reduces taxable
-                traditional=balances.traditional,
-                roth=balances.roth,
-                daf=balances.daf
-            )
+            # Cash is exhausted — try to cover the remainder from taxable
+            shortfall_from_taxable = -new_cash  # positive amount still owed
+            new_taxable = balances.taxable - shortfall_from_taxable
+
+            if new_taxable < 0:
+                # Taxable is also exhausted — pull the rest from Traditional
+                shortfall_from_trad = -new_taxable  # positive amount still owed
+                logger.warning(
+                    f"Year {year}: Cash AND taxable both insufficient for tax adjustment. "
+                    f"Pulling ${shortfall_from_trad:,.2f} from Traditional account."
+                )
+                balances = PortfolioBalances(
+                    cash=0,
+                    taxable=0,
+                    traditional=max(0, balances.traditional - shortfall_from_trad),
+                    roth=balances.roth,
+                    daf=balances.daf,
+                    traditional_person1=balances.traditional_person1,
+                    traditional_person2=balances.traditional_person2,
+                )
+            else:
+                logger.warning(
+                    f"Year {year}: Cash insufficient for tax adjustment "
+                    f"(${balances.cash:,.2f} - ${tax_difference:,.2f} = ${new_cash:,.2f}). "
+                    f"Pulling ${shortfall_from_taxable:,.2f} from taxable account."
+                )
+                balances = PortfolioBalances(
+                    cash=0,
+                    taxable=new_taxable,
+                    traditional=balances.traditional,
+                    roth=balances.roth,
+                    daf=balances.daf,
+                    traditional_person1=balances.traditional_person1,
+                    traditional_person2=balances.traditional_person2,
+                )
         else:
             balances = PortfolioBalances(
                 cash=new_cash,
                 taxable=balances.taxable,
                 traditional=balances.traditional,
                 roth=balances.roth,
-                daf=balances.daf
+                daf=balances.daf,
+                traditional_person1=balances.traditional_person1,
+                traditional_person2=balances.traditional_person2,
             )
             
             if tax_difference > 0:
