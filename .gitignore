@@ -197,3 +197,4 @@ BOB_DEMO_README.md
 bob_demo.py
 strategy.py.bak2
 .backups/retirement_config_*.json
+.backups/portfolio.db.tom.old
