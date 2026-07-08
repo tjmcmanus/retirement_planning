@@ -48,7 +48,8 @@ All calculations run locally. No data leaves your machine. No subscription requi
 | [Single Person Mode](docs/user/SINGLE_PERSON_MODE_GUIDE.md) | Simplified interface for individual planning |
 | [LTC Planning](docs/user/LTC_PLANNING_GUIDE.md) | Long-term care cost modelling |
 | [HSA Integration](docs/user/HSA_INTEGRATION_GUIDE.md) | HSA contribution and withdrawal optimisation |
-| [Advanced Strategies](docs/advanced/betr-guide.md) | Mega backdoor Roth, DAF, direct indexing |
+| [Direct Indexing](docs/user/DIRECT_INDEXING_USER_GUIDE.md) | Tax-loss harvesting workflow, setup, dashboard usage |
+| [Advanced Strategies](docs/advanced/betr-guide.md) | Mega backdoor Roth, DAF, and other advanced planning topics |
 | [Scenario Planning](docs/user/SCENARIO_PLANNING_USER_GUIDE.md) | What-if scenarios, comparison tools |
 | [Income & Expense Modelling](docs/user/INCOME_EXPENSE_GUIDE.md) | Age-based expense curves, income sources |
 
@@ -63,7 +64,7 @@ All calculations run locally. No data leaves your machine. No subscription requi
 | **Portfolio Hub** | Holdings, performance analytics, rebalancing, brokerage sync |
 | **Strategy** | Year-by-year 7-stage withdrawal plan |
 | **Monte Carlo** | 10,000-scenario probabilistic analysis |
-| **Advanced Strategies** | BETR Roth conversions, bucket strategy, tax-loss harvesting, SS optimisation |
+| **Advanced Strategies** | BETR Roth conversions, bucket strategy, tax-loss harvesting, direct indexing, SS optimisation |
 | **Estate Planning** | Beneficiary optimisation, estate tax projections, charitable giving |
 | **Scenario Planning** | Compare multiple planning scenarios side-by-side |
 | **Reports** | Exportable summaries |
