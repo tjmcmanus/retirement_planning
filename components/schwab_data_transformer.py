@@ -41,6 +41,33 @@ def get_account_config(account_name: str) -> Dict:
         return {'account_type': 'Brokerage', 'owner': 'Joint'}
 
 
+def get_schwab_account_name(account_number: str) -> str:
+    """
+    Map a Schwab account number to the configured application account name.
+
+    Args:
+        account_number: Full Schwab account number
+
+    Returns:
+        Configured account name if found, otherwise Schwab-<last4>
+    """
+    default_name = f"Schwab-{account_number[-4:]}"
+
+    try:
+        from config import get_config_manager
+        config_mgr = get_config_manager()
+        accounts = config_mgr.get("portfolio_accounts", "accounts", [])
+
+        for account in accounts:
+            account_name = account.get('account_name', '')
+            if isinstance(account_name, str) and account_name.startswith('Schwab-') and account_name.endswith(account_number[-4:]):
+                return account_name
+    except Exception as e:
+        logger.warning(f"Could not load Schwab account name from config: {e}")
+
+    return default_name
+
+
 class SchwabDataTransformer:
     """
     Transform Schwab API data to portfolio format
@@ -160,7 +187,7 @@ class SchwabDataTransformer:
                 logger.info(f"Detected option/warrant by symbol pattern: {symbol}")
             
             # Generate account name
-            account_name = f"Schwab-{account_number[-4:]}"
+            account_name = get_schwab_account_name(account_number)
             
             # Look up account configuration
             logger.info(f"Looking up account config for: {account_name}")

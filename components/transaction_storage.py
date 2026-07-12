@@ -149,6 +149,55 @@ class TransactionStorage:
             """)
             
             conn.commit()
+
+    def backfill_account_names(self, user_id: str = "default") -> int:
+        """
+        Backfill blank transaction account names from account IDs.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            Number of transactions updated
+        """
+        from components.credential_manager import CredentialManager
+
+        cred_mgr = CredentialManager()
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT id, account_id
+                FROM transactions
+                WHERE user_id = ?
+                  AND (account_name IS NULL OR TRIM(account_name) = '')
+                  AND account_id IS NOT NULL
+                  AND TRIM(account_id) != ''
+            """, (user_id,)).fetchall()
+
+            updated_count = 0
+            for row in rows:
+                account_id = row['account_id']
+                account_name = cred_mgr.get_schwab_account_name(account_id, user_id=user_id)
+                if not account_name:
+                    if account_id.startswith('Schwab'):
+                        account_name = account_id
+                    elif len(account_id) >= 4:
+                        account_name = f"Schwab-{account_id[-4:]}"
+                    else:
+                        account_name = account_id
+
+                conn.execute("""
+                    UPDATE transactions
+                    SET account_name = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (account_name, row['id']))
+                updated_count += 1
+
+            conn.commit()
+
+        logger.info(f"Backfilled account names for {updated_count} transactions")
+        return updated_count
     
     def store_transactions(
         self,

@@ -301,6 +301,7 @@ def db_overwrite_month(
                 conn,
                 if_exists="append",
                 index=False,
+                method=_upsert_method,
             )
             n = len(rows)
         conn.commit()
@@ -348,6 +349,65 @@ def db_delete_row(
     if deleted:
         _write_csv_backup(db_path)
     return deleted
+
+
+def db_update_account_metadata(
+    accounts: list[dict],
+    db_path: Path = DB_PATH,
+) -> int:
+    """
+    Propagate account_type and owner changes from the config into portfolio.db.
+
+    When an account's type or owner is renamed in the Configuration page, all
+    existing holdings rows for that account_name should reflect the new values.
+    This function performs a bulk UPDATE for every account in *accounts* whose
+    actual DB values differ from the supplied ones.
+
+    Args:
+        accounts: List of dicts, each with keys ``account_name``, ``account_type``,
+                  and ``owner`` (as stored in retirement_config.json).
+        db_path:  Override for testing.
+
+    Returns:
+        Total number of rows updated across all accounts.
+    """
+    if not accounts:
+        return 0
+
+    conn = get_db_connection(db_path)
+    total_updated = 0
+    try:
+        for account in accounts:
+            name = str(account.get("account_name", "")).strip()
+            new_type = str(account.get("account_type", "")).strip()
+            new_owner = str(account.get("owner", "")).strip()
+            if not name:
+                continue
+            cur = conn.execute(
+                "UPDATE holdings "
+                "SET account_type = ?, owner = ? "
+                "WHERE account_name = ? "
+                "  AND (account_type != ? OR owner != ?)",
+                (new_type, new_owner, name, new_type, new_owner),
+            )
+            if cur.rowcount:
+                logger.info(
+                    f"db_update_account_metadata: '{name}' → "
+                    f"type={new_type!r}, owner={new_owner!r} "
+                    f"({cur.rowcount} row(s) updated)"
+                )
+            total_updated += cur.rowcount
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        logger.error(f"db_update_account_metadata failed: {exc}")
+        raise
+
+    if total_updated:
+        _write_csv_backup(db_path)
+        logger.info(f"db_update_account_metadata: {total_updated} total row(s) updated")
+
+    return total_updated
 
 
 # ==============================================================================

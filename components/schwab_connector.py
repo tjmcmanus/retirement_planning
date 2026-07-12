@@ -700,6 +700,14 @@ class SchwabConnector:
                         continue
                     try:
                         account_data = self.api.get_account_details(acc_hash, include_positions=True)
+                        account_info = account_data.get('securitiesAccount', {})
+                        account_number = account_info.get('accountNumber', 'Unknown')
+                        if account_number and account_number != 'Unknown':
+                            from components.schwab_data_transformer import get_schwab_account_name
+                            self.credential_manager.store_schwab_account_mapping(
+                                account_hash=acc_hash,
+                                account_name=get_schwab_account_name(account_number),
+                            )
                         accounts.append(account_data)
                     except Exception as e:
                         logger.error(f"Failed to get details for account {acc_hash}: {e}")
@@ -901,14 +909,18 @@ class SchwabConnector:
     def get_transactions(
         self,
         account_hash: str,
-        days_back: int = 30
+        days_back: int = 30,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
     ) -> List[Dict]:
         """
         Get recent transactions for an account
         
         Args:
             account_hash: Account hash
-            days_back: Number of days of history to retrieve
+            days_back: Number of days of history to retrieve when explicit dates are not provided
+            start_date: Optional start date in YYYY-MM-DD format
+            end_date: Optional end date in YYYY-MM-DD format
             
         Returns:
             List of transaction dictionaries
@@ -920,13 +932,17 @@ class SchwabConnector:
             raise RuntimeError("API client not initialized")
         
         try:
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days_back)
+            if end_date is None:
+                end_dt = datetime.now()
+                end_date = end_dt.strftime('%Y-%m-%d')
+            if start_date is None:
+                start_dt = datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=days_back)
+                start_date = start_dt.strftime('%Y-%m-%d')
             
             transactions = self.api.get_transactions(
                 account_hash=account_hash,
-                start_date=start_date.strftime('%Y-%m-%d'),
-                end_date=end_date.strftime('%Y-%m-%d')
+                start_date=start_date,
+                end_date=end_date
             )
             
             logger.info(f"Retrieved {len(transactions)} transactions")

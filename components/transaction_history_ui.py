@@ -7,6 +7,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional
+
+from components.transaction_importer import TransactionImporter
+from components.credential_manager import CredentialManager
 import logging
 
 logger = logging.getLogger(__name__)
@@ -89,6 +92,8 @@ def _calculate_gains_losses(transactions_df: pd.DataFrame) -> pd.DataFrame:
         transactions_df['term'] = ''
     if 'wash_sale' not in transactions_df.columns:
         transactions_df['wash_sale'] = False
+    if 'wash_sale_adjustment' not in transactions_df.columns:
+        transactions_df['wash_sale_adjustment'] = 0.0
     
     # Ensure date column is datetime
     if 'date' in transactions_df.columns:
@@ -217,9 +222,6 @@ def create_transaction_importer(connector):
         TransactionImporter instance
     """
     try:
-        from components.transaction_importer import TransactionImporter
-        from components.credential_manager import CredentialManager
-        
         cred_mgr = CredentialManager()
         return TransactionImporter(cred_mgr)
     except Exception as e:
@@ -266,6 +268,7 @@ def render_transaction_history_tab(
     # First, check if we have transactions in the database
     if transaction_storage:
         try:
+            transaction_storage.backfill_account_names(user_id=user_id)
             all_transactions = transaction_storage.get_transactions(user_id=user_id)
             logger.info(f"Loaded {len(all_transactions)} transactions from database")
             
@@ -276,7 +279,9 @@ def render_transaction_history_tab(
                 column_mapping = {
                     'transaction_date': 'date',
                     'transaction_type': 'type',
-                    'transaction_id': 'id'
+                    'transaction_id': 'id',
+                    'account_name': 'account_name',
+                    'account_id': 'account_id'
                 }
                 all_transactions = all_transactions.rename(columns=column_mapping)
                 
@@ -349,8 +354,13 @@ def render_transaction_history_tab(
             
             # Import transactions
             if import_button:
-                if not transaction_importer:
-                    st.error("Transaction importer not available. Please ensure SnapTrade is properly configured.")
+                selected_connector = connector
+                if connection['brokerage_name'] == 'Schwab':
+                    selected_connector = st.session_state.get("schwab_connector")
+
+                if not transaction_importer or not selected_connector:
+                    provider_name = connection['brokerage_name']
+                    st.error(f"Transaction importer not available for {provider_name}. Please ensure that connector is properly configured.")
                     return
                     
                 with st.spinner("Importing transactions..."):
@@ -362,15 +372,12 @@ def render_transaction_history_tab(
                         else:
                             user_secret = ''
                         
-                        if not user_secret:
+                        if connection['brokerage_name'] != 'Schwab' and not user_secret:
                             st.error("Failed to retrieve account credentials")
                             return
                         
-                        # Import transactions
-                        from components.transaction_importer import import_and_display_transactions
-                        
                         transactions_df = transaction_importer.import_transactions(
-                            connector=connector,
+                            connector=selected_connector,
                             user_id=user_id,
                             user_secret=user_secret,
                             account_id=connection['account_id'],
@@ -435,8 +442,9 @@ def render_transaction_history_tab(
             # Transaction table
             st.markdown("#### Transaction Details")
             
-            # Format for display - use account_id only (removed redundant account_name)
-            display_columns = ['date', 'account_id', 'type', 'symbol', 'quantity', 'price',
+            # Format for display - prefer friendly account_name when available
+            account_column = 'account_name' if 'account_name' in transactions_df.columns else 'account_id'
+            display_columns = ['date', account_column, 'type', 'symbol', 'quantity', 'price',
                              'amount', 'gain_loss', 'term', 'wash_sale']
             
             # Only include columns that exist in the dataframe
@@ -463,6 +471,7 @@ def render_transaction_history_tab(
             column_names = {
                 'date': 'Date',
                 'account_id': 'Account',
+                'account_name': 'Account',
                 'type': 'Type',
                 'symbol': 'Symbol',
                 'quantity': 'Quantity',
@@ -625,6 +634,8 @@ def render_cost_basis_tab(transaction_storage, user_id: str = "default"):
                 'transaction_id': 'id'
             }
             transactions = transactions.rename(columns=column_mapping)
+
+            account_column = 'account_name' if 'account_name' in transactions.columns else 'account_id'
             
             # Filter for BUY transactions to show current lots
             buy_transactions = transactions[transactions['type'] == 'BUY'].copy()
@@ -635,12 +646,12 @@ def render_cost_basis_tab(transaction_storage, user_id: str = "default"):
             
             # Calculate current lots by symbol and account
             st.markdown("### 📊 Current Tax Lots")
-            st.caption("Active purchase lots grouped by Account ID for proper tax treatment")
+            st.caption("Active purchase lots grouped by account for proper tax treatment")
             
-            # Group by account_id and symbol for proper tax tracking
+            # Group by account and symbol for proper tax tracking
             group_cols = ['symbol']
-            if 'account_id' in buy_transactions.columns:
-                group_cols = ['account_id', 'symbol']
+            if account_column in buy_transactions.columns:
+                group_cols = [account_column, 'symbol']
             
             lots_summary = buy_transactions.groupby(group_cols).agg({
                 'quantity': 'sum',
@@ -649,7 +660,7 @@ def render_cost_basis_tab(transaction_storage, user_id: str = "default"):
                 'date': 'min'
             }).reset_index()
             
-            if 'account_id' in lots_summary.columns:
+            if account_column in lots_summary.columns:
                 lots_summary.columns = ['Account', 'Symbol', 'Total Shares', 'Avg Price', 'Total Cost', 'First Purchase']
             else:
                 lots_summary.columns = ['Symbol', 'Total Shares', 'Avg Price', 'Total Cost', 'First Purchase']
@@ -686,16 +697,16 @@ def render_cost_basis_tab(transaction_storage, user_id: str = "default"):
             
             # Detailed lot-level view
             with st.expander("📋 Detailed Lot Information"):
-                st.markdown("**Individual Purchase Lots (grouped by Account ID for tax purposes)**")
+                st.markdown("**Individual Purchase Lots (grouped by account for tax purposes)**")
                 
-                # Show all buy transactions with details including account_id
+                # Show all buy transactions with details including account
                 detail_cols = ['date', 'symbol', 'quantity', 'price', 'amount']
-                if 'account_id' in buy_transactions.columns:
-                    detail_cols = ['date', 'account_id', 'symbol', 'quantity', 'price', 'amount']
+                if account_column in buy_transactions.columns:
+                    detail_cols = ['date', account_column, 'symbol', 'quantity', 'price', 'amount']
                 
                 lot_details = buy_transactions[detail_cols].copy()
                 
-                if 'account_id' in lot_details.columns:
+                if account_column in lot_details.columns:
                     lot_details.columns = ['Purchase Date', 'Account', 'Symbol', 'Shares', 'Price/Share', 'Total Cost']
                 else:
                     lot_details.columns = ['Purchase Date', 'Symbol', 'Shares', 'Price/Share', 'Total Cost']
@@ -929,13 +940,14 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
             height=300
         )
         
-        # Gains by account (with account_id for proper tax treatment)
-        if 'account_id' in sell_transactions.columns:
+        # Gains by account (prefer friendly account name when available)
+        account_column = 'account_name' if 'account_name' in sell_transactions.columns else 'account_id'
+        if account_column in sell_transactions.columns:
             st.markdown("### 🏦 Gains by Account")
-            st.caption("Grouped by Account ID to properly track tax treatment (Roth, Traditional, Brokerage)")
+            st.caption("Grouped by account to properly track tax treatment (Roth, Traditional, Brokerage)")
             
-            # Group by account_id
-            account_gains = sell_transactions.groupby('account_id').agg({
+            # Group by account
+            account_gains = sell_transactions.groupby(account_column).agg({
                 'gain_loss': 'sum',
                 'symbol': 'count'
             }).reset_index()
@@ -972,11 +984,11 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
         
         # Detailed transaction list
         with st.expander("📋 Detailed Sale Transactions"):
-            st.markdown("**All Realized Gains/Losses (with Account ID for tax tracking)**")
+            st.markdown("**All Realized Gains/Losses (with account for tax tracking)**")
             
             detail_cols = ['date', 'symbol', 'quantity', 'price', 'amount', 'gain_loss', 'term', 'wash_sale']
-            if 'account_id' in sell_transactions.columns:
-                detail_cols = ['date', 'account_id', 'symbol', 'quantity', 'price', 'amount', 'gain_loss', 'term', 'wash_sale']
+            if account_column in sell_transactions.columns:
+                detail_cols = ['date', account_column, 'symbol', 'quantity', 'price', 'amount', 'gain_loss', 'term', 'wash_sale']
             
             available_cols = [col for col in detail_cols if col in sell_transactions.columns]
             
@@ -987,6 +999,7 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
             display_names = {
                 'date': 'Sale Date',
                 'account_id': 'Account',
+                'account_name': 'Account',
                 'symbol': 'Symbol',
                 'quantity': 'Shares',
                 'price': 'Price',

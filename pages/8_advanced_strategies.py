@@ -120,8 +120,10 @@ with adv_tax_planner_tab:
         except Exception as e:
             st.error(f"Error loading tax data: {e}"); st.stop()
 
+        # Pass 1: preliminary DAF/AGI/conversions using only the known income
+        # (roth_amount is 0 when auto-conversion is used, so conversions are unknown here).
         try:
-            calc_daf = calc_daf_value(deferred_dist + wages, interest, daf1, maxdaf,
+            calc_daf = calc_daf_value(deferred_dist + wages + cg_income_st + roth_amount, interest, daf1, maxdaf,
                                       contribution_type=daf_contribution_type,  # type: ignore[arg-type]
                                       stddectdf=cast(pd.DataFrame, stddectdf))
         except Exception:
@@ -131,11 +133,6 @@ with adv_tax_planner_tab:
             agi = calc_agi(deferred_dist + wages + cg_income_st, interest, stddectdf, calc_daf)
         except Exception as e:
             st.error(f"AGI error: {e}"); st.stop()
-
-        try:
-            irmaa_fees = calculate_irmma_penalty(agi, irmaadf, people)
-        except Exception:
-            irmaa_fees = 0
 
         try:
             result = calculate_taxable_income(agi, taxratedf)
@@ -169,6 +166,15 @@ with adv_tax_planner_tab:
             st.error(f"Roth conversion error: {e}")
             conversions, conversion_tax = 0, 0
 
+        # Pass 2: now that conversions are known, recalculate Max DAF using the
+        # full income base (including Roth conversion amount) then recompute AGI.
+        try:
+            calc_daf = calc_daf_value(deferred_dist + wages + cg_income_st + conversions, interest, daf1, maxdaf,
+                                      contribution_type=daf_contribution_type,  # type: ignore[arg-type]
+                                      stddectdf=cast(pd.DataFrame, stddectdf))
+        except Exception:
+            pass  # keep the pass-1 value if recalc fails
+
         try:
             if conversions >= 0:
                 agi = calc_agi(deferred_dist + wages + cg_income_st + conversions, interest, stddectdf, calc_daf)
@@ -176,6 +182,11 @@ with adv_tax_planner_tab:
                 taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
         except Exception:
             pass
+
+        try:
+            irmaa_fees = calculate_irmma_penalty(agi, irmaadf, people)
+        except Exception:
+            irmaa_fees = 0
 
         cg_tax = 0
         try:

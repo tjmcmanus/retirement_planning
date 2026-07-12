@@ -79,7 +79,7 @@ def render_tax_records_tab(curr_year: int) -> None:
         "🌱 Harvest Savings",
     ])
 
-    # Initialise transaction storage once; share across sub-tabs
+    # Initialise transaction components once; share across sub-tabs
     txn_storage = None
     if TRANSACTION_FEATURES_AVAILABLE and create_transaction_storage is not None:
         if "tax_records_transaction_storage" not in st.session_state:
@@ -89,6 +89,14 @@ def render_tax_records_tab(curr_year: int) -> None:
                 st.session_state["tax_records_transaction_storage"] = None
                 st.error(f"Failed to initialise transaction storage: {e}")
         txn_storage = st.session_state.get("tax_records_transaction_storage")
+
+        if "transaction_importer" not in st.session_state:
+            try:
+                from components.transaction_history_ui import create_transaction_importer
+                st.session_state["transaction_importer"] = create_transaction_importer(None)
+            except Exception as e:
+                st.session_state["transaction_importer"] = None
+                st.error(f"Failed to initialise transaction importer: {e}")
 
     with transactions_sub:
         _render_transactions(txn_storage)

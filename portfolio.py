@@ -132,15 +132,20 @@ def get_sector(symbol, month=None, year=None):
     row = _get_symbol_row(symbol, month=month, year=year)
     csv_sector = row['sector'] if row is not None else ''
 
+    # Any MF:-prefixed value stored in the DB is always treated as authoritative.
+    # This covers user-entered values like MF:Large-Cap, MF:Small-Cap, MF:Global
+    # etc. that yfinance cannot reliably return (it returns empty category/sector
+    # for most mutual funds).  Without this guard, the 5-letter alpha path below
+    # would fall through to MF:Unknown and overwrite the correct stored value.
+    if isinstance(csv_sector, str) and csv_sector.startswith('MF:'):
+        return csv_sector
+
     # If stored sector is already good, use it as-is (user overrides honoured)
     _stale = {
         '', 'MUTUALFUND', 'EQUITY', 'FIXED_INCOME', 'nan', 'NONE',
         'Stock', 'Mutual Fund', 'Index Fund', 'Fund', 'Unknown',
     }
     if isinstance(csv_sector, str) and csv_sector and csv_sector not in _stale:
-        # Cash label normalisation
-        if csv_sector == 'Cash':
-            return 'MF:Cash'
         return csv_sector
 
     # Stored sector is stale/missing — fetch from yfinance
