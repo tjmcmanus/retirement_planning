@@ -96,6 +96,18 @@ class CredentialManager:
                 )
             """)
             
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schwab_account_mappings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL DEFAULT 'default',
+                    account_hash TEXT NOT NULL,
+                    account_name TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, account_hash)
+                )
+            """)
+            
             conn.commit()
     
     def encrypt(self, data: str) -> str:
@@ -217,6 +229,39 @@ class CredentialManager:
                 })
             
             return connections
+
+    def store_schwab_account_mapping(
+        self,
+        account_hash: str,
+        account_name: str,
+        user_id: str = "default"
+    ) -> None:
+        """
+        Store mapping from Schwab account hash to application account name.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO schwab_account_mappings (user_id, account_hash, account_name)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, account_hash) DO UPDATE SET
+                    account_name = excluded.account_name,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_id, account_hash, account_name))
+            conn.commit()
+
+    def get_schwab_account_name(self, account_hash: str, user_id: str = "default") -> Optional[str]:
+        """
+        Get mapped application account name for a Schwab account hash.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT account_name
+                FROM schwab_account_mappings
+                WHERE user_id = ? AND account_hash = ?
+            """, (user_id, account_hash))
+            row = cursor.fetchone()
+            return row['account_name'] if row else None
     
     def update_sync_time(self, connection_id: int) -> None:
         """Update last sync timestamp for a connection."""

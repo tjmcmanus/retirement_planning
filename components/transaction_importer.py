@@ -106,8 +106,18 @@ class TransactionImporter:
         logger.info(f"Importing transactions from {start_date} to {end_date} for account {account_id}")
         
         try:
-            # Get transactions from connector
-            if hasattr(connector, 'get_transactions'):
+            if not hasattr(connector, 'get_transactions'):
+                logger.error("Connector does not support transaction import")
+                return pd.DataFrame()
+
+            connector_class_name = connector.__class__.__name__
+            if connector_class_name == 'SchwabConnector':
+                raw_transactions = connector.get_transactions(
+                    account_hash=account_id,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+            else:
                 raw_transactions = connector.get_transactions(
                     user_id=user_id,
                     user_secret=user_secret,
@@ -115,16 +125,20 @@ class TransactionImporter:
                     start_date=start_date,
                     end_date=end_date
                 )
-            else:
-                logger.error("Connector does not support transaction import")
-                return pd.DataFrame()
             
             if not raw_transactions:
                 logger.warning(f"No transactions found for account {account_id}")
                 return pd.DataFrame()
             
+            account_name = account_id
+            if connector_class_name == 'SchwabConnector':
+                account_name = self.credential_manager.get_schwab_account_name(account_id, user_id=user_id) or f"Schwab-{account_id[-4:]}"
+            
             # Transform to standardized format
             transactions_df = self._transform_transactions(raw_transactions)
+            if not transactions_df.empty:
+                transactions_df['account_id'] = account_id
+                transactions_df['account_name'] = account_name
             
             # Calculate cost basis
             transactions_df = self._calculate_cost_basis(transactions_df)

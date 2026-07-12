@@ -27,7 +27,7 @@ from portfolio_data_entry import (
     get_valid_account_owners,
     VALID_SECTORS,
 )
-from portfolio_db import db_load_all, migrate_from_csv as _migrate_from_csv
+from portfolio_db import db_load_all, db_update_account_metadata, migrate_from_csv as _migrate_from_csv
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
 from ltc_hsa_export import (
     export_ltc_analysis_to_csv, export_ltc_analysis_to_json, export_ltc_analysis_to_markdown,
@@ -4566,7 +4566,15 @@ with tab6:
                 "accounts": st.session_state['accounts_list']
             })
             if config_mgr.save_config():
-                st.success("✅ Accounts saved!")
+                # Propagate any account_type / owner changes into portfolio.db
+                try:
+                    updated_rows = db_update_account_metadata(st.session_state['accounts_list'])
+                    if updated_rows:
+                        st.success(f"✅ Accounts saved! ({updated_rows} holding row(s) updated in portfolio.db)")
+                    else:
+                        st.success("✅ Accounts saved!")
+                except Exception as _e:
+                    st.warning(f"✅ Accounts saved to config, but portfolio.db update failed: {_e}")
             else:
                 st.error("❌ Error saving accounts")
     
@@ -4914,9 +4922,15 @@ with tab6:
                 return
             st.success(f"✅ {msg}")
 
-            # ── Refresh portfolio display cache ───────────────────────────
-            # Clear the cached result so the next call fetches fresh data
-            # from the newly saved CSV, then pre-warm the cache immediately.
+            # ── Refresh all portfolio caches ──────────────────────────────
+            # Clear the underlying data caches first so that get_sector() and
+            # other helpers read the freshly-saved rows (including any sector
+            # edits) rather than stale pre-save values.  Without this, Streamlit
+            # cache_data returns the old row, get_sector() sees the old sector,
+            # treats it as stale, fetches yfinance, and overwrites the user edit.
+            from portfolio import getPortfolioData, _get_symbol_row
+            getPortfolioData.clear()
+            _get_symbol_row.clear()
             build_portfolio_display.clear()
             try:
                 # Determine the most recent month/year from the saved data
