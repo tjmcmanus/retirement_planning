@@ -132,15 +132,17 @@ def _render_rebalancing_body(
                 # Bucket 3: 100% stocks
                 stocks_from_b3 = 100 * bucket_3_weight
 
-                # Cumulative targets
-                _default_cash = round(cash_from_b1)
-                _default_bonds = round(bonds_from_b2)
-                _default_stocks = round(stocks_from_b2 + stocks_from_b3)
+                # Cumulative targets — clamp each to [0, 100] individually
+                # before the sum-to-100 correction so no single value can
+                # exceed the widget's max_value.
+                _default_cash   = max(0, min(100, round(cash_from_b1)))
+                _default_bonds  = max(0, min(100, round(bonds_from_b2)))
+                _default_stocks = max(0, min(100, round(stocks_from_b2 + stocks_from_b3)))
 
-                # Ensure they sum to 100
+                # Ensure they sum to 100 by adjusting stocks (largest bucket)
                 total = _default_cash + _default_bonds + _default_stocks
                 if total != 100:
-                    _default_stocks = 100 - _default_cash - _default_bonds
+                    _default_stocks = max(0, 100 - _default_cash - _default_bonds)
     except Exception:
         # If bucket strategy not available or any error, use hardcoded defaults
         pass

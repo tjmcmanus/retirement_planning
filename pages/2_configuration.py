@@ -657,7 +657,54 @@ with tab2:
         help="Expected annual increase in wages/salary",
         key="wage_inflation_rate"
     )
-    
+
+    # Other passive income sources (retirement years)
+    st.markdown("---")
+    st.subheader("Other Income Sources")
+    st.markdown(
+        "Annual amounts in today's dollars. These are inflated each year using the "
+        "expense inflation rate and appear in the **Income Sources Over Time** chart."
+    )
+    oi_col1, oi_col2 = st.columns(2)
+    with oi_col1:
+        pension_annual = st.number_input(
+            "Pension / Annuity ($/yr)",
+            min_value=0,
+            max_value=500000,
+            value=config_mgr.get("income", "pension_annual", 0),
+            step=1000,
+            help="Combined annual pension or annuity payments (both persons, today's dollars).",
+            key="pension_annual",
+        )
+        interest_annual = st.number_input(
+            "Interest Income ($/yr)",
+            min_value=0,
+            max_value=200000,
+            value=config_mgr.get("income", "interest_annual", 0),
+            step=500,
+            help="Annual taxable interest from savings accounts, CDs, bonds (today's dollars).",
+            key="interest_annual",
+        )
+    with oi_col2:
+        rental_annual = st.number_input(
+            "Net Rental Income ($/yr)",
+            min_value=0,
+            max_value=500000,
+            value=config_mgr.get("income", "rental_annual", 0),
+            step=1000,
+            help="Net annual rental income after expenses (today's dollars).",
+            key="rental_annual",
+        )
+        dividend_annual = st.number_input(
+            "Dividend Income ($/yr)",
+            min_value=0,
+            max_value=200000,
+            value=config_mgr.get("income", "dividend_annual", 0),
+            step=500,
+            help="Annual dividend income from taxable brokerage accounts (today's dollars).",
+            key="dividend_annual",
+        )
+
     # Display calculated values
     st.markdown("---")
     st.subheader("Calculated Values")
@@ -3981,6 +4028,64 @@ with tab5:
     st.markdown("---")
     st.caption("💡 **Strategy Tip**: Lower rates in early retirement (Stages 3-4) maximize conversions when income is low. Higher rates in accumulation (Stage 1) allow conversions while earning. Stage 5-6 rates balance conversions with SS/RMD income. Stage 7 uses conservative rates due to single filer tax brackets.")
 
+    # January Bracket-Fill Strategy Section
+    st.markdown("---")
+    st.subheader("📅 January Bracket-Fill Strategy")
+    st.info("ℹ️ Alternative withdrawal strategy: Single January decision-point that fills the 12% bracket, minimizes mid-year adjustments, and uses 60-day rollover mechanics for Roth conversions.")
+    
+    january_col1, january_col2 = st.columns(2)
+    
+    with january_col1:
+        st.markdown("**Strategy Configuration**")
+        
+        use_january_strategy = st.checkbox(
+            "Enable January Bracket-Fill Strategy",
+            value=config_mgr.get("tax_strategy", "use_january_bracket_fill_strategy", False),
+            help="Use January single-withdrawal strategy instead of continuous BETR optimization",
+            key="use_january_bracket_fill_strategy"
+        )
+        
+        _default_safety_reserve = round(
+            config_mgr.get("financial_assumptions", "expected_annual_expenses", 133600) / 12 * 5
+        )
+        pnc_safety_reserve = st.number_input(
+            "Savings Safety Reserve ($)",
+            min_value=0,
+            max_value=500000,
+            value=int(config_mgr.get("tax_strategy", "savings_safety_reserve", _default_safety_reserve)),
+            step=1000,
+            help=f"Minimum PNC Savings balance before mid-year Brokerage supplementation triggers. Default = 5 months expenses (currently ${_default_safety_reserve:,.0f})",
+            key="savings_safety_reserve"
+        )
+    
+    with january_col2:
+        st.markdown("**60-Day Rollover Mechanics**")
+        
+        use_60day_rollover = st.checkbox(
+            "Use 60-Day Rollover for Roth Conversions",
+            value=config_mgr.get("tax_strategy", "use_60day_rollover_mechanics", True),
+            help="Withhold conversion taxes from Traditional account, redeposit within 60 days from cash/brokerage",
+            key="use_60day_rollover_mechanics"
+        )
+        
+        # Withholding rate is derived from the stage-specific max conversion rate
+        # (configured above in Stage-Specific Conversion Rate Limits).
+        # Stage 3 = early retirement (pre-Medicare, pre-SS) — the primary bracket-fill stage.
+        _s3_rate = config_mgr.get("tax_strategy", "stage_3_max_conversion_rate", 12)
+        _s4_rate = config_mgr.get("tax_strategy", "stage_4_max_conversion_rate", 12)
+        st.markdown(
+            f"**Conversion Withholding Rate** is read directly from your "
+            f"Stage-Specific Conversion Rate Limits above — no separate entry needed."
+        )
+        st.caption(
+            f"Stage 3 (Early Retirement): **{_s3_rate}%** &nbsp;·&nbsp; "
+            f"Stage 4 (Medicare): **{_s4_rate}%**  \n"
+            f"To change the withholding rate, update the stage rates above."
+        )
+    
+    st.caption("💡 **Strategy Tip**: January Bracket-Fill withholds taxes at the stage's max conversion rate. Redeposit the withheld amount to Traditional within 60 days using cash or Brokerage.")
+
+
     
     # Charitable Giving Section
     st.markdown("---")
@@ -5525,6 +5630,14 @@ with tab10:
                 "contribution_401k_percent": st.session_state.get("contribution_401k_percent", config_mgr.get("income", "contribution_401k_percent", 10.0)),
                 "contribution_roth_percent": st.session_state.get("contribution_roth_percent", config_mgr.get("income", "contribution_roth_percent", 5.0)),
                 "contribution_brokerage_percent": st.session_state.get("contribution_brokerage_percent", config_mgr.get("income", "contribution_brokerage_percent", 5.0)),
+                "pension_annual": st.session_state.get("pension_annual",
+                    config_mgr.get("income", "pension_annual", 0)),
+                "rental_annual": st.session_state.get("rental_annual",
+                    config_mgr.get("income", "rental_annual", 0)),
+                "interest_annual": st.session_state.get("interest_annual",
+                    config_mgr.get("income", "interest_annual", 0)),
+                "dividend_annual": st.session_state.get("dividend_annual",
+                    config_mgr.get("income", "dividend_annual", 0)),
             })
             
             # Save expenses configuration
@@ -5573,6 +5686,13 @@ with tab10:
                     config_mgr.get("tax_strategy", "stage_6_max_conversion_rate", 10)),
                 "stage_7_max_conversion_rate": st.session_state.get("stage_7_conversion_rate",
                     config_mgr.get("tax_strategy", "stage_7_max_conversion_rate", 15)),
+                # January Bracket-Fill Strategy
+                "use_january_bracket_fill_strategy": st.session_state.get("use_january_bracket_fill_strategy",
+                    config_mgr.get("tax_strategy", "use_january_bracket_fill_strategy", False)),
+                "savings_safety_reserve": st.session_state.get("savings_safety_reserve",
+                    config_mgr.get("tax_strategy", "savings_safety_reserve", 55667)),
+                "use_60day_rollover_mechanics": st.session_state.get("use_60day_rollover_mechanics",
+                    config_mgr.get("tax_strategy", "use_60day_rollover_mechanics", True)),
             })
 
             config_mgr.update_section("charitable_giving", {

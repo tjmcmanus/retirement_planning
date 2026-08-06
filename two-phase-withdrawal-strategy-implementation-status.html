@@ -1,0 +1,295 @@
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Two-Phase Withdrawal Strategy Implementation Status</title>
+    <style>
+        body {
+            font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+            line-height: 1.6;
+            color: #1f2328;
+            background: #ffffff;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 760px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 24px;
+            margin: 0 0 15px 0;
+            color: #1f2328;
+        }
+        h2 {
+            font-size: 16px;
+            margin: 25px 0 12px 0;
+            color: #1f2328;
+            font-weight: 600;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 8px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 13px;
+        }
+        th {
+            background: #f7f8fa;
+            border: 1px solid #e5e7eb;
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+        }
+        td {
+            border: 1px solid #e5e7eb;
+            padding: 10px;
+        }
+        tr:nth-child(even) {
+            background: #f7f8fa;
+        }
+        .status-complete {
+            background: #dcfce7;
+            color: #166534;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 3px;
+        }
+        .status-partial {
+            background: #fef08a;
+            color: #713f12;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 3px;
+        }
+        .status-todo {
+            background: #fee2e2;
+            color: #7f1d1d;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 3px;
+        }
+        .code {
+            background: #f7f8fa;
+            padding: 8px 12px;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            margin: 8px 0;
+        }
+        .note {
+            background: #f0f9ff;
+            border-left: 4px solid #0284c7;
+            padding: 12px 15px;
+            border-radius: 2px;
+            margin: 15px 0;
+        }
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        li {
+            margin: 8px 0;
+        }
+        .footer {
+            text-align: center;
+            font-size: 12px;
+            color: #57606a;
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 1px solid #e5e7eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Two-Phase Withdrawal Strategy Implementation</h1>
+
+        <h2>Status Summary</h2>
+
+        <table>
+            <tr>
+                <th>Stage</th>
+                <th>Status</th>
+                <th>Phase 1 (Spending)</th>
+                <th>Phase 2 (Conversions)</th>
+            </tr>
+            <tr>
+                <td><strong>Stage 3: Early Retirement</strong></td>
+                <td><span class="status-complete">COMPLETE ✓</span></td>
+                <td>✓ Implemented</td>
+                <td>✓ Uses max_conversion_rate</td>
+            </tr>
+            <tr>
+                <td><strong>Stage 4: Medicare</strong></td>
+                <td><span class="status-complete">COMPLETE ✓</span></td>
+                <td>✓ Implemented</td>
+                <td>✓ IRMAA-aware</td>
+            </tr>
+            <tr>
+                <td><strong>Stage 2: Prep Retirement</strong></td>
+                <td><span class="status-partial">PARTIAL</span></td>
+                <td>Method added</td>
+                <td>Needs integration</td>
+            </tr>
+            <tr>
+                <td><strong>Stage 5: Social Security</strong></td>
+                <td><span class="status-todo">TO DO</span></td>
+                <td>—</td>
+                <td>Complex (SS taxation)</td>
+            </tr>
+            <tr>
+                <td><strong>Stage 6: RMD</strong></td>
+                <td><span class="status-todo">TO DO</span></td>
+                <td>—</td>
+                <td>Complex (RMD mandatory)</td>
+            </tr>
+            <tr>
+                <td><strong>Stage 7: Surviving Spouse</strong></td>
+                <td><span class="status-todo">TO DO</span></td>
+                <td>—</td>
+                <td>Single-filer filing status</td>
+            </tr>
+        </table>
+
+        <h2>What Was Done</h2>
+
+        <h3>Stage 3 &amp; Stage 4 Implementation Pattern</h3>
+        <ol>
+            <li><strong>Added imports:</strong> <code>datetime</code>, <code>JanuaryBracketFillStrategy</code></li>
+            <li><strong>Phase 1 in calculate_strategy():</strong>
+                <ul>
+                    <li>Call <code>_plan_january_bracket_fill_withdrawal()</code></li>
+                    <li>Extract <code>_jan_spending_withdrawal = plan.pnc_shortfall</code></li>
+                    <li>Log decision to tax_strategy category</li>
+                </ul>
+            </li>
+            <li><strong>Phase 2 in calculate_strategy():</strong>
+                <ul>
+                    <li>Calculate <code>available_for_conversion</code> by subtracting <code>_jan_spending_withdrawal</code></li>
+                    <li>Call existing conversion method (BETR for Stage 3, IRMAA-aware for Stage 4)</li>
+                    <li>Log decision with conversion amount and rate</li>
+                </ul>
+            </li>
+            <li><strong>Apply spending withdrawal BEFORE rebalancing:</strong>
+                <ul>
+                    <li>After DAF contribution applied to balances</li>
+                    <li>Before <code>_execute_rebalancing()</code> call</li>
+                    <li>Traditional→Cash transfer applied directly to <code>balances_for_rebalance</code></li>
+                </ul>
+            </li>
+            <li><strong>Added method:</strong> <code>_plan_january_bracket_fill_withdrawal()</code>
+                <ul>
+                    <li>Reads config flag <code>use_january_bracket_fill_strategy</code></li>
+                    <li>Reads bracket data from <code>income_rates.csv</code></li>
+                    <li>Creates <code>JanuaryBracketFillStrategy</code> instance</li>
+                    <li>Returns plan dict with pnc_shortfall and other fields</li>
+                </ul>
+            </li>
+        </ol>
+
+        <h2>Implementation Template for Remaining Stages</h2>
+
+        <h3>For Stages 2, 5, 6, 7</h3>
+
+        <p><strong>Step 1: Add imports</strong></p>
+        <div class="code">
+from datetime import datetime
+from ..january_bracket_fill_strategy import JanuaryBracketFillStrategy
+        </div>
+
+        <p><strong>Step 2: In calculate_strategy(), add Phase 1</strong></p>
+        <div class="code">
+# ── PHASE 1: FUND SPENDING ─────────────────────────────────────────
+_jan_plan = self._plan_january_bracket_fill_withdrawal(
+    year=year,
+    pnc_savings_balance=balances.cash,
+    annual_expenses=expenses,
+    aca_premium=aca_premium,  # or 0 for stages without healthcare
+    age_primary=age_primary,
+    age_spouse=age_spouse,
+    filing_status=filing_status,
+)
+
+_jan_spending_withdrawal = 0.0
+if _jan_plan is not None:
+    _jan_spending_withdrawal = _jan_plan['pnc_shortfall']
+    self._log_decision(
+        strategy,
+        'tax_strategy',
+        'January Strategy - Spending Phase',
+        f'Traditional withdrawal for spending: ${_jan_spending_withdrawal:,.0f}',
+        f'...',
+        spending_withdrawal=_jan_spending_withdrawal,
+    )
+        </div>
+
+        <p><strong>Step 3: Modify Phase 2 conversion calculation</strong></p>
+        <div class="code">
+# ── PHASE 2: ROTH CONVERSIONS ─────────────────────────────────────
+available_for_conversion = max(
+    0,
+    balances.traditional - anticipated_needs['total_traditional_need'] 
+    - _jan_spending_withdrawal  # ← Add this line
+)
+        </div>
+
+        <p><strong>Step 4: Apply spending withdrawal before rebalancing</strong></p>
+        <div class="code">
+# ── PHASE 1 APPLIED: pull Traditional→Cash BEFORE rebalancing ─────
+_jan_trad_to_cash = 0.0
+if _jan_spending_withdrawal &gt; 0:
+    _jan_trad_to_cash = min(
+        _jan_spending_withdrawal,
+        balances_for_rebalance.traditional
+    )
+    if _jan_trad_to_cash &gt; 0:
+        balances_for_rebalance = PortfolioBalances(
+            cash=balances_for_rebalance.cash + _jan_trad_to_cash,
+            taxable=balances_for_rebalance.taxable,
+            traditional=balances_for_rebalance.traditional - _jan_trad_to_cash,
+            roth=balances_for_rebalance.roth,
+            daf=balances_for_rebalance.daf,
+            traditional_person1=balances_for_rebalance.traditional_person1,
+            traditional_person2=balances_for_rebalance.traditional_person2,
+        )
+        logger.info(
+            f"Year {year} Stage X [Phase 1 - Spending]: "
+            f"Traditional→Cash ${_jan_trad_to_cash:,.0f} "
+            f"(spending shortfall), "
+            f"Roth conversion Phase 2: ${roth_conversion:,.0f}"
+        )
+        </div>
+
+        <p><strong>Step 5: Add _plan_january_bracket_fill_withdrawal() method</strong></p>
+        <p>Copy the implementation from Stage 3 or Stage 4, changing only:</p>
+        <ul>
+            <li>Logger messages: "Stage X" instead of "Stage 3" or "Stage 4"</li>
+            <li>Config rate key: <code>stage_X_max_conversion_rate</code> instead of <code>stage_3_max_conversion_rate</code></li>
+        </ul>
+
+        <h2>Notes</h2>
+
+        <div class="note">
+            <strong>Why Stage 5, 6, 7 are More Complex:</strong><br />
+            • <strong>Stage 5 (SS):</strong> Social Security taxation creates a feedback loop (taxable SS depends on AGI, AGI depends on withdrawals)<br />
+            • <strong>Stage 6 (RMD):</strong> Mandatory distributions add to ordinary income; must plan withdrawals around RMD requirements<br />
+            • <strong>Stage 7 (Surviving Spouse):</strong> Single filing status changes bracket thresholds; conservative conversion strategy
+        </div>
+
+        <div class="note">
+            <strong>Testing After Implementation:</strong><br />
+            After implementing for each stage, run:<br />
+            <code>pytest tests/test_january_bracket_fill_strategy.py -v</code><br />
+            And validate with:<br />
+            <code>python scripts/example_january_bracket_fill_2027.py</code>
+        </div>
+
+        <div class="footer">
+            Made with IBM Bob
+        </div>
+    </div>
+</body>
+</html>

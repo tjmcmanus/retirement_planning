@@ -726,11 +726,13 @@ class BrokerageAccount:
             t for t in self.transactions if t.current_value > lot_cleanup_threshold
         ]
 
+        # Calculate LTCG ratio safely (avoid division by zero)
+        ltcg_ratio = (ltcg_realized / amount) if amount > 0 else 0.0
         logger.info(
             f"Year {year}: LOFO cash withdrawal ${amount:,.0f} from brokerage — "
             f"basis returned ${basis_returned:,.0f}, "
             f"LTCG realized ${ltcg_realized:,.0f} "
-            f"(ltcg ratio: {ltcg_realized/amount:.1%} of withdrawal)"
+            f"(ltcg ratio: {ltcg_ratio:.1%} of withdrawal)"
         )
         return basis_returned, ltcg_realized
 
@@ -3205,10 +3207,10 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                         logger.info(f"  FIFO: ${transfer:,.0f} from Brokerage to Cash: "
                                    f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
                 else:
-                    # Fallback to FIFO
-                    basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
+                    # Fallback to lowest-gain-first (prioritizes zero-gain transactions from Traditional→Brokerage, RMD)
+                    basis_returned, ltcg_realized = brokerage_account.withdraw_lowest_gain(transfer, year)
                     transactions['brokerage_ltcg'] = ltcg_realized
-                    logger.info(f"  FIFO: ${transfer:,.0f} from Brokerage to Cash: "
+                    logger.info(f"  LOFO (zero-gain first): ${transfer:,.0f} from Brokerage to Cash: "
                                f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
             except (KeyError, AttributeError) as e:
                 logger.warning("Brokerage cost-basis unavailable (%s); estimating LTCG at %.0f%%", e, BROKERAGE_LTCG_RATIO * 100)
@@ -3413,7 +3415,7 @@ def replenish_brokerage_buffer(balances: PortfolioBalances,
             
             # Track transfer in brokerage account for cost basis
             if brokerage_account is not None:
-                brokerage_account.add_transfer(year, distribution, "trad_to_brok")
+                brokerage_account.add_transfer(year, distribution, "trad_to_brok_zero_gain")
             
             logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Brokerage (ordinary income tax)")
             dl.add("brokerage_replenishment", "Traditional → Brokerage",
@@ -4350,7 +4352,14 @@ class WithdrawalStrategyEngine:
                 )
             
             has_wages = wages > 0
-            
+
+            # Other passive / fixed income sources — inflated from start_year
+            _other_inflation = (1 + expense_inflation_rate) ** max(0, year - start_year)
+            pension_income   = config_mgr.get("income", "pension_annual",  0) * _other_inflation
+            rental_income    = config_mgr.get("income", "rental_annual",   0) * _other_inflation
+            interest_income  = config_mgr.get("income", "interest_annual", 0) * _other_inflation
+            dividend_income  = config_mgr.get("income", "dividend_annual", 0) * _other_inflation
+
             # Get SS benefits using dynamic calculator
             # Check each person's individual claiming age from config
             ss_benefits = 0
@@ -4445,7 +4454,10 @@ class WithdrawalStrategyEngine:
                 self.brokerage_account.apply_annual_growth(growth_rate, year)
             
             # Calculate strategy (add start_year for buffer ramp-up calculation)
-            # Pass brokerage_account to stages for cost basis tracking
+            # Pass brokerage_account to stages for cost basis tracking.
+            # Use the stage-specific max_conversion_rate from config; fall back to
+            # the global kwarg value only when no stage-specific override exists.
+            stage_conversion_rate = get_stage_specific_conversion_rate(stage.name)
             strategy = stage.calculate_strategy(
                 year=year,
                 balances=balances,
@@ -4457,9 +4469,15 @@ class WithdrawalStrategyEngine:
                 prior_magi=prior_magi,
                 start_year=start_year,
                 brokerage_account=self.brokerage_account,
-                **kwargs
+                **{**kwargs, 'max_conversion_rate': stage_conversion_rate},
             )
-            
+
+            # Stamp the other income sources onto the strategy object for the chart
+            strategy.pension_income  = pension_income
+            strategy.rental_income   = rental_income
+            strategy.interest_income = interest_income
+            strategy.dividend_income = dividend_income
+
             # Log ending balances for this year
             logger.info(f"=== Year {year} Ending Balances (after strategy) ===")
             logger.info(f"  Cash: ${strategy.balances.cash:,.2f}")
@@ -4610,17 +4628,30 @@ class WithdrawalStrategyEngine:
                 # Income sources (in requested order)
                 'Wages': s.wages,
                 'SS Benefits': s.ss_benefits,
+                'Pension': s.pension_income,
+                'Rental Income': s.rental_income,
+                'Interest Income': s.interest_income,
+                'Dividends': s.dividend_income,
                 'Traditional Withdrawal': s.traditional_withdrawal,
                 'Roth Conversion': s.roth_conversion,
                 # Expenses and costs
                 'Expenses': s.expenses,
                 'Healthcare Cost': s.healthcare_costs if s.healthcare_costs > 0 else (s.irmaa_penalty + s.aca_premium),
+                # HC Premium = total healthcare minus OOP and minus IRMAA (which is
+                # already tracked in its own column and baked into the Part B cost
+                # inside healthcare_costs via the all-in part_b_monthly figure).
+                'HC Premium': max(0.0, (s.healthcare_costs - getattr(s, 'hc_oop', 0.0) - s.irmaa_penalty)
+                                  if s.healthcare_costs > 0
+                                  else s.aca_premium),
+                'HC OOP': getattr(s, 'hc_oop', 0.0),
                 'IRMAA Penalty': s.irmaa_penalty,
                 'ACA Premium': s.aca_premium,
                 'DAF Contribution': s.daf_contribution,
                 'AGI': s.agi,
                 'MAGI': s.magi,
                 'Federal Tax': s.federal_tax,
+                'LTCG Tax': getattr(s, 'ltcg_tax', 0.0),
+                'Income Tax': s.federal_tax - getattr(s, 'ltcg_tax', 0.0),
                 'State Tax': s.state_tax,
                 'Cash Balance': s.balances.cash,
                 # Additional withdrawal details — combined + per-person RMDs

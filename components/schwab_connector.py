@@ -727,36 +727,39 @@ class SchwabConnector:
                         'position': position
                     })
                 
-                # Inject cash / sweep / money-market balances as synthetic positions
-                # Schwab reports these in currentBalances, not positions
-                cash_items = {
-                    'CASH':         ('CASH', 'Cash Balance',         'CASH_EQUIVALENT'),
-                    'moneyMarketFund': ('SWVXX', 'Money Market Fund','MONEY_MARKET_FUND'),
-                    'cashDebitCallValue': ('SWEEP', 'Cash Sweep',    'CASH_EQUIVALENT'),
-                }
-                
-                for balance_key, (sym, desc, asset_type) in cash_items.items():
-                    amount = balances.get(balance_key, 0) or 0
-                    if amount != 0:
-                        all_positions.append({
-                            'account_number': account_number,
-                            'position': {
-                                'instrument': {
-                                    'symbol': sym,
-                                    'description': desc,
-                                    'assetType': asset_type,
-                                },
-                                'longQuantity': amount,
-                                'shortQuantity': 0,
-                                'averagePrice': 1.0,
-                                'marketValue': amount,
-                                '_is_cash_balance': True,
-                            }
-                        })
-                        logger.info(
-                            f"Injected {desc} balance of ${amount:,.2f} "
-                            f"for account {account_number[-4:]}"
-                        )
+                # Inject cash / sweep / money-market balances as synthetic positions.
+                # The Schwab Trader API v1 reports these in currentBalances, not positions.
+                #
+                # Key mapping (Schwab API field → portfolio symbol):
+                #   cashBalance        → CASH  (total "Cash & Cash Investments" shown in the UI;
+                #                               includes sweep / money-market funds.  This is the
+                #                               single authoritative number to capture — it equals
+                #                               the "Total cash & cash investments" line in the
+                #                               Schwab account summary.)
+                #
+                # Note: moneyMarketFund and cashDebitCallValue are sub-components already
+                # included in cashBalance, so we use only cashBalance to avoid double-counting.
+                cash_balance_amount = balances.get('cashBalance', 0) or 0
+                if cash_balance_amount != 0:
+                    all_positions.append({
+                        'account_number': account_number,
+                        'position': {
+                            'instrument': {
+                                'symbol': 'CASH',
+                                'description': 'Cash & Cash Investments',
+                                'assetType': 'CASH_EQUIVALENT',
+                            },
+                            'longQuantity': cash_balance_amount,
+                            'shortQuantity': 0,
+                            'averagePrice': 1.0,
+                            'marketValue': cash_balance_amount,
+                            '_is_cash_balance': True,
+                        }
+                    })
+                    logger.info(
+                        f"Injected Cash & Cash Investments balance of ${cash_balance_amount:,.2f} "
+                        f"for account {account_number[-4:]}"
+                    )
             
             logger.info(f"Retrieved {len(all_positions)} positions from {len(account_hashes)} accounts")
             

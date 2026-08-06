@@ -7,10 +7,13 @@ Pre-Medicare, pre-SS retirement phase with focus on ACA optimization and Roth co
 
 import logging
 from typing import Any, Optional
+from datetime import datetime
 
 from ..base_strategy import BaseLifeStageStrategy
 from ..interfaces import ITaxCalculator, IAccountManager
 from ..models import PortfolioBalances, YearlyStrategy
+from ..agi_calculator import AGICalculator
+from ..january_bracket_fill_strategy import JanuaryBracketFillStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,10 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             tax_calculator=tax_calculator,
             account_manager=account_manager
         )
+        # DAF carryforward persists across years (IRC §170 — up to 5-year carryforward).
+        # Initialised to 0 at the start of each full simulation run; the engine creates
+        # a new Stage3 instance per run so this resets correctly.
+        self._daf_carryforward: float = 0.0
     
     def applies(
         self,
@@ -212,6 +219,45 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
 
         if daf_trad_prefund > 0:
             # ── PRE-FUND PATH ─────────────────────────────────────────────────
+            # IMPORTANT: Apply January Bracket-Fill strategy FIRST to determine spending shortfall.
+            # The pre-fund is an ADDITIONAL withdrawal on top of the January strategy.
+            # This ensures your cash needs are covered BEFORE the DAF pre-fund is applied.
+            
+            # Step 0: Apply January Bracket-Fill to determine spending shortfall
+            _jan_plan = self._plan_january_bracket_fill_withdrawal(
+                year=year,
+                pnc_savings_balance=balances.cash,
+                annual_expenses=expenses,
+                aca_premium=aca_premium,
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                filing_status=filing_status,
+            )
+            
+            # Apply January shortfall withdrawal if strategy is enabled
+            _jan_trad_to_cash = 0.0
+            if _jan_plan is not None:
+                # Use total_traditional_withdrawal which includes shortfall + conversion tax
+                _jan_trad_to_cash = min(
+                    _jan_plan['traditional_withdrawal'],
+                    balances.traditional
+                )
+                if _jan_trad_to_cash > 0:
+                    balances = PortfolioBalances(
+                        cash=balances.cash + _jan_trad_to_cash,
+                        taxable=balances.taxable,
+                        traditional=balances.traditional - _jan_trad_to_cash,
+                        roth=balances.roth,
+                        daf=balances.daf,
+                        traditional_person1=balances.traditional_person1,
+                        traditional_person2=balances.traditional_person2,
+                    )
+                    logger.info(
+                        f"Year {year} Stage 3 [Pre-fund path - January]: "
+                        f"Traditional→Cash ${_jan_trad_to_cash:,.0f} "
+                        f"(shortfall ${_jan_plan['pnc_shortfall']:,.0f})"
+                    )
+            
             # Suppress Roth conversion — the big Traditional distribution consumes
             # all available bracket space; stacking a conversion on top would push
             # AGI above the target rate.
@@ -227,7 +273,7 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 daf_trad_prefund=daf_trad_prefund,
             )
 
-            # Step 1: Deduct expenses + ACA from cash.
+            # Step 1: Deduct expenses + ACA from cash (after January strategy has been applied).
             # Clamp to zero; carry any shortfall into Step 2.
             total_cash_outflow = expenses + aca_premium
             cash_after_outflow = balances.cash - total_cash_outflow
@@ -240,16 +286,43 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 daf=balances.daf,
             )
 
-            # Step 2: Fill the cash buffer using Brokerage → Cash (LOFO — lowest-gain
-            # lots first).  This is more tax-efficient than pulling from Traditional
-            # because:
-            #   a) The Traditional distribution (Step 3) already generates a large
-            #      ordinary-income hit; adding more Traditional withdrawals here would
-            #      compound that.
-            #   b) Low-gain brokerage lots realise minimal LTCG (potentially 0% rate
-            #      for MFJ filers in Stage 3).
-            #   c) It preserves the highest-gain lots in Brokerage for future DAF
-            #      donations (HIFO), eliminating even more embedded gain tax-free.
+            # Step 2: Execute the pre-fund transfer Traditional → Brokerage and
+            # register a zero-gain lot in the tracker BEFORE the LOFO Brok→Cash.
+            #
+            # Design intent: Brok→Cash ≤ Trad→Brok in the same year is all-basis
+            # ($0 LTCG) because the money just came from Traditional (already taxed
+            # as ordinary income).  The LOFO algorithm implements this automatically
+            # provided the zero-gain lot is registered first.
+            actual_prefund = min(daf_trad_prefund, new_balances.traditional)
+            if actual_prefund < daf_trad_prefund:
+                logger.warning(
+                    f"Year {year}: DAF pre-fund capped at ${actual_prefund:,.0f} "
+                    f"(wanted ${daf_trad_prefund:,.0f}, Traditional balance insufficient)"
+                )
+
+            # Register the zero-gain lot NOW so LOFO (Step 3) sees it and withdraws
+            # from it first (cost_basis == current_value → $0 LTCG per dollar withdrawn).
+            if brokerage_account is not None and actual_prefund > 0:
+                brokerage_account.add_transfer(year, actual_prefund, "trad_to_brok_zero_gain")
+                logger.info(
+                    f"Year {year}: Registered ${actual_prefund:,.0f} zero-gain lot "
+                    f"(trad_to_brok_zero_gain) — Brok→Cash ≤ this amount will realize $0 LTCG."
+                )
+
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable + actual_prefund,
+                traditional=new_balances.traditional - actual_prefund,
+                roth=new_balances.roth,
+                daf=new_balances.daf,
+            )
+            logger.info(
+                f"Year {year}: DAF pre-fund executed: ${actual_prefund:,.0f} Traditional → Brokerage"
+            )
+
+            # Step 3: Fill the cash buffer using Brokerage → Cash (LOFO — lowest-gain
+            # lots first, which now includes the zero-gain pre-fund lot from Step 2).
+            # Any Brok→Cash ≤ actual_prefund draws from the zero-gain lot → $0 LTCG.
             from strategy import calculate_cash_buffer_targets
             cash_target, _ = calculate_cash_buffer_targets(expenses)
             cash_deficit = max(0.0, cash_target - new_balances.cash) + outflow_shortfall
@@ -259,9 +332,6 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             trad_to_cash = 0.0
 
             if cash_deficit > 100:
-                # How much Brokerage can provide without going below zero
-                # (Step 3 needs Brokerage intact to receive the pre-fund deposit,
-                # so we only use what is already there before the pre-fund.)
                 brok_available = new_balances.taxable
                 brok_transfer = min(cash_deficit, brok_available)
 
@@ -269,9 +339,6 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                     if brokerage_account is not None:
                         _, brok_ltcg = brokerage_account.withdraw_lowest_gain(brok_transfer, year)
                     else:
-                        # No lot tracker — estimate LTCG at account-level ratio
-                        brok_ltcg = brok_transfer * getattr(brokerage_account, 'ltcg_ratio', 0.4) \
-                                    if brokerage_account else brok_transfer * 0.4
                         brok_ltcg = 0.0  # no tracker means we can't compute it
 
                     new_balances = PortfolioBalances(
@@ -302,24 +369,6 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                         f"Year {year}: Pre-fund path: ${trad_to_cash:,.0f} Traditional → Cash "
                         f"(Brokerage insufficient; fallback)"
                     )
-
-            # Step 3: Execute the pre-fund transfer Traditional → Brokerage
-            actual_prefund = min(daf_trad_prefund, new_balances.traditional)
-            if actual_prefund < daf_trad_prefund:
-                logger.warning(
-                    f"Year {year}: DAF pre-fund capped at ${actual_prefund:,.0f} "
-                    f"(wanted ${daf_trad_prefund:,.0f}, Traditional balance insufficient)"
-                )
-            new_balances = PortfolioBalances(
-                cash=new_balances.cash,
-                taxable=new_balances.taxable + actual_prefund,
-                traditional=new_balances.traditional - actual_prefund,
-                roth=new_balances.roth,
-                daf=new_balances.daf,
-            )
-            logger.info(
-                f"Year {year}: DAF pre-fund executed: ${actual_prefund:,.0f} Traditional → Brokerage"
-            )
 
             # Step 4: DAF bundling contribution — now that Brokerage is funded by the
             # pre-fund, the bundled DAF contribution can fire in this same year if the
@@ -353,14 +402,16 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             # Build transaction dict matching the shape the rest of the method expects.
             # brok_to_cash and brok_ltcg feed into _calculate_final_taxes so the LOFO
             # LTCG is included in AGI correctly.
+            # NOTE: Include _jan_trad_to_cash (January strategy withdrawal) in total
+            total_trad_to_cash = _jan_trad_to_cash + trad_to_cash
             transactions = {
                 'brokerage_to_cash': brok_to_cash,
-                'traditional_to_cash': trad_to_cash,
+                'traditional_to_cash': total_trad_to_cash,
                 'traditional_to_brokerage': actual_prefund,
                 'roth_to_cash': 0.0,
                 'roth_to_brokerage': 0.0,
                 'conversion_executed': 0.0,
-                'cash_replenishment': brok_to_cash + trad_to_cash,
+                'cash_replenishment': brok_to_cash + total_trad_to_cash,
                 'brokerage_replenishment': actual_prefund,
                 'brokerage_ltcg': brok_ltcg,
                 'taxes_paid': 0.0,
@@ -368,23 +419,66 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
 
         else:
             # ── NORMAL PATH ───────────────────────────────────────────────────
-            # Calculate available Traditional balance for conversion
-            available_for_conversion = max(
-                0,
-                balances.traditional - anticipated_needs['total_traditional_need']
+
+            # ── PHASE 1: FUND SPENDING ─────────────────────────────────────────
+            # Use January strategy to determine spending shortfall and Traditional→Cash withdrawal
+            _jan_plan = self._plan_january_bracket_fill_withdrawal(
+                year=year,
+                pnc_savings_balance=balances.cash,
+                annual_expenses=expenses,
+                aca_premium=aca_premium,
+                age_primary=age_primary,
+                age_spouse=age_spouse,
+                filing_status=filing_status,
             )
 
-            # Calculate optimal Roth conversion using BETR
-            roth_conversion = self._calculate_betr_roth_conversion(
-                strategy,
-                available_for_conversion,
-                anticipated_needs,
-                max_conversion_rate,
-                age_primary,
-                balances.taxable,
-                growth_rate,
-                year
+            # Extract spending withdrawal from January plan (shortfall only, no conversion)
+            _jan_spending_withdrawal = 0.0
+            if _jan_plan is not None:
+                _jan_spending_withdrawal = _jan_plan['pnc_shortfall']
+                self._log_decision(
+                    strategy,
+                    'tax_strategy',
+                    'January Strategy - Spending Phase',
+                    f'Traditional withdrawal for spending: ${_jan_spending_withdrawal:,.0f}',
+                    f'PNC shortfall (spending + ACA) requires Traditional withdrawal of ${_jan_spending_withdrawal:,.0f} '
+                    f'to supplement existing cash.',
+                    spending_withdrawal=_jan_spending_withdrawal,
+                )
+
+            # ── PHASE 2: ROTH CONVERSIONS ─────────────────────────────────────
+            # After spending is funded, calculate Roth conversion based on remaining bracket space
+            # Use config max_conversion_rate (24% for Stage 3, etc.)
+            available_for_conversion = max(
+                0,
+                balances.traditional - anticipated_needs['total_traditional_need'] - _jan_spending_withdrawal
             )
+
+            # Calculate bracket space for conversions (config rate, not just 12%)
+            roth_conversion = 0.0
+            if available_for_conversion > 0:
+                # Use BETR to optimize conversion within the max_conversion_rate bracket
+                roth_conversion = self._calculate_betr_roth_conversion(
+                    strategy,
+                    available_for_conversion,
+                    anticipated_needs,
+                    max_conversion_rate,
+                    age_primary,
+                    balances.taxable,
+                    growth_rate,
+                    year
+                )
+            
+            if roth_conversion > 0:
+                self._log_decision(
+                    strategy,
+                    'roth_conversion',
+                    'Roth Conversion - After Spending',
+                    f'Roth conversion: ${roth_conversion:,.0f} at {max_conversion_rate:.0%}',
+                    f'After funding spending with ${_jan_spending_withdrawal:,.0f}, available bracket space '
+                    f'for Roth conversions up to {max_conversion_rate:.0%} bracket is ${roth_conversion:,.0f}.',
+                    roth_conversion=roth_conversion,
+                )
 
             # Calculate DAF contribution and optimization
             daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
@@ -414,10 +508,49 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                         roth_conversion
                     )
 
+            # ── PHASE 1 APPLIED: pull Traditional→Cash BEFORE rebalancing ─────
+            # rebalance_accounts prefers Brokerage→Cash for cash needs, but the
+            # January strategy requires Traditional to be the PRIMARY cash source
+            # for covering spending shortfall.  Apply the Traditional→Cash withdrawal
+            # directly here so rebalance_accounts sees a pre-funded cash balance.
+            _jan_trad_to_cash = 0.0
+            if _jan_spending_withdrawal > 0:
+                # Apply spending withdrawal only (no conversion tax here)
+                _jan_trad_to_cash = min(
+                    _jan_spending_withdrawal,
+                    balances.traditional
+                )
+                if _jan_trad_to_cash > 0:
+                    balances = PortfolioBalances(
+                        cash=balances.cash + _jan_trad_to_cash,
+                        taxable=balances.taxable,
+                        traditional=balances.traditional - _jan_trad_to_cash,
+                        roth=balances.roth,
+                        daf=balances.daf,
+                        traditional_person1=balances.traditional_person1,
+                        traditional_person2=balances.traditional_person2,
+                    )
+                    logger.info(
+                        f"Year {year} Stage 3 [Phase 1 - Spending]: "
+                        f"Traditional→Cash ${_jan_trad_to_cash:,.0f} "
+                        f"(spending shortfall), "
+                        f"Roth conversion Phase 2: ${roth_conversion:,.0f}"
+                    )
+
             # Subtract DAF from balances before rebalancing (HIFO lot removal)
             balances_for_rebalance = self._apply_daf_contribution(
                 balances, daf_contribution, year, brokerage_account
             )
+            # Credit DAF balance here for the normal (non-prefund) path.
+            # The prefund path already credits DAF — do not double-count.
+            if daf_contribution > 0:
+                balances_for_rebalance = PortfolioBalances(
+                    cash=balances_for_rebalance.cash,
+                    taxable=balances_for_rebalance.taxable,
+                    traditional=balances_for_rebalance.traditional,
+                    roth=balances_for_rebalance.roth,
+                    daf=balances_for_rebalance.daf + daf_contribution,
+                )
 
             # Estimate preliminary tax before rebalancing
             preliminary_tax = self._estimate_preliminary_tax(
@@ -433,7 +566,7 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 brokerage_account=brokerage_account
             )
 
-            # Execute account rebalancing with preliminary tax estimate
+            # Execute account rebalancing
             new_balances, transactions = self._execute_rebalancing(
                 strategy,
                 balances_for_rebalance,
@@ -443,8 +576,17 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 preliminary_tax,
                 year,
                 age_primary,
-                brokerage_account
+                brokerage_account,
+                cash_target_override=None  # Cash already pre-funded above
             )
+
+            # ── JANUARY: record the Traditional→Cash in the transaction log ──
+            # rebalance_accounts only knows about transactions it made; merge
+            # the pre-funded withdrawal so the year-by-year table is correct.
+            if _jan_trad_to_cash > 0:
+                transactions['traditional_to_cash'] = (
+                    transactions.get('traditional_to_cash', 0.0) + _jan_trad_to_cash
+                )
 
         # Ensure 90% standard deduction target is met
         new_balances, transactions = self._ensure_standard_deduction_target(
@@ -469,18 +611,12 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             filing_status,
             state,
             year,
-            expenses
+            expenses,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            daf_carryforward_prior=self._daf_carryforward,
+            property_tax=self._get_property_tax_from_config(),
         )
-        
-        # Add DAF contribution to DAF balance
-        if daf_contribution > 0:
-            new_balances = PortfolioBalances(
-                cash=new_balances.cash,
-                taxable=new_balances.taxable,
-                traditional=new_balances.traditional,
-                roth=new_balances.roth,
-                daf=new_balances.daf + daf_contribution
-            )
         
         # Apply growth to balances
         new_balances = PortfolioBalances(
@@ -490,13 +626,17 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             roth=new_balances.roth * growth_rate,
             daf=new_balances.daf * growth_rate
         )
-        
+
+        # Deduct annual charitable grant from DAF (grants paid out each year)
+        new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
+
         # Update strategy with final values
         strategy.balances = new_balances
         strategy.roth_conversion = roth_conversion
         strategy.daf_contribution = daf_contribution
         strategy.aca_premium = aca_premium
         strategy.healthcare_costs = healthcare_total  # Full costs: ACA/retiree premium + OOP
+        strategy.hc_oop = getattr(_hc_breakdown, 'out_of_pocket', 0.0)
         
         # Set transaction tracking
         strategy.traditional_to_cash = transactions['traditional_to_cash']
@@ -520,6 +660,141 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         )
         
         return strategy
+    
+    def _plan_january_bracket_fill_withdrawal(
+        self,
+        year: int,
+        pnc_savings_balance: float,
+        annual_expenses: float,
+        aca_premium: float,
+        age_primary: int,
+        age_spouse: int,
+        filing_status: str
+    ) -> Optional[dict]:
+        """
+        Use January Bracket-Fill Strategy if enabled in configuration.
+        
+        This is an OPTIONAL path that can complement or replace the existing BETR logic.
+        Returns withdrawal plan if enabled; None otherwise.
+        
+        Args:
+            year: Current year
+            pnc_savings_balance: PNC Savings account balance (actual spendable cash)
+            annual_expenses: Annual living expenses
+            aca_premium: ACA insurance premium
+            age_primary: Primary person's age
+            age_spouse: Spouse's age
+            filing_status: Tax filing status
+        
+        Returns:
+            JanuaryWithdrawalPlan dict or None if not enabled
+        """
+        # Check if January Bracket-Fill is enabled in config
+        try:
+            from config import get_config_value
+            use_january_strategy = get_config_value(
+                'tax_strategy', 
+                'use_january_bracket_fill_strategy', 
+                False
+            )
+        except:
+            use_january_strategy = False
+        
+        if not use_january_strategy:
+            logger.debug("Stage 3: January Bracket-Fill Strategy not enabled in config")
+            return None
+        
+        # Get bracket parameters for this year
+        try:
+            import csv
+            bracket_12_upper = None
+            std_deduction_value = None
+            
+            # Read bracket from income_rates.csv
+            import os as _os
+            _csv_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), 'income_rates.csv')
+            with open(_csv_path) as f:
+                for row in csv.DictReader(f):
+                    if (int(row['year']) == year and 
+                        row['filing_status'] == filing_status and 
+                        abs(float(row['rate']) - 0.12) < 0.001):
+                        bracket_12_upper = float(row['upper'])
+                        break
+            
+            # Get standard deduction
+            std_deduction_value = self.tax_calculator.calculate_standard_deduction(
+                filing_status, year, age_primary, age_spouse
+            )
+        except Exception as e:
+            logger.warning(f"Stage 3: Could not read bracket data: {e}")
+            return None
+        
+        if not bracket_12_upper or not std_deduction_value:
+            logger.warning("Stage 3: Missing bracket or deduction data for January strategy")
+            return None
+        
+        # Read safety reserve from config (default = 5 months of expenses)
+        try:
+            from config import get_config_value
+            _safety_reserve = float(get_config_value(
+                'tax_strategy', 'savings_safety_reserve',
+                round(annual_expenses / 12 * 5)
+            ))
+        except:
+            _safety_reserve = round(annual_expenses / 12 * 5)
+        
+        # Initialize January strategy
+        strategy = JanuaryBracketFillStrategy(
+            annual_expenses=annual_expenses,
+            savings_account_safety_reserve=_safety_reserve,
+            bracket_12_upper=bracket_12_upper,
+            standard_deduction=std_deduction_value
+        )
+        
+        # Plan the withdrawal
+        try:
+            # Withholding rate = stage 3 max conversion rate (from config) ÷ 100
+            try:
+                from config import get_config_value
+                _stage_rate_pct = float(get_config_value(
+                    'tax_strategy', 'stage_3_max_conversion_rate', 12
+                ))
+            except:
+                _stage_rate_pct = 12.0
+            _withholding_rate = _stage_rate_pct / 100.0
+            
+            plan = strategy.plan_january_withdrawal(
+                    pnc_savings_balance_jan1=pnc_savings_balance,
+                    estimated_tax_rate=_withholding_rate,
+                    aca_premium=aca_premium,
+                    conversion_date=datetime(year, 1, 15),
+                    year=year,
+                    filing_status=filing_status,
+                    age_primary=age_primary,
+                    age_spouse=age_spouse,
+                    tax_calculator=self.tax_calculator
+                )
+            
+            logger.info(
+                f"Stage 3: January Bracket-Fill plan generated: "
+                f"Shortfall=${plan.pnc_shortfall:,.0f}, "
+                f"Traditional withdrawal=${plan.total_traditional_withdrawal:,.0f}, "
+                f"Roth conversion=${plan.roth_conversion_amount:,.0f}"
+            )
+            
+            return {
+                'plan': plan,
+                'pnc_shortfall': plan.pnc_shortfall,
+                'traditional_withdrawal': plan.total_traditional_withdrawal,
+                'roth_conversion': plan.roth_conversion_amount,
+                'conversion_withholding': plan.conversion_withholding,
+                'redeposit_deadline': plan.sixty_day_redeposit_deadline,
+            }
+        except Exception as e:
+            logger.warning(f"Stage 3: January Bracket-Fill planning failed: {e}")
+            return None
+    
+
     
     def _calculate_aca_premium(
         self,
@@ -1154,6 +1429,17 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 )
             return balances
     
+    def _get_property_tax_from_config(self) -> float:
+        """Read annual property tax from config for SALT calculation."""
+        try:
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+            return float(
+                config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0)
+            )
+        except Exception:
+            return 0.0
+
     def _execute_rebalancing(
         self,
         strategy: YearlyStrategy,
@@ -1164,7 +1450,8 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         preliminary_tax: float,
         year: int,
         age_primary: int,
-        brokerage_account: Any
+        brokerage_account: Any,
+        cash_target_override: Optional[float] = None
     ) -> tuple[PortfolioBalances, dict]:
         """
         Execute account rebalancing including Roth conversion and buffer maintenance.
@@ -1179,6 +1466,8 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             year: Current year
             age_primary: Primary person's age
             brokerage_account: BrokerageAccount instance
+            cash_target_override: If set (January strategy), tells rebalance_accounts
+                exactly how much cash to target, driving the Traditional→Cash amount.
             
         Returns:
             Tuple of (new_balances, transactions_dict)
@@ -1197,7 +1486,8 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 irmaa_penalty=0.0,
                 aca_premium=aca_premium,
                 medical_costs=0.0,
-                brokerage_account=brokerage_account
+                brokerage_account=brokerage_account,
+                cash_target_override=cash_target_override
             )
             
             # Merge decision logs
@@ -1322,75 +1612,98 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         filing_status: str,
         state: str,
         year: int,
-        expenses: float
+        expenses: float,
+        age_primary: int = 0,
+        age_spouse: int = 0,
+        daf_carryforward_prior: float = 0.0,
+        property_tax: float = 0.0
     ) -> PortfolioBalances:
         """
-        Calculate final AGI and taxes with actual withdrawals.
+        Calculate final AGI and taxes with correct order.
         
-        Updates the strategy object with final tax calculations.
+        Uses AGICalculator to implement correct IRC-compliant calculation:
+          1. Gross Ordinary = Traditional + Roth + Brokerage basis
+          2. AGI = Gross Ordinary + LTCG (pre-deduction, for 30% DAF limit)
+          3. DAF deduction with 30% limit + carryforward
+          4. Itemized vs. Standard deduction
+          5. Taxable Ordinary = Gross Ordinary - Deduction
+          6. Federal tax on Taxable Ordinary, LTCG stacked on top
+          7. State tax on Taxable Ordinary only
         
         Args:
             strategy: YearlyStrategy to update
             balances: Final balances
-            transactions: Transaction dict
+            transactions: Transaction dict with withdrawal details
             roth_conversion: Roth conversion amount
-            daf_contribution: DAF contribution
-            daf_tax_excess: DAF tax excess deduction
-            std_deduction: Standard deduction
+            daf_contribution: DAF contribution (FMV transferred)
+            daf_tax_excess: Deprecated (replaced by AGI calculator)
+            std_deduction: Standard deduction (informational; recalculated)
             filing_status: Filing status
             state: State for tax calculation
             year: Current year
-            expenses: Annual expenses
+            expenses: Annual expenses (informational)
+            age_primary: Primary taxpayer age
+            age_spouse: Spouse age
+            daf_carryforward_prior: DAF carryforward from prior years
+            property_tax: Property tax for SALT calculation
         """
-        # Calculate AGI components
+        # Calculate AGI components from transactions
         trad_withdrawal = (
-            transactions['traditional_to_cash'] + 
+            transactions['traditional_to_cash'] +
             transactions['traditional_to_brokerage']
         )
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
+        brokerage_basis = transactions.get('brokerage_basis', 0.0)
         
-        # AGI = LTCG + Roth conversion + Traditional withdrawals
-        agi = brokerage_ltcg + roth_conversion + trad_withdrawal
-        magi = agi  # Same as AGI in Stage 3 (no SS benefits)
-        
-        logger.info(
-            f"Year {year} Stage 3 AGI breakdown: "
-            f"LTCG from Brokerage=${brokerage_ltcg:,.0f}, "
-            f"Roth Conv=${roth_conversion:,.0f}, "
-            f"Trad Withdrawal=${trad_withdrawal:,.0f}, "
-            f"Total AGI=${agi:,.0f}"
-        )
-        
-        # Calculate effective deduction
-        effective_deduction = std_deduction + daf_tax_excess if daf_contribution > 0 else std_deduction
-        
-        # Calculate taxable income
-        taxable_income = max(0, agi - effective_deduction)
-        
-        # Calculate ordinary income (exclude LTCG)
-        ordinary_income = max(0, taxable_income - brokerage_ltcg)
-        
-        # Calculate federal tax on ordinary income
-        federal_tax, max_rate, upper_bracket = self.tax_calculator.calculate_federal_tax(
-            ordinary_income, filing_status, year
-        )
-        
-        # Calculate capital gains tax
-        cg_tax = self.tax_calculator.calculate_capital_gains_tax(
-            brokerage_ltcg, ordinary_income, filing_status, year
-        )
-        
-        total_tax = federal_tax + cg_tax
-        
-        # Calculate state tax with retirement income exemptions
-        state_tax = self.tax_calculator.calculate_state_tax(
-            agi=agi,
-            state=state,
+        # Use AGICalculator with correct order
+        agi_calc = AGICalculator(self.tax_calculator)
+        tax_result = agi_calc.calculate_agi_and_taxes(
             year=year,
             filing_status=filing_status,
-            retirement_income=trad_withdrawal,
-            ss_benefits=0.0,  # No SS in Stage 3
-            roth_conversion=roth_conversion
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            traditional_withdrawal=trad_withdrawal,
+            roth_conversion=roth_conversion,
+            brokerage_ltcg=brokerage_ltcg,
+            brokerage_basis=brokerage_basis,
+            daf_fmv=daf_contribution,
+            state=state,
+            pa_rate=0.0307,  # PA flat income tax rate (3.07%)
+            property_tax=property_tax,
+            daf_carryforward_prior=daf_carryforward_prior,
+            tax_calculator=self.tax_calculator
+        )
+        
+        # Extract results from the calculator
+        federal_tax = tax_result['federal_ordinary_tax']
+        cg_tax = tax_result['ltcg_tax']
+        state_tax = tax_result['state_tax']
+        total_tax = tax_result['total_tax']
+        agi = tax_result['agi_pre_deduction']
+        magi = agi  # Same as AGI in Stage 3 (no SS benefits)
+        ordinary_income = tax_result['taxable_ordinary']
+        taxable_income = ordinary_income + brokerage_ltcg  # For logging
+
+        # Persist DAF carryforward for next year (IRC §170 5-year carry-forward)
+        self._daf_carryforward = tax_result['daf_carryforward_new']
+        if self._daf_carryforward > 0:
+            logger.info(
+                f"Year {year}: DAF carryforward ${self._daf_carryforward:,.2f} "
+                f"will be available in future years."
+            )
+        
+        logger.info(
+            f"Year {year} Stage 3 AGI (CORRECTED): Trad=${trad_withdrawal:,.0f}, "
+            f"Roth=${roth_conversion:,.0f}, Basis=${brokerage_basis:,.0f}, "
+            f"LTCG=${brokerage_ltcg:,.0f} → "
+            f"Gross Ordinary=${tax_result['gross_ordinary']:,.0f}, "
+            f"AGI=${agi:,.0f}; DAF=${daf_contribution:,.0f} "
+            f"(deductible ${tax_result['daf_deductible_this_year']:,.0f}, "
+            f"carryforward ${tax_result['daf_carryforward_new']:,.0f}); "
+            f"{tax_result['deduction_type']} Deduction=${tax_result['deduction']:,.0f}; "
+            f"Taxable Ordinary=${ordinary_income:,.0f}; "
+            f"Taxes: Fed=${federal_tax:,.0f}, LTCG=${cg_tax:,.0f}, "
+            f"State=${state_tax:,.0f}, Total=${total_tax:,.0f}"
         )
         
         # Calculate tax estimation error
@@ -1465,12 +1778,11 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         if daf_contribution > 0:
             logger.info(f"Year {year}: Final tax calculation with DAF:")
             logger.info(f"  AGI: ${agi:,.2f}")
-            logger.info(f"  Standard Deduction: ${std_deduction:,.2f}")
-            logger.info(f"  DAF Tax Excess: ${daf_tax_excess:,.2f}")
-            logger.info(f"  Effective Deduction: ${effective_deduction:,.2f}")
-            logger.info(f"  Taxable Income: ${taxable_income:,.2f}")
+            logger.info(f"  DAF deductible: ${tax_result['daf_deductible_this_year']:,.2f}")
+            logger.info(f"  DAF carryforward: ${tax_result['daf_carryforward_new']:,.2f}")
+            logger.info(f"  Deduction ({tax_result['deduction_type']}): ${tax_result['deduction']:,.2f}")
+            logger.info(f"  Taxable Ordinary: ${ordinary_income:,.2f}")
             logger.info(f"  LTCG: ${brokerage_ltcg:,.2f}")
-            logger.info(f"  Ordinary Income: ${ordinary_income:,.2f}")
             logger.info(f"  Federal Tax (ordinary): ${federal_tax:,.2f}")
             logger.info(f"  CG Tax: ${cg_tax:,.2f}")
             logger.info(f"  Total Tax: ${total_tax:,.2f}")
@@ -1483,6 +1795,7 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         strategy.magi = magi
         strategy.taxable_income = taxable_income
         strategy.federal_tax = total_tax
+        strategy.ltcg_tax = cg_tax
         strategy.state_tax = state_tax
         strategy.ltcg_harvested = brokerage_ltcg
         strategy.traditional_withdrawal = trad_withdrawal

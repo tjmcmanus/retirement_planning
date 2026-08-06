@@ -339,8 +339,10 @@ class TaxCalculator(ITaxCalculator):
         Returns:
             Standard deduction amount
         """
+        # Normalize 'married' → 'married_filing_jointly' to match CSV data
+        _fs = 'married_filing_jointly' if filing_status == 'married' else filing_status
         try:
-            deduction_df = self._get_std_deduction(year, filing_status)
+            deduction_df = self._get_std_deduction(year, _fs)
             # Extract the numeric value from the DataFrame
             if hasattr(deduction_df, 'empty') and not deduction_df.empty and 'deduction' in deduction_df.columns:
                 base_deduction = float(deduction_df['deduction'].iloc[0])

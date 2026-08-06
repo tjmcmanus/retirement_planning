@@ -227,20 +227,6 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             taxable_income, filing_status, year
         )
         
-        state_tax = self.tax_calculator.calculate_state_tax(
-            agi_before_conversion, state, year
-        )
-        
-        # Deduct state tax from cash balance
-        balances = PortfolioBalances(
-            cash=balances.cash - state_tax,
-            taxable=balances.taxable,
-            traditional=balances.traditional,
-            roth=balances.roth,
-            daf=balances.daf
-        )
-        logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
-        
         # Calculate FICA taxes
         fica_tax = self._calculate_fica_tax(wages)
         
@@ -263,7 +249,8 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             agi_before_conversion
         )
         
-        # Decision 3: BETR-validated Roth conversion
+        # Decision 3: BETR-validated Roth conversion — must be computed BEFORE
+        # state_tax so the full AGI (wages + conversion) is taxed correctly.
         roth_conversion = self._calculate_prep_roth_conversion(
             strategy,
             balances,
@@ -276,6 +263,27 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             filing_status,
             year
         )
+
+        # State tax on full AGI (wages + Roth conversion).
+        # roth_conversion passed separately so PA/IL/MS can exempt it;
+        # wages always remain taxable.
+        state_tax = self.tax_calculator.calculate_state_tax(
+            agi_before_conversion + roth_conversion,
+            state,
+            year,
+            filing_status=filing_status,
+            roth_conversion=roth_conversion,
+        )
+
+        # Deduct state tax from cash balance
+        balances = PortfolioBalances(
+            cash=balances.cash - state_tax,
+            taxable=balances.taxable,
+            traditional=balances.traditional,
+            roth=balances.roth,
+            daf=balances.daf
+        )
+        logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
         
         # Update strategy with calculated values
         strategy.expenses = expenses  # Store expenses in strategy
@@ -574,13 +582,43 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         """
         if balances.traditional <= 0 or max_rate > max_conversion_rate:
             return 0.0
-        
-        # Calculate conversion room in current bracket
-        conversion_room = max(0, upper_bracket - agi - std_deduction)
-        
+
+        # Determine the target bracket ceiling.
+        # max_conversion_rate may be higher than the current marginal rate (e.g.
+        # config says 32% but wages only put us in the 24% bracket).  In that
+        # case we want to fill all the way up to the 32% bracket top, not just
+        # the 24% top.  We probe the tax calculator at
+        #   (max_conversion_rate_bracket_floor + $1)
+        # to get the upper bound of the target bracket.
+        if max_conversion_rate > max_rate:
+            # Find the top of the max_conversion_rate bracket by probing at a
+            # taxable-income level known to be inside it.  We use
+            #   upper_bracket (top of current bracket) + $1
+            # and keep stepping up until the returned rate matches or we overshoot.
+            probe_income = upper_bracket + 1  # just above current bracket top
+            _, probe_rate, probe_upper = self.tax_calculator.calculate_federal_tax(
+                probe_income, filing_status, year
+            )
+            # Walk up until we reach the target rate bracket
+            while probe_rate < max_conversion_rate and probe_upper < 2_000_000:
+                probe_income = probe_upper + 1
+                _, probe_rate, probe_upper = self.tax_calculator.calculate_federal_tax(
+                    probe_income, filing_status, year
+                )
+            target_bracket_top = probe_upper
+        else:
+            target_bracket_top = upper_bracket
+
+        # BUG FIX: conversion room is target bracket ceiling minus current
+        # taxable income.  The old formula subtracted std_deduction a second
+        # time (agi already represents gross income; std_ded is subtracted once
+        # to get taxable_income, not twice).
+        current_taxable_income = max(0, agi - std_deduction)
+        conversion_room = max(0, target_bracket_top - current_taxable_income)
+
         if conversion_room < 10000:
             return 0.0
-        
+
         # Propose conversion: lesser of room or 10% of traditional balance
         proposed_conversion = min(
             conversion_room,

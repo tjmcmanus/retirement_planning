@@ -7,10 +7,13 @@ On Medicare, optimizing for IRMAA while continuing Roth conversions.
 
 import logging
 from typing import Any, Optional
+from datetime import datetime
 
 from ..base_strategy import BaseLifeStageStrategy
 from ..interfaces import ITaxCalculator, IAccountManager
 from ..models import PortfolioBalances, YearlyStrategy
+from ..agi_calculator import AGICalculator
+from ..january_bracket_fill_strategy import JanuaryBracketFillStrategy
 from .stage6_rmd import get_rmd_age
 
 logger = logging.getLogger(__name__)
@@ -158,7 +161,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
         # Calculate IRMAA penalty and headroom
         irmaa_penalty, irmaa_headroom, people_on_medicare, next_irmaa_threshold = (
             self._calculate_irmaa_metrics(
-                strategy, prior_magi, age_primary, age_spouse, year
+                strategy, prior_magi, age_primary, age_spouse, year, filing_status
             )
         )
         
@@ -213,10 +216,38 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 'estimated_ltcg': 0.0
             }
         
-        # Calculate available Traditional balance for conversion
+        # ── PHASE 1: FUND SPENDING ─────────────────────────────────────────
+        # Use January strategy to determine spending shortfall and Traditional→Cash withdrawal
+        _jan_plan = self._plan_january_bracket_fill_withdrawal(
+            year=year,
+            pnc_savings_balance=balances.cash,
+            annual_expenses=expenses,
+            aca_premium=aca_premium,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            filing_status=filing_status,
+        )
+
+        # Extract spending withdrawal from January plan (shortfall only, no conversion)
+        _jan_spending_withdrawal = 0.0
+        if _jan_plan is not None:
+            _jan_spending_withdrawal = _jan_plan['pnc_shortfall']
+            self._log_decision(
+                strategy,
+                'tax_strategy',
+                'January Strategy - Spending Phase',
+                f'Traditional withdrawal for spending: ${_jan_spending_withdrawal:,.0f}',
+                f'PNC shortfall (spending + ACA) requires Traditional withdrawal of ${_jan_spending_withdrawal:,.0f} '
+                f'to supplement existing cash.',
+                spending_withdrawal=_jan_spending_withdrawal,
+            )
+
+        # ── PHASE 2: ROTH CONVERSIONS ─────────────────────────────────────
+        # After spending is funded, calculate Roth conversion based on remaining bracket space
+        # Use config max_conversion_rate and IRMAA thresholds (Stage 4 specific)
         available_for_conversion = max(
-            0, 
-            balances.traditional - anticipated_needs['total_traditional_need']
+            0,
+            balances.traditional - anticipated_needs['total_traditional_need'] - _jan_spending_withdrawal
         )
         
         # Calculate optimal Roth conversion using BETR with IRMAA constraints
@@ -231,6 +262,18 @@ class Stage4Medicare(BaseLifeStageStrategy):
             growth_rate,
             year
         )
+        
+        if roth_conversion > 0:
+            self._log_decision(
+                strategy,
+                'roth_conversion',
+                'Roth Conversion - After Spending (IRMAA-Aware)',
+                f'Roth conversion: ${roth_conversion:,.0f} at {max_conversion_rate:.0%}',
+                f'After funding spending with ${_jan_spending_withdrawal:,.0f}, available bracket space '
+                f'for Roth conversions up to {max_conversion_rate:.0%} bracket (IRMAA limit: ${irmaa_headroom:,.0f}) '
+                f'is ${roth_conversion:,.0f}.',
+                roth_conversion=roth_conversion,
+            )
         
         # Calculate DAF contribution and optimization
         daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
@@ -283,6 +326,32 @@ class Stage4Medicare(BaseLifeStageStrategy):
             brokerage_account=brokerage_account
         )
         
+        # ── PHASE 1 APPLIED: pull Traditional→Cash BEFORE rebalancing ─────
+        # Apply spending withdrawal directly so rebalance_accounts sees pre-funded cash
+        _jan_trad_to_cash = 0.0
+        if _jan_spending_withdrawal > 0:
+            # Apply spending withdrawal only (no conversion tax here)
+            _jan_trad_to_cash = min(
+                _jan_spending_withdrawal,
+                balances_for_rebalance.traditional
+            )
+            if _jan_trad_to_cash > 0:
+                balances_for_rebalance = PortfolioBalances(
+                    cash=balances_for_rebalance.cash + _jan_trad_to_cash,
+                    taxable=balances_for_rebalance.taxable,
+                    traditional=balances_for_rebalance.traditional - _jan_trad_to_cash,
+                    roth=balances_for_rebalance.roth,
+                    daf=balances_for_rebalance.daf,
+                    traditional_person1=balances_for_rebalance.traditional_person1,
+                    traditional_person2=balances_for_rebalance.traditional_person2,
+                )
+                logger.info(
+                    f"Year {year} Stage 4 [Phase 1 - Spending]: "
+                    f"Traditional→Cash ${_jan_trad_to_cash:,.0f} "
+                    f"(spending shortfall), "
+                    f"Roth conversion Phase 2: ${roth_conversion:,.0f}"
+                )
+        
         # Execute account rebalancing with preliminary tax estimate
         new_balances, transactions = self._execute_rebalancing(
             strategy,
@@ -297,6 +366,17 @@ class Stage4Medicare(BaseLifeStageStrategy):
             brokerage_account
         )
         
+        # ── PHASE 1 RECORDED: merge January Traditional→Cash into transaction log ──
+        # _execute_rebalancing only knows about transfers it made; add the pre-funded
+        # spending withdrawal so the year-by-year report shows the correct amount.
+        if _jan_trad_to_cash > 0:
+            transactions['traditional_to_cash'] = (
+                transactions.get('traditional_to_cash', 0.0) + _jan_trad_to_cash
+            )
+            transactions['cash_replenishment'] = (
+                transactions.get('cash_replenishment', 0.0) + _jan_trad_to_cash
+            )
+
         # Ensure 90% standard deduction target is met
         new_balances, transactions = self._ensure_standard_deduction_target(
             strategy,
@@ -320,7 +400,11 @@ class Stage4Medicare(BaseLifeStageStrategy):
             filing_status,
             state,
             year,
-            expenses
+            expenses,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            daf_carryforward_prior=0.0,  # TODO: track across years
+            property_tax=0.0  # TODO: add to config
         )
         
         # Deduct DAF contribution from Brokerage (HIFO lot removal) and credit DAF balance
@@ -354,7 +438,10 @@ class Stage4Medicare(BaseLifeStageStrategy):
             roth=new_balances.roth * growth_rate,
             daf=new_balances.daf * growth_rate
         )
-        
+
+        # Deduct annual charitable grant from DAF (grants paid out each year)
+        new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
+
         # Update strategy with final values
         strategy.balances = new_balances
         strategy.roth_conversion = roth_conversion
@@ -362,6 +449,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
         strategy.irmaa_penalty = irmaa_penalty
         strategy.aca_premium = aca_premium
         strategy.healthcare_costs = healthcare_total  # Full costs: Medicare + IRMAA + Medigap + OOP
+        strategy.hc_oop = getattr(_hc_breakdown, 'out_of_pocket', 0.0)
         
         # Set transaction tracking
         strategy.traditional_to_cash = transactions['traditional_to_cash']
@@ -395,9 +483,11 @@ class Stage4Medicare(BaseLifeStageStrategy):
         age_spouse: int
     ) -> float:
         """Get standard deduction from load_data module."""
+        # Normalize 'married' → 'married_filing_jointly' to match CSV data
+        _fs = 'married_filing_jointly' if filing_status == 'married' else filing_status
         try:
             from load_data import get_std_deduction
-            std_deduction_df = get_std_deduction(year, filing_status)
+            std_deduction_df = get_std_deduction(year, _fs)
             return float(std_deduction_df.iloc[0]['deduction'])
         except Exception as e:
             logger.warning(f"Could not get standard deduction: {e}, using default")
@@ -409,7 +499,8 @@ class Stage4Medicare(BaseLifeStageStrategy):
         prior_magi: float,
         age_primary: int,
         age_spouse: int,
-        year: int
+        year: int,
+        filing_status: str = 'married_filing_jointly'
     ) -> tuple[float, float, int, float]:
         """
         Calculate IRMAA penalty and headroom to next bracket.
@@ -420,6 +511,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             age_primary: Primary person's age
             age_spouse: Spouse's age
             year: Current year
+            filing_status: Tax filing status (for standard deduction lookup)
             
         Returns:
             Tuple of (irmaa_penalty, irmaa_headroom, people_on_medicare, next_threshold)
@@ -450,7 +542,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
                     break
             
             # Calculate headroom (how much we can increase MAGI before hitting next bracket)
-            std_deduction = self._get_standard_deduction('married', year, age_primary, age_spouse)
+            std_deduction = self._get_standard_deduction(filing_status, year, age_primary, age_spouse)
             irmaa_headroom = next_irmaa_threshold - std_deduction
             
             logger.debug(
@@ -1110,55 +1202,62 @@ class Stage4Medicare(BaseLifeStageStrategy):
         filing_status: str,
         state: str,
         year: int,
-        expenses: float
+        expenses: float,
+        age_primary: int = 0,
+        age_spouse: int = 0,
+        daf_carryforward_prior: float = 0.0,
+        property_tax: float = 0.0
     ) -> PortfolioBalances:
-        """Calculate final AGI and taxes with actual withdrawals."""
-        # Calculate AGI components
+        """
+        Calculate final AGI and taxes with correct order.
+        
+        Uses AGICalculator to implement correct IRC-compliant calculation.
+        Stage 4 is Medicare-eligible but no SS yet.
+        """
+        # Calculate AGI components from transactions
         trad_withdrawal = (
-            transactions['traditional_to_cash'] + 
+            transactions['traditional_to_cash'] +
             transactions['traditional_to_brokerage']
         )
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
+        brokerage_basis = transactions.get('brokerage_basis', 0.0)
         
-        agi = brokerage_ltcg + roth_conversion + trad_withdrawal
-        magi = agi  # Same as AGI in Stage 4 (no SS benefits)
-        
-        logger.info(
-            f"Year {year} Stage 4 AGI breakdown: "
-            f"LTCG from Brokerage=${brokerage_ltcg:,.0f}, "
-            f"Roth Conv=${roth_conversion:,.0f}, "
-            f"Trad Withdrawal=${trad_withdrawal:,.0f}, "
-            f"Total AGI=${agi:,.0f}"
-        )
-        
-        # Calculate effective deduction
-        effective_deduction = std_deduction + daf_tax_excess if daf_contribution > 0 else std_deduction
-        
-        # Calculate taxable income
-        taxable_income = max(0, agi - effective_deduction)
-        ordinary_income = max(0, taxable_income - brokerage_ltcg)
-        
-        # Calculate federal tax
-        federal_tax, max_rate, upper_bracket = self.tax_calculator.calculate_federal_tax(
-            ordinary_income, filing_status, year
-        )
-        
-        # Calculate capital gains tax
-        cg_tax = self.tax_calculator.calculate_capital_gains_tax(
-            brokerage_ltcg, ordinary_income, filing_status, year
-        )
-        
-        total_tax = federal_tax + cg_tax
-        
-        # Calculate state tax with retirement income exemptions
-        state_tax = self.tax_calculator.calculate_state_tax(
-            agi=agi,
-            state=state,
+        # Use AGICalculator with correct order
+        agi_calc = AGICalculator(self.tax_calculator)
+        tax_result = agi_calc.calculate_agi_and_taxes(
             year=year,
             filing_status=filing_status,
-            retirement_income=trad_withdrawal,
-            ss_benefits=0.0,  # No SS in Stage 4
-            roth_conversion=roth_conversion
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            traditional_withdrawal=trad_withdrawal,
+            roth_conversion=roth_conversion,
+            brokerage_ltcg=brokerage_ltcg,
+            brokerage_basis=brokerage_basis,
+            daf_fmv=daf_contribution,
+            state=state,
+            pa_rate=0.0307,  # PA flat income tax rate (3.07%)
+            property_tax=property_tax,
+            daf_carryforward_prior=daf_carryforward_prior,
+            tax_calculator=self.tax_calculator
+        )
+        
+        # Extract results
+        federal_tax = tax_result['federal_ordinary_tax']
+        cg_tax = tax_result['ltcg_tax']
+        state_tax = tax_result['state_tax']
+        total_tax = tax_result['total_tax']
+        agi = tax_result['agi_pre_deduction']
+        magi = agi  # Same as AGI in Stage 4 (no SS benefits)
+        ordinary_income = tax_result['taxable_ordinary']
+        taxable_income = ordinary_income + brokerage_ltcg
+        
+        logger.info(
+            f"Year {year} Stage 4 AGI (CORRECTED): Trad=${trad_withdrawal:,.0f}, "
+            f"Roth=${roth_conversion:,.0f}, Basis=${brokerage_basis:,.0f}, "
+            f"LTCG=${brokerage_ltcg:,.0f} → AGI=${agi:,.0f}; "
+            f"Taxable Ordinary=${ordinary_income:,.0f}; "
+            f"Taxes: Fed=${federal_tax:,.0f}, LTCG=${cg_tax:,.0f}, "
+            f"State=${state_tax:,.0f}, Total=${total_tax:,.0f}"
         )
         
         # Calculate tax estimation error
@@ -1208,7 +1307,9 @@ class Stage4Medicare(BaseLifeStageStrategy):
         if daf_contribution > 0:
             logger.info(f"Year {year}: Final tax with DAF:")
             logger.info(f"  AGI: ${agi:,.2f}")
-            logger.info(f"  Effective Deduction: ${effective_deduction:,.2f}")
+            logger.info(f"  DAF deductible: ${tax_result['daf_deductible_this_year']:,.2f}")
+            logger.info(f"  DAF carryforward: ${tax_result['daf_carryforward_new']:,.2f}")
+            logger.info(f"  Deduction ({tax_result['deduction_type']}): ${tax_result['deduction']:,.2f}")
             logger.info(f"  Total Tax: ${total_tax:,.2f}")
         
         # Update strategy
@@ -1217,6 +1318,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
         strategy.magi = magi
         strategy.taxable_income = taxable_income
         strategy.federal_tax = total_tax
+        strategy.ltcg_tax = cg_tax
         strategy.state_tax = state_tax
         strategy.ltcg_harvested = brokerage_ltcg
         strategy.traditional_withdrawal = trad_withdrawal
@@ -1226,7 +1328,141 @@ class Stage4Medicare(BaseLifeStageStrategy):
             transactions['roth_to_brokerage']
         )
         
-        # Return updated balances with state tax deducted
+        # Return updated balances with tax adjustments applied
         return balances
+
+    def _plan_january_bracket_fill_withdrawal(
+        self,
+        year: int,
+        pnc_savings_balance: float,
+        annual_expenses: float,
+        aca_premium: float,
+        age_primary: int,
+        age_spouse: int,
+        filing_status: str
+    ) -> Optional[dict]:
+        """
+        Use January Bracket-Fill Strategy if enabled in configuration.
+        
+        This is an OPTIONAL path that can complement or replace the existing BETR logic.
+        Returns withdrawal plan if enabled; None otherwise.
+        
+        Args:
+            year: Current year
+            pnc_savings_balance: PNC Savings account balance (actual spendable cash)
+            annual_expenses: Annual living expenses
+            aca_premium: ACA insurance premium
+            age_primary: Primary person's age
+            age_spouse: Spouse's age
+            filing_status: Tax filing status
+        
+        Returns:
+            JanuaryWithdrawalPlan dict or None if not enabled
+        """
+        # Check if January Bracket-Fill is enabled in config
+        try:
+            from config import get_config_value
+            use_january_strategy = get_config_value(
+                'tax_strategy', 
+                'use_january_bracket_fill_strategy', 
+                False
+            )
+        except:
+            use_january_strategy = False
+        
+        if not use_january_strategy:
+            logger.debug("Stage 4: January Bracket-Fill Strategy not enabled in config")
+            return None
+        
+        # Get bracket parameters for this year
+        try:
+            import csv
+            bracket_12_upper = None
+            std_deduction_value = None
+            
+            # Read bracket from income_rates.csv
+            import os as _os
+            _csv_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), 'income_rates.csv')
+            with open(_csv_path) as f:
+                for row in csv.DictReader(f):
+                    if (int(row['year']) == year and 
+                        row['filing_status'] == filing_status and 
+                        abs(float(row['rate']) - 0.12) < 0.001):
+                        bracket_12_upper = float(row['upper'])
+                        break
+            
+            # Get standard deduction
+            std_deduction_value = self.tax_calculator.calculate_standard_deduction(
+                filing_status, year, age_primary, age_spouse
+            )
+        except Exception as e:
+            logger.warning(f"Stage 4: Could not read bracket data: {e}")
+            return None
+        
+        if not bracket_12_upper or not std_deduction_value:
+            logger.warning("Stage 4: Missing bracket or deduction data for January strategy")
+            return None
+        
+        # Read safety reserve from config (default = 5 months of expenses)
+        try:
+            from config import get_config_value
+            _safety_reserve = float(get_config_value(
+                'tax_strategy', 'savings_safety_reserve',
+                round(annual_expenses / 12 * 5)
+            ))
+        except:
+            _safety_reserve = round(annual_expenses / 12 * 5)
+        
+        # Initialize January strategy
+        strategy = JanuaryBracketFillStrategy(
+            annual_expenses=annual_expenses,
+            savings_account_safety_reserve=_safety_reserve,
+            bracket_12_upper=bracket_12_upper,
+            standard_deduction=std_deduction_value
+        )
+        
+        # Plan the withdrawal
+        try:
+            # Withholding rate = stage 4 max conversion rate (from config) ÷ 100
+            try:
+                from config import get_config_value
+                _stage_rate_pct = float(get_config_value(
+                    'tax_strategy', 'stage_4_max_conversion_rate', 12
+                ))
+            except:
+                _stage_rate_pct = 12.0
+            _withholding_rate = _stage_rate_pct / 100.0
+            
+            plan = strategy.plan_january_withdrawal(
+                    pnc_savings_balance_jan1=pnc_savings_balance,
+                    estimated_tax_rate=_withholding_rate,
+                    aca_premium=aca_premium,
+                    conversion_date=datetime(year, 1, 15),
+                    year=year,
+                    filing_status=filing_status,
+                    age_primary=age_primary,
+                    age_spouse=age_spouse,
+                    tax_calculator=self.tax_calculator
+                )
+            
+            logger.info(
+                f"Stage 4: January Bracket-Fill plan generated: "
+                f"Shortfall=${plan.pnc_shortfall:,.0f}, "
+                f"Traditional withdrawal=${plan.total_traditional_withdrawal:,.0f}, "
+                f"Roth conversion=${plan.roth_conversion_amount:,.0f}"
+            )
+            
+            return {
+                'plan': plan,
+                'pnc_shortfall': plan.pnc_shortfall,
+                'traditional_withdrawal': plan.total_traditional_withdrawal,
+                'roth_conversion': plan.roth_conversion_amount,
+                'conversion_withholding': plan.conversion_withholding,
+                'redeposit_deadline': plan.sixty_day_redeposit_deadline,
+            }
+        except Exception as e:
+            logger.warning(f"Stage 4: January Bracket-Fill planning failed: {e}")
+            return None
+
 
 # Made with Bob

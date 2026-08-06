@@ -38,6 +38,7 @@ def _sample_rows(month: int = 1, year: int = 2026) -> pd.DataFrame:
             "account_name": "Schwab", "account_type": "Brokerage",
             "owner": "Joint", "symbol": "AAPL", "name": "Apple Inc.",
             "sector": "Technology", "qty": 10.0, "purchase_price": 150.0,
+            "end_of_month_price": 175.0,
             "purchase_date": "2023-01-15",
         },
         {
@@ -45,6 +46,7 @@ def _sample_rows(month: int = 1, year: int = 2026) -> pd.DataFrame:
             "account_name": "Schwab", "account_type": "Brokerage",
             "owner": "Joint", "symbol": "GOOGL", "name": "Alphabet Inc.",
             "sector": "Communication Services", "qty": 5.0, "purchase_price": 140.0,
+            "end_of_month_price": 155.0,
             "purchase_date": "2022-04-01",
         },
         {
@@ -52,6 +54,7 @@ def _sample_rows(month: int = 1, year: int = 2026) -> pd.DataFrame:
             "account_name": "Fidelity", "account_type": "Traditional",
             "owner": "Morticia", "symbol": "VFIAX", "name": "Vanguard 500 Index",
             "sector": "MUTUALFUND", "qty": 900.0, "purchase_price": 450.0,
+            "end_of_month_price": 470.0,
             "purchase_date": "2020-03-10",
         },
     ])
