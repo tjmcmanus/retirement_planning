@@ -12,30 +12,30 @@ from typing import Dict, Any, Optional, Tuple
 # Default configuration file path
 CONFIG_FILE = "retirement_config.json"
 
-# Default configuration values
+# Default configuration values — NO personal data here.
+# Real values live in retirement_config.json (gitignored).
+# See retirement_config.json.example for a documented template.
 DEFAULT_CONFIG = {
     "personal_info": {
         "is_single_person": False,
-        "person1_name": "Tom",
-        "person1_birth_date": "1966-05-16",
-        "person1_retirement_date": "2026-10-02",
-        "person1_retirement_age": 60,
-        "person1_retirement_year": 2026,
-        "person2_name": "Sarah",
-        "person2_birth_date": "1967-03-22",
-        "person2_retirement_date": "2026-07-15",
-        "person2_retirement_age": 59,
-        "person2_retirement_year": 2026,
+        "person1_name": "Person 1",
+        "person1_birth_date": "1965-01-01",
+        "person1_retirement_date": "2027-01-01",
+        "person1_retirement_age": 62,
+        "person1_retirement_year": 2027,
+        "person2_name": "Person 2",
+        "person2_birth_date": "1966-01-01",
+        "person2_retirement_date": "2027-01-01",
+        "person2_retirement_age": 61,
+        "person2_retirement_year": 2027,
         "retirement_state": "PA",
-        "children": [
-            {"name": "Edwin", "birth_date": "2000-07-09", "special_needs": False},
-        ],
+        "children": [],
         "surviving_spouse_mode": False,
         "decedent_person": None,
         "date_of_death": None,
     },
     "financial_assumptions": {
-        "expected_annual_expenses": 148600,
+        "expected_annual_expenses": 100000,
         "expense_inflation_rate": 3.0,
         "expected_rate_of_return": 6.0,
         "years_of_expenses_in_cash": 2,
@@ -43,38 +43,40 @@ DEFAULT_CONFIG = {
         "brokerage_rebalance_trigger_multiplier": 1.0,
     },
     "income": {
-        "person1_annual_wages": 250000,
-        "person2_annual_wages": 120000,
+        "person1_annual_wages": 100000,
+        "person2_annual_wages": 100000,
         "wage_inflation_rate": 3.0,
         "contribution_401k_percent": 10.0,
         "contribution_roth_percent": 5.0,
         "contribution_brokerage_percent": 5.0,
+        # Other income sources (annual amounts in today's dollars, inflated at expense_inflation_rate)
+        "pension_annual": 0,           # combined annual pension / annuity
+        "rental_annual": 0,            # net annual rental income
+        "interest_annual": 0,          # annual taxable interest income
+        "dividend_annual": 0,          # annual dividend income
     },
     "expenses": {
         "living_expenses": {
             "property_tax": 5000,
             "homeowners_insurance": 1000,
-            "auto_insurance": 4000,
-            "food_groceries": 12000,
-            "utilities_phone": 2400,
-            "utilities_internet": 3600,
+            "auto_insurance": 3000,
+            "food_groceries": 10000,
+            "utilities_phone": 1200,
+            "utilities_internet": 1200,
             "utilities_cable": 0,
-            "utilities_electric": 6000,
-            "utilities_gas": 3600,
-            "utilities_water": 3000,
-            "gifts_donations": 20000,
-            "other_living": 10000,
+            "utilities_electric": 3000,
+            "utilities_gas": 1200,
+            "utilities_water": 1200,
+            "gifts_donations": 5000,
+            "other_living": 5000,
         },
-        "big_ticket_items": [
-            {"name": "Sarah car", "amount": 70000.0, "frequency_years": 10, "start_year": 2021, "end_year": 2056},
-            {"name": "Tom car",   "amount": 70000.0, "frequency_years": 10, "start_year": 2024, "end_year": 2056},
-        ],
+        "big_ticket_items": [],
         "entertainment_expenses": {
-            "travel_vacations": 30000,
-            "dining_out": 18000,
-            "clothing": 10000,
-            "hobbies": 10000,
-            "entertainment_other": 10000,
+            "travel_vacations": 10000,
+            "dining_out": 5000,
+            "clothing": 3000,
+            "hobbies": 3000,
+            "entertainment_other": 3000,
             "retirement_decline_enabled": True,
             "retirement_decline_percent": 20,
             "retirement_decline_start_age": 72,
@@ -82,14 +84,14 @@ DEFAULT_CONFIG = {
     },
     "social_security": {
         "person1_ssi_age": 70,
-        "person1_ssi_amount": 4205,
+        "person1_ssi_amount": 2000,
         "person2_ssi_age": 70,
-        "person2_ssi_amount": 4205,
-        "person1_birth_year": 1960,
+        "person2_ssi_amount": 2000,
+        "person1_birth_year": 1965,
         "person1_gender": "M",
-        "person1_life_expectancy": 84,
+        "person1_life_expectancy": 85,
         "person1_current_earnings": 0,
-        "person2_birth_year": 1962,
+        "person2_birth_year": 1966,
         "person2_gender": "F",
         "person2_life_expectancy": 87,
         "person2_current_earnings": 0,
@@ -102,19 +104,19 @@ DEFAULT_CONFIG = {
         "person1_preretirement_coverage_type": "Employer",
         "person1_preretirement_insurance_monthly": 400,
         "person1_retirement_coverage_type": "Employer Retiree",
-        "person1_aca_insurance_monthly": 1000,
+        "person1_aca_insurance_monthly": 500,
         "person1_aca_start_age": 62,
         "person1_aca_end_age": 65,
         "person1_medicare_start_age": 65,
         "person2_preretirement_coverage_type": "Employer",
-        "person2_preretirement_insurance_monthly": 200,
+        "person2_preretirement_insurance_monthly": 400,
         "person2_retirement_coverage_type": "Employer Retiree",
-        "person2_aca_insurance_monthly": 240,
+        "person2_aca_insurance_monthly": 500,
         "person2_aca_start_age": 62,
         "person2_aca_end_age": 65,
         "person2_medicare_start_age": 65,
-        "person1_conditions": ["atherosclerosis"],
-        "person2_conditions": ["type1_diabetes"],
+        "person1_conditions": [],
+        "person2_conditions": [],
     },
     "tax_strategy": {
         "max_roth_conversion_tax_rate": 24,
@@ -127,18 +129,18 @@ DEFAULT_CONFIG = {
         "stage_7_max_conversion_rate": 15,
     },
     "charitable_giving": {
-        "annual_charitable_giving": 30000,
-        "charitable_giving_start_age": 61,
-        "charitable_giving_end_age": 95,
+        "annual_charitable_giving": 0,
+        "charitable_giving_start_age": 65,
+        "charitable_giving_end_age": 90,
         "charitable_giving_inflation_rate": 2.0,
-        "has_daf": True,
+        "has_daf": False,
         "daf_provider": "",
-        "daf_initial_contribution": 230000,
-        "daf_annual_contribution": 60000,
-        "daf_contribution_start_age": 61,
+        "daf_initial_contribution": 0,
+        "daf_annual_contribution": 0,
+        "daf_contribution_start_age": 65,
         "daf_contribution_end_age": 75,
-        "daf_trad_prefund_enabled": True,
-        "daf_trad_prefund_amount": 625000,
+        "daf_trad_prefund_enabled": False,
+        "daf_trad_prefund_amount": 0,
         "daf_trad_prefund_start_year": 2027,
         "daf_trad_prefund_end_year": 2027,
     },
@@ -167,26 +169,10 @@ DEFAULT_CONFIG = {
         },
     },
     "portfolio_accounts": {
-        "accounts": [
-            {"account_name": "Schwab-8457",                      "account_type": "Traditional", "owner": "Joint"},
-            {"account_name": "Schwab-6471",                      "account_type": "Roth",        "owner": "Sarah"},
-            {"account_name": "Schwab-5553",                      "account_type": "Roth",        "owner": "Tom"},
-            {"account_name": "PNC",                              "account_type": "Savings",     "owner": "Joint"},
-            {"account_name": "IBM Pension (Legecy)",             "account_type": "Traditional", "owner": "Tom"},
-            {"account_name": "IBM Pension",                      "account_type": "Traditional", "owner": "Tom"},
-            {"account_name": "IBM ESPP",                         "account_type": "Brokerage",   "owner": "Joint"},
-            {"account_name": "Highmark Pension (Legacy)",        "account_type": "Traditional", "owner": "Sarah"},
-            {"account_name": "Highmark Pension",                 "account_type": "Traditional", "owner": "Sarah"},
-            {"account_name": "Highmark 401k",                    "account_type": "Traditional", "owner": "Sarah"},
-            {"account_name": "CVS 401k",                         "account_type": "Traditional", "owner": "Sarah"},
-            {"account_name": "CAPGEMINI SAFE HARBOR 401(K) PLAN","account_type": "Traditional", "owner": "Sarah"},
-            {"account_name": "IBM 401(K) PLAN",                  "account_type": "Traditional", "owner": "Tom"},
-        ],
+        "accounts": [],
     },
     "real_estate": {
-        "properties": [
-            {"property_name": "McManus Home", "address": "1259 Denniston Street", "purchase_price": 280000},
-        ],
+        "properties": [],
     },
     "metadata": {
         "last_updated": None,
@@ -618,6 +604,26 @@ def get_config_manager() -> ConfigManager:
         if _config_manager is None:
             _config_manager = ConfigManager()
         return _config_manager
+
+def get_config_value(section: str, key: str, default: Any = None) -> Any:
+    """
+    Get a configuration value.
+    
+    This is a convenience wrapper around ConfigManager.get() that works
+    outside of Streamlit contexts (e.g., in unit tests or CLI scripts).
+    
+    Args:
+        section: Configuration section (e.g., 'tax_strategy')
+        key: Configuration key (e.g., 'use_january_bracket_fill_strategy')
+        default: Default value if not found
+    
+    Returns:
+        Configuration value or default
+    """
+    config_mgr = get_config_manager()
+    return config_mgr.get(section, key, default)
+
+
 
 
 def get_value_with_session_override(section: str, key: str, session_key: str, default: Any = None) -> Any:

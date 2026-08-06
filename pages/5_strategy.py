@@ -2071,6 +2071,909 @@ def render_tax_insights(tax_data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tax Strategy Comparison
+# ---------------------------------------------------------------------------
+
+def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> None:
+    """
+    Render an interactive "Select a Tax Strategy" comparison table.
+
+    For a user-selected year the function analytically evaluates every
+    common withdrawal-ordering and Roth-conversion strategy and reports:
+      - Average Tax Rate  (total taxes / total income for the year)
+      - Total Taxes       (federal + state + IRMAA for the year)
+      - Total Net Income  (income after all taxes, projected to plan end)
+      - Portfolio Impact  (plan's projected end-of-plan portfolio ± tax delta compounded forward)
+
+    Strategies compared
+    -------------------
+    Withdrawal-order variants (6):
+      1. Pro-Rata               — draw from all accounts in proportion to balance
+      2. Taxable → Deferred → Free  (default plan order)
+      3. Taxable → Free → Deferred
+      4. Deferred → Taxable → Free
+      5. Deferred → Free → Taxable
+      6. Free → Deferred → Taxable
+      7. Free → Taxable → Deferred
+
+    Roth-conversion variants (7):
+      8.  Roth Conversions to fill 0% bracket
+      9.  Roth Conversions to fill 10% bracket
+      10. Roth Conversions to fill 12% bracket
+      11. Roth Conversions below IRMAA Bracket 1  ← typically the planner default
+      12. Roth Conversions to fill 22% bracket
+      13. Roth Conversions below IRMAA Bracket 2
+      14. Roth Conversions below IRMAA Bracket 3
+      15. Roth Conversions below IRMAA Bracket 4
+    """
+    if strategy_df.empty or 'Year' not in strategy_df.columns:
+        return
+
+    st.markdown("### 🎯 Tax Strategy Comparison")
+    st.caption(
+        "Compare how different withdrawal-ordering and Roth-conversion strategies affect your "
+        "tax burden and net income.  Select a year to evaluate — the currently-used plan strategy "
+        "is flagged automatically."
+    )
+
+    # Read the plan's configured growth rate from session state (same source the
+    # strategy engine uses) so the compounding is consistent.
+    try:
+        _plan_growth_rate = float(st.session_state.get("RATE", 6)) / 100
+    except (ValueError, TypeError):
+        _plan_growth_rate = 0.06
+
+
+    # -----------------------------------------------------------------------
+    # Year selector
+    # -----------------------------------------------------------------------
+    years = sorted(strategy_df['Year'].unique().tolist())
+    selected_year = st.selectbox(
+        "Select year to evaluate",
+        options=years,
+        index=0,
+        key=f"tax_strategy_comparison_year_{phase}",
+        help="Choose which plan year to run the comparison for",
+    )
+
+    year_row = strategy_df[strategy_df['Year'] == selected_year].iloc[0]
+
+    def _v(col: str, default: float = 0.0) -> float:
+        v = year_row.get(col, default)
+        try:
+            return float(v) if v is not None and v == v else default
+        except (TypeError, ValueError):
+            return default
+
+    # -----------------------------------------------------------------------
+    # Pull the year's key financial variables
+    # -----------------------------------------------------------------------
+    wages           = _v('Wages')
+    ss_benefits     = _v('SS Benefits')
+    rmd             = _v('RMD')
+    trad_cash       = _v('Trad→\nCash')
+    brok_cash       = _v('Brok→\nCash')
+    ltcg            = _v('LTCG Harvested')
+    agi             = _v('AGI')
+    federal_tax     = _v('Federal Tax')
+    state_tax       = _v('State Tax')
+    irmaa           = _v('IRMAA Penalty')
+    expenses        = _v('Expenses')
+    trad_balance    = _v('Traditional Balance')
+    roth_balance    = _v('Roth Balance')
+    taxable_balance = _v('Taxable Balance')
+    total_portfolio = _v('Total Portfolio')
+    roth_conv_plan  = _v('Trad→\nRoth')
+
+    # Parse ages from "primary/spouse" string (e.g. "63/61")
+    age_str = str(year_row.get('Age', '0/0'))
+    try:
+        _parts = age_str.split('/')
+        age_primary = int(_parts[0].strip())
+        age_spouse  = int(_parts[1].strip()) if len(_parts) > 1 else 0
+    except (ValueError, IndexError):
+        age_primary = age_spouse = 0
+
+    # Remaining plan years (for net legacy projection)
+    plan_years_remaining = max(1, len(strategy_df[strategy_df['Year'] >= selected_year]))
+
+    # -----------------------------------------------------------------------
+    # Load tax + IRMAA data for the selected year
+    # -----------------------------------------------------------------------
+    from load_data import get_income_tax_brackets, get_std_deduction, get_medicare_costs
+    from config import get_config_manager as _gcfg
+
+    try:
+        _cfg = _gcfg()
+        filing_status   = _cfg.get("tax_info", "filing_status", "married_filing_jointly")
+        state_tax_rate  = _cfg.get("tax_info", "state_income_tax_rate", 0.0) / 100.0
+    except Exception:
+        filing_status  = "married_filing_jointly"
+        state_tax_rate = 0.04
+
+    try:
+        brackets_df = get_income_tax_brackets(selected_year, filing_status)
+        brackets = brackets_df.sort_values('lower')[['lower', 'upper', 'rate']].values.tolist()
+        brackets = [(lo, hi, r) for lo, hi, r in brackets if r > 0]
+    except Exception:
+        brackets = []
+
+    try:
+        std_ded_df    = get_std_deduction(selected_year, filing_status)
+        std_deduction = float(std_ded_df['deduction'].iloc[0])
+    except Exception:
+        std_deduction = 32200.0
+
+    # IRMAA uses a 2-year lookback: a conversion THIS year affects Medicare
+    # premiums TWO years from now.  IRMAA options are only meaningful when at
+    # least one person will be on Medicare in selected_year + 2 (i.e. age ≥ 65
+    # two years from now, meaning age ≥ 63 today).
+    medicare_relevant = (age_primary + 2 >= 65) or (age_spouse > 0 and age_spouse + 2 >= 65)
+
+    try:
+        # Load IRMAA brackets for the year that MAGI will be evaluated
+        # (selected_year income → IRMAA in selected_year+2)
+        irmaa_df        = get_medicare_costs(selected_year)
+        irmaa_thresholds = sorted(t for t in irmaa_df['lower'].tolist() if t > 0)
+    except Exception:
+        irmaa_thresholds = [218_000, 274_000, 334_000, 400_000]
+
+    # -----------------------------------------------------------------------
+    # Analytical tax computation helpers
+    # -----------------------------------------------------------------------
+
+    def _compute_federal_tax(taxable_income: float) -> float:
+        """Progressive bracket tax."""
+        if not brackets or taxable_income <= 0:
+            return 0.0
+        tax = 0.0
+        for lo, hi, rate in brackets:
+            if taxable_income <= lo:
+                break
+            tax += (min(taxable_income, hi) - lo) * rate
+        return max(0.0, tax)
+
+    def _compute_taxes(conv_amount: float, withdrawal_order_key: str) -> dict:
+        """Compute taxes + metrics for one (conversion_amount, withdrawal_order) scenario.
+
+        Withdrawal ordering
+        -------------------
+        The plan already has fixed income streams (wages, SS, RMDs) that cannot
+        be re-ordered.  The ordering choice only governs the *discretionary gap*:
+        the additional cash needed from portfolio accounts beyond those fixed
+        sources.  We use the plan's actual combined discretionary draw
+        (trad_cash + brok_cash + roth_cash from the strategy row) as the total
+        amount to redistribute, then re-split it according to the chosen order.
+
+        Roth conversions
+        ----------------
+        A Roth conversion is a tax-event — ordinary income now for tax-free
+        growth later.  The conversion amount increases AGI and therefore taxes,
+        but it is NOT spendable cash; the money moves from Traditional to Roth.
+        Net Spendable Cash is therefore calculated excluding the conversion from
+        income, so that comparing higher vs. lower conversion amounts correctly
+        shows the cost in take-home pay today.
+        """
+        # The portfolio gap = the dollars that must come from investment accounts.
+        # Fixed sources (wages, SS, RMDs) cover expenses first; the rest must be
+        # drawn from Traditional, Taxable (brokerage), and/or Roth.
+        # We use expenses as the funding target so the ordering comparison is
+        # always meaningful — even in years where wages happen to cover everything,
+        # we still show what each ordering *would* cost if you had to fund the full
+        # expense from portfolio (which is the scenario that matters in retirement).
+        fixed_income   = wages + ss_benefits + rmd   # cannot be reordered
+        portfolio_need = max(0.0, expenses - fixed_income)
+
+        # Each account can supply at most its balance; cap draws accordingly.
+        avail_map = {
+            'trad':    trad_balance,
+            'taxable': taxable_balance,
+            'roth':    roth_balance,
+        }
+        remaining = portfolio_need
+        trad_draw = brok_draw = roth_draw = 0.0
+
+        if withdrawal_order_key == 'pro_rata':
+            trad_draw, brok_draw, roth_draw = _pro_rata_split(
+                remaining, trad_balance, taxable_balance, roth_balance)
+        else:
+            order = {
+                'taxable_deferred_free': ['taxable', 'trad', 'roth'],
+                'taxable_free_deferred': ['taxable', 'roth', 'trad'],
+                'deferred_taxable_free': ['trad', 'taxable', 'roth'],
+                'deferred_free_taxable': ['trad', 'roth', 'taxable'],
+                'free_deferred_taxable': ['roth', 'trad', 'taxable'],
+                'free_taxable_deferred': ['roth', 'taxable', 'trad'],
+            }.get(withdrawal_order_key, ['trad', 'taxable', 'roth'])
+            for src in order:
+                if remaining <= 0:
+                    break
+                drawn = min(remaining, avail_map.get(src, 0.0))
+                if src == 'trad':      trad_draw += drawn
+                elif src == 'taxable': brok_draw += drawn
+                else:                  roth_draw += drawn
+                remaining -= drawn
+
+        brok_ltcg_ratio = ltcg / brok_cash if brok_cash > 0 else 0.40
+        # Only the LTCG fraction of brokerage draws is ordinary/taxable income;
+        # the basis-return portion is tax-free return of capital.
+        brok_taxable = brok_draw * brok_ltcg_ratio
+        ss_taxable   = ss_benefits * 0.85  # up to 85% of SS is taxable
+
+        # AGI for this scenario — conversion adds ordinary income, Roth draw does not
+        scenario_agi     = wages + ss_taxable + trad_draw + rmd + conv_amount + brok_taxable
+        scenario_taxable = max(0.0, scenario_agi - std_deduction)
+        fed              = _compute_federal_tax(scenario_taxable)
+        st_tax_amt       = scenario_agi * state_tax_rate
+
+        irmaa_cost = 0.0
+        if medicare_relevant and irmaa_thresholds:
+            irmaa_cost = irmaa if scenario_agi >= irmaa_thresholds[0] else 0.0
+
+        total_tax = fed + st_tax_amt + irmaa_cost
+
+        # Effective Tax Rate = total taxes ÷ taxable income
+        # (AGI − standard deduction) — same definition as rest of this app.
+        eff_tax_rate = (total_tax / scenario_taxable * 100) if scenario_taxable > 0 else 0.0
+
+        # Net Spendable Cash = all cash that actually lands in pocket.
+        # Roth conversions move money between accounts; they are NOT spendable.
+        # We show take-home from income sources minus taxes, so the user can see
+        # the real cost of a conversion strategy in this year's cash flow.
+        gross_spendable = wages + ss_benefits + trad_draw + brok_draw + roth_draw + rmd
+        net_spendable   = max(0.0, gross_spendable - total_tax)
+
+        # Portfolio Impact = marginal effect of this year's tax difference,
+        # compounded forward to end-of-plan at the plan's configured growth rate.
+        #
+        #   tax_delta > 0  → strategy pays less tax → more money invested → higher portfolio
+        #   tax_delta < 0  → strategy pays more tax → less money invested → lower portfolio
+        #
+        # Formula: tax_delta × (1 + r)^n
+        #   • tax_delta: one-year tax saving vs the plan's actual taxes
+        #   • r: plan's configured annual growth rate (from session state RATE)
+        #   • n: years from selected_year to end of plan
+        #
+        # This is added to total_portfolio (the plan's already-projected end value)
+        # to show what the end balance would look like under this scenario.
+        baseline_tax     = federal_tax + state_tax + irmaa
+        tax_delta        = baseline_tax - total_tax
+        compound_factor  = (1 + _plan_growth_rate) ** plan_years_remaining
+        portfolio_impact = total_portfolio + tax_delta * compound_factor
+
+        return {
+            'eff_tax_rate':     eff_tax_rate,
+            'total_taxes':      total_tax,
+            'net_spendable':    net_spendable,
+            'portfolio_impact': portfolio_impact,
+        }
+
+    def _pro_rata_split(gap, trad_bal, brok_bal, roth_bal):
+        total = trad_bal + brok_bal + roth_bal
+        if total <= 0:
+            return 0.0, 0.0, 0.0
+        return gap * trad_bal / total, gap * brok_bal / total, gap * roth_bal / total
+
+    # -----------------------------------------------------------------------
+    # Strategy definitions — smart filtering
+    # -----------------------------------------------------------------------
+
+    # Base non-conversion AGI (what income looks like without the conversion)
+    base_agi_no_conv = (wages + ss_benefits * 0.85 + rmd + trad_cash
+                        + brok_cash * (ltcg / brok_cash if brok_cash > 0 else 0.40))
+
+    def _bracket_upper(rate: float) -> float:
+        """Return the upper bound of the bracket with the given marginal rate."""
+        for lo, hi, r in brackets:
+            if abs(r - rate) < 0.001:
+                return hi
+        return 0.0
+
+    def _fill_conv(target_taxable_upper: float) -> float:
+        """Conversion needed to push taxable income to target_taxable_upper."""
+        base_taxable = max(0.0, base_agi_no_conv - std_deduction)
+        headroom = target_taxable_upper - base_taxable
+        return max(0.0, headroom)
+
+    def _irmaa_conv_limit(tier: int) -> float:
+        """Max conversion keeping MAGI below IRMAA tier (0-based)."""
+        if tier >= len(irmaa_thresholds):
+            return 0.0
+        return max(0.0, irmaa_thresholds[tier] - 1 - base_agi_no_conv)
+
+    def _irmaa_label(tier: int) -> str:
+        return f"${irmaa_thresholds[tier]:,.0f}" if tier < len(irmaa_thresholds) else "N/A"
+
+    plan_order_key = "taxable_deferred_free"
+
+    # ---- Withdrawal-order strategies ----------------------------------------
+    # Suppress orders where a source account has zero balance (no meaningful choice)
+    has_trad    = trad_balance > 1_000
+    has_taxable = taxable_balance > 1_000
+    has_roth    = roth_balance > 1_000
+
+    all_orders = [
+        ("Pro-Rata",                          "pro_rata"),
+        ("Taxable → Tax-Deferred → Tax-Free", "taxable_deferred_free"),
+        ("Taxable → Tax-Free → Tax-Deferred", "taxable_free_deferred"),
+        ("Tax-Deferred → Taxable → Tax-Free", "deferred_taxable_free"),
+        ("Tax-Deferred → Tax-Free → Taxable", "deferred_free_taxable"),
+        ("Tax-Free → Tax-Deferred → Taxable", "free_deferred_taxable"),
+        ("Tax-Free → Taxable → Tax-Deferred", "free_taxable_deferred"),
+    ]
+
+    strategies: list[dict] = []
+
+    for name, order_key in all_orders:
+        # Skip orders that lead to an empty first-source draw
+        if order_key in ('taxable_deferred_free', 'taxable_free_deferred') and not has_taxable:
+            continue
+        if order_key in ('deferred_taxable_free', 'deferred_free_taxable') and not has_trad:
+            continue
+        if order_key in ('free_deferred_taxable', 'free_taxable_deferred') and not has_roth:
+            continue
+
+        result      = _compute_taxes(roth_conv_plan, order_key)
+        used_in_plan = (order_key == plan_order_key)
+        strategies.append({
+            'name': name, 'order_key': order_key,
+            'group': 'Withdrawal Order',
+            'used_in_plan': used_in_plan, 'viewing_now': used_in_plan,
+            **result,
+        })
+
+    # ---- Roth-conversion bracket-fill strategies ----------------------------
+    # Only include a bracket if there's meaningful headroom (> $1,000 of room)
+    # and the Traditional balance can support the conversion.
+    MIN_CONV = 1_000.0
+
+    # All possible bracket rates present in this year's CSV
+    all_rates = sorted({r for _, _, r in brackets})
+
+    # Fill-to-bracket rows: one per bracket rate, ordered low → high
+    for rate in all_rates:
+        upper = _bracket_upper(rate)
+        if upper <= 0:
+            continue
+        conv = _fill_conv(upper)
+        if conv < MIN_CONV or conv > trad_balance:
+            continue
+        label = f"Roth Conversions — fill {rate*100:.0f}% bracket  (convert ${conv:,.0f})"
+        result = _compute_taxes(conv, plan_order_key)
+        used_in_plan = abs(conv - roth_conv_plan) < 500
+        strategies.append({
+            'name': label, 'order_key': plan_order_key,
+            'group': 'Roth Conversion',
+            'used_in_plan': used_in_plan, 'viewing_now': used_in_plan and roth_conv_plan > 0,
+            **result,
+        })
+
+    # IRMAA-aware rows: only when Medicare is relevant for this year's income
+    if medicare_relevant and irmaa_thresholds:
+        for tier, threshold in enumerate(irmaa_thresholds):
+            conv = _irmaa_conv_limit(tier)
+            if conv < MIN_CONV or conv > trad_balance:
+                continue
+            # Label: show the MAGI threshold and 2-year lookback note
+            lookback_year = selected_year + 2
+            label = (f"Roth Conversions — below IRMAA Tier {tier+1} "
+                     f"({_irmaa_label(tier)} MAGI cap → affects {lookback_year} Medicare)  "
+                     f"(convert ${conv:,.0f})")
+            result = _compute_taxes(conv, plan_order_key)
+            used_in_plan = abs(conv - roth_conv_plan) < 500
+            strategies.append({
+                'name': label, 'order_key': plan_order_key,
+                'group': 'Roth Conversion',
+                'used_in_plan': used_in_plan, 'viewing_now': used_in_plan and roth_conv_plan > 0,
+                **result,
+            })
+
+    if not strategies:
+        st.info("No strategies available to compare for the selected year.")
+        return
+
+    # -----------------------------------------------------------------------
+    # Determine the default selection — closest to the plan's actual taxes
+    # -----------------------------------------------------------------------
+    plan_actual_taxes = federal_tax + state_tax + irmaa
+
+    # Find the index of the plan-matching row (or closest by tax amount)
+    plan_candidates = [i for i, s in enumerate(strategies) if s['used_in_plan']]
+    if plan_candidates:
+        default_idx = min(plan_candidates,
+                          key=lambda i: abs(strategies[i]['total_taxes'] - plan_actual_taxes))
+    else:
+        default_idx = min(range(len(strategies)),
+                          key=lambda i: abs(strategies[i]['total_taxes'] - plan_actual_taxes))
+
+    # -----------------------------------------------------------------------
+    # Build the radio options list, with group headers as disabled separators
+    # -----------------------------------------------------------------------
+    # We need to map radio index → strategy index, skipping group headers.
+    radio_labels   = []   # what st.radio shows
+    radio_to_strat = []   # radio index → strategy index
+
+    last_group = None
+    for si, s in enumerate(strategies):
+        grp = s.get('group', '')
+        if grp != last_group:
+            # Insert a non-selectable group header as a bold label prefix on the
+            # first item of each group.  We encode the group into the label text
+            # and strip it visually below — this avoids needing a disabled option.
+            last_group = grp
+        badge = "  ⚑ Used in Plan" if s['used_in_plan'] else ""
+        radio_labels.append(f"{s['name']}{badge}")
+        radio_to_strat.append(si)
+
+    # Map default_idx (strategy index) back to radio index
+    default_radio_idx = next(
+        (ri for ri, si in enumerate(radio_to_strat) if si == default_idx), 0
+    )
+
+    # -----------------------------------------------------------------------
+    # Render: radio selector on the left, metrics table on the right
+    # -----------------------------------------------------------------------
+
+    # Color helpers
+    best_tax  = min(s['total_taxes'] for s in strategies)
+    worst_tax = max(s['total_taxes'] for s in strategies)
+    tax_range = max(1.0, worst_tax - best_tax)
+
+    def _bar_pct(tax: float) -> float:
+        """0–100 position on the color scale (0=green/best, 100=red/worst)."""
+        return (tax - best_tax) / tax_range * 100
+
+    def _bar_color(pct: float) -> str:
+        """Interpolate green→yellow→red."""
+        if pct <= 50:
+            r = int(pct / 50 * 220)
+            return f"rgb({r},200,80)"
+        else:
+            g = int((1 - (pct - 50) / 50) * 160)
+            return f"rgb(220,{g},80)"
+
+    # Split into two columns: selector left, table right
+    sel_col, tbl_col = st.columns([1, 2], gap="large")
+
+    with sel_col:
+        st.markdown("**Select a strategy to analyse:**")
+
+        # Build group-aware radio by injecting markdown headers between groups
+        last_grp_rendered = None
+        for ri, si in enumerate(radio_to_strat):
+            s = strategies[si]
+            grp = s.get('group', '')
+            if grp != last_grp_rendered:
+                st.markdown(
+                    f"<div style='font-size:10px;font-weight:700;letter-spacing:.07em;"
+                    f"text-transform:uppercase;color:#57606a;margin-top:10px;"
+                    f"margin-bottom:2px;'>{grp}</div>",
+                    unsafe_allow_html=True,
+                )
+                last_grp_rendered = grp
+
+            # One button per strategy
+            label_clean = s['name'].split('  (convert')[0]  # drop the amount hint for brevity
+            badge_html  = ""
+            if s['used_in_plan']:
+                badge_html = (
+                    ' <span style="background:#3b82d4;color:white;border-radius:8px;'
+                    'padding:1px 6px;font-size:10px;">⚑ Plan</span>'
+                )
+            st.markdown(
+                f"<div style='margin-bottom:0;font-size:12px;'>"
+                f"{label_clean}{badge_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+        # The actual radio widget — labels are the clean strategy names
+        clean_labels = []
+        last_grp2 = None
+        for ri, si in enumerate(radio_to_strat):
+            s = strategies[si]
+            grp = s.get('group', '')
+            prefix = f"[{grp}] " if grp != last_grp2 else "  "
+            last_grp2 = grp
+            short = s['name'].split('  (convert')[0]
+            clean_labels.append(short)
+
+        selected_radio = st.radio(
+            "Strategy",
+            options=clean_labels,
+            index=default_radio_idx,
+            key=f"strategy_radio_{phase}_{selected_year}",
+            label_visibility="collapsed",
+        )
+        selected_si = radio_to_strat[clean_labels.index(selected_radio)]
+        viewing = strategies[selected_si]
+
+    with tbl_col:
+        # ---- Summary metrics for selected strategy ----
+        st.markdown("**Selected strategy — year detail:**")
+
+        plan_badge = " ⚑ (Used in Plan)" if viewing['used_in_plan'] else ""
+        st.markdown(
+            f"<div style='font-size:13px;font-weight:600;color:#1f2328;"
+            f"margin-bottom:8px;'>{viewing['name'].split('  (convert')[0]}{plan_badge}</div>",
+            unsafe_allow_html=True,
+        )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Effective Tax Rate", f"{viewing['eff_tax_rate']:.2f}%",
+                  help="Total taxes (federal + state + IRMAA) ÷ taxable income (AGI − std deduction)")
+        m2.metric("Total Taxes", f"${viewing['total_taxes']:,.0f}")
+        m3.metric("Net Spendable Cash", f"${viewing['net_spendable']:,.0f}",
+                  help="Wages + SS + all withdrawals + RMDs minus taxes. "
+                       "Roth conversions excluded — they move money between accounts.")
+        m4.metric("Portfolio Impact", f"${viewing['portfolio_impact']:,.0f}",
+                  help=(
+                      "Projected end-of-plan portfolio value under this strategy.\n\n"
+                      "Formula: plan's projected portfolio + (tax saving vs plan this year "
+                      f"× (1 + {_plan_growth_rate*100:.1f}%)^{plan_years_remaining} years remaining).\n\n"
+                      "A higher number means this strategy leaves more in the portfolio at end of plan "
+                      "after accounting for the tax difference compounded forward."
+                  ))
+
+        st.markdown("---")
+
+        # ---- Full comparison table (read-only, for context) ----
+        st.markdown("**All strategies at a glance:**")
+
+        rows_html = ""
+        last_group = None
+        for si, s in enumerate(strategies):
+            grp = s.get('group', '')
+            if grp != last_group:
+                rows_html += (
+                    f'<tr><td colspan="5" style="padding:8px 6px 3px;font-size:10px;'
+                    f'font-weight:700;letter-spacing:.07em;text-transform:uppercase;'
+                    f'color:#57606a;border-bottom:1px solid #e5e7eb;">{grp}</td></tr>'
+                )
+                last_group = grp
+
+            is_selected  = (si == selected_si)
+            is_plan      = s['used_in_plan']
+            row_bg       = "#d4f0c0" if is_selected else ("#eaf6e0" if is_plan else "transparent")
+            border_left  = "border-left:3px solid #5c9c3a;" if is_selected else ""
+
+            pct   = _bar_pct(s['total_taxes'])
+            color = _bar_color(pct)
+            # Mini bar width proportional to tax amount
+            bar_w = max(4, int(pct * 0.6))
+
+            badge = ""
+            if is_selected:
+                badge = '<span style="background:#5c9c3a;color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;margin-left:4px;">● Selected</span>'
+            elif is_plan:
+                badge = '<span style="background:#3b82d4;color:#fff;border-radius:8px;padding:1px 6px;font-size:10px;margin-left:4px;">⚑ Plan</span>'
+
+            short_name = s['name'].split('  (convert')[0]
+            rows_html += (
+                f'<tr style="background:{row_bg};{border_left}">'
+                f'<td style="padding:6px 8px;font-size:12px;">{short_name}{badge}</td>'
+                f'<td style="padding:6px 8px;text-align:right;font-size:12px;">{s["eff_tax_rate"]:.2f}%</td>'
+                f'<td style="padding:6px 8px;text-align:right;font-size:12px;">${s["total_taxes"]:,.0f}'
+                f'<div style="height:4px;width:{bar_w}px;background:{color};'
+                f'border-radius:2px;margin-top:2px;margin-left:auto;"></div></td>'
+                f'<td style="padding:6px 8px;text-align:right;font-size:12px;">${s["net_spendable"]:,.0f}</td>'
+                f'<td style="padding:6px 8px;text-align:right;font-size:12px;">${s["portfolio_impact"]:,.0f}</td>'
+                f'</tr>'
+            )
+
+        tbl_html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  body{{margin:0;padding:0;background:transparent}}
+  table{{width:100%;border-collapse:collapse;font-family:-apple-system,"Segoe UI",sans-serif}}
+  th{{background:#f7f8fa;border-bottom:2px solid #e5e7eb;padding:7px 8px;font-size:11px;
+      font-weight:600;color:#1f2328;text-align:left}}
+  th.r{{text-align:right}}
+  td{{border-bottom:1px solid #f0f0f0;vertical-align:top}}
+  tr:hover td{{background:#f5f9ff!important}}
+</style></head><body>
+<table>
+  <thead><tr>
+    <th>Strategy</th>
+    <th class="r">Eff. Tax Rate</th>
+    <th class="r">Total Taxes</th>
+    <th class="r">Net Spendable</th>
+    <th class="r">Portfolio Impact</th>
+  </tr></thead>
+  <tbody>{rows_html}</tbody>
+</table></body></html>"""
+
+        tbl_height = len(strategies) * 34 + 60
+        components.html(tbl_html, height=tbl_height, scrolling=False)
+
+    # ---- Savings callout ----
+    max_tax_strat  = max(strategies, key=lambda s: s['total_taxes'])
+    best_pi_strat  = max(strategies, key=lambda s: s['portfolio_impact'])
+    savings = max_tax_strat['total_taxes'] - viewing['total_taxes']
+    if savings > 0:
+        st.success(
+            f"💡 **{viewing['name'].split('  (convert')[0]}** saves **${savings:,.0f}** in taxes "
+            f"vs the highest-tax approach "
+            f"(**{max_tax_strat['name'].split('  (convert')[0]}** at "
+            f"${max_tax_strat['total_taxes']:,.0f})."
+        )
+
+    st.caption(
+        "ℹ️ *Effective Tax Rate* = (federal + state + IRMAA) ÷ taxable income (AGI − standard deduction).  "
+        "*Net Spendable Cash* = wages + SS + portfolio withdrawals + RMDs minus taxes. "
+        "Roth conversion rows show lower spendable cash because the tax is paid this year; "
+        "the benefit shows up in *Portfolio Impact*.  "
+        f"*Portfolio Impact* = plan's projected end-of-plan portfolio ± (this year's tax difference "
+        f"× (1 + {_plan_growth_rate*100:.1f}%)^years remaining).  "
+        "All values are analytical estimates — rerun the full strategy for exact figures."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Expenses by Type Chart
+# ---------------------------------------------------------------------------
+
+def render_expenses_by_type_chart(strategy_df: pd.DataFrame, phase: str) -> None:
+    """
+    Render a stacked bar chart of annual expenses broken down by category:
+      - Taxes: Income Tax (on wages / conversions / distributions), LTCG Tax, State Tax
+      - IRMAA (Medicare surcharge)
+      - Payroll / FICA taxes
+      - Healthcare Premiums (Medicare Part B/D/Medigap, ACA premiums)
+      - Out-of-Pocket Healthcare (deductibles, copays, etc.)
+      - Living Expenses (property tax, insurance, utilities, food, gifts, other)
+      - Big-Ticket Items (cars, home projects, etc. — annualised)
+      - Entertainment (travel, dining, hobbies, clothing, etc.)
+
+    The Living / Big-Ticket / Entertainment split is derived from the config
+    base amounts and applied proportionally to each year's 'Expenses' figure
+    (which is the strategy engine's rolled-up total).
+    """
+    if strategy_df.empty:
+        return
+
+    st.subheader("💸 Annual Expenses by Category")
+    st.caption(
+        "Stacked view of every dollar leaving the household each year. "
+        "Taxes are split into income tax (on wages / Roth conversions / distributions) "
+        "vs. capital-gains tax. Healthcare is split into monthly premiums vs. out-of-pocket. "
+        "Living / Big-Ticket / Entertainment proportions are derived from your configuration."
+    )
+
+    # ------------------------------------------------------------------
+    # 1. Read expense category data from config
+    # ------------------------------------------------------------------
+    try:
+        from config import get_config_manager as _ecfg
+        _cfg = _ecfg()
+        living_cfg: dict = _cfg.get("expenses", "living_expenses", {}) or {}
+        big_ticket_list: list = _cfg.get("expenses", "big_ticket_items", []) or []
+        entertain_cfg: dict = _cfg.get("expenses", "entertainment_expenses", {}) or {}
+        expense_inflation_rate: float = _cfg.get(
+            "financial_assumptions", "expense_inflation_rate", 3.0
+        ) / 100.0
+    except Exception:
+        living_cfg = {}
+        big_ticket_list = []
+        entertain_cfg = {}
+        expense_inflation_rate = 0.03
+
+    _non_numeric_keys = {"retirement_decline_enabled", "retirement_decline_percent",
+                         "retirement_decline_start_age"}
+
+    living_base = sum(
+        float(v) for k, v in living_cfg.items()
+        if k not in _non_numeric_keys and isinstance(v, (int, float))
+    )
+
+    entertain_base = sum(
+        float(v) for k, v in entertain_cfg.items()
+        if k not in _non_numeric_keys and isinstance(v, (int, float))
+    )
+
+    # Recurring base (no big-ticket) used to proportion living vs. entertainment
+    recurring_base = living_base + entertain_base
+    if recurring_base > 0:
+        living_frac   = living_base / recurring_base
+        entertain_frac = entertain_base / recurring_base
+    else:
+        living_frac = entertain_frac = 0.5
+
+    # ------------------------------------------------------------------
+    # 2. Build per-year series for each category
+    # ------------------------------------------------------------------
+    df = strategy_df.copy()
+
+    def _col(c: str) -> "pd.Series":
+        return df[c].fillna(0).clip(lower=0) if c in df.columns else pd.Series(0.0, index=df.index)
+
+    # Taxes — split by type when available, fall back to combined Federal Tax
+    ltcg_tax    = _col("LTCG Tax")
+    income_tax  = _col("Income Tax")          # Federal Tax minus LTCG Tax
+    # If Income Tax column is absent (older cache), fall back to full Federal Tax
+    if income_tax.sum() == 0 and ltcg_tax.sum() == 0:
+        income_tax = _col("Federal Tax")
+    state_tax   = _col("State Tax")
+    irmaa       = _col("IRMAA Penalty")
+    payroll_tax = _col("Wages→\nPayroll")
+
+    # Healthcare — split into premiums vs. out-of-pocket when available
+    hc_premium  = _col("HC Premium")
+    hc_oop      = _col("HC OOP")
+    # Fallback for older cache: use Healthcare Cost minus IRMAA
+    if hc_premium.sum() == 0 and hc_oop.sum() == 0:
+        healthcare_total = _col("Healthcare Cost")
+        hc_premium = (healthcare_total - irmaa).clip(lower=0)
+
+    # ------------------------------------------------------------------
+    # Big-ticket items: compute actual hit years (spikes), not annualised avg
+    # Each item fires on start_year, start_year+freq, start_year+2*freq, ...
+    # up to end_year.  Amount is inflated from the chart's first year.
+    # ------------------------------------------------------------------
+    years_in_chart = df["Year"].tolist() if "Year" in df.columns else []
+    chart_start_year = int(years_in_chart[0]) if years_in_chart else 2026
+
+    bt_by_year: dict[int, float] = {}
+    for item in big_ticket_list:
+        if not isinstance(item, dict):
+            continue
+        amount    = float(item.get("amount", 0))
+        freq      = max(1, int(item.get("frequency_years", 10)))
+        item_start = int(item.get("start_year", chart_start_year))
+        item_end   = int(item.get("end_year", chart_start_year + 30))
+        if amount <= 0:
+            continue
+        # Walk every occurrence year within [item_start, item_end]
+        occ_year = item_start
+        while occ_year <= item_end:
+            if occ_year in set(years_in_chart):
+                # Inflate from chart start to this year
+                yrs_elapsed = occ_year - chart_start_year
+                inflated = amount * ((1 + expense_inflation_rate) ** max(0, yrs_elapsed))
+                bt_by_year[occ_year] = bt_by_year.get(occ_year, 0.0) + inflated
+            occ_year += freq
+
+    bt_exp = pd.Series(
+        [bt_by_year.get(int(y), 0.0) for y in years_in_chart],
+        index=df.index,
+    )
+
+    # Recurring expenses = strategy total minus big-ticket hits.
+    # Clamp so we never go negative (rounding / inflation mismatch).
+    expenses_total   = _col("Expenses")
+    recurring_exp    = (expenses_total - bt_exp).clip(lower=0)
+
+    # Split recurring into living and entertainment using config proportions
+    living_exp    = recurring_exp * living_frac
+    entertain_exp = recurring_exp * entertain_frac
+
+    # ------------------------------------------------------------------
+    # 3. Build the stacked bar chart
+    # ------------------------------------------------------------------
+    fig = go.Figure()
+
+    _TRACES = [
+        # Taxes (warm reds / oranges)
+        (income_tax,    "Income Tax (Conv/Dist/Wages)", "#d62728"),   # strong red
+        (ltcg_tax,      "Capital Gains Tax",            "#ff9896"),   # light red
+        (state_tax,     "State Tax",                    "#ff7f0e"),   # orange
+        (irmaa,         "IRMAA (Medicare surcharge)",   "#9467bd"),   # purple
+        (payroll_tax,   "Payroll / FICA",               "#4c78a8"),   # blue-grey
+        # Healthcare (blues / teals)
+        (hc_premium,    "HC Premiums (Medicare/ACA)",   "#17becf"),   # teal
+        (hc_oop,        "HC Out-of-Pocket",             "#aec7e8"),   # light blue
+        # Lifestyle (greens / earth)
+        (living_exp,    "Living Expenses",              "#2ca02c"),   # green
+        (bt_exp,        "Big-Ticket Items",             "#bcbd22"),   # yellow-green
+        (entertain_exp, "Entertainment",                "#e377c2"),   # pink
+    ]
+
+    for series, name, color in _TRACES:
+        if series.sum() > 0:
+            fig.add_trace(go.Bar(
+                x=df["Year"],
+                y=series,
+                name=name,
+                marker_color=color,
+                hovertemplate=f"Year %{{x}}<br>{name}: $%{{y:,.0f}}<extra></extra>",
+            ))
+
+    # Total line overlay
+    total_all = (income_tax + ltcg_tax + state_tax + irmaa + payroll_tax +
+                 hc_premium + hc_oop + living_exp + bt_exp + entertain_exp)
+
+    fig.add_trace(go.Scatter(
+        x=df["Year"],
+        y=total_all,
+        name="Total Outflows",
+        mode="lines+markers",
+        line=dict(color="#000000", width=2, dash="dot"),
+        marker=dict(size=5),
+        hovertemplate="Year %{x}<br>Total: $%{y:,.0f}<extra></extra>",
+    ))
+
+    fig.update_layout(
+        barmode="stack",
+        title="Annual Expenses & Taxes by Category",
+        xaxis_title="Year",
+        yaxis_title="Amount ($)",
+        yaxis_tickformat="$,.0f",
+        hovermode="x unified",
+        height=520,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ------------------------------------------------------------------
+    # 4. Summary totals callout
+    # ------------------------------------------------------------------
+    n_years = len(df)
+    if n_years > 0:
+        total_income_tax = income_tax.sum()
+        total_ltcg_tax   = ltcg_tax.sum()
+        total_state_tax  = state_tax.sum()
+        total_irmaa      = irmaa.sum()
+        total_payroll    = payroll_tax.sum()
+        total_hc_prem    = hc_premium.sum()
+        total_hc_oop     = hc_oop.sum()
+        total_living     = living_exp.sum()
+        total_bt         = bt_exp.sum()
+        total_ent        = entertain_exp.sum()
+        grand_total      = total_all.sum()
+
+        st.markdown("#### 📊 Cumulative Totals Over Planning Period")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "Income + LTCG + State Tax",
+            f"${total_income_tax + total_ltcg_tax + total_state_tax:,.0f}",
+            help=(
+                f"Income tax (wages/conversions/distributions): ${total_income_tax:,.0f}  \n"
+                f"Capital gains tax: ${total_ltcg_tax:,.0f}  \n"
+                f"State income tax: ${total_state_tax:,.0f}"
+            ),
+        )
+        c2.metric(
+            "Healthcare (Premiums + OOP)",
+            f"${total_irmaa + total_hc_prem + total_hc_oop:,.0f}",
+            help=(
+                f"IRMAA Medicare surcharge: ${total_irmaa:,.0f}  \n"
+                f"Monthly premiums (Medicare/ACA): ${total_hc_prem:,.0f}  \n"
+                f"Out-of-pocket (deductibles/copays): ${total_hc_oop:,.0f}"
+            ),
+        )
+        n_bt_years = int((bt_exp > 0).sum())
+        c3.metric(
+            "Living + Big-Ticket + Entertainment",
+            f"${total_living + total_bt + total_ent:,.0f}",
+            help=(
+                f"Living expenses: ${total_living:,.0f}  \n"
+                f"Big-ticket items (actual hit years only, {n_bt_years} yr{'s' if n_bt_years != 1 else ''}): ${total_bt:,.0f}  \n"
+                f"Entertainment: ${total_ent:,.0f}"
+            ),
+        )
+        c4.metric("Grand Total Outflows", f"${grand_total:,.0f}",
+                  help="All expenses, taxes, and healthcare costs combined")
+
+        if total_payroll > 0:
+            st.caption(f"Payroll / FICA taxes (not in metrics above): ${total_payroll:,.0f}")
+
+        # Show the config-derived proportions and big-ticket schedule as an informational note
+        if recurring_base > 0:
+            st.caption(
+                f"ℹ️ Recurring expense split (config): "
+                f"Living {living_frac*100:.0f}% (${living_base:,.0f}) · "
+                f"Entertainment {entertain_frac*100:.0f}% (${entertain_base:,.0f}). "
+                f"Big-ticket items shown as spikes on their actual purchase years."
+            )
+
+
+# ---------------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------------
 (
@@ -2297,6 +3200,8 @@ if phase == "📈 Accumulation (Pre-Retirement)":
             render_balance_chart(accum_balances_df, title="Projected Account Balances (Accumulation)")
             st.subheader("Income Sources Over Time")
             render_income_chart(accum_strategy_df, title="Income Sources by Year (Accumulation)")
+            st.markdown("---")
+            render_expenses_by_type_chart(accum_strategy_df, "accumulation")
         
         with bucket_tab:
             st.subheader("🪣 Bucket Strategy Analysis")
@@ -2774,8 +3679,8 @@ if phase == "📈 Accumulation (Pre-Retirement)":
             
             if tax_data:
                 # Create sub-tabs for different views
-                tax_overview_tab, tax_income_tab, tax_breakdown_tab, tax_rates_tab, tax_table_tab = st.tabs([
-                    "📊 Overview", "💵 Income Sources", "💰 Tax Breakdown", "📈 Tax Rates", "📋 Detailed Table"
+                tax_overview_tab, tax_income_tab, tax_breakdown_tab, tax_rates_tab, tax_table_tab, tax_strategy_tab = st.tabs([
+                    "📊 Overview", "💵 Income Sources", "💰 Tax Breakdown", "📈 Tax Rates", "📋 Detailed Table", "🎯 Strategy Comparison"
                 ])
                 
                 with tax_overview_tab:
@@ -2794,6 +3699,9 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 
                 with tax_table_tab:
                     render_tax_table(tax_data, "accumulation")
+
+                with tax_strategy_tab:
+                    render_tax_strategy_comparison(accum_strategy_df, "accumulation")
             else:
                 st.info("No tax data available for analysis.")
 
@@ -3037,6 +3945,8 @@ else:
             render_balance_chart(balances_df_w, title="Projected Account Balances (Withdrawal)")
             st.subheader("Income Sources Over Time")
             render_income_chart(strategy_df_w, title="Income Sources by Year (Withdrawal)")
+            st.markdown("---")
+            render_expenses_by_type_chart(strategy_df_w, "withdrawal")
         
         with bucket_tab:
             st.subheader("🪣 Bucket Strategy Analysis")
@@ -3382,8 +4292,8 @@ else:
             
             if tax_data:
                 # Create sub-tabs for different views
-                tax_overview_tab, tax_income_tab, tax_breakdown_tab, tax_rates_tab, tax_table_tab = st.tabs([
-                    "📊 Overview", "💵 Income Sources", "💰 Tax Breakdown", "📈 Tax Rates", "📋 Detailed Table"
+                tax_overview_tab, tax_income_tab, tax_breakdown_tab, tax_rates_tab, tax_table_tab, tax_strategy_tab = st.tabs([
+                    "📊 Overview", "💵 Income Sources", "💰 Tax Breakdown", "📈 Tax Rates", "📋 Detailed Table", "🎯 Strategy Comparison"
                 ])
                 
                 with tax_overview_tab:
@@ -3402,6 +4312,9 @@ else:
                 
                 with tax_table_tab:
                     render_tax_table(tax_data, "withdrawal")
+
+                with tax_strategy_tab:
+                    render_tax_strategy_comparison(strategy_df_w, "withdrawal")
             else:
                 st.info("No tax data available for analysis.")
 

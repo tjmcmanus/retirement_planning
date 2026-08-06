@@ -11,6 +11,7 @@ from typing import Any, Optional, Tuple
 from ..base_strategy import BaseLifeStageStrategy
 from ..interfaces import ITaxCalculator, IAccountManager
 from ..models import PortfolioBalances, YearlyStrategy
+from ..agi_calculator import AGICalculator
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
         age_spouse = kwargs.get('age_spouse', 0)
         ss_benefits = kwargs.get('ss_benefits', 0.0)
         prior_magi = kwargs.get('prior_magi', 0.0)
+        state = kwargs.get('state')  # None → calculate_state_tax reads config
         brokerage_account = kwargs.get('brokerage_account')
         growth_rate = kwargs.get('growth_rate', 1.07)
         start_year = kwargs.get('start_year', year)
@@ -271,7 +273,10 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             roth=new_balances.roth * growth_rate,
             daf=new_balances.daf * growth_rate
         )
-        
+
+        # Deduct annual charitable grant from DAF (grants paid out each year)
+        new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
+
         # Calculate final AGI and MAGI
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage'] + rmd_amount
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
@@ -351,8 +356,10 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
         strategy.agi = agi
         strategy.magi = magi
         strategy.federal_tax = total_tax
+        strategy.ltcg_tax = cg_tax
         strategy.irmaa_penalty = healthcare_costs['irmaa_penalty']
         strategy.aca_premium = healthcare_costs['aca_premium']
+        strategy.hc_oop = healthcare_costs.get('out_of_pocket', 0.0)
         strategy.balances = new_balances
         strategy.state_tax = state_tax
         
@@ -442,14 +449,16 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             return {
                 'medical_costs': medical_costs,
                 'aca_premium': aca_premium,
-                'irmaa_penalty': irmaa_penalty
+                'irmaa_penalty': irmaa_penalty,
+                'out_of_pocket': healthcare_breakdown.out_of_pocket,
             }
         except Exception as e:
             logger.warning(f"Could not calculate healthcare costs: {e}")
             return {
                 'medical_costs': 0.0,
                 'aca_premium': 0.0,
-                'irmaa_penalty': 0.0
+                'irmaa_penalty': 0.0,
+                'out_of_pocket': 0.0,
             }
     
     def _calculate_buffer_needs(
@@ -461,7 +470,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
     ) -> Tuple[float, float]:
         """Calculate cash and taxable buffer needs."""
         try:
-            from bucket_strategy import calculate_cash_buffer_targets, calculate_buffer_ramp_up
+            from strategy import calculate_cash_buffer_targets, calculate_buffer_ramp_up
             
             cash_target, taxable_target = calculate_cash_buffer_targets(expenses)
             cash_need, taxable_need = calculate_buffer_ramp_up(
@@ -596,9 +605,9 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
     ) -> Tuple[float, float]:
         """Calculate DAF contribution for tax optimization."""
         try:
-            from charitable_giving_advanced import _calculate_daf_for_year
+            from strategy import _calculate_daf_for_year
             from config import get_config_manager
-            from calculations import calculate_state_tax
+            from strategy import calculate_state_tax
             
             config_mgr = get_config_manager()
             
@@ -637,7 +646,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
     ) -> Tuple[PortfolioBalances, dict]:
         """Execute account rebalancing."""
         try:
-            from bucket_strategy import rebalance_accounts
+            from strategy import rebalance_accounts
             
             new_balances, transactions, rebal_dl = rebalance_accounts(
                 balances=balances,
@@ -684,10 +693,14 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             tax_brackets = get_income_tax_brackets(year)
             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
             
-            result = calculate_taxable_income(taxable_income, tax_brackets)
+            # Ordinary income = taxable income minus LTCG (which is taxed at
+            # preferential rates).  Pass only ordinary income to the progressive
+            # brackets so LTCG is not double-taxed at both ordinary and CG rates.
+            ordinary_income = max(0.0, taxable_income - ltcg)
+            result = calculate_taxable_income(ordinary_income, tax_brackets)
             federal_tax = result.total_tax
             
-            cg_tax = calculate_cap_gains(taxable_income - ltcg, cg_brackets, ltcg)
+            cg_tax = calculate_cap_gains(ordinary_income, cg_brackets, ltcg)
             
             return federal_tax, cg_tax
         except Exception as e:
@@ -705,7 +718,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
     ) -> float:
         """Calculate state income tax."""
         try:
-            from calculations import calculate_state_tax
+            from strategy import calculate_state_tax
             
             state_tax, _ = calculate_state_tax(
                 state_agi=agi,

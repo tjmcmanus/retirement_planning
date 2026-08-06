@@ -251,6 +251,79 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
             daf=balances.daf * multiplier
         )
     
+    def _deduct_daf_annual_grant(
+        self,
+        balances: PortfolioBalances,
+        year: int,
+        start_year: int,
+        inflation_rate: float = 0.02,
+    ) -> PortfolioBalances:
+        """
+        Deduct the inflation-adjusted annual charitable grant from the DAF balance.
+
+        The DAF account holds funds that will be granted to charities over time.
+        Each year the ``annual_charitable_giving`` amount (from config, inflated
+        from ``start_year``) is paid out.  Without this deduction the DAF balance
+        grows indefinitely, which is misleading.
+
+        Args:
+            balances:      Current balances after contributions and growth.
+            year:          Current calendar year.
+            start_year:    First year of the strategy (used for inflation base).
+            inflation_rate: Annual charitable giving inflation rate (default 2%).
+
+        Returns:
+            New PortfolioBalances with DAF reduced by the annual grant amount.
+            The DAF balance is floored at 0 (no negative balance).
+        """
+        try:
+            from config import get_config_manager
+            cfg = get_config_manager()
+            has_daf        = bool(cfg.get("charitable_giving", "has_daf", False))
+            annual_giving  = float(cfg.get("charitable_giving", "annual_charitable_giving", 0))
+            giving_start   = int(cfg.get("charitable_giving", "charitable_giving_start_age", 61))
+            giving_end     = int(cfg.get("charitable_giving", "charitable_giving_end_age", 95))
+            giving_inflation = float(cfg.get("charitable_giving", "charitable_giving_inflation_rate", 2.0)) / 100.0
+        except Exception:
+            return balances
+
+        if not has_daf or annual_giving <= 0 or balances.daf <= 0:
+            return balances
+
+        # Check age window — only deduct while active charitable giving is configured
+        try:
+            from config import get_config_manager as _cfg
+            _c = _cfg()
+            p1_birth = _c.get("personal_info", "person1_birth_date", "1966-01-01")
+            p1_birth_year = int(str(p1_birth).split("-")[0])
+            age_primary = year - p1_birth_year
+        except Exception:
+            age_primary = 61  # safe default: allow deduction
+
+        if age_primary < giving_start or age_primary > giving_end:
+            return balances
+
+        # Inflate from start_year
+        years_elapsed = max(0, year - start_year)
+        grant = annual_giving * ((1 + giving_inflation) ** years_elapsed)
+        new_daf = max(0.0, balances.daf - grant)
+
+        logger.info(
+            f"Year {year}: DAF annual grant deducted: ${grant:,.0f} "
+            f"(base=${annual_giving:,.0f}, {years_elapsed} yrs inflation), "
+            f"DAF balance: ${balances.daf:,.0f} → ${new_daf:,.0f}"
+        )
+
+        return PortfolioBalances(
+            cash=balances.cash,
+            taxable=balances.taxable,
+            traditional=balances.traditional,
+            roth=balances.roth,
+            daf=new_daf,
+            traditional_person1=balances.traditional_person1,
+            traditional_person2=balances.traditional_person2,
+        )
+
     def _calculate_shortfall(
         self,
         expenses: float,

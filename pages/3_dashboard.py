@@ -35,6 +35,7 @@ from components.navbar import navbar
 from components.shared import (
     COLOR_PALETTE,
     COLOR_SCALE,
+    _get_real_estate_rows,
     auto_rerun_if_rebuilding,
     format_currency,
     init_page,
@@ -80,28 +81,34 @@ if networth.empty or len(networth) < 2:
 # ---------------------------------------------------------------------------
 # Pre-compute summary figures used across multiple sections
 # ---------------------------------------------------------------------------
-_current_nw = float(networth["total"].iloc[-1])
-_prior_nw   = float(networth["total"].iloc[-2])
+_re_rows = _get_real_estate_rows()
+_re_total = float(_re_rows['market_value'].sum()) if not _re_rows.empty else 0.0
+_networth_with_re = networth.copy()
+if _re_total:
+    _networth_with_re['total'] = _networth_with_re['total'] + _re_total
+
+_current_nw = float(_networth_with_re["total"].iloc[-1])
+_prior_nw   = float(_networth_with_re["total"].iloc[-2])
 _mom_change = _current_nw - _prior_nw
 _mom_pct    = (_mom_change / _prior_nw * 100) if _prior_nw else 0.0
 
-_dti = pd.DatetimeIndex(networth.index)
+_dti = pd.DatetimeIndex(_networth_with_re.index)
 _curr_year_mask = _dti.year == _dti[-1].year  # type: ignore[union-attr]
 _ytd_start = (
-    float(networth.loc[_curr_year_mask, "total"].iloc[0])
+    float(_networth_with_re.loc[_curr_year_mask, "total"].iloc[0])
     if _curr_year_mask.any() else _current_nw
 )
 _ytd_gain = _current_nw - _ytd_start
 
 _twelve_ago    = _dti[-1] - pd.DateOffset(months=12)
-_older         = networth.loc[networth.index <= _twelve_ago]
-_rolling_start = float(_older["total"].iloc[-1]) if not _older.empty else float(networth["total"].iloc[0])
+_older         = _networth_with_re.loc[_networth_with_re.index <= _twelve_ago]
+_rolling_start = float(_older["total"].iloc[-1]) if not _older.empty else float(_networth_with_re["total"].iloc[0])
 _rolling_gain  = _current_nw - _rolling_start
 
 # Benchmark comparison (7% annual → monthly compound)
 _bench_rate   = 0.07 / 12
-_start_val    = float(networth["total"].iloc[0])
-_bench_vals   = [_start_val * ((1 + _bench_rate) ** i) for i in range(len(networth))]
+_start_val    = float(_networth_with_re["total"].iloc[0])
+_bench_vals   = [_start_val * ((1 + _bench_rate) ** i) for i in range(len(_networth_with_re))]
 _last_bench   = _bench_vals[-1]
 _vs_bench     = _current_nw - _last_bench
 _vs_bench_pct = (_vs_bench / _last_bench * 100) if _last_bench else 0.0
@@ -593,42 +600,51 @@ tab_trend, tab_statement, tab_account_mix, tab_portfolio_mix = st.tabs([
 # TAB 1: NET WORTH TREND (All Time)
 # ========================================================================
 with tab_trend:
-    # Combined bar chart with trend line overlay
-    _nw_labels = pd.DatetimeIndex(networth.index).strftime("%b %Y")
+    # Combined bar chart with trend line overlay using month-end values
+    _monthly_networth = (
+        networth[['total']]
+        .sort_index()
+        .resample('ME')
+        .last()
+        .dropna(subset=['total'])
+    )
+    if _re_total:
+        _monthly_networth['total'] = _monthly_networth['total'] + _re_total
+    _month_labels = _monthly_networth.index.strftime('%b %Y')
     fig_nw_combined = go.Figure()
     
     # Add bars
     fig_nw_combined.add_trace(go.Bar(
-        x=networth.index,
-        y=networth['total'],
+        x=_month_labels,
+        y=_monthly_networth['total'],
         name='Net Worth',
         marker=dict(
-            color=networth['total'],
+            color=_monthly_networth['total'],
             colorscale=COLOR_SCALE,
             showscale=False,
         ),
-        hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
+        hovertemplate='%{x}<br>$%{y:,.0f}<extra></extra>',
     ))
     
     # Add trend line
     fig_nw_combined.add_trace(go.Scatter(
-        x=networth.index,
-        y=networth['total'],
+        x=_month_labels,
+        y=_monthly_networth['total'],
         mode='lines+markers',
         name='Trend',
         line=dict(color='#4c78a8', width=3),
         marker=dict(size=8, color='#4c78a8', line=dict(color='white', width=2)),
-        hovertemplate='%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>',
+        hovertemplate='%{x}<br>$%{y:,.0f}<extra></extra>',
     ))
     
     # Add month-over-month annotation
-    _last_val  = float(networth['total'].iloc[-1])
-    _prev_val  = float(networth['total'].iloc[-2]) if len(networth) > 1 else _last_val
+    _last_val  = float(_monthly_networth['total'].iloc[-1])
+    _prev_val  = float(_monthly_networth['total'].iloc[-2]) if len(_monthly_networth) > 1 else _last_val
     _mom_delta = _last_val - _prev_val
     _mom_pct_t = (_mom_delta / _prev_val * 100) if _prev_val else 0.0
     _arrow_clr = '#21c354' if _mom_delta >= 0 else '#ff4b4b'
     fig_nw_combined.add_annotation(
-        x=networth.index[-1], y=_last_val,
+        x=_month_labels[-1], y=_last_val,
         text=f"{'▲' if _mom_delta >= 0 else '▼'} ${abs(_mom_delta):,.0f} ({_mom_pct_t:+.1f}%)",
         showarrow=True, arrowhead=2, arrowcolor=_arrow_clr,
         font=dict(color=_arrow_clr, size=12, weight='bold'),
@@ -636,18 +652,22 @@ with tab_trend:
         ax=0, ay=-40,
     )
     
-    _y_min = networth['total'].min()
-    _y_max = networth['total'].max()
+    _y_min = _monthly_networth['total'].min()
+    _y_max = _monthly_networth['total'].max()
     _y_rng = _y_max - _y_min
     fig_nw_combined.update_layout(
-        title='Net Worth Trend (All Time)',
+        title='Net Worth Trend (Monthly)',
         xaxis_title='Month',
         yaxis_title='Net Worth ($)',
         plot_bgcolor='white',
         paper_bgcolor='white',
         showlegend=True,
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-        xaxis=dict(tickfont=dict(color='black'), tickangle=-45),
+        xaxis=dict(
+            type='category',
+            tickfont=dict(color='black'),
+            tickangle=-45,
+        ),
         yaxis=dict(
             tickfont=dict(color='black'),
             tickformat='$,.0f',

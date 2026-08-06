@@ -7,10 +7,13 @@ Handles the RMD stage where required distributions from Traditional accounts beg
 
 import logging
 from typing import Any, Optional, Tuple
+from datetime import datetime
 
 from ..base_strategy import BaseLifeStageStrategy
 from ..interfaces import ITaxCalculator, IAccountManager
 from ..models import PortfolioBalances, YearlyStrategy
+from ..agi_calculator import AGICalculator
+from ..january_bracket_fill_strategy import JanuaryBracketFillStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +154,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         ss_benefits = kwargs.get('ss_benefits', 0.0)
         prior_magi = kwargs.get('prior_magi', 0.0)
         filing_status = kwargs.get('filing_status', 'married_filing_jointly')
+        state = kwargs.get('state')  # None → calculate_state_tax reads config
         brokerage_account = kwargs.get('brokerage_account')
         growth_rate = kwargs.get('growth_rate', 1.07)
         start_year = kwargs.get('start_year', year)
@@ -226,27 +230,105 @@ class Stage6RMD(BaseLifeStageStrategy):
         )
         logger.info(f"Year {year}: Added SS benefits ${ss_benefits:,.2f} to cash")
         
+        # ── PHASE 1: FUND SPENDING ─────────────────────────────────────────
+        # Use January strategy to determine spending shortfall and Traditional→Cash withdrawal
+        aca_premium = 0.0  # Stage 6: RMD stage, Medicare already active
+        _jan_plan = self._plan_january_bracket_fill_withdrawal(
+            year=year,
+            pnc_savings_balance=balances_with_ss.cash,
+            annual_expenses=expenses,
+            aca_premium=aca_premium,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            filing_status=filing_status,
+        )
+        
+        # Extract spending withdrawal from January plan (shortfall only, no conversion)
+        _jan_spending_withdrawal = 0.0
+        if _jan_plan is not None:
+            _jan_spending_withdrawal = _jan_plan['pnc_shortfall']
+            self._log_decision(
+                strategy,
+                'tax_strategy',
+                'January Strategy - Spending Phase',
+                f'Traditional withdrawal for spending: ${_jan_spending_withdrawal:,.0f}',
+                f'PNC shortfall (spending + healthcare) requires Traditional withdrawal of ${_jan_spending_withdrawal:,.0f} '
+                f'to supplement existing cash.',
+                spending_withdrawal=_jan_spending_withdrawal,
+            )
+        
+
+        
         # Calculate DAF contribution (before rebalancing)
         daf_contribution, daf_tax_excess = self._calculate_daf_contribution(
             age_primary, age_spouse, std_deduction, agi, year, filing_status,
             balances_with_ss.taxable
         )
         
+        # Apply spending withdrawal directly so rebalance_accounts sees pre-funded cash
+        _jan_trad_to_cash = 0.0
+        if _jan_spending_withdrawal > 0:
+            # Apply spending withdrawal only (no conversion tax here)
+            _jan_trad_to_cash = min(
+                _jan_spending_withdrawal,
+                balances_with_ss.traditional
+            )
+            if _jan_trad_to_cash > 0:
+                balances_with_ss = PortfolioBalances(
+                    cash=balances_with_ss.cash + _jan_trad_to_cash,
+                    taxable=balances_with_ss.taxable,
+                    traditional=balances_with_ss.traditional - _jan_trad_to_cash,
+                    roth=balances_with_ss.roth,
+                    daf=balances_with_ss.daf,
+                    traditional_person1=balances_with_ss.traditional_person1,
+                    traditional_person2=balances_with_ss.traditional_person2,
+                )
+                logger.info(
+                    f"Year {year} Stage 6 [Phase 1 - Spending]: "
+                    f"Traditional→Cash ${_jan_trad_to_cash:,.0f} "
+                    f"(spending shortfall), "
+                    f"Roth conversion Phase 2: ${roth_conversion:,.0f}"
+                )
+        
+
+        
+        # ── APPLY RMD BEFORE REBALANCING ──────────────────────────────────
+        # RMD must be added to Brokerage BEFORE rebalancing so it's available
+        # to satisfy withdrawal needs. Otherwise rebalancing depletes Brokerage
+        # before RMD funds arrive (timing issue).
+        balances_after_rmd = balances_with_ss
+        if rmd_amount > 0:
+            balances_after_rmd = PortfolioBalances(
+                cash=balances_with_ss.cash,
+                taxable=balances_with_ss.taxable + rmd_amount,
+                traditional=balances_with_ss.traditional - rmd_amount,
+                roth=balances_with_ss.roth,
+                daf=balances_with_ss.daf,
+                traditional_person1=balances_with_ss.traditional_person1,
+                traditional_person2=balances_with_ss.traditional_person2,
+            )
+            
+            # Track RMD in brokerage account for cost basis
+            if brokerage_account is not None:
+                brokerage_account.add_transfer(year, rmd_amount, "RMD_zero_gain")
+            
+            logger.info(f"Year {year}: RMD ${rmd_amount:,.0f} moved to Brokerage (before rebalancing)")
+        
         # Subtract DAF from brokerage before rebalancing (HIFO lot removal)
-        balances_for_rebalance = balances_with_ss
+        balances_for_rebalance = balances_after_rmd
         if daf_contribution > 0:
             try:
                 from strategy import apply_daf_to_brokerage_account
                 balances_for_rebalance = apply_daf_to_brokerage_account(
-                    balances_with_ss, daf_contribution, year, brokerage_account
+                   balances_after_rmd, daf_contribution, year, brokerage_account
                 )
             except ImportError:
                 balances_for_rebalance = PortfolioBalances(
-                    cash=balances_with_ss.cash,
-                    taxable=balances_with_ss.taxable - daf_contribution,
-                    traditional=balances_with_ss.traditional,
-                    roth=balances_with_ss.roth,
-                    daf=balances_with_ss.daf,
+                   cash=balances_after_rmd.cash,
+                   taxable=balances_after_rmd.taxable - daf_contribution,
+                   traditional=balances_after_rmd.traditional,
+                   roth=balances_after_rmd.roth,
+                   daf=balances_after_rmd.daf,
                 )
             logger.info(f"Year {year}: DAF HIFO donation ${daf_contribution:,.0f} from Brokerage")
         
@@ -256,22 +338,27 @@ class Stage6RMD(BaseLifeStageStrategy):
             total_tax, healthcare_costs, brokerage_account
         )
         
-        # Apply RMD (mandatory distribution from Traditional to Brokerage)
-        if rmd_amount > 0:
-            new_balances = PortfolioBalances(
-                cash=new_balances.cash,
-                taxable=new_balances.taxable + rmd_amount,
-                traditional=new_balances.traditional - rmd_amount,
-                roth=new_balances.roth,
-                daf=new_balances.daf
+        # ── PHASE 1 RECORDED: merge January Traditional→Cash into transaction log ──
+        # _execute_rebalancing only knows about transfers it made; add the pre-funded
+        # spending withdrawal so the year-by-year report shows the correct amount.
+        if _jan_trad_to_cash > 0:
+            transactions['traditional_to_cash'] = (
+                transactions.get('traditional_to_cash', 0.0) + _jan_trad_to_cash
             )
-            logger.info(f"Year {year}: RMD ${rmd_amount:,.0f} distributed to Brokerage")
-            
+            transactions['cash_replenishment'] = (
+                transactions.get('cash_replenishment', 0.0) + _jan_trad_to_cash
+            )
+        
+
+        
+        # Log RMD decision (balance changes already applied before rebalancing)
+        if rmd_amount > 0:
             self._log_decision(
                 strategy, 'rmd_decisions', 'Required Minimum Distribution',
                 f'${rmd_amount:,.0f} distributed from Traditional to Brokerage '
                 f'(Person1: ${rmd_person1:,.0f}, Person2: ${rmd_person2:,.0f})',
-                f'RMD is mandatory — Person1 age {age_primary}, Person2 age {age_spouse}',
+                f'RMD is mandatory — Person1 age {age_primary}, Person2 age {age_spouse}. '
+                f'Applied before rebalancing to fund withdrawal needs.',
                 rmd_amount=rmd_amount,
                 rmd_person1=rmd_person1,
                 rmd_person2=rmd_person2,
@@ -285,7 +372,10 @@ class Stage6RMD(BaseLifeStageStrategy):
             roth=new_balances.roth * growth_rate,
             daf=new_balances.daf * growth_rate
         )
-        
+
+        # Deduct annual charitable grant from DAF (grants paid out each year)
+        new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
+
         # Calculate final AGI and MAGI
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage'] + rmd_amount
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
@@ -296,7 +386,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         
         # Calculate state tax
         state_tax = self._calculate_state_tax(
-            agi, year, filing_status, trad_withdrawal, roth_conversion, taxable_ss
+            agi, year, filing_status, trad_withdrawal, roth_conversion, taxable_ss, state
         )
         
         # Deduct state tax from cash balance
@@ -367,9 +457,11 @@ class Stage6RMD(BaseLifeStageStrategy):
         strategy.agi = agi
         strategy.magi = magi
         strategy.federal_tax = total_tax
+        strategy.ltcg_tax = cg_tax
         strategy.healthcare_costs = healthcare_costs['total']
         strategy.irmaa_penalty = healthcare_costs['irmaa_penalty']
         strategy.aca_premium = healthcare_costs['aca_premium']
+        strategy.hc_oop = healthcare_costs.get('out_of_pocket', 0.0)
         strategy.balances = new_balances
         strategy.state_tax = state_tax
         
@@ -541,6 +633,7 @@ class Stage6RMD(BaseLifeStageStrategy):
                 'medical_costs': medical_costs,
                 'aca_premium': aca_premium,
                 'irmaa_penalty': irmaa_penalty,
+                'out_of_pocket': healthcare_breakdown.out_of_pocket,
                 'total': healthcare_total,
             }
         except Exception as e:
@@ -549,6 +642,7 @@ class Stage6RMD(BaseLifeStageStrategy):
                 'medical_costs': 0.0,
                 'aca_premium': 0.0,
                 'irmaa_penalty': 0.0,
+                'out_of_pocket': 0.0,
                 'total': 0.0,
             }
     
@@ -572,7 +666,7 @@ class Stage6RMD(BaseLifeStageStrategy):
             Tuple of (cash_need, taxable_need)
         """
         try:
-            from bucket_strategy import calculate_cash_buffer_targets, calculate_buffer_ramp_up
+            from strategy import calculate_cash_buffer_targets, calculate_buffer_ramp_up
             
             cash_target, taxable_target = calculate_cash_buffer_targets(expenses)
             cash_need, taxable_need = calculate_buffer_ramp_up(
@@ -772,9 +866,9 @@ class Stage6RMD(BaseLifeStageStrategy):
             Tuple of (daf_contribution, daf_tax_excess)
         """
         try:
-            from charitable_giving_advanced import _calculate_daf_for_year
+            from strategy import _calculate_daf_for_year
             from config import get_config_manager
-            from calculations import calculate_state_tax
+            from strategy import calculate_state_tax
             
             config_mgr = get_config_manager()
             
@@ -799,6 +893,140 @@ class Stage6RMD(BaseLifeStageStrategy):
         except Exception as e:
             logger.warning(f"Could not calculate DAF contribution: {e}")
             return 0.0, 0.0
+    def _plan_january_bracket_fill_withdrawal(
+        self,
+        year: int,
+        pnc_savings_balance: float,
+        annual_expenses: float,
+        aca_premium: float,
+        age_primary: int,
+        age_spouse: int,
+        filing_status: str
+    ) -> Optional[dict]:
+        """
+        Use January Bracket-Fill Strategy if enabled in configuration.
+        
+        This is an OPTIONAL path that can complement or replace the existing BETR logic.
+        Returns withdrawal plan if enabled; None otherwise.
+        
+        Args:
+            year: Current year
+            pnc_savings_balance: PNC Savings account balance (actual spendable cash)
+            annual_expenses: Annual living expenses
+            aca_premium: ACA insurance premium
+            age_primary: Primary person's age
+            age_spouse: Spouse's age
+            filing_status: Tax filing status
+        
+        Returns:
+            JanuaryWithdrawalPlan dict or None if not enabled
+        """
+        # Check if January Bracket-Fill is enabled in config
+        try:
+            from config import get_config_value
+            use_january_strategy = get_config_value(
+                'tax_strategy', 
+                'use_january_bracket_fill_strategy', 
+                False
+            )
+        except:
+            use_january_strategy = False
+        
+        if not use_january_strategy:
+            logger.debug("Stage 6: January Bracket-Fill Strategy not enabled in config")
+            return None
+        
+        # Get bracket parameters for this year
+        try:
+            import csv
+            bracket_12_upper = None
+            std_deduction_value = None
+            
+            # Read bracket from income_rates.csv
+            import os as _os
+            _csv_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), 'income_rates.csv')
+            with open(_csv_path) as f:
+                for row in csv.DictReader(f):
+                    if (int(row['year']) == year and 
+                        row['filing_status'] == filing_status and 
+                        abs(float(row['rate']) - 0.12) < 0.001):
+                        bracket_12_upper = float(row['upper'])
+                        break
+            
+            # Get standard deduction
+            std_deduction_value = self.tax_calculator.calculate_standard_deduction(
+                filing_status, year, age_primary, age_spouse
+            )
+        except Exception as e:
+            logger.warning(f"Stage 6: Could not read bracket data: {e}")
+            return None
+        
+        if not bracket_12_upper or not std_deduction_value:
+            logger.warning("Stage 6: Missing bracket or deduction data for January strategy")
+            return None
+        
+        # Read safety reserve from config (default = 5 months of expenses)
+        try:
+            from config import get_config_value
+            _safety_reserve = float(get_config_value(
+                'tax_strategy', 'savings_safety_reserve',
+                round(annual_expenses / 12 * 5)
+            ))
+        except:
+            _safety_reserve = round(annual_expenses / 12 * 5)
+        
+        # Initialize January strategy
+        strategy = JanuaryBracketFillStrategy(
+            annual_expenses=annual_expenses,
+            savings_account_safety_reserve=_safety_reserve,
+            bracket_12_upper=bracket_12_upper,
+            standard_deduction=std_deduction_value
+        )
+        
+        # Plan the withdrawal
+        try:
+            # Withholding rate = stage 6 max conversion rate (from config) ÷ 100
+            try:
+                from config import get_config_value
+                _stage_rate_pct = float(get_config_value(
+                    'tax_strategy', 'stage_6_max_conversion_rate', 12
+                ))
+            except:
+                _stage_rate_pct = 12.0
+            _withholding_rate = _stage_rate_pct / 100.0
+            
+            plan = strategy.plan_january_withdrawal(
+                    pnc_savings_balance_jan1=pnc_savings_balance,
+                    estimated_tax_rate=_withholding_rate,
+                    aca_premium=aca_premium,
+                    conversion_date=datetime(year, 1, 15),
+                    year=year,
+                    filing_status=filing_status,
+                    age_primary=age_primary,
+                    age_spouse=age_spouse,
+                    tax_calculator=self.tax_calculator
+                )
+            
+            logger.info(
+                f"Stage 6: January Bracket-Fill plan generated: "
+                f"Shortfall=${plan.pnc_shortfall:,.0f}, "
+                f"Traditional withdrawal=${plan.total_traditional_withdrawal:,.0f}, "
+                f"Roth conversion=${plan.roth_conversion_amount:,.0f}"
+            )
+            
+            return {
+                'plan': plan,
+                'pnc_shortfall': plan.pnc_shortfall,
+                'traditional_withdrawal': plan.total_traditional_withdrawal,
+                'roth_conversion': plan.roth_conversion_amount,
+                'conversion_withholding': plan.conversion_withholding,
+                'redeposit_deadline': plan.sixty_day_redeposit_deadline,
+            }
+        except Exception as e:
+            logger.warning(f"Stage 6: January Bracket-Fill planning failed: {e}")
+            return None
+    
+
     
     def _execute_rebalancing(
         self,
@@ -828,7 +1056,7 @@ class Stage6RMD(BaseLifeStageStrategy):
             Tuple of (new_balances, transactions)
         """
         try:
-            from bucket_strategy import rebalance_accounts
+            from strategy import rebalance_accounts
             
             new_balances, transactions, rebal_dl = rebalance_accounts(
                 balances=balances,
@@ -886,10 +1114,14 @@ class Stage6RMD(BaseLifeStageStrategy):
             tax_brackets = get_income_tax_brackets(year)
             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
             
-            result = calculate_taxable_income(taxable_income, tax_brackets)
+            # Ordinary income = taxable income minus LTCG (which is taxed at
+            # preferential rates).  Pass only ordinary income to the progressive
+            # brackets so LTCG is not double-taxed at both ordinary and CG rates.
+            ordinary_income = max(0.0, taxable_income - ltcg)
+            result = calculate_taxable_income(ordinary_income, tax_brackets)
             federal_tax = result.total_tax
             
-            cg_tax = calculate_cap_gains(taxable_income - ltcg, cg_brackets, ltcg)
+            cg_tax = calculate_cap_gains(ordinary_income, cg_brackets, ltcg)
             
             return federal_tax, cg_tax
         except Exception as e:
@@ -903,10 +1135,11 @@ class Stage6RMD(BaseLifeStageStrategy):
         filing_status: str,
         trad_withdrawal: float,
         roth_conversion: float,
-        taxable_ss: float
+        taxable_ss: float,
+        state: Optional[str] = None
     ) -> float:
         """
-        Calculate state income tax.
+        Calculate state income tax using configured state.
         
         Args:
             agi: Adjusted Gross Income
@@ -915,15 +1148,17 @@ class Stage6RMD(BaseLifeStageStrategy):
             trad_withdrawal: Traditional withdrawal amount
             roth_conversion: Roth conversion amount
             taxable_ss: Taxable Social Security
+            state: Two-letter state code; None reads retirement_state from config
             
         Returns:
             State tax amount
         """
         try:
-            from calculations import calculate_state_tax
+            from strategy import calculate_state_tax
             
             state_tax, _ = calculate_state_tax(
                 state_agi=agi,
+                state=state,  # None → reads retirement_state from config
                 year=year,
                 filing_status=filing_status,
                 retirement_income=trad_withdrawal + roth_conversion,

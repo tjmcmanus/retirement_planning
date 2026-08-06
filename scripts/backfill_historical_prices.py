@@ -38,10 +38,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import from load_data
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from load_data import _fetch_prices, CASH_SYMBOLS, CASH_PRICE
+from portfolio_db import DB_PATH, db_load_all, db_overwrite_month
 
-PORTFOLIO_FILE = 'portfolio_data_truth.sample.csv'
+PORTFOLIO_FILE = 'portfolio_data_truth.csv'
 COLUMN_NAME = 'end_of_month_price'
 
 
@@ -80,14 +81,14 @@ def backfill_historical_prices(
     print("Backfill Historical Prices Utility")
     print(f"{'='*70}\n")
     
-    # Check if file exists
-    if not os.path.exists(PORTFOLIO_FILE):
-        print(f"❌ Error: {PORTFOLIO_FILE} not found")
+    # Check if DB exists
+    if not DB_PATH.exists():
+        print(f"❌ Error: {DB_PATH} not found")
         sys.exit(1)
     
     # Load the data
-    logger.info(f"Loading {PORTFOLIO_FILE}...")
-    df = pd.read_csv(PORTFOLIO_FILE)
+    logger.info(f"Loading {DB_PATH}...")
+    df = db_load_all()
     logger.info(f"Found {len(df)} rows")
     
     # Check if column exists
@@ -216,9 +217,10 @@ def backfill_historical_prices(
     print(f"\n💾 Creating backup...")
     backup_file = create_backup(PORTFOLIO_FILE)
     
-    # Save updated file
-    print(f"💾 Saving updated {PORTFOLIO_FILE}...")
-    df_updated.to_csv(PORTFOLIO_FILE, index=False)
+    # Save updated data back to portfolio.db (which also regenerates portfolio_data_truth.csv)
+    print(f"💾 Saving updated holdings to {DB_PATH}...")
+    for (month, year), month_rows in df_updated.groupby(['month', 'year'], sort=False):
+        db_overwrite_month(int(month), int(year), month_rows)
     
     print(f"\n{'='*70}")
     print("✅ Backfill completed successfully!")

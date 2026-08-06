@@ -45,7 +45,7 @@ CSV_BACKUP_PATH = Path("portfolio_data_truth.csv")
 # Canonical column order — matches the CSV schema exactly
 HOLDINGS_COLUMNS = [
     "month", "year", "account_name", "account_type", "owner",
-    "symbol", "name", "sector", "qty", "purchase_price", "purchase_date",
+    "symbol", "name", "sector", "qty", "purchase_price", "end_of_month_price", "purchase_date",
 ]
 
 # ---------------------------------------------------------------------------
@@ -82,13 +82,25 @@ CREATE TABLE IF NOT EXISTS holdings (
     symbol         TEXT    NOT NULL,
     name           TEXT    NOT NULL DEFAULT '',
     sector         TEXT    NOT NULL DEFAULT '',
-    qty            REAL    NOT NULL DEFAULT 0,
-    purchase_price REAL    NOT NULL DEFAULT 0,
-    purchase_date  TEXT    NOT NULL DEFAULT '',
+    qty                REAL    NOT NULL DEFAULT 0,
+    purchase_price     REAL    NOT NULL DEFAULT 0,
+    end_of_month_price REAL,
+    purchase_date      TEXT    NOT NULL DEFAULT '',
     updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (month, year, account_name, symbol)
 );
 """
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Apply additive schema migrations required by the current holdings model."""
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(holdings)").fetchall()
+    }
+    if "end_of_month_price" not in columns:
+        conn.execute("ALTER TABLE holdings ADD COLUMN end_of_month_price REAL")
+
 
 
 # ==============================================================================
@@ -128,6 +140,7 @@ def get_db_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute(_CREATE_TABLE_SQL)
+        _ensure_schema(conn)
         conn.commit()
         _tls.conns[path_str] = conn
         logger.debug(f"get_db_connection: opened new connection to {path_str!r}")
@@ -460,6 +473,8 @@ def _normalise(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = "" if col in ("account_name", "account_type", "owner",
                                     "symbol", "name", "sector", "purchase_date") else 0
+
+    df["end_of_month_price"] = pd.to_numeric(df["end_of_month_price"], errors="coerce")
 
     df["month"] = df["month"].astype(int)
     df["year"] = df["year"].astype(int)

@@ -389,6 +389,26 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
 
         new_data = cast(pd.DataFrame, new_data[required_columns].copy())
 
+        # Strip rows that would fail basic validation (month out of range, qty=0,
+        # blank symbol) before they reach the DB.  This prevents garbage rows
+        # introduced via CSV migration or data-editor "add row" placeholders from
+        # being persisted and re-appearing after restart.
+        valid_mask = (
+            new_data['month'].between(1, 12) &
+            new_data['year'].between(2000, 2100) &
+            new_data['symbol'].notna() &
+            (new_data['symbol'].astype(str).str.strip() != '') &
+            (new_data['qty'].fillna(0) != 0)
+        )
+        dropped = (~valid_mask).sum()
+        if dropped:
+            logger.warning(f"save_portfolio_data: dropping {dropped} invalid row(s) before save "
+                           f"(month out of range, zero qty, or blank symbol)")
+        new_data = new_data[valid_mask]
+
+        if new_data.empty:
+            return False, "No valid rows to save after filtering invalid entries."
+
         if append:
             n = db_upsert(new_data)
             _trigger_portfolio_cache_rebuild(new_data)

@@ -86,7 +86,11 @@ with adv_tax_planner_tab:
 
         c9, c10, c12, c11, c13 = st.columns(5)
         people       = c9.selectbox("Medicare Eligible", [0, 1, 2], key="tp_medicare", on_change=_cs)
-        year         = c10.selectbox("Tax Year", [2023, 2024, 2025, 2026, 2027], key="tp_year", on_change=_cs, index=3)
+        _tp_this_year   = pd.Timestamp.now().year
+        _tp_csv_years   = sorted(pd.read_csv('income_rates.csv')['year'].unique().tolist())
+        _tp_year_opts   = [y for y in _tp_csv_years if y >= 2023]
+        _tp_default_idx = _tp_year_opts.index(_tp_this_year) if _tp_this_year in _tp_year_opts else 0
+        year         = c10.selectbox("Tax Year", _tp_year_opts, key="tp_year", on_change=_cs, index=_tp_default_idx)
         maxdaf       = c12.selectbox("Max Donor Advisor Fund", ["N", "Y"], key="tp_maxdaf", on_change=_cs)
         with c11:
             daf1 = st.number_input("Charitable Contrib", key="tp_daf1" if maxdaf == "Y" else "tp_daf1b",

@@ -485,39 +485,135 @@ def render_balance_chart(balances_df: pd.DataFrame, title: str = "Projected Acco
 
 
 def render_income_chart(strategy_df: pd.DataFrame, title: str = "Income Sources by Year") -> None:
-    """Render a stacked bar chart for Wages / Social Security / Portfolio Withdrawal."""
-    if 'Total Income' not in strategy_df.columns:
+    """Render a stacked area chart of all income sources over time.
+
+    Income layers (rendered bottom-to-top):
+      1. Wages / Salary
+      2. Social Security (SSI)
+      3. Pension / Annuity
+      4. Rental income
+      5. Interest income (taxable + tax-exempt)
+      6. Dividends
+      7. Brokerage positions sold to cash (LTCG harvesting — basis + gains)
+      8. Brokerage account withdrawals (Brok→Cash)
+      9. Traditional IRA/401k withdrawals (Trad→Cash, incl. RMDs)
+     10. Roth IRA/401k distributions (Roth→Cash)
+
+    The function is resilient — any layer whose column is absent or all-zero
+    is simply omitted, so it works for both accumulation and withdrawal phases.
+    """
+    if strategy_df.empty or 'Year' not in strategy_df.columns:
         return
+
+    def _s(col: str) -> "pd.Series":
+        """Return a non-negative series for *col*, zero-filled if absent."""
+        if col in strategy_df.columns:
+            return pd.to_numeric(strategy_df[col], errors='coerce').fillna(0).clip(lower=0)
+        return pd.Series(0.0, index=strategy_df.index)
+
+    years = strategy_df['Year']
+
+    # -----------------------------------------------------------------------
+    # Define each income layer: (label, series, hex-color)
+    # -----------------------------------------------------------------------
+    layers = [
+        # Wages / earned income
+        ("Wages / Salary",          _s('Wages'),            '#2ecc71'),
+        # Social Security — column name differs slightly across phases
+        ("Social Security (SSI)",
+         _s('SS Benefits') if _s('SS Benefits').sum() > 0 else _s('Social Security'),
+         '#3498db'),
+        # Pension / annuity  (column written by Stage 5 / config if present)
+        ("Pension / Annuity",       _s('Pension'),          '#9b59b6'),
+        # Rental income
+        ("Rental Income",           _s('Rental Income'),    '#16a085'),
+        # Interest income (savings, bonds, CDs)
+        ("Interest Income",         _s('Interest Income'),  '#1abc9c'),
+        # Dividends (taxable brokerage dividends)
+        ("Dividends",               _s('Dividends'),        '#f39c12'),
+        # Brokerage withdrawal — split into its two tax components so the chart
+        # shows the taxable (LTCG) portion vs. the tax-free basis return.
+        # These two slices sum to Brok→Cash exactly; Brok→Cash is NOT added
+        # separately (that would double-count the same dollars).
+        ("Brokerage — Basis Returned",  _s('Basis Returned'),   '#e67e22'),
+        ("Brokerage — Gains (LTCG)",    _s('LTCG Harvested'),   '#e74c3c'),
+        # Traditional IRA / 401k withdrawals (direct cash withdrawals, excl. RMDs)
+        ("Traditional Withdrawal",  _s('Trad→\nCash'),      '#d35400'),
+        # RMDs — shown separately when the Trad→Cash column already excludes them;
+        # if Trad→Cash already includes RMDs (single-column engines) this will be 0
+        ("RMD",                     _s('RMD'),              '#e74c3c'),
+        # Roth IRA / 401k distributions
+        ("Roth Distribution",       _s('Roth→\nCash'),      '#8e44ad'),
+    ]
+
+    # Deduplicate Trad→Cash vs RMD: some strategy engines roll RMDs into
+    # Trad→Cash and set RMD separately.  If both are non-zero and their sum
+    # would double-count, prefer the explicit Trad→Cash (which already includes
+    # the RMD) and zero-out the standalone RMD layer.
+    trad_cash_total = _s('Trad→\nCash').sum()
+    rmd_total       = _s('RMD').sum()
+    if trad_cash_total > 0 and rmd_total > 0 and trad_cash_total >= rmd_total * 0.9:
+        # Trad→Cash subsumes RMDs — drop the standalone RMD layer
+        layers = [(lbl, s, c) for lbl, s, c in layers if lbl != "RMD"]
+
+    # Optional: Roth conversions toggle
+    roth_conv_series = _s('Trad→\nRoth')
+    show_conversions = False
+    if roth_conv_series.sum() > 500:
+        show_conversions = st.checkbox(
+            "Include Roth Conversions",
+            value=False,
+            help=(
+                "Roth conversions move money from Traditional to Roth — they are not spendable "
+                "income but do appear on your tax return as ordinary income. Toggle on to see "
+                "how conversions affect the total income picture each year."
+            ),
+        )
+        if show_conversions:
+            layers.append(("Roth Conversion (Trad→Roth)", roth_conv_series, '#c0392b'))
+
+    # Keep only layers with meaningful values (> $500 across the whole period)
+    layers = [(lbl, s, c) for lbl, s, c in layers if s.sum() > 500]
+
+    if not layers:
+        st.caption("No income data available to display for this phase.")
+        return
+
     fig = go.Figure()
-    if 'Wages' in strategy_df.columns:
-        fig.add_trace(go.Bar(
-            x=strategy_df['Year'], y=strategy_df['Wages'],
-            name='Wages', marker_color='rgb(99, 110, 250)'
+
+    for label, series, color in layers:
+        # Convert hex to rgba for fill transparency
+        r = int(color[1:3], 16)
+        g = int(color[3:5], 16)
+        b = int(color[5:7], 16)
+        fill_color = f"rgba({r},{g},{b},0.75)"
+        line_color = f"rgba({r},{g},{b},1.0)"
+
+        fig.add_trace(go.Scatter(
+            x=years,
+            y=series,
+            name=label,
+            mode='lines',
+            stackgroup='income',
+            line=dict(width=1, color=line_color),
+            fillcolor=fill_color,
+            hovertemplate=f'<b>{label}</b><br>Year %{{x}}: $%{{y:,.0f}}<extra></extra>',
         ))
-    if 'Social Security' in strategy_df.columns:
-        fig.add_trace(go.Bar(
-            x=strategy_df['Year'], y=strategy_df['Social Security'],
-            name='Social Security', marker_color='rgb(239, 85, 59)'
-        ))
-    if 'SS Benefits' in strategy_df.columns and 'Social Security' not in strategy_df.columns:
-        fig.add_trace(go.Bar(
-            x=strategy_df['Year'], y=strategy_df['SS Benefits'],
-            name='Social Security', marker_color='rgb(239, 85, 59)'
-        ))
-    if 'Portfolio Withdrawal' in strategy_df.columns:
-        fig.add_trace(go.Bar(
-            x=strategy_df['Year'], y=strategy_df['Portfolio Withdrawal'],
-            name='Portfolio Withdrawal', marker_color='rgb(0, 204, 150)'
-        ))
+
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(size=15, color='#333')),
         xaxis_title='Year',
-        yaxis_title='Amount ($)',
-        barmode='stack',
+        yaxis_title='Annual Income ($)',
         hovermode='x unified',
+        height=430,
+        margin=dict(l=20, r=20, t=55, b=20),
         plot_bgcolor='white',
-        paper_bgcolor='white'
+        paper_bgcolor='white',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        yaxis=dict(tickformat='$,.0f', gridcolor='#eee'),
+        xaxis=dict(gridcolor='#eee'),
     )
+
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -552,7 +648,7 @@ def _build_networth_row(date: pd.Timestamp, summary_df: pd.DataFrame) -> dict:
 @st.cache_data(ttl=300)
 def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
     """Build historical net worth DataFrame using get_networth_by_month."""
-    end_date   = pd.Timestamp.today().normalize()
+    end_date = pd.Timestamp.today().normalize().replace(day=1)
     start_date = end_date - pd.DateOffset(months=num_months - 1)
     date_range = pd.date_range(start=start_date, end=end_date, freq='MS')
 

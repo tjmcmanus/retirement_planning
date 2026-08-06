@@ -246,6 +246,97 @@ class BrokerageAccount:
         
         return total_withdrawn, total_ltcg
     
+    def withdraw_zero_gain_first(self, amount: float) -> tuple[float, float]:
+        """
+        Withdraw using FIFO but prioritizing zero-gain transactions first.
+        
+        Zero-gain transactions are those where basis == amount (e.g., Traditional→Brokerage
+        or RMD transfers, which have no capital gains until market growth occurs).
+        
+        Withdrawal order:
+        1. All zero-gain transactions (basis == amount)
+        2. Remaining needed from FIFO order (oldest first)
+        
+        Args:
+            amount: Amount to withdraw
+            
+        Returns:
+            Tuple of (amount_withdrawn, ltcg_realized)
+        """
+        if amount <= 0:
+            return 0.0, 0.0
+        
+        remaining = amount
+        total_withdrawn = 0.0
+        total_ltcg = 0.0
+        transactions_to_remove = []
+        
+        # PHASE 1: Withdraw all zero-gain transactions first
+        for i, transaction in enumerate(self.transactions):
+            if remaining <= 0:
+                break
+            
+            # Check if this is a zero-gain transaction
+            if abs(transaction.amount - transaction.basis) < 0.01:  # Use small tolerance for floating point
+                if transaction.amount <= remaining:
+                    # Withdraw entire zero-gain transaction
+                    withdrawn = transaction.amount
+                    ltcg = 0.0  # By definition, zero-gain transaction
+                    remaining -= withdrawn
+                    total_withdrawn += withdrawn
+                    total_ltcg += ltcg
+                    transactions_to_remove.append(i)
+                else:
+                    # Partial withdrawal from this zero-gain transaction
+                    withdrawn = remaining
+                    ltcg = 0.0
+                    
+                    transaction.amount -= withdrawn
+                    transaction.basis -= withdrawn
+                    
+                    total_withdrawn += withdrawn
+                    total_ltcg += ltcg
+                    remaining = 0.0
+        
+        # Remove fully withdrawn zero-gain transactions (in reverse to maintain indices)
+        for i in reversed(transactions_to_remove):
+            del self.transactions[i]
+        
+        # PHASE 2: If still need more, use standard FIFO on remaining transactions
+        if remaining > 0:
+            for i, transaction in enumerate(self.transactions):
+                if remaining <= 0:
+                    break
+                
+                if transaction.amount <= remaining:
+                    # Withdraw entire transaction
+                    withdrawn = transaction.amount
+                    ltcg = transaction.calculate_gain()
+                    remaining -= withdrawn
+                    total_withdrawn += withdrawn
+                    total_ltcg += ltcg
+                    transactions_to_remove.append(i)
+                else:
+                    # Partial withdrawal from this transaction
+                    withdrawn = remaining
+                    basis_ratio = transaction.basis / transaction.amount
+                    basis_withdrawn = withdrawn * basis_ratio
+                    ltcg = withdrawn - basis_withdrawn
+                    
+                    transaction.amount -= withdrawn
+                    transaction.basis -= basis_withdrawn
+                    
+                    total_withdrawn += withdrawn
+                    total_ltcg += ltcg
+                    remaining = 0.0
+        
+        # Remove fully withdrawn transactions from phase 2 (in reverse)
+        for i in reversed(transactions_to_remove):
+            del self.transactions[i]
+        
+        return total_withdrawn, total_ltcg
+
+    
     def get_summary(self) -> Dict[str, Any]:
         """Get account summary statistics"""
         return {
@@ -452,6 +543,10 @@ class YearlyStrategy:
     rmd_amount: float = 0.0        # combined RMD (both persons)
     rmd_person1: float = 0.0       # person 1's individual RMD (Tom)
     rmd_person2: float = 0.0       # person 2's individual RMD (Sarah)
+    pension_income: float = 0.0    # annual pension / annuity payments
+    rental_income: float = 0.0     # net rental income from real estate
+    interest_income: float = 0.0   # taxable interest (savings, bonds, CDs)
+    dividend_income: float = 0.0   # qualified + non-qualified dividends
     
     # Withdrawals
     cash_withdrawal: float = 0.0
@@ -470,6 +565,7 @@ class YearlyStrategy:
     healthcare_costs: float = 0.0
     irmaa_penalty: float = 0.0
     aca_premium: float = 0.0
+    hc_oop: float = 0.0          # out-of-pocket medical (deductibles, copays, etc.)
     payroll_tax: float = 0.0
     
     # Expenses

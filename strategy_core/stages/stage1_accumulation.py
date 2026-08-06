@@ -175,20 +175,6 @@ class Stage1Accumulation(BaseLifeStageStrategy):
             taxable_income, filing_status, year
         )
         
-        state_tax = self.tax_calculator.calculate_state_tax(
-            agi_before_conversion, kwargs.get('state', 'PA'), year
-        )
-        
-        # Deduct state tax from cash balance
-        balances = PortfolioBalances(
-            cash=balances.cash - state_tax,
-            taxable=balances.taxable,
-            traditional=balances.traditional,
-            roth=balances.roth,
-            daf=balances.daf
-        )
-        logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
-        
         # Calculate FICA taxes on wages
         fica_tax = self._calculate_fica_tax(wages)
         
@@ -223,6 +209,27 @@ class Stage1Accumulation(BaseLifeStageStrategy):
                 filing_status,
                 year
             )
+
+        # State tax on full AGI (wages + Roth conversion).
+        # Roth conversion is passed separately so retirement-exempt states (PA, IL, MS)
+        # can deduct it before applying the rate — wages always remain taxable.
+        state_tax = self.tax_calculator.calculate_state_tax(
+            agi_before_conversion + roth_conversion,
+            kwargs.get('state'),
+            year,
+            filing_status=filing_status,
+            roth_conversion=roth_conversion,
+        )
+
+        # Deduct state tax from cash balance
+        balances = PortfolioBalances(
+            cash=balances.cash - state_tax,
+            taxable=balances.taxable,
+            traditional=balances.traditional,
+            roth=balances.roth,
+            daf=balances.daf
+        )
+        logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
         
         # Update strategy with calculated values
         strategy.expenses = expenses  # Store expenses in strategy
