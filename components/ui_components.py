@@ -399,7 +399,7 @@ def empty_state(
     if action_label and action_callback:
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            if st.button(action_label, use_container_width=True):
+            if st.button(action_label, width='stretch'):
                 action_callback()
 
 

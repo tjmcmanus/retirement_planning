@@ -137,8 +137,11 @@ DEFAULT_CONFIG = {
         "daf_provider": "",
         "daf_initial_contribution": 0,
         "daf_annual_contribution": 0,
-        "daf_contribution_start_age": 65,
-        "daf_contribution_end_age": 75,
+        # Year-based DAF contribution window.
+        # Rule: year = birth_year + age  (the calendar year the person turns that age).
+        # Tom born 1966-05-16 at age 65 → year 2031.  Default: p1_birth_year + 65.
+        "daf_contribution_start_year": 2030,
+        "daf_contribution_end_year":   2040,
         "daf_trad_prefund_enabled": False,
         "daf_trad_prefund_amount": 0,
         "daf_trad_prefund_start_year": 2027,

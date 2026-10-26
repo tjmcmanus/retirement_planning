@@ -98,37 +98,48 @@ class TestStageRefactoringIntegration:
     def test_stage2_applies(self, mocker):
         """Test Stage 2 applies logic."""
         stage = Stage2PrepForRetirement()
-        
-        # Mock config to provide retirement years
+
+        # Stage 2 reads personal_info.person1_retirement_year /
+        # person2_retirement_year from config (not 'retirement' section).
         mock_config = mocker.MagicMock()
         mock_config.get.side_effect = lambda section, key, default=None: {
-            ('retirement', 'retirement_year_primary'): 2032,  # Age 58 in 2024 -> retire at 66 in 2032
-            ('retirement', 'retirement_year_spouse'): 2030,
+            ('personal_info', 'person1_retirement_year'): 2032,
+            ('personal_info', 'person2_retirement_year'): 2030,
         }.get((section, key), default)
-        
+
         mocker.patch('config.get_config_manager', return_value=mock_config)
-        
-        # Should apply when has wages and within 10 years of retirement (2024 is 8 years before 2032)
+
+        # Should apply: has wages and 2024 is 8 years before retirement 2032
         assert stage.applies(age_primary=58, age_spouse=56, year=2024, has_wages=True, has_ss=False)
-        
-        # Should not apply when too young (2024 is 18 years before 2042)
+
+        # Should not apply: 18 years before retirement 2042
         mock_config.get.side_effect = lambda section, key, default=None: {
-            ('retirement', 'retirement_year_primary'): 2042,
-            ('retirement', 'retirement_year_spouse'): 2040,
+            ('personal_info', 'person1_retirement_year'): 2042,
+            ('personal_info', 'person2_retirement_year'): 2040,
         }.get((section, key), default)
         assert not stage.applies(age_primary=45, age_spouse=43, year=2024, has_wages=True, has_ss=False)
-        
-        # Should not apply when no wages
+
+        # Should not apply: no wages
         mock_config.get.side_effect = lambda section, key, default=None: {
-            ('retirement', 'retirement_year_primary'): 2032,
-            ('retirement', 'retirement_year_spouse'): 2030,
+            ('personal_info', 'person1_retirement_year'): 2032,
+            ('personal_info', 'person2_retirement_year'): 2030,
         }.get((section, key), default)
         assert not stage.applies(age_primary=58, age_spouse=56, year=2024, has_wages=False, has_ss=False)
-    
-    def test_stage2_calculate_strategy(self, tax_calculator, account_manager, sample_balances):
+
+    def test_stage2_calculate_strategy(self, mocker, tax_calculator, account_manager, sample_balances):
         """Test Stage 2 strategy calculation."""
+        # Mock config so the DAF short-circuit returns has_daf=False (avoids
+        # importing strategy.py and loading the full config stack in tests).
+        mock_config = mocker.MagicMock()
+        mock_config.get.side_effect = lambda section, key, default=None: {
+            ('charitable_giving', 'has_daf'): False,
+            ('income', 'contribution_401k_percent'): 10.0,
+            ('income', 'contribution_roth_percent'): 5.0,
+        }.get((section, key), default)
+        mocker.patch('config.get_config_manager', return_value=mock_config)
+
         stage = Stage2PrepForRetirement(tax_calculator, account_manager)
-        
+
         strategy = stage.calculate_strategy(
             year=2024,
             balances=sample_balances,
@@ -139,7 +150,7 @@ class TestStageRefactoringIntegration:
             filing_status='married',
             start_year=2024
         )
-        
+
         assert strategy.year == 2024
         assert strategy.stage == "Stage 2: Prep for Retirement"
         assert strategy.wages == 150000.0

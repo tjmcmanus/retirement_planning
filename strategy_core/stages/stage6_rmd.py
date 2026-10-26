@@ -158,6 +158,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         brokerage_account = kwargs.get('brokerage_account')
         growth_rate = kwargs.get('growth_rate', 1.07)
         start_year = kwargs.get('start_year', year)
+        _daf_carryforward_prior = float(kwargs.get('daf_carryforward_prior', 0.0))
         
         logger.debug(f"Stage 6 (RMD) calculation for year {year}")
         
@@ -325,7 +326,7 @@ class Stage6RMD(BaseLifeStageStrategy):
             except ImportError:
                 balances_for_rebalance = PortfolioBalances(
                    cash=balances_after_rmd.cash,
-                   taxable=balances_after_rmd.taxable - daf_contribution,
+                   taxable=max(0.0, balances_after_rmd.taxable - daf_contribution),
                    traditional=balances_after_rmd.traditional,
                    roth=balances_after_rmd.roth,
                    daf=balances_after_rmd.daf,
@@ -399,26 +400,34 @@ class Stage6RMD(BaseLifeStageStrategy):
         )
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
         
-        # If DAF contribution made, recalculate federal tax with increased deduction
-        if daf_contribution > 0:
-            new_balances = PortfolioBalances(
-                cash=new_balances.cash,
-                taxable=new_balances.taxable - daf_contribution,  # Subtract DAF from taxable
-                traditional=new_balances.traditional,
-                roth=new_balances.roth,
-                daf=new_balances.daf + daf_contribution
-            )
-            
-            # Recalculate taxes with DAF deduction
+        # If DAF contribution made (or carryforward available), recalculate federal tax
+        _daf_deductible_s6 = 0.0
+        if daf_contribution > 0 or _daf_carryforward_prior > 0:
+            if daf_contribution > 0:
+                new_balances = PortfolioBalances(
+                    cash=new_balances.cash,
+                    taxable=max(0.0, new_balances.taxable - daf_contribution),
+                    traditional=new_balances.traditional,
+                    roth=new_balances.roth,
+                    daf=new_balances.daf + daf_contribution
+                )
+
+            # Apply 30% AGI cap + carryforward (IRC §170)
+            _daf_available_s6 = daf_contribution + _daf_carryforward_prior
+            _daf_30pct_s6 = agi * 0.30
+            _daf_deductible_s6 = min(_daf_available_s6, _daf_30pct_s6)
+            _salt_s6 = min(state_tax + (self._get_property_tax() if hasattr(self, '_get_property_tax') else 0.0), 10_000.0)
+            _total_itemised_s6 = _daf_deductible_s6 + _salt_s6
+            daf_tax_excess = max(0.0, _total_itemised_s6 - std_deduction)
             effective_deduction = std_deduction + daf_tax_excess
-            taxable_income_with_daf = agi - effective_deduction
             federal_tax, cg_tax = self._calculate_taxes(
-                taxable_income_with_daf, total_ltcg, year, filing_status
+                agi - effective_deduction, total_ltcg, year, filing_status
             )
             total_tax = federal_tax + cg_tax
-            
-            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
-            
+
+            logger.info(f"Year {year}: Federal tax reduced by DAF deduction "
+                        f"(deductible: ${_daf_deductible_s6:,.0f}, excess over std: ${daf_tax_excess:,.0f})")
+
             self._log_decision(
                 strategy, 'daf_decisions', 'DAF Contribution',
                 f'${daf_contribution:,.0f} contributed to DAF',
@@ -453,6 +462,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         strategy.roth_conversion = roth_conversion
         strategy.ltcg_harvested = total_ltcg
         strategy.daf_contribution = daf_contribution
+        strategy.daf_deductible = _daf_deductible_s6
         strategy.expenses = expenses
         strategy.agi = agi
         strategy.magi = magi
@@ -888,7 +898,8 @@ class Stage6RMD(BaseLifeStageStrategy):
             )
             
             return _calculate_daf_for_year(
-                age_primary, age_spouse, std_deduction, state_tax, property_tax, taxable_balance
+                age_primary, age_spouse, std_deduction, state_tax, property_tax, taxable_balance,
+                year=year
             )
         except Exception as e:
             logger.warning(f"Could not calculate DAF contribution: {e}")

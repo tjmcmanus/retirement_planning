@@ -590,7 +590,8 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     
     if has_stored_prices and not is_current_month:
         # Use stored historical prices for past months
-        stored_price_mask = detailed_df['end_of_month_price'].notna()
+        # A stored price of 0 (or less) is bad data, not a real price - treat as missing
+        stored_price_mask = detailed_df['end_of_month_price'].fillna(0) > 0
         detailed_df.loc[stored_price_mask, 'current_price'] = detailed_df.loc[stored_price_mask, 'end_of_month_price']
         
         # Identify symbols that need prices fetched

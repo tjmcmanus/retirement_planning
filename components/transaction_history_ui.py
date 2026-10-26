@@ -350,7 +350,7 @@ def render_transaction_history_tab(
             
             with col3:
                 st.markdown("<br>", unsafe_allow_html=True)  # Spacing
-                import_button = st.button("📥 Import Transactions", type="primary", use_container_width=True)
+                import_button = st.button("📥 Import Transactions", type="primary", width='stretch')
             
             # Import transactions
             if import_button:
@@ -486,7 +486,7 @@ def render_transaction_history_tab(
             # Display with filtering
             st.dataframe(
                 display_df,
-                use_container_width=True,
+                width='stretch',
                 height=400
             )
             
@@ -499,7 +499,7 @@ def render_transaction_history_tab(
                     data=csv,
                     file_name=f"transactions_{start_date}_{end_date}.csv",
                     mime="text/csv",
-                    use_container_width=True
+                    width='stretch'
                 )
             
             # Tax report (only if transaction_importer is available)
@@ -691,7 +691,7 @@ def render_cost_basis_tab(transaction_storage, user_id: str = "default"):
                     'Total Cost': '${:,.2f}',
                     'Cost/Share': '${:.2f}'
                 }),
-                use_container_width=True,
+                width='stretch',
                 height=400
             )
             
@@ -724,7 +724,7 @@ def render_cost_basis_tab(transaction_storage, user_id: str = "default"):
                         'Price/Share': '${:.2f}',
                         'Total Cost': '${:,.2f}'
                     }),
-                    use_container_width=True,
+                    width='stretch',
                     height=400
                 )
             
@@ -915,7 +915,7 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
                 'Long-Term': '${:,.2f}',
                 'Number of Sales': '{:.0f}'
             }),
-            use_container_width=True
+            width='stretch'
         )
         
         # Gains by security
@@ -936,7 +936,7 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
                 'Shares Sold': '{:.4f}',
                 'Proceeds': '${:,.2f}'
             }).background_gradient(subset=['Total Gains'], cmap='RdYlGn', vmin=-1000, vmax=1000),
-            use_container_width=True,
+            width='stretch',
             height=300
         )
         
@@ -959,7 +959,7 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
                     'Total Gains': '${:,.2f}',
                     'Number of Sales': '{:.0f}'
                 }).background_gradient(subset=['Total Gains'], cmap='RdYlGn'),
-                use_container_width=True
+                width='stretch'
             )
             
             # Add explanation of tax treatment by account type
@@ -1017,7 +1017,7 @@ def render_capital_gains_tab(transaction_storage, user_id: str = "default"):
                     'Proceeds': '${:,.2f}',
                     'Gain/Loss': '${:,.2f}'
                 }).background_gradient(subset=['Gain/Loss'], cmap='RdYlGn'),
-                use_container_width=True,
+                width='stretch',
                 height=400
             )
         

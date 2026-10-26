@@ -790,7 +790,7 @@ with tab_beneficiary:
                 df['distribution'] = df['distribution'].apply(lambda x: f"${x:,.0f}")
                 df['tax'] = df['tax'].apply(lambda x: f"${x:,.0f}")
                 df['after_tax_distribution'] = df['after_tax_distribution'].apply(lambda x: f"${x:,.0f}")
-                st.dataframe(df[['year', 'distribution', 'tax', 'after_tax_distribution']], use_container_width=True)
+                st.dataframe(df[['year', 'distribution', 'tax', 'after_tax_distribution']], width='stretch')
                 
             except Exception as e:
                 st.error(f"Error: {str(e)}")

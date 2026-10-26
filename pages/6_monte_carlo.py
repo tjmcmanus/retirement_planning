@@ -357,7 +357,7 @@ with mc_sim_tab:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
                 hovermode="x unified",
             )
-            st.plotly_chart(_fan_fig, use_container_width=True)
+            st.plotly_chart(_fan_fig, width='stretch')
 
         st.markdown("#### ✅ Probability of Success by Age")
         _sr_fig = go.Figure()
@@ -372,7 +372,7 @@ with mc_sim_tab:
             title="Probability of Portfolio Survival by Age",
             xaxis_title="Age", yaxis_title="Success Rate (%)", yaxis_range=[0, 105],
         )
-        st.plotly_chart(_sr_fig, use_container_width=True)
+        st.plotly_chart(_sr_fig, width='stretch')
 
         st.markdown("#### 🔀 Sequence-of-Returns Risk Analysis")
         with st.spinner("Analyzing sequence risk…"):
@@ -482,7 +482,7 @@ with mc_stress_tab:
                 "P10 Final": f"${_s.p10_final_portfolio:,.0f}",
                 "Depletion Age": str(_s.years_to_depletion_median) if _s.years_to_depletion_median else "Never",
             })
-        st.dataframe(pd.DataFrame(_st_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(_st_rows), width='stretch', hide_index=True)
 
         st.markdown("#### Median Portfolio Path by Scenario")
         _path_fig = go.Figure()
@@ -505,7 +505,7 @@ with mc_stress_tab:
             yaxis_tickformat="$,.0f",
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
         )
-        st.plotly_chart(_path_fig, use_container_width=True)
+        st.plotly_chart(_path_fig, width='stretch')
 
         _st_csv = generate_monte_carlo_report_csv(
             st.session_state.get("_mc_result", run_monte_carlo(_build_mc_inputs())),
@@ -561,7 +561,7 @@ with mc_longevity_tab:
                 "P10 Final": f"${_mc.p10_final_portfolio:,.0f}",
                 "P10 Depletion Age": str(_mc.years_to_depletion_p10) if _mc.years_to_depletion_p10 else "Never ✅",
             })
-        st.dataframe(pd.DataFrame(_lon_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(_lon_rows), width='stretch', hide_index=True)
 
         _lon_fig = go.Figure()
         _lon_labels = list(_lon_res.keys())
@@ -583,7 +583,7 @@ with mc_longevity_tab:
             yaxis_title="Success Probability (%)",
             yaxis_range=[0, 110],
         )
-        st.plotly_chart(_lon_fig, use_container_width=True)
+        st.plotly_chart(_lon_fig, width='stretch')
 
         st.markdown("#### Median Portfolio Path by Longevity")
         _lon_path_fig = go.Figure()
@@ -602,7 +602,7 @@ with mc_longevity_tab:
             yaxis_tickformat="$,.0f",
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
         )
-        st.plotly_chart(_lon_path_fig, use_container_width=True)
+        st.plotly_chart(_lon_path_fig, width='stretch')
 
         _lon_csv = generate_monte_carlo_report_csv(
             st.session_state.get("_mc_result", run_monte_carlo(_build_mc_inputs())),
@@ -681,7 +681,7 @@ with mc_heatmap_tab:
 
         st.dataframe(
             _hm_display.style.applymap(_color_success),
-            use_container_width=True,
+            width='stretch',
         )
 
         _hm_fig = go.Figure(data=go.Heatmap(
@@ -704,7 +704,7 @@ with mc_heatmap_tab:
             xaxis_title="Portfolio Allocation",
             yaxis_title="Annual Withdrawal",
         )
-        st.plotly_chart(_hm_fig, use_container_width=True)
+        st.plotly_chart(_hm_fig, width='stretch')
 
 # -----------------------------------------------------------------------
 # SUB-TAB 5: Scenario Comparison
@@ -748,7 +748,7 @@ with mc_compare_tab:
         _cmp_df = build_scenario_comparison_df(_cmp)
 
         st.markdown("#### All Scenarios — Side-by-Side")
-        st.dataframe(_cmp_df, use_container_width=True, hide_index=True)
+        st.dataframe(_cmp_df, width='stretch', hide_index=True)
 
         _cmp_fig = go.Figure()
         _cmp_labels = _cmp_df["Scenario"].tolist()
@@ -775,7 +775,7 @@ with mc_compare_tab:
             xaxis_title="Scenario", yaxis_title="Success Probability (%)",
             yaxis_range=[0, 115], xaxis_tickangle=-30,
         )
-        st.plotly_chart(_cmp_fig, use_container_width=True)
+        st.plotly_chart(_cmp_fig, width='stretch')
 
         _cmp_csv = generate_monte_carlo_report_csv(
             _cmp.baseline,

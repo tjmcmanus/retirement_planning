@@ -446,11 +446,146 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
         st.info("No significant financial events identified in this planning period.")
 
 
+def build_annual_calendar_html(
+    monthly_df: pd.DataFrame,
+    year: int,
+    phase: str = "Strategy",
+    jan_bracket_enabled: bool = False,
+) -> str:
+    """
+    Build a print-ready HTML page from the monthly execution plan DataFrame.
+
+    Returns a complete, self-contained HTML string suitable for download and
+    browser-printing (Ctrl+P / Cmd+P).
+    """
+    month_rows_html = []
+    for _, row in monthly_df.iterrows():
+        if row['Action_Count'] == 0:
+            continue
+        # Convert the markdown bold (**text**) to <strong> for HTML output
+        raw = row['Actions']
+        # Replace **...** with <strong>...</strong>
+        import re as _re
+        html_actions = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', raw)
+        # Each double-newline-separated item becomes its own <li>
+        items = [item.strip() for item in html_actions.split('\n\n') if item.strip()]
+        li_items = "\n".join(f"          <li>{item}</li>" for item in items)
+        month_rows_html.append(f"""
+      <div class="month-card">
+        <div class="month-header">📆 {row['Month']}</div>
+        <ul>
+{li_items}
+        </ul>
+      </div>""")
+
+    strategy_badge = (
+        '<span class="badge badge-jan">⚡ January Bracket-Fill Strategy Active</span>'
+        if jan_bracket_enabled else ""
+    )
+    generated = __import__('datetime').datetime.now().strftime("%B %d, %Y at %I:%M %p")
+
+    body = "\n".join(month_rows_html) if month_rows_html else "<p>No scheduled actions for this year.</p>"
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{year} Annual Financial Calendar — {phase}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #1f2328;
+    background: #fff;
+    padding: 32px 40px;
+  }}
+  h1 {{
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }}
+  .subtitle {{
+    color: #57606a;
+    font-size: 12px;
+    margin-bottom: 18px;
+  }}
+  .badge {{
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 18px;
+  }}
+  .badge-jan {{
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+  }}
+  .grid {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }}
+  .month-card {{
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 14px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }}
+  .month-header {{
+    font-weight: 700;
+    font-size: 13px;
+    color: #3b82d4;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 6px;
+    margin-bottom: 8px;
+  }}
+  ul {{
+    padding-left: 16px;
+  }}
+  li {{
+    margin-bottom: 5px;
+    font-size: 12px;
+    color: #1f2328;
+  }}
+  footer {{
+    margin-top: 32px;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 10px;
+    text-align: center;
+    font-size: 11px;
+    color: #57606a;
+  }}
+  @media print {{
+    body {{ padding: 16px 20px; }}
+    .grid {{ gap: 10px; }}
+  }}
+</style>
+</head>
+<body>
+  <h1>📅 {year} Annual Financial Calendar</h1>
+  <div class="subtitle">{phase} Phase &nbsp;·&nbsp; Generated {generated}</div>
+  {strategy_badge}
+  <div class="grid">
+{body}
+  </div>
+  <footer>Made with IBM Bob</footer>
+</body>
+</html>"""
+
+
 def create_monthly_execution_plan(
     strategy_df: pd.DataFrame,
     selected_year: int,
     person1_name: str = "Person 1",
     person2_name: str = "Person 2",
+    jan_bracket_enabled: bool = False,
+    jan_bracket_plan: dict | None = None,
 ) -> pd.DataFrame:
     """
     Create a month-by-month execution plan for a specific year.
@@ -469,6 +604,14 @@ def create_monthly_execution_plan(
         selected_year: The calendar year to build the plan for.
         person1_name: Display name for the primary person (default "Person 1").
         person2_name: Display name for the spouse (default "Person 2").
+        jan_bracket_enabled: When True, the January Bracket-Fill Strategy is active.
+            Replaces quarterly Roth conversions and Trad→Cash with a single January
+            lump withdrawal + Roth conversion + 60-day rollover cycle.
+        jan_bracket_plan: Optional dict returned by _plan_january_bracket_fill_withdrawal()
+            containing keys: traditional_withdrawal, roth_conversion,
+            conversion_withholding, redeposit_deadline, pnc_shortfall.
+            If None and jan_bracket_enabled is True, the calendar will show
+            placeholder labels derived from the strategy DataFrame values.
     """
     if strategy_df.empty:
         return pd.DataFrame()
@@ -503,6 +646,30 @@ def create_monthly_execution_plan(
     trad_roth = _val('Trad→\nRoth')
     trad_cash = _val('Trad→\nCash')
     trad_brok = _val('Trad→\nBrok')
+
+    # ── January Bracket-Fill: extract plan values ────────────────────────────
+    # When enabled, we replace the quarterly Roth conversion / Trad→Cash
+    # entries with a single January action block.
+    jan_trad_withdrawal = 0.0
+    jan_roth_conversion = 0.0
+    jan_conversion_withholding = 0.0
+    jan_redeposit_deadline_str = ""
+    if jan_bracket_enabled:
+        if jan_bracket_plan:
+            jan_trad_withdrawal = float(jan_bracket_plan.get('traditional_withdrawal', 0) or 0)
+            jan_roth_conversion = float(jan_bracket_plan.get('roth_conversion', 0) or 0)
+            jan_conversion_withholding = float(jan_bracket_plan.get('conversion_withholding', 0) or 0)
+            redeposit_dt = jan_bracket_plan.get('redeposit_deadline')
+            if redeposit_dt:
+                try:
+                    jan_redeposit_deadline_str = redeposit_dt.strftime('%B %d, %Y')
+                except Exception:
+                    jan_redeposit_deadline_str = str(redeposit_dt)
+        else:
+            # No pre-computed plan: derive approximate values from strategy DF
+            jan_trad_withdrawal = trad_cash if trad_cash > 0 else (trad_roth if trad_roth > 0 else 0.0)
+            jan_roth_conversion = trad_roth
+    # ── End January Bracket-Fill setup ──────────────────────────────────────
 
     # Create monthly plan
     monthly_plan = []
@@ -554,23 +721,93 @@ def create_monthly_execution_plan(
                     actions.append("📋 Q3 Estimated Tax Payment (Federal)")
                     amounts.append(f"${q_fed:,.0f}")
 
-        # Roth conversions — quarterly (Jan, Apr, Jul, Oct), with per-person attribution.
-        # Tom's IBM 401(k) is the primary source (~70%) due to its much larger balance;
-        # Sarah's Highmark 401k / CapGemini 401k contribute the remainder (~30%).
-        if trad_roth > 0 and month_num in [1, 4, 7, 10]:
-            q_conv = trad_roth / 4
-            p1_conv = q_conv * 0.70
-            p2_conv = q_conv * 0.30
-            actions.append(
-                f"🔄 Roth Conversion — {person1_name} (IBM 401k→Schwab Roth)"
-            )
-            amounts.append(f"${p1_conv:,.0f}")
-            actions.append(
-                f"🔄 Roth Conversion — {person2_name} (Highmark 401k→Schwab Roth)"
-            )
-            amounts.append(f"${p2_conv:,.0f}")
+        if jan_bracket_enabled:
+            # ── JANUARY BRACKET-FILL MODE ────────────────────────────────────────
+            # January: single lump Traditional withdrawal + Roth conversion.
+            # April/July/October quarterly Roth and Trad→Cash are suppressed.
+            if month_num == 1:
+                if jan_trad_withdrawal > 0:
+                    p1_trad = jan_trad_withdrawal * 0.70
+                    p2_trad = jan_trad_withdrawal * 0.30
+                    actions.append(
+                        f"💵 January Withdrawal — {person1_name} (IBM 401k → PNC, full-year funding)"
+                    )
+                    amounts.append(f"${p1_trad:,.0f}")
+                    if p2_trad >= 500:
+                        actions.append(
+                            f"💵 January Withdrawal — {person2_name} (Highmark 401k → PNC)"
+                        )
+                        amounts.append(f"${p2_trad:,.0f}")
+                if jan_roth_conversion > 0:
+                    p1_conv = jan_roth_conversion * 0.70
+                    p2_conv = jan_roth_conversion * 0.30
+                    actions.append(
+                        f"🔄 Roth Conversion — {person1_name} (IBM 401k→Schwab Roth, bracket-fill)"
+                    )
+                    amounts.append(f"${p1_conv:,.0f}")
+                    actions.append(
+                        f"🔄 Roth Conversion — {person2_name} (Highmark 401k→Schwab Roth, bracket-fill)"
+                    )
+                    amounts.append(f"${p2_conv:,.0f}")
+                if jan_conversion_withholding > 0:
+                    actions.append(
+                        "⚠️ Withholding withheld from Roth conversion — fund 60-day redeposit from PNC"
+                    )
+                    amounts.append(f"${jan_conversion_withholding:,.0f}")
+
+            # March: 60-day rollover redeposit deadline reminder
+            if month_num == 3 and jan_roth_conversion > 0:
+                redeposit_note = (
+                    f"by {jan_redeposit_deadline_str}" if jan_redeposit_deadline_str
+                    else "~60 days after January conversion"
+                )
+                actions.append(
+                    f"⏰ 60-Day Rollover Redeposit Deadline — redeposit withheld funds to Traditional IRA ({redeposit_note})"
+                )
+                amounts.append(f"${jan_conversion_withholding:,.0f}" if jan_conversion_withholding > 0 else "—")
+
+            # June: mid-year PNC Savings health check
+            if month_num == 6:
+                actions.append(
+                    "🔍 Mid-Year PNC Savings Check — verify balance above safety reserve; "
+                    "supplement from Brokerage (LOFO) if needed"
+                )
+                amounts.append("—")
+            # ── End January Bracket-Fill MODE ────────────────────────────────────
+
+        else:
+            # ── STANDARD QUARTERLY MODE ──────────────────────────────────────────
+            # Roth conversions — quarterly (Jan, Apr, Jul, Oct), with per-person attribution.
+            # Tom's IBM 401(k) is the primary source (~70%) due to its much larger balance;
+            # Sarah's Highmark 401k / CapGemini 401k contribute the remainder (~30%).
+            if trad_roth > 0 and month_num in [1, 4, 7, 10]:
+                q_conv = trad_roth / 4
+                p1_conv = q_conv * 0.70
+                p2_conv = q_conv * 0.30
+                actions.append(
+                    f"🔄 Roth Conversion — {person1_name} (IBM 401k→Schwab Roth)"
+                )
+                amounts.append(f"${p1_conv:,.0f}")
+                actions.append(
+                    f"🔄 Roth Conversion — {person2_name} (Highmark 401k→Schwab Roth)"
+                )
+                amounts.append(f"${p2_conv:,.0f}")
+
+            # Trad → Cash (expense funding) — monthly, shown every month when active.
+            if trad_cash > 0:
+                monthly_cash = trad_cash / 12
+                if monthly_cash >= 500:
+                    # Attribute to the person whose account is being tapped; default to
+                    # the larger holder (Tom) for the full amount since the engine draws
+                    # from the combined traditional balance.
+                    actions.append(
+                        f"💵 Trad→Cash — {person1_name} (IBM 401k → PNC, for expenses)"
+                    )
+                    amounts.append(f"${monthly_cash:,.0f}")
+            # ── End standard quarterly mode ──────────────────────────────────────
 
         # RMDs — quarterly (Mar, Jun, Sep, Dec), per person, mandatory by Dec 31.
+        # RMDs are always shown regardless of strategy mode.
         if rmd_total > 0 and month_num in [3, 6, 9, 12]:
             q_p1 = rmd_p1 / 4
             q_p2 = rmd_p2 / 4
@@ -586,6 +823,7 @@ def create_monthly_execution_plan(
         # Trad → Brokerage replenishment — quarterly (Jan, Apr, Jul, Oct).
         # The engine moves Traditional funds to the brokerage buffer when the brokerage
         # balance falls below its target; spread evenly across the year.
+        # Shown in both modes (brokerage replenishment is independent of the strategy).
         if trad_brok > 0 and month_num in [1, 4, 7, 10]:
             q_brok = trad_brok / 4
             # Attribute proportionally by balance size
@@ -600,18 +838,6 @@ def create_monthly_execution_plan(
                     f"📤 Trad→Brokerage — {person2_name} (Highmark 401k → Schwab-8457)"
                 )
                 amounts.append(f"${p2_brok:,.0f}")
-
-        # Trad → Cash (expense funding) — monthly, shown every month when active.
-        if trad_cash > 0:
-            monthly_cash = trad_cash / 12
-            if monthly_cash >= 500:
-                # Attribute to the person whose account is being tapped; default to
-                # the larger holder (Tom) for the full amount since the engine draws
-                # from the combined traditional balance.
-                actions.append(
-                    f"💵 Trad→Cash — {person1_name} (IBM 401k → PNC, for expenses)"
-                )
-                amounts.append(f"${monthly_cash:,.0f}")
 
         # Portfolio rebalancing (quarterly)
         if month_num in [3, 6, 9, 12]:
@@ -792,6 +1018,12 @@ def render_accumulation_sankey_for_year(year_data: pd.Series, portfolio: pd.Data
         targets.append("Roth Conversion")
         values.append(float(year_data['Trad→\nRoth']))
     
+    # DAF contributions from brokerage (Stage 2 can donate appreciated securities to DAF)
+    if 'DAF Contribution' in year_data and year_data['DAF Contribution'] > 1000:
+        sources.append("Brokerage Account")
+        targets.append("DAF (Charitable)")
+        values.append(float(year_data['DAF Contribution']))
+
     if sources:
         _render_sankey_diagram(sources, targets, values,
                               f"💰 Money Flow for {int(year_data['Year'])}: Income → Accounts & Expenses")
@@ -981,7 +1213,7 @@ def _render_sankey_diagram(sources: list, targets: list, values: list, title: st
         margin=dict(l=20, r=20, t=60, b=20)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 # ---------------------------------------------------------------------------
@@ -1423,7 +1655,7 @@ def render_tax_overview(tax_data: dict) -> None:
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Display cost basis insights if available
     cost_basis_insights = tax_data.get('cost_basis_insights', {})
@@ -1560,7 +1792,7 @@ def render_income_sources_chart(tax_data: dict, phase: str) -> None:
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Income composition pie chart
     st.markdown("#### Average Income Composition")
@@ -1582,7 +1814,7 @@ def render_income_sources_chart(tax_data: dict, phase: str) -> None:
             height=350
         )
         
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width='stretch')
 
 
 def render_tax_breakdown_chart(tax_data: dict) -> None:
@@ -1664,7 +1896,7 @@ def render_tax_breakdown_chart(tax_data: dict) -> None:
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Tax composition pie chart
     st.markdown("#### Tax Type Distribution")
@@ -1684,7 +1916,7 @@ def render_tax_breakdown_chart(tax_data: dict) -> None:
             height=350
         )
         
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width='stretch')
 
 
 def render_tax_rates_chart(tax_data: dict) -> None:
@@ -1729,7 +1961,7 @@ def render_tax_rates_chart(tax_data: dict) -> None:
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     
     # Interactive Annual Tax Analysis
     st.markdown("#### 🔍 Annual Tax Analysis")
@@ -2052,7 +2284,7 @@ def render_tax_table(tax_data: dict, phase: str) -> None:
         display_df,
         column_config=column_config,
         hide_index=True,
-        use_container_width=True
+        width='stretch'
     )
 
 
@@ -2908,7 +3140,7 @@ def render_expenses_by_type_chart(strategy_df: pd.DataFrame, phase: str) -> None
         ),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # ------------------------------------------------------------------
     # 4. Summary totals callout
@@ -3124,7 +3356,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                     'Year', 'Age', 'Stage',
                     'Wages', 'Wages→\nPayroll', 'Wages→\nTrad', 'Wages→\nRoth',
                     'Trad→\nRoth', 'Cash→\nRoth', 'Cash→\nBrok',
-                    'Expenses', 'Healthcare Cost', 'AGI', 'Federal Tax', 'State Tax', 'Cash Balance',
+                    'Expenses', 'Healthcare Cost', 'DAF Contribution', 'AGI', 'Federal Tax', 'State Tax', 'Cash Balance',
                 ]
                 available_cols_a = [c for c in display_cols_a if c in display_df_a.columns]
                 display_df_a = cast(pd.DataFrame, display_df_a[available_cols_a].copy())
@@ -3145,12 +3377,13 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                     "Cash→\nBrok":    st.column_config.TextColumn("Cash→Brok"),
                     "Expenses":       st.column_config.TextColumn("Expenses"),
                     "Healthcare Cost":st.column_config.TextColumn("Healthcare"),
-                    "AGI":            st.column_config.TextColumn("AGI", help="Adjusted Gross Income (after 401k contributions, before itemized deductions)"),
+                    "DAF Contribution":st.column_config.TextColumn("DAF", help="Donor-Advised Fund contribution (itemized deduction, capped at 30% of AGI for appreciated securities)"),
+                    "AGI":            st.column_config.TextColumn("AGI", help="Adjusted Gross Income (before itemized deductions). DAF contributions reduce taxable income but not AGI."),
                     "Federal Tax":    st.column_config.TextColumn("Fed Tax"),
                     "State Tax":      st.column_config.TextColumn("State Tax", help=f"Estimated {accum_state} state income tax"),
                     "Cash Balance":   st.column_config.TextColumn("Cash End"),
                 }
-                st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, use_container_width=True)
+                st.dataframe(display_df_a, column_config=accum_column_config, hide_index=True, width='stretch')
                 
                 # Life Stage Guide - only show if we have data
                 _accum_stages_present = display_df_a['Stage'].unique() if 'Stage' in display_df_a.columns else []
@@ -3176,13 +3409,35 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                 key="accum_monthly_year"
             )
             
+            _jan_bracket_on = _acfg.get("tax_strategy", "use_january_bracket_fill_strategy", False)
+            if _jan_bracket_on:
+                st.info("⚡ **January Bracket-Fill Strategy is enabled.** "
+                        "January shows the full-year lump withdrawal + Roth conversion. "
+                        "Quarterly Roth/Trad→Cash entries are replaced by the January action block.")
+
             monthly_df = create_monthly_execution_plan(
                 accum_strategy_df, selected_year_monthly,
                 person1_name=accum_person1_name,
                 person2_name=accum_person2_name,
+                jan_bracket_enabled=bool(_jan_bracket_on),
             )
             
             if not monthly_df.empty:
+                # Print / download button
+                _cal_html_a = build_annual_calendar_html(
+                    monthly_df, selected_year_monthly,
+                    phase="Accumulation",
+                    jan_bracket_enabled=bool(_jan_bracket_on),
+                )
+                st.download_button(
+                    label="🖨️ Print Annual Calendar",
+                    data=_cal_html_a,
+                    file_name=f"{selected_year_monthly}_annual_calendar_accumulation.html",
+                    mime="text/html",
+                    help="Downloads a print-ready HTML file. Open it in your browser and use Ctrl+P / Cmd+P to print.",
+                    key="accum_print_calendar",
+                )
+                st.markdown("---")
                 # Display as cards for better UX
                 for idx, row in monthly_df.iterrows():
                     if row['Action_Count'] > 0:
@@ -3359,7 +3614,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                         )
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     st.markdown("---")
                     
@@ -3517,7 +3772,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                         )
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Detailed holdings breakdown
                     st.markdown("---")
@@ -3565,7 +3820,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                                             "Value": st.column_config.NumberColumn("Value", format="$%.0f"),
                                         },
                                         hide_index=True,
-                                        use_container_width=True
+                                        width='stretch'
                                     )
                                     
                                     st.caption(f"**Total:** ${total_value:,.0f}")
@@ -3659,7 +3914,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
                                 "Status": st.column_config.TextColumn("Status", width="small"),
                             },
                             hide_index=True,
-                            use_container_width=True
+                            width='stretch'
                         )
                     else:
                         st.success("✅ **Portfolio is well-balanced** - No rebalancing needed at this time.")
@@ -3898,7 +4153,7 @@ else:
                 "State Tax":        st.column_config.TextColumn("State Tax", help=f"Estimated {state} state income tax"),
                 "Cash Balance":     st.column_config.TextColumn("Cash End"),
             }
-            st.dataframe(display_df_w, column_config=withdrawal_column_config, hide_index=True, use_container_width=True)
+            st.dataframe(display_df_w, column_config=withdrawal_column_config, hide_index=True, width='stretch')
 
             _withdrawal_stages_present = display_df_w['Stage'].unique() if 'Stage' in display_df_w.columns else []
             with st.expander("ℹ️ Life Stage Guide", expanded=False):
@@ -3921,13 +4176,35 @@ else:
                 key="withdrawal_monthly_year"
             )
             
+            _jan_bracket_on_w = _cfg.get("tax_strategy", "use_january_bracket_fill_strategy", False)
+            if _jan_bracket_on_w:
+                st.info("⚡ **January Bracket-Fill Strategy is enabled.** "
+                        "January shows the full-year lump withdrawal + Roth conversion. "
+                        "Quarterly Roth/Trad→Cash entries are replaced by the January action block.")
+
             monthly_df_w = create_monthly_execution_plan(
                 strategy_df_w, selected_year_monthly_w,
                 person1_name=person1_name,
                 person2_name=person2_name,
+                jan_bracket_enabled=bool(_jan_bracket_on_w),
             )
             
             if not monthly_df_w.empty:
+                # Print / download button
+                _cal_html_w = build_annual_calendar_html(
+                    monthly_df_w, selected_year_monthly_w,
+                    phase="Withdrawal",
+                    jan_bracket_enabled=bool(_jan_bracket_on_w),
+                )
+                st.download_button(
+                    label="🖨️ Print Annual Calendar",
+                    data=_cal_html_w,
+                    file_name=f"{selected_year_monthly_w}_annual_calendar_withdrawal.html",
+                    mime="text/html",
+                    help="Downloads a print-ready HTML file. Open it in your browser and use Ctrl+P / Cmd+P to print.",
+                    key="withdrawal_print_calendar",
+                )
+                st.markdown("---")
                 # Display as cards for better UX
                 for idx, row in monthly_df_w.iterrows():
                     if row['Action_Count'] > 0:
@@ -4130,7 +4407,7 @@ else:
                         )
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                     
                     # Detailed holdings breakdown
                     st.markdown("---")
@@ -4178,7 +4455,7 @@ else:
                                             "Value": st.column_config.NumberColumn("Value", format="$%.0f"),
                                         },
                                         hide_index=True,
-                                        use_container_width=True
+                                        width='stretch'
                                     )
                                     
                                     st.caption(f"**Total:** ${total_value:,.0f}")
@@ -4272,7 +4549,7 @@ else:
                                 "Status": st.column_config.TextColumn("Status", width="small"),
                             },
                             hide_index=True,
-                            use_container_width=True
+                            width='stretch'
                         )
                     else:
                         st.success("✅ **Portfolio is well-balanced** - No rebalancing needed at this time.")

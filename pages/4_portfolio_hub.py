@@ -177,7 +177,7 @@ with holdings_tab:
         st.markdown("---")
         st.markdown("### Current Holdings (Read-Only)")
         if not portdf.empty:
-            st.dataframe(portdf, use_container_width=True, hide_index=True)
+            st.dataframe(portdf, width='stretch', hide_index=True)
         else:
             st.warning("No portfolio data available.")
 

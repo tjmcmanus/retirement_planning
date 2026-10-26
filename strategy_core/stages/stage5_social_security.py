@@ -141,6 +141,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         growth_rate = kwargs.get('growth_rate', 1.07)
         start_year = kwargs.get('start_year', year)
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
+        _daf_carryforward_prior = float(kwargs.get('daf_carryforward_prior', 0.0))
         
         logger.debug(f"Stage 5 (SS) calculation for year {year}, SS=${ss_benefits:,.2f}")
         
@@ -348,7 +349,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             except ImportError:
                 balances_for_rebalance = PortfolioBalances(
                     cash=balances_with_ss.cash,
-                    taxable=balances_with_ss.taxable - daf_contribution,
+                    taxable=max(0.0, balances_with_ss.taxable - daf_contribution),
                     traditional=balances_with_ss.traditional,
                     roth=balances_with_ss.roth,
                     daf=balances_with_ss.daf,
@@ -430,22 +431,32 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
         
         # If DAF contribution made, recalculate taxes with increased deduction
-        if daf_contribution > 0:
-            new_balances = PortfolioBalances(
-                cash=new_balances.cash,
-                taxable=new_balances.taxable,
-                traditional=new_balances.traditional,
-                roth=new_balances.roth,
-                daf=new_balances.daf + daf_contribution
-            )
-            
+        _daf_deductible_s5 = 0.0
+        if daf_contribution > 0 or _daf_carryforward_prior > 0:
+            if daf_contribution > 0:
+                new_balances = PortfolioBalances(
+                    cash=new_balances.cash,
+                    taxable=new_balances.taxable,
+                    traditional=new_balances.traditional,
+                    roth=new_balances.roth,
+                    daf=new_balances.daf + daf_contribution
+                )
+
+            # Apply 30% AGI cap + carryforward (IRC §170)
+            _daf_available_s5 = daf_contribution + _daf_carryforward_prior
+            _daf_30pct_s5 = agi * 0.30
+            _daf_deductible_s5 = min(_daf_available_s5, _daf_30pct_s5)
+            _salt_s5 = min(state_tax + (self._get_property_tax() if hasattr(self, '_get_property_tax') else 0.0), 10_000.0)
+            _total_itemised_s5 = _daf_deductible_s5 + _salt_s5
+            daf_tax_excess = max(0.0, _total_itemised_s5 - std_deduction)
             effective_deduction = std_deduction + daf_tax_excess
             federal_tax, cg_tax = self._calculate_taxes(
                 agi, effective_deduction, total_ltcg, year, filing_status
             )
             total_tax = federal_tax + cg_tax
-            
-            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
+
+            logger.info(f"Year {year}: Federal tax reduced by DAF deduction "
+                        f"(deductible: ${_daf_deductible_s5:,.0f}, excess over std: ${daf_tax_excess:,.0f})")
         
         # Get cost basis ratios
         if brokerage_account:
@@ -477,6 +488,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         strategy.roth_conversion = roth_conversion
         strategy.ltcg_harvested = total_ltcg
         strategy.daf_contribution = daf_contribution
+        strategy.daf_deductible = _daf_deductible_s5
         strategy.expenses = expenses
         strategy.agi = agi
         strategy.magi = magi
@@ -920,7 +932,8 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             )
             
             return _calculate_daf_for_year(
-                age_primary, age_spouse, std_deduction, state_tax, property_tax, taxable_balance
+                age_primary, age_spouse, std_deduction, state_tax, property_tax, taxable_balance,
+                year=year
             )
         except Exception as e:
             logger.warning(f"Could not calculate DAF contribution: {e}")

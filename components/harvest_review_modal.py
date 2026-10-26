@@ -246,7 +246,7 @@ def render_harvest_review(
     result: Optional[HarvestExecution] = None
 
     with btn_cancel:
-        if st.button("✖ Cancel", key=f"{key}_cancel", use_container_width=True):
+        if st.button("✖ Cancel", key=f"{key}_cancel", width='stretch'):
             # Signal caller to close the review panel
             st.session_state[f"{key}_cancelled"] = True
             st.rerun()
@@ -255,7 +255,7 @@ def render_harvest_review(
         if selected_replacement and st.button(
             "📄 Generate Instructions",
             key=f"{key}_instructions",
-            use_container_width=True,
+            width='stretch',
         ):
             try:
                 execution = create_harvest_execution(
@@ -289,7 +289,7 @@ def render_harvest_review(
             key=f"{key}_approve",
             type="primary",
             disabled=disabled,
-            use_container_width=True,
+            width='stretch',
         ):
             try:
                 # Re-use a pending execution if instructions were already generated

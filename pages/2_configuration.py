@@ -1577,7 +1577,7 @@ with tab3:
                         'Monthly Cost': '${:,.0f}',
                         '3-Year Total Cost': '${:,.0f}'
                     }),
-                    use_container_width=True
+                    width='stretch'
                 )
                 
                 # Medicaid Spend-Down Analysis
@@ -1973,7 +1973,7 @@ with tab3:
                             'Investment Growth': '${:,.0f}',
                             'Ending Balance': '${:,.0f}'
                         }),
-                        use_container_width=True,
+                        width='stretch',
                         height=300
                     )
                 
@@ -2920,7 +2920,7 @@ with tab4:
                 ) / 100
             
             # Run optimization button
-            if st.button("🚀 Run Optimization Analysis", type="primary", use_container_width=True):
+            if st.button("🚀 Run Optimization Analysis", type="primary", width='stretch'):
                 if person1_ssi_amount == 0 and person2_ssi_amount == 0:
                     st.error("❌ Please enter Social Security benefit amounts above before running optimization.")
                 else:
@@ -3147,7 +3147,7 @@ with tab4:
                                             'Lifetime Total': '${:,.0f}',
                                             'Net Present Value': '${:,.0f}'
                                         }).background_gradient(subset=['Net Present Value'], cmap='RdYlGn'),
-                                        use_container_width=True,
+                                        width='stretch',
                                         height=400
                                     )
                             
@@ -3166,7 +3166,7 @@ with tab4:
                                             'Lifetime Total': '${:,.0f}',
                                             'Net Present Value': '${:,.0f}'
                                         }).background_gradient(subset=['Net Present Value'], cmap='RdYlGn'),
-                                        use_container_width=True,
+                                        width='stretch',
                                         height=400
                                     )
                             
@@ -4152,10 +4152,33 @@ with tab5:
 
         # Initialize DAF variables with config defaults (overridden by widgets when has_daf is True)
         daf_initial_contribution = config_mgr.get("charitable_giving", "daf_initial_contribution", 0)
-        daf_annual_contribution = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
-        daf_contribution_start_age = config_mgr.get("charitable_giving", "daf_contribution_start_age", 60)
-        daf_contribution_end_age = config_mgr.get("charitable_giving", "daf_contribution_end_age", 75)
-        daf_provider = config_mgr.get("charitable_giving", "daf_provider", "")
+        daf_annual_contribution  = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
+        daf_provider             = config_mgr.get("charitable_giving", "daf_provider", "")
+
+        # Age-to-year reference: year = birth_year + age.
+        # _p1_by  — person1 (primary/Tom) birth year; used for age hints in the UI.
+        # _eldest_by — birth year of the oldest person; used for QCD/RMD ceiling only.
+        try:
+            _p1_bd = str(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01"))
+            _p1_by = int(_p1_bd.split("-")[0])
+            _p2_bd = str(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01"))
+            _p2_by = int(_p2_bd.split("-")[0])
+            _eldest_by = min(_p1_by, _p2_by)
+            _p1_name_hint = str(config_mgr.get("personal_info", "person1_name", "Person 1"))
+        except Exception:
+            _p1_by = 1965
+            _eldest_by = 1965
+            _p1_name_hint = "Person 1"
+
+        _daf_start_yr_default = int(config_mgr.get(
+            "charitable_giving", "daf_contribution_start_year",
+            _p1_by + 65))  # default: year person1 turns 65
+        _daf_end_yr_default = int(config_mgr.get(
+            "charitable_giving", "daf_contribution_end_year",
+            _p1_by + 75))  # default: year person1 turns 75
+
+        daf_contribution_start_year = _daf_start_yr_default
+        daf_contribution_end_year   = _daf_end_yr_default
 
         if not has_daf:
             with st.expander("💡 What is a Donor Advised Fund and how do I set one up?", expanded=False):
@@ -4261,30 +4284,49 @@ accumulation years, early retirement, or as part of your estate plan.
                 key="daf_initial_contribution"
             )
 
-            daf_contribution_start_age = st.number_input(
-                "DAF Contribution Start Age",
-                min_value=18,
-                max_value=100,
-                value=config_mgr.get("charitable_giving", "daf_contribution_start_age", 60),
-                help="Age when you plan to start making DAF contributions",
-                key="daf_contribution_start_age"
-            )
+            _daf_yr_col1, _daf_yr_col2 = st.columns(2)
+            with _daf_yr_col1:
+                daf_contribution_start_year = st.number_input(
+                    "DAF Contribution Start Year",
+                    min_value=datetime.now().year,
+                    max_value=datetime.now().year + 60,
+                    value=_daf_start_yr_default,
+                    step=1,
+                    help=(
+                        "First tax year to make a DAF contribution.  "
+                        "Age reference: year = birth_year + age  "
+                        f"({_p1_name_hint} born {_p1_by}: age {_daf_start_yr_default - _p1_by} in {_daf_start_yr_default})."
+                    ),
+                    key="daf_contribution_start_year",
+                )
+                # Show age-equivalent hint beneath the widget (keyed to person1/primary)
+                _start_age_ref = daf_contribution_start_year - _p1_by
+                st.caption(f"≈ {_p1_name_hint} is {_start_age_ref} in {daf_contribution_start_year}")
 
-            daf_contribution_end_age = st.number_input(
-                "DAF Contribution End Age",
-                min_value=18,
-                max_value=100,
-                value=config_mgr.get("charitable_giving", "daf_contribution_end_age", 75),
-                help="Age when you plan to stop making DAF contributions",
-                key="daf_contribution_end_age"
-            )
+            with _daf_yr_col2:
+                daf_contribution_end_year = st.number_input(
+                    "DAF Contribution End Year",
+                    min_value=datetime.now().year,
+                    max_value=datetime.now().year + 60,
+                    value=_daf_end_yr_default,
+                    step=1,
+                    help=(
+                        "Last tax year to make a DAF contribution (inclusive).  "
+                        "Age reference: year = birth_year + age  "
+                        f"({_p1_name_hint} born {_p1_by}: age {_daf_end_yr_default - _p1_by} in {_daf_end_yr_default}).  "
+                        "Stop before QCDs become more efficient (typically the year eldest turns 70)."
+                    ),
+                    key="daf_contribution_end_year",
+                )
+                _end_age_ref = daf_contribution_end_year - _p1_by
+                st.caption(f"≈ {_p1_name_hint} is {_end_age_ref} in {daf_contribution_end_year}")
 
             # ── Optimal bundling suggestion ────────────────────────────────
             # RMD age is birth-year-aware (SECURE 2.0): 73 for born 1951–1959, 75 for born 1960+
             _p1_birth_year = config_mgr.get("social_security", "person1_birth_year", 1960)
             from strategy_core.stages.stage6_rmd import get_rmd_age as _get_rmd_age
             _rmd_age = _get_rmd_age(_p1_birth_year)
-            _giving_years = max(1, daf_contribution_end_age - daf_contribution_start_age)
+            _giving_years = max(1, daf_contribution_end_year - daf_contribution_start_year)
             _std_ded = 30_000  # 2025 MFJ standard deduction reference
 
             if annual_charitable_giving > 0:
@@ -4314,41 +4356,51 @@ accumulation years, early retirement, or as part of your estate plan.
                         help=f"{_opt_interval} × ${annual_charitable_giving:,.0f}/yr",
                     )
                 with _sug_col2:
+                    _start_yr_lbl = daf_contribution_start_year
+                    _end_yr_lbl   = daf_contribution_end_year
                     st.metric(
                         "Estimated Bundle Events",
                         f"~{_num_bundles}",
-                        help=f"Over your {_giving_years}-year contribution window "
-                             f"(age {daf_contribution_start_age}–{daf_contribution_end_age}).",
+                        help=(
+                            f"Over your {_giving_years}-year contribution window "
+                            f"({_start_yr_lbl}–{_end_yr_lbl}; "
+                            f"{_p1_name_hint} ages {_start_yr_lbl - _p1_by}–{_end_yr_lbl - _p1_by})."
+                        ),
                     )
-                    # Total Lifetime DAF Contributions = giving from start age to RMD age
-                    # (after RMD age, QCDs from Traditional IRA take over — see QCD Potential above)
-                    _sug_daf_end = min(_rmd_age, charitable_giving_end_age)
-                    _sug_daf_years = max(0, _sug_daf_end - charitable_giving_start_age)
+                    # Total Lifetime DAF Contributions = giving from start year to QCD year
+                    _rmd_year  = _eldest_by + _rmd_age
+                    _sug_qcd_yr = min(_rmd_year, _eldest_by + int(charitable_giving_end_age))
+                    _sug_daf_yrs = max(0, _sug_qcd_yr - int(charitable_giving_start_age + _eldest_by - _eldest_by))
+                    # Simpler: years from charitable_giving_start to QCD boundary
+                    _cg_start_yr = _eldest_by + int(charitable_giving_start_age)
+                    _sug_daf_years = max(0, _sug_qcd_yr - _cg_start_yr)
                     _sug_daf_total = annual_charitable_giving * _sug_daf_years
                     st.metric(
                         "Total Lifetime DAF Contributions",
                         f"${_sug_daf_total:,.0f}",
                         help=(
-                            f"Giving from age {charitable_giving_start_age} to {_sug_daf_end} "
-                            f"({_sug_daf_years} yrs × ${annual_charitable_giving:,.0f}/yr). "
+                            f"Giving from {_cg_start_yr} to {_sug_qcd_yr} "
+                            f"({_p1_name_hint} ages {_cg_start_yr - _p1_by}–{_sug_qcd_yr - _eldest_by}; "
+                            f"{_sug_daf_years} yrs × ${annual_charitable_giving:,.0f}/yr). "
                             f"Funded via {_num_bundles} bundled DAF contribution(s) of "
                             f"${_opt_bundle_amt:,.0f} each (every {_opt_interval} years) from "
-                            f"Brokerage/cash. After age {_rmd_age}, QCDs from your Traditional IRA "
-                            f"satisfy giving tax-free. "
+                            f"Brokerage/cash. After {_rmd_year} (age {_rmd_age}), QCDs from your "
+                            f"Traditional IRA satisfy giving tax-free. "
                             f"Matches 'Total DAF Contributions' in the Charitable Giving Summary above."
                         ),
                     )
 
-                # QCD tip when RMD age falls within or after the contribution window
-                if daf_contribution_end_age >= _rmd_age:
+                # QCD tip: show when end_year is at or beyond the year eldest turns RMD age
+                _rmd_yr_threshold = _eldest_by + _rmd_age
+                if daf_contribution_end_year >= _rmd_yr_threshold:
                     st.info(
-                        f"**💡 QCD Tip:** Once you reach age **{_rmd_age}** and must take Required "
-                        f"Minimum Distributions (RMDs), consider switching from DAF contributions "
-                        f"to **Qualified Charitable Distributions (QCDs)** directly from your IRA. "
-                        f"QCDs satisfy your RMD (up to **\\$105,000/yr** in 2025) and are excluded "
-                        f"from your taxable income entirely — more tax-efficient than a DAF "
-                        f"contribution in most cases. You can use both strategies: DAF for "
-                        f"bundling appreciated securities, QCD for satisfying RMDs tax-free."
+                        f"**💡 QCD Tip:** Once you reach **{_rmd_yr_threshold}** (age {_rmd_age}) and "
+                        f"must take Required Minimum Distributions, consider switching from DAF "
+                        f"contributions to **Qualified Charitable Distributions (QCDs)** directly "
+                        f"from your IRA. QCDs satisfy your RMD (up to **\\$105,000/yr** in 2025) and "
+                        f"are excluded from your taxable income — more tax-efficient than a DAF "
+                        f"contribution in most cases. You can use both: DAF for bundling appreciated "
+                        f"securities, QCD for satisfying RMDs tax-free."
                     )
             else:
                 daf_annual_contribution = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
@@ -4478,9 +4530,12 @@ accumulation years, early retirement, or as part of your estate plan.
         lifetime_giving = total_daf_contributions + _qcd_amount  # == annual × total_years
 
         if has_daf and annual_charitable_giving > 0:
+            _daf_start_yr_sum = daf_contribution_start_year
+            _daf_end_yr_sum   = daf_contribution_end_year
             _cg_bundle_help = (
-                f"Giving from age {charitable_giving_start_age} to {_daf_end_age} "
-                f"(before QCDs begin at 73): "
+                f"Giving {_daf_start_yr_sum}–{_daf_end_yr_sum} "
+                f"({_p1_name_hint} ages {_daf_start_yr_sum - _p1_by}–{_daf_end_yr_sum - _p1_by}, "
+                f"before QCDs become more efficient at age 70): "
                 f"${annual_charitable_giving:,.0f}/yr × {_daf_years} yrs = "
                 f"${total_daf_contributions:,.0f}. "
                 f"Funded via bundled DAF contributions from Brokerage/cash "
@@ -4489,7 +4544,8 @@ accumulation years, early retirement, or as part of your estate plan.
         elif has_daf:
             _cg_bundle_help = (
                 f"Annual contributions of ${daf_annual_contribution:,.0f} "
-                f"from age {daf_contribution_start_age} to {daf_contribution_end_age}."
+                f"from {daf_contribution_start_year} to {daf_contribution_end_year} "
+                f"({_p1_name_hint} ages {daf_contribution_start_year - _p1_by}–{daf_contribution_end_year - _p1_by})."
             )
         else:
             _cg_bundle_help = "No DAF configured. Check 'I already have a Donor Advised Fund set up' to add DAF contributions."
@@ -4734,7 +4790,7 @@ with tab6:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        if st.button("📂 Load Current Data", use_container_width=True):
+        if st.button("📂 Load Current Data", width='stretch'):
             try:
                 _df = db_load_all()
                 st.session_state['portfolio_df'] = _df
@@ -4743,7 +4799,7 @@ with tab6:
                 st.error(f"Error loading data: {e}")
 
     with col2:
-        if st.button("➕ Add Empty Row", use_container_width=True):
+        if st.button("➕ Add Empty Row", width='stretch'):
             new_row = pd.DataFrame({
                 'month': [entry_month],
                 'year': [entry_year],
@@ -4772,7 +4828,7 @@ with tab6:
 
         if st.button(
             f"📋 Copy {_src_month}/{_src_year} → {_tgt_month}/{_tgt_year}",
-            use_container_width=True,
+            width='stretch',
             help=f"Copies all entries from {_src_month}/{_src_year}, updates month/year to "
                  f"{_tgt_month}/{_tgt_year}, and prepends them for editing."
         ):
@@ -4802,7 +4858,7 @@ with tab6:
                 st.rerun()
 
     with col4:
-        if st.button("🗑️ Clear All", use_container_width=True):
+        if st.button("🗑️ Clear All", width='stretch'):
             st.session_state['portfolio_df'] = pd.DataFrame(columns=pd.Index([
                 'month', 'year', 'account_name', 'account_type', 'owner', 'symbol', 'name', 'sector', 'qty', 'purchase_price'
             ]))
@@ -4812,7 +4868,7 @@ with tab6:
     col5, col6, col7 = st.columns(3)
 
     with col5:
-        if st.button("🔍 Validate & Lookup Tickers", use_container_width=True,
+        if st.button("🔍 Validate & Lookup Tickers", width='stretch',
                      help="Validates ticker symbols, auto-fills Name/Sector, and maps Account Type/Owner from Your Accounts configuration"):
             current_df = st.session_state['portfolio_df'].copy()
             
@@ -4892,7 +4948,7 @@ with tab6:
                 st.rerun()
 
     with col6:
-        if st.button("🆕 Start from Scratch", type="secondary", use_container_width=True,
+        if st.button("🆕 Start from Scratch", type="secondary", width='stretch',
                      help="Backs up current data and creates a blank portfolio file"):
             if 'cfg_confirm_scratch' not in st.session_state:
                 st.session_state.cfg_confirm_scratch = False
@@ -4914,7 +4970,7 @@ with tab6:
                     st.session_state.cfg_confirm_scratch = False
 
     with col7:
-        if st.button("⏮️ Revert to Last Backup", type="secondary", use_container_width=True,
+        if st.button("⏮️ Revert to Last Backup", type="secondary", width='stretch',
                      help="Restores the most recent backup of portfolio_data_truth.csv"):
             if 'cfg_confirm_revert' not in st.session_state:
                 st.session_state.cfg_confirm_revert = False
@@ -5003,14 +5059,14 @@ with tab6:
         st.markdown("---")
         col_a, col_b = st.columns(2)
         with col_a:
-            if st.button("🔙 Fix Errors & Cancel", type="secondary", use_container_width=True):
+            if st.button("🔙 Fix Errors & Cancel", type="secondary", width='stretch'):
                 st.rerun()   # closes the dialog
         with col_b:
             save_anyway_disabled = len(valid_df) == 0
             if st.button(
                 f"💾 Save {len(valid_df)} Valid Rows Anyway",
                 type="primary",
-                use_container_width=True,
+                width='stretch',
                 disabled=save_anyway_disabled,
             ):
                 _do_save(valid_df)
@@ -5073,7 +5129,7 @@ with tab6:
             invalid_df = pd.DataFrame()
 
     with col_save2:
-        if st.button("💾 Save Portfolio Data", type="primary", use_container_width=True, disabled=len(edited_df) == 0):
+        if st.button("💾 Save Portfolio Data", type="primary", width='stretch', disabled=len(edited_df) == 0):
             # Re-validate at save time
             valid_df_save, invalid_df_save = validate_portfolio_dataframe(edited_df)
 
@@ -5198,7 +5254,7 @@ with tab8:
     rebal_col1, rebal_col2 = st.columns(2)
     
     with rebal_col1:
-        if st.button("🔍 Validate Tickers", use_container_width=True, key="validate_rebal_tickers"):
+        if st.button("🔍 Validate Tickers", width='stretch', key="validate_rebal_tickers"):
             validation_results = []
             symbols_to_validate = {
                 "Cash": extract_ticker(cash_symbol),
@@ -5238,7 +5294,7 @@ with tab8:
                         st.markdown(f"  - **{label}**: `{ticker}` - {name} ✓")
     
     with rebal_col2:
-        if st.button("💾 Save Preferences", type="primary", use_container_width=True, key="save_rebal_prefs"):
+        if st.button("💾 Save Preferences", type="primary", width='stretch', key="save_rebal_prefs"):
             config_mgr.set("rebalancing_preferences", "cash_symbol", cash_symbol)
             config_mgr.set("rebalancing_preferences", "bonds_traditional", bonds_traditional)
             config_mgr.set("rebalancing_preferences", "bonds_roth", bonds_roth)
@@ -5364,7 +5420,7 @@ with tab9:
             })
         
         progression_df = pd.DataFrame(progression_data)
-        st.dataframe(progression_df, hide_index=True, use_container_width=True)
+        st.dataframe(progression_df, hide_index=True, width='stretch')
         
         st.markdown("---")
         st.subheader("Market Trend Adjustments")
@@ -5706,18 +5762,29 @@ with tab10:
                     config_mgr.get("charitable_giving", "charitable_giving_inflation_rate", 2.0)),
                 "has_daf": st.session_state.get("has_daf",
                     config_mgr.get("charitable_giving", "has_daf", False)),
-                "daf_provider": st.session_state.get("daf_provider",
-                    config_mgr.get("charitable_giving", "daf_provider", "")),
+                # daf_provider_choice holds the selectbox value; daf_provider_custom
+                # holds the free-text name when "Other" is selected.  Resolve them
+                # the same way the widget block does (lines 4257–4266).
+                "daf_provider": (
+                    st.session_state.get("daf_provider_custom", "").strip()
+                    or "Other"
+                ) if st.session_state.get("daf_provider_choice") == "Other" else (
+                    st.session_state.get("daf_provider_choice")
+                    or config_mgr.get("charitable_giving", "daf_provider", "")
+                ),
                 "daf_initial_contribution": st.session_state.get("daf_initial_contribution",
                     config_mgr.get("charitable_giving", "daf_initial_contribution", 0)),
                 # daf_annual_contribution is a local variable computed from the bundling
                 # suggestion above — use it directly so the calculated value is saved even
                 # when the user hasn't interacted with a widget for this field.
                 "daf_annual_contribution": daf_annual_contribution,
-                "daf_contribution_start_age": st.session_state.get("daf_contribution_start_age",
-                    config_mgr.get("charitable_giving", "daf_contribution_start_age", 60)),
-                "daf_contribution_end_age": st.session_state.get("daf_contribution_end_age",
-                    config_mgr.get("charitable_giving", "daf_contribution_end_age", 75)),
+                # Year-based DAF window — replaces the legacy age fields.
+                # Widget keys are daf_contribution_start_year / daf_contribution_end_year.
+                # Fallback default anchored to person1 (primary) birth year, not eldest.
+                "daf_contribution_start_year": st.session_state.get("daf_contribution_start_year",
+                    config_mgr.get("charitable_giving", "daf_contribution_start_year", _p1_by + 65)),
+                "daf_contribution_end_year": st.session_state.get("daf_contribution_end_year",
+                    config_mgr.get("charitable_giving", "daf_contribution_end_year", _p1_by + 75)),
                 "daf_trad_prefund_enabled": st.session_state.get("daf_trad_prefund_enabled",
                     config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False)),
                 "daf_trad_prefund_amount": st.session_state.get("daf_trad_prefund_amount",
@@ -6066,7 +6133,6 @@ with tab7:
             column_config=re_column_config,
             width='stretch',
             hide_index=True,
-            use_container_width=True
         )
 
     # Keep session state in sync with edits (supports row deletion via num_rows="dynamic")

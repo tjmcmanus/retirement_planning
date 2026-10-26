@@ -211,20 +211,20 @@ def sidebar():
         # Quick Navigation Links                                               #
         # ------------------------------------------------------------------ #
         st.markdown("**📍 Navigate**")
-        st.page_link("pages/3_dashboard.py",           label="🏠 Dashboard",           use_container_width=True)
-        st.page_link("pages/4_portfolio.py",           label="📊 Portfolio",           use_container_width=True)
-        st.page_link("pages/5_strategy.py",            label="📋 Strategy",            use_container_width=True)
-        st.page_link("pages/6_monte_carlo.py",         label="🎲 Monte Carlo",         use_container_width=True)
-        st.page_link("pages/8_advanced_strategies.py", label="🧠 Advanced Strategies", use_container_width=True)
-        st.page_link("pages/1_estate_planning.py",     label="🏛️ Estate Planning",     use_container_width=True)
-        st.page_link("pages/2_configuration.py",       label="⚙️ Configuration",       use_container_width=True)
+        st.page_link("pages/3_dashboard.py",           label="🏠 Dashboard",           width='stretch')
+        st.page_link("pages/4_portfolio.py",           label="📊 Portfolio",           width='stretch')
+        st.page_link("pages/5_strategy.py",            label="📋 Strategy",            width='stretch')
+        st.page_link("pages/6_monte_carlo.py",         label="🎲 Monte Carlo",         width='stretch')
+        st.page_link("pages/8_advanced_strategies.py", label="🧠 Advanced Strategies", width='stretch')
+        st.page_link("pages/1_estate_planning.py",     label="🏛️ Estate Planning",     width='stretch')
+        st.page_link("pages/2_configuration.py",       label="⚙️ Configuration",       width='stretch')
 
         st.markdown("---")
 
         # ------------------------------------------------------------------ #
         # Header actions                                                       #
         # ------------------------------------------------------------------ #
-        st.button("🔄 Refresh All Data", on_click=clear_all_cache, use_container_width=True)
+        st.button("🔄 Refresh All Data", on_click=clear_all_cache, width='stretch')
 
         st.caption("Adjust strategy parameters in the **⚙️ Configuration** page.")
 

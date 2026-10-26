@@ -349,7 +349,7 @@ def _render_opportunities(
         h_display,
         hide_index=True,
         height=(len(h_display) + 1) * 38 + 3,
-        use_container_width=True,
+        width='stretch',
     )
 
     st.markdown("---")
@@ -501,7 +501,7 @@ def _render_di_scan_additive(
                     if st.button(
                         "🔍 Full Review",
                         key=f"di_open_review_{i}",
-                        use_container_width=False,
+                        width='content',
                     ):
                         st.session_state[reviewing_key] = True
                         st.rerun()
@@ -653,7 +653,7 @@ def _render_execution_queue() -> None:
                         "✅ Approve",
                         key=f"hub_q_approve_{tid}",
                         type="primary",
-                        use_container_width=True,
+                        width='stretch',
                     ):
                         approve_pending_trade(tid)
                         st.success("Approved! Execute the trades in Schwab then click Confirm Executed.")
@@ -665,12 +665,12 @@ def _render_execution_queue() -> None:
                         label_visibility="collapsed",
                         placeholder="Rejection reason…",
                     )
-                    if st.button("✖ Reject", key=f"hub_q_reject_{tid}", use_container_width=True):
+                    if st.button("✖ Reject", key=f"hub_q_reject_{tid}", width='stretch'):
                         reject_pending_trade(tid, reason=reject_reason)
                         st.warning("Trade rejected.")
                         st.rerun()
                 with ba3:
-                    if st.button("🗑 Cancel", key=f"hub_q_cancel_{tid}", use_container_width=True):
+                    if st.button("🗑 Cancel", key=f"hub_q_cancel_{tid}", width='stretch'):
                         cancel_pending_trade(tid)
                         st.warning("Trade cancelled.")
                         st.rerun()
@@ -708,7 +708,7 @@ def _render_execution_queue() -> None:
                         "🏁 Confirm Executed",
                         key=f"hub_q_confirm_{tid}",
                         type="primary",
-                        use_container_width=True,
+                        width='stretch',
                     ):
                         confirm_trade_executed(
                             tid,

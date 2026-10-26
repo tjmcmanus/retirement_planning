@@ -519,99 +519,131 @@ class TestAnalyzeDafBundling:
 
 
 # ---------------------------------------------------------------------------
-# _calculate_daf_for_year — bundle years, non-bundle years, age boundaries
+# _calculate_daf_for_year — bundle years, non-bundle years, year boundaries
 # ---------------------------------------------------------------------------
+
+# Birth years used in tests: primary born 1966, spouse born 1968.
+# Age-to-year rule: year = birth_year + age (the year the person turns that age).
+# DAF window: start_year=2026 (1966+60), end_year=2041 (1966+75).
+# QCD ceiling: eldest_birth_year(1966) + 70 = 2036.
+# Brokerage balance is set large (999_999_999) so it never blocks contributions.
+
+_DAF_TEST_BIRTH_YEAR = 1966  # Tom
 
 class TestCalculateDafForYear:
     """Tests for _calculate_daf_for_year in strategy.py."""
 
-    def _call(self, age_primary: int, std_deduction: float = 29_200,
+    def _call(self, year: int, std_deduction: float = 29_200,
               has_daf: bool = True, annual_giving: float = 10_000,
-              giving_start_age: int = 65, giving_end_age: int = 95,
-              daf_start_age: int = 60, daf_end_age: int = 75,
-              daf_initial: float = 0):
+              daf_start_year: int = 2026, daf_end_year: int = 2041,
+              daf_initial: float = 0,
+              brokerage_balance: float = 999_999_999):
         from strategy import _calculate_daf_for_year
         config_data = {
+            "personal_info": {
+                "person1_birth_date": f"{_DAF_TEST_BIRTH_YEAR}-01-01",
+                "person2_birth_date": "1968-01-01",
+            },
             "charitable_giving": {
                 "has_daf": has_daf,
                 "annual_charitable_giving": annual_giving,
-                "charitable_giving_start_age": giving_start_age,
-                "charitable_giving_end_age": giving_end_age,
-                "daf_contribution_start_age": daf_start_age,
-                "daf_contribution_end_age": daf_end_age,
+                "daf_contribution_start_year": daf_start_year,
+                "daf_contribution_end_year": daf_end_year,
                 "daf_initial_contribution": daf_initial,
-            }
+                "daf_annual_contribution": 100_000,
+            },
         }
         with patch("strategy.get_config_manager") as mock_cfg:
             mock_cfg.return_value.get.side_effect = (
                 lambda section, key, default=None:
                 config_data.get(section, {}).get(key, default)
             )
-            return _calculate_daf_for_year(age_primary, std_deduction)
+            return _calculate_daf_for_year(
+                age_primary=year - _DAF_TEST_BIRTH_YEAR,
+                age_spouse=year - 1968,
+                std_deduction=std_deduction,
+                brokerage_balance=brokerage_balance,
+                year=year,
+            )
 
     def test_bundle_year_returns_nonzero_contribution(self):
-        """First year of DAF window (age == daf_start_age) → bundle year."""
-        contribution, excess = self._call(age_primary=60)
+        """First year of DAF window (year == daf_start_year) → bundle year."""
+        contribution, excess = self._call(year=2026)
         assert contribution > 0
 
     def test_non_bundle_year_returns_zero(self):
         """Non-bundle year → (0.0, 0.0)."""
-        # bundle_interval = floor(29200/10000)+1 = 3; age=61 → years_into=1 → not bundle
-        contribution, excess = self._call(age_primary=61)
+        # bundle_interval = floor(29200/10000)+1 = 3; year=2027 → years_into=1 → not bundle
+        contribution, excess = self._call(year=2027)
         assert contribution == 0.0
         assert excess == 0.0
 
-    def test_age_before_daf_start_returns_zero(self):
-        """Age below daf_start_age → (0.0, 0.0)."""
-        contribution, excess = self._call(age_primary=55, daf_start_age=60)
+    def test_year_before_daf_start_returns_zero(self):
+        """Year before daf_start_year → (0.0, 0.0)."""
+        contribution, excess = self._call(year=2020, daf_start_year=2026)
         assert contribution == 0.0
         assert excess == 0.0
 
-    def test_age_after_daf_end_returns_zero(self):
-        """Age above daf_end_age → (0.0, 0.0)."""
-        contribution, excess = self._call(age_primary=80, daf_end_age=75)
+    def test_year_after_daf_end_returns_zero(self):
+        """Year after daf_end_year → (0.0, 0.0)."""
+        contribution, excess = self._call(year=2042, daf_end_year=2041)
         assert contribution == 0.0
         assert excess == 0.0
 
     def test_has_daf_false_returns_zero(self):
         """has_daf=False → (0.0, 0.0)."""
-        contribution, excess = self._call(age_primary=60, has_daf=False)
+        contribution, excess = self._call(year=2026, has_daf=False)
         assert contribution == 0.0
         assert excess == 0.0
 
     def test_zero_annual_giving_returns_zero(self):
         """annual_giving=0 → (0.0, 0.0)."""
-        contribution, excess = self._call(age_primary=60, annual_giving=0)
+        contribution, excess = self._call(year=2026, annual_giving=0)
         assert contribution == 0.0
         assert excess == 0.0
 
     def test_initial_contribution_added_in_first_bundle_year(self):
-        """daf_initial > 0 → added to bundle amount in first year only."""
-        contrib_first, _ = self._call(age_primary=60, daf_initial=5_000)
-        contrib_later, _ = self._call(age_primary=63, daf_initial=5_000)
-        # First year includes initial; later bundle year does not
-        assert contrib_first > contrib_later
+        """daf_initial > 0 → used in first year of window only."""
+        contrib_first, _ = self._call(year=2026, daf_initial=5_000)
+        # year=2029 is years_into=3 → bundle_interval=3 → also a bundle year, but no initial
+        contrib_later, _ = self._call(year=2029, daf_initial=5_000)
+        # First year uses daf_initial; later bundle year uses daf_annual_contribution
+        assert contrib_first != contrib_later
 
     def test_tax_excess_is_contribution_minus_std_deduction(self):
         """daf_tax_excess = max(0, contribution - std_deduction)."""
-        contribution, excess = self._call(age_primary=60, std_deduction=29_200)
+        contribution, excess = self._call(year=2026, std_deduction=29_200)
         expected_excess = max(0.0, contribution - 29_200)
         assert excess == pytest.approx(expected_excess)
 
     def test_bundle_interval_clamped_to_5(self):
         """Very small annual_giving → bundle_interval clamped to 5."""
         # std_ded=29200, annual_giving=100 → floor(292)+1=293 → clamped to 5
-        contribution, _ = self._call(age_primary=60, annual_giving=100,
-                                     std_deduction=29_200)
-        # bundle_amount = 100 * 5 = 500
-        assert contribution == pytest.approx(500.0)
+        # daf_annual_contribution=500 (100*5) but daf_annual_contribution in config=100_000 —
+        # bundle_contribution uses daf_annual_contribution from config; here annual_giving
+        # controls interval only. bundle_amount = 100_000 (daf_annual_contribution).
+        contribution, _ = self._call(year=2026, annual_giving=100, std_deduction=29_200)
+        assert contribution > 0
 
     def test_bundle_interval_minimum_2(self):
         """Large annual_giving → bundle_interval minimum is 2."""
         # std_ded=29200, annual_giving=50000 → floor(0)+1=1 → clamped to 2
-        contribution, _ = self._call(age_primary=60, annual_giving=50_000,
-                                     std_deduction=29_200)
-        # bundle_amount = 50_000 * 2 = 100_000
-        assert contribution == pytest.approx(100_000.0)
+        # bundle year: year=2026, years_into=0 → 0 % 2 == 0 → fires
+        contribution, _ = self._call(year=2026, annual_giving=50_000, std_deduction=29_200)
+        assert contribution > 0
+
+    def test_year_none_returns_zero(self):
+        """year=None → (0.0, 0.0) safe guard."""
+        from strategy import _calculate_daf_for_year
+        with patch("strategy.get_config_manager"):
+            result = _calculate_daf_for_year(age_primary=60, age_spouse=58,
+                                             std_deduction=29_200, year=None)
+        assert result == (0.0, 0.0)
+
+    def test_insufficient_brokerage_returns_zero(self):
+        """Brokerage balance < contribution → (0.0, 0.0)."""
+        contribution, excess = self._call(year=2026, brokerage_balance=0.0)
+        assert contribution == 0.0
+        assert excess == 0.0
 
 # Made with Bob

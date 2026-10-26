@@ -387,7 +387,12 @@ def save_portfolio_data(new_data: pd.DataFrame, append: bool = True) -> Tuple[bo
         if missing_cols:
             return False, f"Missing required columns: {missing_cols}"
 
-        new_data = cast(pd.DataFrame, new_data[required_columns].copy())
+        # Preserve stored end-of-month prices when the caller supplies them;
+        # otherwise INSERT OR REPLACE would wipe the historical prices.
+        keep_columns = required_columns + (
+            ['end_of_month_price'] if 'end_of_month_price' in new_data.columns else []
+        )
+        new_data = cast(pd.DataFrame, new_data[keep_columns].copy())
 
         # Strip rows that would fail basic validation (month out of range, qty=0,
         # blank symbol) before they reach the DB.  This prevents garbage rows

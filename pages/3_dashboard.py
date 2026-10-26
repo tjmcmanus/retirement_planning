@@ -677,7 +677,7 @@ with tab_trend:
         margin=dict(t=60, l=10, r=10, b=10),
     )
     
-    st.plotly_chart(fig_nw_combined, use_container_width=True)
+    st.plotly_chart(fig_nw_combined, width='stretch')
 
 # ========================================================================
 # TAB 2: NET WORTH STATEMENT
@@ -714,7 +714,7 @@ with tab_account_mix:
         )
         fig_acct_mix.data[0].textinfo = "label+text+value+percent root"
         fig_acct_mix.update_layout(margin=dict(t=50, l=25, r=25, b=25), height=600)
-        st.plotly_chart(fig_acct_mix, use_container_width=True)
+        st.plotly_chart(fig_acct_mix, width='stretch')
     else:
         st.info("No account data available for the current period.")
 
@@ -756,7 +756,7 @@ with tab_portfolio_mix:
                 fig_port_mix.data[0].textinfo = "label+text+value+percent root"
                 fig_port_mix.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
                 fig_port_mix.update_layout(margin=dict(t=50, l=25, r=25, b=25), height=600)
-                st.plotly_chart(fig_port_mix, use_container_width=True)
+                st.plotly_chart(fig_port_mix, width='stretch')
             else:
                 st.info("No sector data available for portfolio mix chart.")
 
@@ -922,7 +922,7 @@ try:
 
     _rri_col_gauge, _rri_col_metrics = st.columns([2, 3])
     with _rri_col_gauge:
-        st.plotly_chart(_gauge_fig, use_container_width=True)
+        st.plotly_chart(_gauge_fig, width='stretch')
         st.markdown(
             f'<p style="text-align:center;font-size:18px;font-weight:700;'
             f'color:{_rri_color(_overall)}">{_rri_label(_overall)}</p>',

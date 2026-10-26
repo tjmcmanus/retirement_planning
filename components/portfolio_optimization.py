@@ -225,7 +225,7 @@ def _render_rebalancing_body(
             save_btn = st.button(
                 "💾 Save Targets",
                 disabled=not is_valid,
-                use_container_width=True,
+                width='stretch',
                 key="rb_save_targets_btn",
                 help="Save these targets for use in Portfolio Review reports"
             )
@@ -272,7 +272,7 @@ def _render_rebalancing_body(
         "🔄 Calculate Rebalancing Plan",
         disabled=not is_valid,
         type="primary" if is_valid else "secondary",
-        use_container_width=True,
+        width='stretch',
         key="rb_calculate_btn"
     )
 
@@ -478,7 +478,7 @@ def _render_daf_body(curr_month: int, curr_year: int) -> None:
                 }
                 for c in daf_candidates_list
             ]
-            st.dataframe(pd.DataFrame(daf_cand_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(daf_cand_rows), hide_index=True, width='stretch')
 
             st.markdown("---")
             st.markdown("#### 💡 DAF Bundling Strategy")
@@ -544,7 +544,7 @@ def _render_withdrawal_body() -> None:
             key="withdrawal_purpose"
         )
 
-    if st.button("💡 Get Withdrawal Recommendations", use_container_width=True, key="withdrawal_recs"):
+    if st.button("💡 Get Withdrawal Recommendations", width='stretch', key="withdrawal_recs"):
         st.markdown("##### 📋 Recommended Withdrawal Sequence")
         st.markdown(f"""
         **Tax-Efficient Withdrawal Order for ${withdrawal_amount:,.0f}:**

@@ -481,7 +481,7 @@ def render_balance_chart(balances_df: pd.DataFrame, title: str = "Projected Acco
         plot_bgcolor='white',
         paper_bgcolor='white'
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_income_chart(strategy_df: pd.DataFrame, title: str = "Income Sources by Year") -> None:
@@ -614,7 +614,7 @@ def render_income_chart(strategy_df: pd.DataFrame, title: str = "Income Sources 
         xaxis=dict(gridcolor='#eee'),
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_balance_table(balances_df: pd.DataFrame) -> None:
@@ -625,7 +625,7 @@ def render_balance_table(balances_df: pd.DataFrame) -> None:
     for col in balance_cols:
         if col in display.columns:
             display[col] = pd.Series(pd.to_numeric(display[col], errors='coerce')).map(format_currency)
-    st.dataframe(display, column_config=BALANCE_COLUMN_CONFIG, hide_index=True, use_container_width=True)
+    st.dataframe(display, column_config=BALANCE_COLUMN_CONFIG, hide_index=True, width='stretch')
 
 
 # ---------------------------------------------------------------------------

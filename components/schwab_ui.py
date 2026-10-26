@@ -109,7 +109,7 @@ def render_schwab_authorization(schwab_connector) -> None:
         st.markdown("You'll be redirected to Schwab to approve access.")
     
     with col2:
-        if st.button("🔗 Authorize Schwab", type="primary", use_container_width=True):
+        if st.button("🔗 Authorize Schwab", type="primary", width='stretch'):
             try:
                 auth_url = schwab_connector.get_authorization_url()
                 st.session_state.schwab_auth_url = auth_url
@@ -134,7 +134,7 @@ def render_schwab_authorization(schwab_connector) -> None:
         
         col1, col2 = st.columns([3, 1])
         with col2:
-            if st.button("Complete Authorization", type="primary", use_container_width=True):
+            if st.button("Complete Authorization", type="primary", width='stretch'):
                 if callback_url:
                     try:
                         success = schwab_connector.complete_authorization(callback_url)
@@ -184,25 +184,25 @@ def render_schwab_connected_accounts(schwab_connector, schwab_transformer, curr_
                     st.metric("Cash Balance", f"${cash_balance:,.2f}")
                 
                 with col3:
-                    if st.button("🔄 Sync", key=f"sync_schwab_single_{account_number}", use_container_width=True):
+                    if st.button("🔄 Sync", key=f"sync_schwab_single_{account_number}", width='stretch'):
                         sync_schwab_account(schwab_connector, schwab_transformer, curr_month, curr_year)
         
         # Sync all button
         st.markdown("---")
         col1, col2 = st.columns([3, 1])
         with col2:
-            if st.button("🔄 Sync All Accounts", key="sync_schwab_all", type="primary", use_container_width=True):
+            if st.button("🔄 Sync All Accounts", key="sync_schwab_all", type="primary", width='stretch'):
                 sync_schwab_account(schwab_connector, schwab_transformer, curr_month, curr_year)
         
         # Show merge button if holdings are synced
         if 'schwab_synced_holdings' in st.session_state:
             st.markdown("---")
             st.markdown("### 📊 Synced Holdings Preview")
-            st.dataframe(st.session_state.schwab_synced_holdings, use_container_width=True, hide_index=True)
+            st.dataframe(st.session_state.schwab_synced_holdings, width='stretch', hide_index=True)
             
             col1, col2, col3 = st.columns([2, 1, 2])
             with col2:
-                if st.button("💾 Merge with Portfolio", key="merge_schwab", type="primary", use_container_width=True):
+                if st.button("💾 Merge with Portfolio", key="merge_schwab", type="primary", width='stretch'):
                     try:
                         # Import merge function
                         from components.portfolio_connections import _merge_synced_holdings

@@ -805,7 +805,7 @@ def apply_daf_to_brokerage_account(
 
     return PortfolioBalances(
         cash=balances.cash,
-        taxable=balances.taxable - daf_contribution,
+        taxable=max(0.0, balances.taxable - daf_contribution),
         traditional=balances.traditional,
         roth=balances.roth,
         daf=balances.daf,
@@ -1375,21 +1375,32 @@ def optimize_rmd_lookback(strategies: list,
                             std_deduction = std_deduction_df.iloc[0]['deduction']
                             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year_strategy.year))
                             
-                            # CRITICAL: Account for DAF deduction if present
-                            # DAF contribution creates additional itemized deduction above standard deduction
+                            # Account for DAF deduction if present.
+                            # Use daf_deductible (the already-capped amount that includes both the
+                            # current-year donation AND any carryforward from prior years) rather than
+                            # daf_contribution (the raw new donation, which ignores the carryforward
+                            # and was not yet capped at 30% of AGI).
+                            # Falls back to daf_contribution for strategies built before this field existed.
                             daf_tax_excess = 0
-                            if year_strategy.daf_contribution > 0:
+                            _daf_deductible_for_tax = getattr(year_strategy, 'daf_deductible', None)
+                            if _daf_deductible_for_tax is None:
+                                # Legacy fallback: apply 30% cap manually
+                                _daf_deductible_for_tax = min(
+                                    year_strategy.daf_contribution,
+                                    year_strategy.agi * 0.30
+                                )
+                            if _daf_deductible_for_tax > 0:
                                 # Get property tax for SALT calculation
                                 try:
                                     property_tax = float(config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0))
                                 except Exception:
                                     property_tax = 0.0
-                                
+
                                 # Calculate SALT cap (state tax + property tax, capped at $10,000)
                                 salt_deduction = min(year_strategy.state_tax + property_tax, 10000)
                                 
-                                # Total itemized deductions = SALT + DAF contribution
-                                itemized_deduction = salt_deduction + year_strategy.daf_contribution
+                                # Total itemized deductions = DAF (capped + carryforward) + SALT
+                                itemized_deduction = _daf_deductible_for_tax + salt_deduction
                                 
                                 # DAF tax excess = amount by which itemized exceeds standard
                                 daf_tax_excess = max(0, itemized_deduction - std_deduction)
@@ -3145,14 +3156,14 @@ def replenish_cash_buffer(balances: PortfolioBalances,
             'brokerage_ltcg': 0.0
         }, dl
 
-    logger.warning(f"Year {year}: Cash buffer below target (${balances.cash:,.0f} < ${cash_target:,.0f})")
-    logger.warning(f"  Cash deficit: ${cash_deficit:,.0f}")
-    logger.warning(f"  Current account balances:")
-    logger.warning(f"    Cash: ${balances.cash:,.2f}")
-    logger.warning(f"    Taxable (Brokerage): ${balances.taxable:,.2f}")
-    logger.warning(f"    Traditional: ${balances.traditional:,.2f}")
-    logger.warning(f"    Roth: ${balances.roth:,.2f}")
-    logger.warning(f"    DAF: ${balances.daf:,.2f}")
+    logger.info(f"Year {year}: Cash buffer below target (${balances.cash:,.0f} < ${cash_target:,.0f})")
+    logger.info(f"  Cash deficit: ${cash_deficit:,.0f} — sourcing from Brokerage/Roth/Traditional")
+    logger.info(f"  Current account balances:")
+    logger.info(f"    Cash:      ${balances.cash:,.2f}")
+    logger.info(f"    Brokerage: ${balances.taxable:,.2f}")
+    logger.info(f"    Trad:      ${balances.traditional:,.2f}")
+    logger.info(f"    Roth:      ${balances.roth:,.2f}")
+    logger.info(f"    DAF:       ${balances.daf:,.2f}")
 
     dl.add("cash_replenishment", "Cash Buffer Deficit",
            f"Replenish ${cash_deficit:,.0f}",
@@ -4035,125 +4046,164 @@ def _get_latest_retirement_year() -> int:
 
 def _calculate_daf_for_year(age_primary: int, age_spouse: int, std_deduction: float,
                            state_tax: float = 0.0, property_tax: float = 0.0,
-                           brokerage_balance: float = 0.0) -> Tuple[float, float]:
-    """Calculate DAF contribution and tax deduction excess for a given year/age.
+                           brokerage_balance: float = 0.0,
+                           year: Optional[int] = None) -> Tuple[float, float]:
+    """Calculate DAF contribution and tax deduction excess for a given tax year.
 
-    Uses the eldest person's age for DAF contribution timing and stops contributions
-    once the eldest reaches QCD eligibility age (70.5 years old).
+    The DAF contribution window is specified as **calendar years** — no age-to-year
+    conversion is needed in the strategy engine.  The config fields
+    ``daf_contribution_start_year`` and ``daf_contribution_end_year`` hold the exact
+    first and last tax years in which bundled contributions fire.
+
+    Age-to-year reference rule (for display and UI helpers only):
+        year = birth_year + age
+    Example: Tom born 1966-05-16 turns 65 in 2031 → ``birth_year + 65 = 2031``.
+    Medicare begins in 2031 (the year he turns 65); SSI at 65 also starts 2031;
+    RMDs at 75 start in 2041 (1966 + 75).  There is no ambiguity when working
+    in tax years directly.
 
     Bundling strategy:
-      - First year: daf_initial_contribution (if configured)
-      - Subsequent years: bundle based on daf_annual_contribution from config
-      - Bundle interval calculated from config or defaults to every 2 years
-      - Stops at QCD eligibility age (70.5) or daf_contribution_end_age, whichever is earlier
+      - start_year: daf_initial_contribution (if configured), then bundle amounts
+        every ``bundle_interval`` years thereafter
+      - Stops after end_year (inclusive) or when eldest person reaches QCD age
+        (birth_year + 70, the year they turn 70 — QCD available at 70½ but the
+        tax year they turn 70 is the last safe year for a DAF contribution)
 
-    When calculating itemized deductions, includes SALT (State And Local Taxes) which consists
-    of state income tax and property tax, capped at $10,000 per IRS rules.
+    When calculating itemized deductions, includes SALT (State And Local Taxes)
+    capped at $10,000 per IRS rules.
 
     Args:
-        age_primary: Primary person's age
-        age_spouse: Spouse's age (0 if single)
-        std_deduction: Standard deduction amount for the year
-        state_tax: State income tax paid (default 0.0)
-        property_tax: Property tax paid (default 0.0)
-        brokerage_balance: Current brokerage account balance (default 0.0)
+        age_primary: Primary person's age (year − birth_year); used only for
+                     the QCD ceiling check when year-based config is absent.
+        age_spouse:  Spouse's age (0 if single).
+        std_deduction: Standard deduction amount for the year.
+        state_tax:   State income tax paid (default 0.0).
+        property_tax: Property tax paid (default 0.0).
+        brokerage_balance: Current brokerage balance (default 0.0).
+        year: Calendar tax year being evaluated.  Required for the year-based
+              window check; when None the function returns (0.0, 0.0) to avoid
+              misfires.
 
     Returns:
         (daf_contribution, daf_tax_deduction_excess)
         daf_contribution          — amount contributed to DAF this year (0 in non-bundle years)
         daf_tax_deduction_excess  — amount by which total itemized deductions (DAF + SALT)
-                                    exceed the standard deduction (i.e. the incremental
-                                    itemized deduction benefit). This is subtracted from
-                                    taxable income in bundle years.
+                                    exceed the standard deduction.
     """
-    # QCD (Qualified Charitable Distribution) eligibility age
-    QCD_AGE = 70.5
-    
+    # When the year is unknown we cannot evaluate the window — skip safely.
+    if year is None:
+        return 0.0, 0.0
+
     try:
         config_mgr = get_config_manager()
-        has_daf = config_mgr.get("charitable_giving", "has_daf", False)
+        has_daf      = config_mgr.get("charitable_giving", "has_daf", False)
         annual_giving = float(config_mgr.get("charitable_giving", "annual_charitable_giving", 0))
-        daf_start_age = int(config_mgr.get("charitable_giving", "daf_contribution_start_age", 60))
-        daf_end_age = int(config_mgr.get("charitable_giving", "daf_contribution_end_age", 75))
-        daf_initial = float(config_mgr.get("charitable_giving", "daf_initial_contribution", 0))
-        daf_annual = float(config_mgr.get("charitable_giving", "daf_annual_contribution", 100000))
-        
-        # Get bundle interval from tax_strategy if available, otherwise calculate
+        daf_initial  = float(config_mgr.get("charitable_giving", "daf_initial_contribution", 0))
+        daf_annual   = float(config_mgr.get("charitable_giving", "daf_annual_contribution", 100000))
+
+        # ── Year-based contribution window ────────────────────────────────────
+        # Primary source: daf_contribution_start_year / daf_contribution_end_year.
+        # Fallback: convert legacy age fields using birth_year + age so old
+        # configs continue to work until the user saves the new year-based values.
+        _current_year = year  # already an int
+
+        daf_start_year = config_mgr.get("charitable_giving", "daf_contribution_start_year", None)
+        daf_end_year   = config_mgr.get("charitable_giving", "daf_contribution_end_year",   None)
+
+        if daf_start_year is None or daf_end_year is None:
+            # Legacy fallback: age → year via birth_year + age
+            try:
+                p1_birth_date = str(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01"))
+                p1_birth_year = int(p1_birth_date.split('-')[0])
+                p2_birth_date = str(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01"))
+                p2_birth_year = int(p2_birth_date.split('-')[0])
+                eldest_birth_year = min(p1_birth_year, p2_birth_year)  # eldest born first
+            except Exception:
+                eldest_birth_year = 1965
+            daf_start_age = int(config_mgr.get("charitable_giving", "daf_contribution_start_age", 65))
+            daf_end_age   = int(config_mgr.get("charitable_giving", "daf_contribution_end_age",   75))
+            daf_start_year = eldest_birth_year + daf_start_age
+            daf_end_year   = eldest_birth_year + daf_end_age
+
+        daf_start_year = int(daf_start_year)
+        daf_end_year   = int(daf_end_year)
+
+        # ── QCD ceiling: eldest person's birth_year + 70 ─────────────────────
+        # Qualified Charitable Distributions from an IRA are available at 70½.
+        # For simplicity we use the tax year the eldest turns 70 as the last
+        # year a DAF contribution makes sense (QCD is more efficient from 70.5+).
+        try:
+            p1_birth_date = str(config_mgr.get("personal_info", "person1_birth_date", "1965-01-01"))
+            p1_birth_year = int(p1_birth_date.split('-')[0])
+            p2_birth_date = str(config_mgr.get("personal_info", "person2_birth_date", "1967-01-01"))
+            p2_birth_year = int(p2_birth_date.split('-')[0])
+            # Eldest person is the one born in the earlier year
+            eldest_birth_year = min(p1_birth_year, p2_birth_year)
+        except Exception:
+            eldest_birth_year = 1965
+        qcd_year = eldest_birth_year + 70  # year eldest turns 70
+
+        # Clamp end_year to qcd_year so contributions stop before QCD takes over
+        effective_end_year = min(daf_end_year, qcd_year)
+        # ─────────────────────────────────────────────────────────────────────
+
+        # Get bundle interval
         bundle_interval = config_mgr.get("tax_strategy", "daf_bundle_interval_years", None)
         if bundle_interval is None:
-            # Calculate bundle interval: floor(std_ded / giving) + 1, capped [2, 5]
             bundle_interval = max(2, min(int(std_deduction // annual_giving) + 1, 5)) if annual_giving > 0 else 2
         else:
             bundle_interval = int(bundle_interval)
-            
-        # Get bundle contribution amount from tax_strategy if available
+
+        # Get bundle contribution amount
         bundle_contribution = config_mgr.get("tax_strategy", "daf_bundle_contribution_amount", None)
-        if bundle_contribution is None:
-            bundle_contribution = daf_annual
-        else:
-            bundle_contribution = float(bundle_contribution)
-            
+        bundle_contribution = float(bundle_contribution) if bundle_contribution is not None else daf_annual
+
     except Exception:
         return 0.0, 0.0
 
-    # No DAF or no giving configured — guard before any division
+    # No DAF or no giving configured
     if not has_daf or annual_giving <= 0:
         return 0.0, 0.0
 
-    # Use eldest person's age for DAF contribution timing
-    eldest_age = max(age_primary, age_spouse) if age_spouse > 0 else age_primary
-    
-    # Stop DAF contributions once eldest reaches QCD eligibility age (70.5)
-    # QCD allows direct charitable distributions from IRA, which is more tax-efficient
-    if eldest_age >= QCD_AGE:
-        logger.debug(f"No DAF contribution: eldest age {eldest_age:.1f} >= QCD age {QCD_AGE}")
-        return 0.0, 0.0
-    
-    # Also respect the configured end age
-    if eldest_age < daf_start_age or eldest_age > daf_end_age:
-        return 0.0, 0.0
-    
-    years_into_window = eldest_age - daf_start_age
-
-    # Check if this is a bundle year
-    if years_into_window % bundle_interval != 0:
-        return 0.0, 0.0
-
-    # First year of the window: use initial contribution
-    if years_into_window == 0 and daf_initial > 0:
-        daf_contribution = daf_initial
-        logger.debug(f"DAF initial contribution year (eldest age {eldest_age}): ${daf_contribution:,.0f}")
-    else:
-        # Subsequent bundle years: use configured bundle amount
-        daf_contribution = bundle_contribution
-        logger.debug(f"DAF bundle year (eldest age {eldest_age}): ${daf_contribution:,.0f}")
-
-    # Check if brokerage has sufficient funds for DAF contribution
-    if daf_contribution > brokerage_balance:
-        logger.warning(
-            f"Insufficient brokerage balance for DAF contribution: "
-            f"${brokerage_balance:,.2f} < ${daf_contribution:,.0f}. "
-            f"Skipping DAF contribution for eldest age {eldest_age}."
+    # Outside the configured window?
+    if _current_year < daf_start_year or _current_year > effective_end_year:
+        logger.debug(
+            f"DAF: year {_current_year} outside window "
+            f"{daf_start_year}–{effective_end_year} (qcd_year={qcd_year})"
         )
         return 0.0, 0.0
 
-    # Calculate SALT (State And Local Taxes) deduction, capped at $10,000 per IRS rules
-    salt_deduction = min(10000.0, state_tax + property_tax)
-    
-    # Total itemized deductions = DAF contribution + SALT
-    total_itemized = daf_contribution + salt_deduction
-    
-    # Tax deduction excess: amount by which itemized deductions exceed standard deduction
-    # Only itemize if total itemized deductions exceed the standard deduction
-    daf_tax_excess = max(0.0, total_itemized - std_deduction)
+    years_into_window = _current_year - daf_start_year
+
+    # Not a bundle year?
+    if years_into_window % bundle_interval != 0:
+        return 0.0, 0.0
+
+    # First year: use initial contribution if configured
+    if years_into_window == 0 and daf_initial > 0:
+        daf_contribution = daf_initial
+        logger.debug(f"DAF initial contribution year {_current_year}: ${daf_contribution:,.0f}")
+    else:
+        daf_contribution = bundle_contribution
+        logger.debug(f"DAF bundle year {_current_year} (offset +{years_into_window}): ${daf_contribution:,.0f}")
+
+    # Brokerage sufficiency check
+    if daf_contribution > brokerage_balance:
+        logger.warning(
+            f"DAF year {_current_year}: insufficient brokerage "
+            f"(${brokerage_balance:,.2f} < ${daf_contribution:,.0f}) — skipping."
+        )
+        return 0.0, 0.0
+
+    # SALT deduction (State And Local Taxes), capped at $10,000
+    salt_deduction   = min(10000.0, state_tax + property_tax)
+    total_itemized   = daf_contribution + salt_deduction
+    daf_tax_excess   = max(0.0, total_itemized - std_deduction)
 
     logger.debug(
-        f"DAF bundle year (eldest age {eldest_age}): "
-        f"contribution=${daf_contribution:,.0f}, "
-        f"SALT=${salt_deduction:,.0f} (state=${state_tax:,.0f}, property=${property_tax:,.0f}), "
-        f"total itemized=${total_itemized:,.0f}, "
-        f"tax excess above std_ded=${daf_tax_excess:,.0f} "
-        f"(interval={bundle_interval} yrs)"
+        f"DAF year {_current_year}: contribution=${daf_contribution:,.0f}, "
+        f"SALT=${salt_deduction:,.0f}, total_itemized=${total_itemized:,.0f}, "
+        f"tax_excess=${daf_tax_excess:,.0f} (interval={bundle_interval} yrs)"
     )
     return daf_contribution, daf_tax_excess
 
@@ -4220,6 +4270,12 @@ class WithdrawalStrategyEngine:
             Stage6RMD(tax_calc, acct_mgr)
         ]
         self.brokerage_account: Optional[BrokerageAccount] = None
+        # IRC §170 DAF carryforward — persists across ALL stage transitions.
+        # Each stage's calculate_strategy receives this via the daf_carryforward_prior
+        # kwarg and returns the new balance via strategy.daf_deductible so the engine
+        # can update it.  Keeping it here (not on individual stage instances) is the
+        # only way to correctly handle transitions such as Stage 2 → Stage 3.
+        self._daf_carryforward: float = 0.0
         
         logger.info("Withdrawal Strategy Engine initialized with 7 refactored life stages")
     
@@ -4299,12 +4355,14 @@ class WithdrawalStrategyEngine:
         magi_history = {}
         
         for year in range(start_year, end_year + 1):
-            # Get ages from config (calculate from birth year)
+            # Get ages from config (calculate from birth year).
+            # age_primary / age_spouse = the age each person *turns* during
+            # this calendar year, used for stage transitions, Medicare, SS, RMD.
             config_mgr = get_config_manager()
             person1_birth_date = config_mgr.get("personal_info", "person1_birth_date", "1965-01-01")
             person1_birth_year = int(person1_birth_date.split('-')[0])
             age_primary = year - person1_birth_year
-            
+
             person2_birth_date = config_mgr.get("personal_info", "person2_birth_date", "1967-01-01")
             person2_birth_year = int(person2_birth_date.split('-')[0])
             age_spouse = year - person2_birth_year
@@ -4445,6 +4503,25 @@ class WithdrawalStrategyEngine:
             logger.info(f"  Roth: ${balances.roth:,.2f}")
             logger.info(f"  Total: ${balances.total():,.2f}")
             logger.info(f"  Expenses for year: ${expenses:,.2f}")
+
+            # When cash is already below a rough retirement-target threshold,
+            # log the prior 2 years' key cash drivers to make the cause visible.
+            _rough_cash_target = expenses * 2
+            if balances.cash < _rough_cash_target and results:
+                logger.info(
+                    f"  ⚠  Cash (${balances.cash:,.0f}) is below ~2yr target "
+                    f"(${_rough_cash_target:,.0f}) — prior-year context:"
+                )
+                for _ps in results[-2:]:
+                    logger.info(
+                        f"    {_ps.year}: wages=${_ps.wages:,.0f}, "
+                        f"fed_tax=${_ps.federal_tax:,.0f}, "
+                        f"state_tax=${_ps.state_tax:,.0f}, "
+                        f"daf=${_ps.daf_contribution:,.0f} (deductible=${_ps.daf_deductible:,.0f}), "
+                        f"roth_conv=${_ps.roth_conversion:,.0f}, "
+                        f"brokerage_end=${_ps.taxable_balance:,.0f}, "
+                        f"cash_end=${_ps.cash_balance:,.0f}"
+                    )
             
             # Determine stage
             stage = self.determine_stage(age_primary, age_spouse, year, has_wages, has_ss)
@@ -4469,8 +4546,22 @@ class WithdrawalStrategyEngine:
                 prior_magi=prior_magi,
                 start_year=start_year,
                 brokerage_account=self.brokerage_account,
+                daf_carryforward_prior=self._daf_carryforward,
                 **{**kwargs, 'max_conversion_rate': stage_conversion_rate},
             )
+
+            # Update the engine-level DAF carryforward from this year's result.
+            # strategy.daf_deductible holds the amount actually deducted (capped at 30%
+            # of AGI, including any prior carryforward consumed).  Any excess that was
+            # not deductible this year is: available - deductible.
+            # We derive available = (new contribution this year) + (prior carryforward).
+            _daf_available = strategy.daf_contribution + self._daf_carryforward
+            self._daf_carryforward = max(0.0, _daf_available - strategy.daf_deductible)
+            if self._daf_carryforward > 0:
+                logger.info(
+                    f"Year {year}: Engine DAF carryforward → ${self._daf_carryforward:,.0f} "
+                    f"(available=${_daf_available:,.0f}, deducted=${strategy.daf_deductible:,.0f})"
+                )
 
             # Stamp the other income sources onto the strategy object for the chart
             strategy.pension_income  = pension_income
@@ -4760,7 +4851,19 @@ def build_withdrawal_strategy_display(start_year: Optional[int] = None,
                 trad_p1 += trad_joint / 2.0
                 trad_p2 += trad_joint / 2.0
 
-                logger.info(f"Per-person Traditional split: {_p1_name}=${trad_p1:,.2f}, {_p2_name}=${trad_p2:,.2f}")
+                # If portfolio has no per-owner rows (both sum to 0) but there IS a
+                # combined Traditional balance, set to None so the 70/30 fallback
+                # is used — a zero here would silently suppress all RMDs.
+                if trad_p1 + trad_p2 == 0.0 and traditional_balance > 0:
+                    logger.warning(
+                        f"No per-owner Traditional rows found for '{_p1_name}'/'{_p2_name}' "
+                        f"(combined ${traditional_balance:,.0f} exists). "
+                        f"Falling back to 70/30 split for RMD calculations."
+                    )
+                    trad_p1 = None
+                    trad_p2 = None
+
+                logger.info(f"Per-person Traditional split: {_p1_name}=${trad_p1 or 0:,.2f}, {_p2_name}=${trad_p2 or 0:,.2f}")
             except Exception as _split_exc:
                 logger.warning(f"Could not compute per-person traditional split: {_split_exc}")
                 trad_p1 = None

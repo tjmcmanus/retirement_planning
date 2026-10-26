@@ -211,7 +211,7 @@ def _render_harvest_savings(curr_year: int) -> None:
         })
         st.dataframe(
             term_df.style.format({"Losses ($)": "${:,.0f}", "Savings ($)": "${:,.0f}"}),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -228,7 +228,7 @@ def _render_harvest_savings(curr_year: int) -> None:
             ]
             st.dataframe(
                 pd.DataFrame(acct_rows).style.format({"Savings ($)": "${:,.0f}"}),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
         else:
@@ -266,7 +266,7 @@ def _render_harvest_savings(curr_year: int) -> None:
                     "realized_loss": "${:+,.2f}",
                     "estimated_tax_savings": "${:,.2f}",
                 }),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
             dl_bytes = history_df.to_csv(index=False).encode("utf-8")

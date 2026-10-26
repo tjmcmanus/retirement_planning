@@ -244,7 +244,7 @@ def _render_factor_radar_chart(exposure: PortfolioFactorExposure):
         margin=dict(l=80, r=80, t=40, b=40),
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def _render_factor_tilts(exposure: PortfolioFactorExposure):
@@ -284,7 +284,7 @@ def _render_factor_tilts(exposure: PortfolioFactorExposure):
     
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def _render_style_classification(exposure: PortfolioFactorExposure):
@@ -344,7 +344,7 @@ def _render_factor_balance(exposure: PortfolioFactorExposure):
         showlegend=True,
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def _render_top_holdings_by_factor(exposure: PortfolioFactorExposure):
@@ -409,7 +409,7 @@ def _render_holdings_detail_table(portdf: pd.DataFrame, factor_data: Dict[str, F
         # Color code scores
         st.dataframe(
             detail_df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config={
                 'Value Score': st.column_config.ProgressColumn(

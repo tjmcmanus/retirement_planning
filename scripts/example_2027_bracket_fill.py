@@ -123,9 +123,12 @@ def example_2027():
     has_daf = config_mgr.get("charitable_giving", "has_daf", False)
     daf_annual = 0
     if has_daf:
-        daf_start_age = config_mgr.get("charitable_giving", "daf_contribution_start_age", 61)
-        daf_end_age = config_mgr.get("charitable_giving", "daf_contribution_end_age", 75)
-        if daf_start_age <= age_primary < daf_end_age:
+        primary_birth_year = config_mgr.get("personal_info", "primary_birth_year", 1966)
+        daf_start_year = config_mgr.get("charitable_giving", "daf_contribution_start_year",
+                                        primary_birth_year + config_mgr.get("charitable_giving", "daf_contribution_start_age", 61))
+        daf_end_year = config_mgr.get("charitable_giving", "daf_contribution_end_year",
+                                      primary_birth_year + config_mgr.get("charitable_giving", "daf_contribution_end_age", 75))
+        if daf_start_year <= year < daf_end_year:
             daf_annual = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
     
     # Big-ticket items in 2027

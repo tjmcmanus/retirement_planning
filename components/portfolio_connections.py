@@ -190,7 +190,7 @@ def _render_connect_with_credentials(connector, cred_manager, user_id: str, user
         st.markdown("Click the button to connect your brokerage accounts →")
     
     with col2:
-        if st.button("🔗 Connect Brokerage", type="primary", use_container_width=True):
+        if st.button("🔗 Connect Brokerage", type="primary", width='stretch'):
             try:
                 auth_data = connector.get_auth_link(user_id=user_id)
                 st.session_state.auth_link = auth_data['auth_link']
@@ -234,12 +234,12 @@ def _render_connected_accounts_from_api(status: dict, connector, cred_manager, c
                 st.caption("Connected via environment credentials")
             
             with col3:
-                if st.button("🔄 Sync Now", key=f"sync_api_{account.get('id')}", use_container_width=True):
+                if st.button("🔄 Sync Now", key=f"sync_api_{account.get('id')}", width='stretch'):
                     _sync_account_from_api(user_id, account.get('id'), connector, cred_manager, curr_month, curr_year)
     
     # Show sync all button
     st.markdown("---")
-    if st.button("🔄 Sync All Accounts", type="primary", use_container_width=True):
+    if st.button("🔄 Sync All Accounts", type="primary", width='stretch'):
         _sync_all_accounts(user_id, connector, cred_manager, curr_month, curr_year)
 
 
@@ -259,7 +259,7 @@ def _sync_account_from_api(user_id: str, account_id: str, connector, cred_manage
             st.session_state.sync_year = year
             
             st.success(f"✅ Synced {len(holdings_df)} holdings")
-            st.dataframe(holdings_df, use_container_width=True, hide_index=True)
+            st.dataframe(holdings_df, width='stretch', hide_index=True)
                 
         except Exception as e:
             st.error(f"Sync failed: {e}")
@@ -304,7 +304,7 @@ def _sync_all_accounts(user_id: str, connector, cred_manager, month: int, year: 
                 return
             
             st.success(f"✅ Synced {len(holdings_df)} holdings from all accounts")
-            st.dataframe(holdings_df, use_container_width=True, hide_index=True)
+            st.dataframe(holdings_df, width='stretch', hide_index=True)
             
             # Auto-merge immediately after sync
             st.info("⏳ Merging with portfolio...")
@@ -334,7 +334,7 @@ def _render_connect_new_account(connector, cred_manager) -> None:
         st.markdown("- ✅ 12,000+ other institutions via Plaid")
     
     with col2:
-        if st.button("🔗 Connect Account", type="primary", use_container_width=True):
+        if st.button("🔗 Connect Account", type="primary", width='stretch'):
             try:
                 auth_data = connector.get_auth_link()
                 st.session_state.auth_link = auth_data['auth_link']
@@ -346,7 +346,7 @@ def _render_connect_new_account(connector, cred_manager) -> None:
                 # Show reset option if userSecret issue
                 if "userSecret" in str(e):
                     st.warning("⚠️ **Personal API Key Issue**: With personal keys, only one user can be registered.")
-                    if st.button("🔄 Reset & Reconnect", use_container_width=True):
+                    if st.button("🔄 Reset & Reconnect", width='stretch'):
                         try:
                             auth_data = connector.get_auth_link(force_reregister=True)
                             st.session_state.auth_link = auth_data['auth_link']
@@ -401,10 +401,10 @@ def _render_connected_accounts(connections, connector, cred_manager, curr_month,
                         st.caption(f"Token expires in {days_left} days")
             
             with col3:
-                if st.button("🔄 Sync Now", key=f"sync_{conn['id']}", use_container_width=True):
+                if st.button("🔄 Sync Now", key=f"sync_{conn['id']}", width='stretch'):
                     _sync_account(conn['id'], connector, cred_manager, curr_month, curr_year)
                 
-                if st.button("🗑️ Disconnect", key=f"disconnect_{conn['id']}", use_container_width=True):
+                if st.button("🗑️ Disconnect", key=f"disconnect_{conn['id']}", width='stretch'):
                     if st.session_state.get(f"confirm_disconnect_{conn['id']}", False):
                         cred_manager.disconnect_account(conn['id'])
                         st.success("Account disconnected")
@@ -426,7 +426,7 @@ def _render_connected_accounts(connections, connector, cred_manager, curr_month,
     
     # Add new account button
     st.markdown("---")
-    if st.button("➕ Connect Another Account", use_container_width=True):
+    if st.button("➕ Connect Another Account", width='stretch'):
         _render_connect_new_account(connector, cred_manager)
 
 
@@ -454,7 +454,7 @@ def _sync_account(connection_id: int, connector, cred_manager, month: int, year:
             
             # Show preview
             st.success(f"✅ Synced {len(holdings_df)} holdings")
-            st.dataframe(holdings_df, use_container_width=True, hide_index=True)
+            st.dataframe(holdings_df, width='stretch', hide_index=True)
             
             # Ask user to confirm merge
             if st.button("💾 Merge with Portfolio", key=f"merge_{connection_id}"):
