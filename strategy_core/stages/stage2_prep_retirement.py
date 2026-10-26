@@ -52,6 +52,10 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             tax_calculator=tax_calculator,
             account_manager=account_manager
         )
+        # DAF carryforward persists across years (IRC §170 — up to 5-year carryforward).
+        # Initialised to 0 at the start of each full simulation run; the engine creates
+        # a new Stage2 instance per run so this resets correctly.
+        self._daf_carryforward: float = 0.0
     
     def applies(
         self,
@@ -140,7 +144,7 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         """
         # Validate dependencies
         self._validate_dependencies()
-        
+
         # Extract parameters
         wages = kwargs.get('wages', 0.0)
         age_primary = kwargs.get('age_primary', 0)
@@ -149,9 +153,15 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         max_conversion_rate = kwargs.get('max_conversion_rate', 0.24)
         filing_status = kwargs.get('filing_status', 'married_filing_jointly')
         state = kwargs.get('state', 'PA')
-        
-        logger.debug(
-            f"Stage 2 Prep calculation for year {year}, wages=${wages:,.2f}"
+        # Engine passes the global carryforward via kwarg; fall back to the
+        # instance var so the stage still works when called standalone.
+        _engine_carryforward = kwargs.get('daf_carryforward_prior', None)
+        if _engine_carryforward is not None:
+            self._daf_carryforward = float(_engine_carryforward)
+
+        logger.info(
+            f"Stage 2 [1/8] start — year={year}, age={age_primary}/{age_spouse}, "
+            f"wages=${wages:,.0f}"
         )
         
         # Log if SS benefits present (age-gap marriage scenario)
@@ -216,20 +226,27 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         
         # Calculate AGI based on contribution type
         agi_before_conversion = wages if prefer_roth_401k else wages - contribution_401k
-        
-        # Calculate taxes
+        logger.info(f"Stage 2 [2/8] AGI before conversion=${agi_before_conversion:,.0f}")
+
+        # Standard deduction — needed for conversion sizing and tax computation
         std_deduction = self.tax_calculator.calculate_standard_deduction(
             filing_status, year, age_primary, age_spouse
         )
-        
-        taxable_income = max(0, agi_before_conversion - std_deduction)
-        federal_tax, max_rate, upper_bracket = self.tax_calculator.calculate_federal_tax(
-            taxable_income, filing_status, year
+
+        # Preliminary tax on wages only (pre-conversion) — used to size the
+        # Roth conversion in _calculate_prep_roth_conversion.
+        taxable_income_pre = max(0, agi_before_conversion - std_deduction)
+        federal_tax_pre, max_rate, upper_bracket = self.tax_calculator.calculate_federal_tax(
+            taxable_income_pre, filing_status, year
         )
-        
+        logger.info(
+            f"Stage 2 [3/8] pre-conversion tax=${federal_tax_pre:,.0f}, "
+            f"std_ded=${std_deduction:,.0f}, rate={max_rate:.0%}"
+        )
+
         # Calculate FICA taxes
         fica_tax = self._calculate_fica_tax(wages)
-        
+
         # Log contribution type decision
         self._log_decision(
             strategy,
@@ -242,15 +259,16 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             trad_balance=balances.traditional,
             roth_balance=balances.roth
         )
-        
+
         # Decision 2: Backdoor Roth IRA
         backdoor_roth_amount = self._calculate_backdoor_roth(
             strategy,
             agi_before_conversion
         )
-        
-        # Decision 3: BETR-validated Roth conversion — must be computed BEFORE
-        # state_tax so the full AGI (wages + conversion) is taxed correctly.
+        logger.info(f"Stage 2 [4/8] backdoor Roth=${backdoor_roth_amount:,.0f}")
+
+        # Decision 3: BETR-validated Roth conversion.
+        logger.info("Stage 2 [5/8] calculating Roth conversion…")
         roth_conversion = self._calculate_prep_roth_conversion(
             strategy,
             balances,
@@ -264,11 +282,108 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             year
         )
 
+        logger.info(f"Stage 2 [6/8] Roth conversion=${roth_conversion:,.0f}")
+
+        # ── DAF initial / bundle contribution (Stage 2 support) ──────────────
+        # Short-circuit immediately when has_daf is False so we never import
+        # strategy.py or call get_config_manager() unnecessarily (avoids hangs
+        # in tests and keeps the hot path fast).
+        daf_contribution  = 0.0
+        daf_tax_excess    = 0.0
+        daf_deductible    = 0.0   # actual deduction applied this year (new + carryforward, 30%-capped)
+        daf_carryforward_new = self._daf_carryforward
+        try:
+            from config import get_config_manager as _gcm
+            _cfg = _gcm()
+            _has_daf = bool(_cfg.get("charitable_giving", "has_daf", False))
+        except Exception:
+            _has_daf = False
+
+        if _has_daf:
+            logger.info("Stage 2 [6b/8] DAF enabled — computing contribution…")
+            try:
+                from strategy import _calculate_daf_for_year
+                _property_tax = 0.0
+                try:
+                    _property_tax = float(_cfg.get("tax_strategy", "property_tax_annual", 0))
+                except Exception:
+                    pass
+                # Use pre-conversion state tax as approximation for SALT
+                _state_tax_approx = self.tax_calculator.calculate_state_tax(
+                    agi_before_conversion, state, year, filing_status=filing_status
+                )
+                daf_contribution, _ = _calculate_daf_for_year(
+                    age_primary, age_spouse, std_deduction,
+                    _state_tax_approx, _property_tax,
+                    balances.taxable,
+                    year=year,
+                )
+                logger.info(f"Stage 2 [6b/8] DAF contribution=${daf_contribution:,.0f}")
+
+                # ── IRC §170: 30% AGI limit for appreciated-securities donations ──
+                # AGI for the limit uses the full post-conversion income so that a
+                # large Roth conversion doesn't artificially shrink the deductible
+                # amount.  We know roth_conversion at this point because it was
+                # computed in step [5/8] above.
+                _agi_for_limit = agi_before_conversion + roth_conversion
+                _daf_30pct_limit = _agi_for_limit * 0.30
+                _available_daf   = daf_contribution + self._daf_carryforward
+                _daf_deductible  = min(_available_daf, _daf_30pct_limit)
+                daf_deductible   = _daf_deductible   # expose outside try block
+                daf_carryforward_new = _available_daf - _daf_deductible
+
+                # daf_tax_excess = amount by which itemised deductions exceed std deduction.
+                # SALT (state tax + property tax, capped at $10k) is also included.
+                _salt = min(10_000.0, _state_tax_approx + _property_tax)
+                _total_itemised = _daf_deductible + _salt
+                daf_tax_excess  = max(0.0, _total_itemised - std_deduction)
+
+                logger.info(
+                    f"Stage 2 [6b/8] DAF 30% limit: AGI=${_agi_for_limit:,.0f}, "
+                    f"limit=${_daf_30pct_limit:,.0f}, "
+                    f"available (incl. carryforward ${self._daf_carryforward:,.0f})=${_available_daf:,.0f}, "
+                    f"deductible=${_daf_deductible:,.0f}, "
+                    f"carryforward_new=${daf_carryforward_new:,.0f}, "
+                    f"tax_excess=${daf_tax_excess:,.0f}"
+                )
+            except Exception as _daf_exc:
+                logger.warning(f"Stage 2 DAF calculation skipped: {_daf_exc}")
+
+        # Deduct DAF from brokerage if it fires this year
+        if daf_contribution > 0:
+            balances = PortfolioBalances(
+                cash=balances.cash,
+                taxable=max(0.0, balances.taxable - daf_contribution),
+                traditional=balances.traditional,
+                roth=balances.roth,
+                daf=balances.daf + daf_contribution,
+            )
+            logger.info(f"Year {year} Stage 2: DAF contribution ${daf_contribution:,.0f} from Brokerage")
+
+        # ── Persist DAF carryforward for next year (IRC §170 5-year carry-forward) ──
+        self._daf_carryforward = daf_carryforward_new
+        if self._daf_carryforward > 0:
+            logger.info(
+                f"Year {year}: DAF carryforward ${self._daf_carryforward:,.2f} "
+                f"will be available in future years."
+            )
+
+        # ── Final federal tax — recalculate on full AGI including Roth conversion
+        # and DAF itemized deduction excess.
+        # Roth conversion is ordinary income; DAF excess reduces taxable income
+        # when itemizing (deduction above standard deduction).
+        logger.info("Stage 2 [7/8] computing final federal tax…")
+        full_agi        = agi_before_conversion + roth_conversion
+        taxable_income  = max(0, full_agi - std_deduction - daf_tax_excess)
+        federal_tax, _, _ = self.tax_calculator.calculate_federal_tax(
+            taxable_income, filing_status, year
+        )
+
         # State tax on full AGI (wages + Roth conversion).
         # roth_conversion passed separately so PA/IL/MS can exempt it;
         # wages always remain taxable.
         state_tax = self.tax_calculator.calculate_state_tax(
-            agi_before_conversion + roth_conversion,
+            full_agi,
             state,
             year,
             filing_status=filing_status,
@@ -284,12 +399,16 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             daf=balances.daf
         )
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
-        
+
         # Update strategy with calculated values
+        logger.info(
+            f"Stage 2 [8/8] done — AGI=${full_agi:,.0f}, "
+            f"fed_tax=${federal_tax:,.0f}, roth_conv=${roth_conversion:,.0f}, "
+            f"daf=${daf_contribution:,.0f}"
+        )
         strategy.expenses = expenses  # Store expenses in strategy
-        # AGI includes Roth conversions (they are taxable income)
-        strategy.agi = agi_before_conversion + roth_conversion
-        strategy.magi = strategy.agi
+        strategy.agi = full_agi
+        strategy.magi = full_agi
         strategy.taxable_income = taxable_income
         strategy.federal_tax = federal_tax
         strategy.state_tax = state_tax
@@ -297,6 +416,8 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         strategy.payroll_tax = fica_tax  # Payroll tax is FICA
         strategy.roth_conversion = roth_conversion
         strategy.conversion_executed = roth_conversion  # For dataframe display
+        strategy.daf_contribution = daf_contribution
+        strategy.daf_deductible   = daf_deductible
         
         # Set contribution fields for display
         if prefer_roth_401k:
@@ -326,8 +447,8 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         
         strategy.taxable_balance = balances.taxable
         strategy.cash_balance = balances.cash
-        
-        # Calculate take-home pay
+
+        # Calculate take-home pay (uses final federal_tax including Roth conversion)
         take_home = wages - contribution_401k - contribution_roth - backdoor_roth_amount
         take_home -= federal_tax + state_tax + fica_tax + healthcare_costs
         
@@ -599,8 +720,19 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             _, probe_rate, probe_upper = self.tax_calculator.calculate_federal_tax(
                 probe_income, filing_status, year
             )
-            # Walk up until we reach the target rate bracket
+            # Walk up until we reach the target rate bracket.
+            # Guard: stop if probe_upper stops advancing (unknown filing_status /
+            # year with no bracket data returns constant values → infinite loop).
+            _prev_upper = None
             while probe_rate < max_conversion_rate and probe_upper < 2_000_000:
+                if probe_upper == _prev_upper:
+                    logger.warning(
+                        f"Stage 2 bracket probe stalled at ${probe_upper:,.0f} "
+                        f"(probe_rate={probe_rate}, filing_status={filing_status!r}, "
+                        f"year={year}). Using current bracket top as target."
+                    )
+                    break
+                _prev_upper = probe_upper
                 probe_income = probe_upper + 1
                 _, probe_rate, probe_upper = self.tax_calculator.calculate_federal_tax(
                     probe_income, filing_status, year

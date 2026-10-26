@@ -352,7 +352,7 @@ with adv_tax_tab:
                 "AGI": f"${_p.agi:,.0f}", "Federal Tax": f"${_p.federal_tax:,.0f}",
                 "Effective Rate": f"{_p.effective_rate:.1%}", "Marginal Rate": f"{_p.marginal_rate:.0%}",
                 "Bracket Headroom": f"${_p.bracket_headroom:,.0f}",
-            } for _p in _myt_result.years]), use_container_width=True, hide_index=True)
+            } for _p in _myt_result.years]), width='stretch', hide_index=True)
 
             _myt_fig = go.Figure()
             _myt_fig.add_bar(x=[p.year for p in _myt_result.years], y=[p.federal_tax for p in _myt_result.years],
@@ -362,7 +362,7 @@ with adv_tax_tab:
             _myt_fig.update_layout(barmode="group", title="Federal Tax vs. Bracket Headroom",
                                    xaxis_title="Year", yaxis_title="Amount ($)",
                                    legend=dict(orientation="h", yanchor="bottom", y=1.02))
-            st.plotly_chart(_myt_fig, use_container_width=True)
+            st.plotly_chart(_myt_fig, width='stretch')
 
             if _myt_result.optimization_opportunities:
                 st.markdown("#### 💡 Optimization Opportunities")
@@ -372,7 +372,7 @@ with adv_tax_tab:
                 st.markdown("#### 📈 Recommended Roth Conversions")
                 st.dataframe(pd.DataFrame([{"Year": yr, "Recommended Conversion": f"${amt:,.0f}"}
                                            for yr, amt in _myt_result.recommended_conversions.items()]),
-                             use_container_width=True, hide_index=True)
+                             width='stretch', hide_index=True)
         except Exception as _myt_err:
             st.error(f"Error running tax projection: {_myt_err}")
 
@@ -621,7 +621,7 @@ with adv_backdoor_tab:
             )
             _betr_fig.update_layout(title=f"After-Tax Future Value ({_betr_years}-Year Horizon)",
                                     yaxis_title="After-Tax Future Value ($)", yaxis_tickformat="$,.0f")
-            st.plotly_chart(_betr_fig, use_container_width=True)
+            st.plotly_chart(_betr_fig, width='stretch')
             if _betr_r.analysis_notes:
                 for _note in _betr_r.analysis_notes:
                     st.caption(_note)
@@ -765,7 +765,7 @@ with adv_nua_tab:
             )
             _nua_fig.update_layout(title="Tax Cost: NUA Strategy vs. IRA Rollover",
                                    yaxis_title="Tax Cost ($)", yaxis_tickformat="$,.0f")
-            st.plotly_chart(_nua_fig, use_container_width=True)
+            st.plotly_chart(_nua_fig, width='stretch')
             if _nua_r.notes:
                 st.markdown("#### Analysis Notes")
                 for _note in _nua_r.notes:
@@ -1111,7 +1111,7 @@ with adv_harvest_tab:
             "Losses Harvested": f"${_hlv_r.harvest_amounts.get(yr, 0):,.0f}",
             "Tax Savings": f"${_hlv_r.tax_savings_by_year.get(yr, 0):,.0f}",
             "Carryforward": f"${_hlv_r.carryforward_by_year.get(yr, 0):,.0f}",
-        } for yr in _hlv_r.years]), use_container_width=True, hide_index=True)
+        } for yr in _hlv_r.years]), width='stretch', hide_index=True)
 
         _hlv_fig = go.Figure()
         _hlv_fig.add_bar(
@@ -1121,7 +1121,7 @@ with adv_harvest_tab:
         )
         _hlv_fig.update_layout(title="Annual Tax Savings from Loss Harvesting",
                                xaxis_title="Year", yaxis_title="Tax Savings ($)", yaxis_tickformat="$,.0f")
-        st.plotly_chart(_hlv_fig, use_container_width=True)
+        st.plotly_chart(_hlv_fig, width='stretch')
 
         if _hlv_r.notes:
             st.markdown("#### 📋 Notes")

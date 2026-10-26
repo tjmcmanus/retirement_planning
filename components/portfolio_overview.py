@@ -237,7 +237,7 @@ def render_portfolio_overview(
                             groupclick='togglegroup', font=dict(color='black')),
                 height=400,
             ))
-            st.plotly_chart(fig_stacked, use_container_width=True, key='portfolio_stacked')
+            st.plotly_chart(fig_stacked, width='stretch', key='portfolio_stacked')
         else:
             st.info("📊 Historical data not available")
     
@@ -264,7 +264,7 @@ def render_portfolio_overview(
                 margin=dict(l=1, r=1, b=1, t=1),
                 height=400,
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width='stretch')
         else:
             st.info("📊 Historical data not available")
     
@@ -290,7 +290,7 @@ def render_portfolio_overview(
             portfolio_by_sector.data[0].textinfo = "label+text+value+percent root"
             portfolio_by_sector.update_traces(texttemplate="%{label}<br>$%{value:,.2f}")
             portfolio_by_sector.update_layout(margin=dict(t=50, l=25, r=25, b=25))
-            st.plotly_chart(portfolio_by_sector, use_container_width=True)
+            st.plotly_chart(portfolio_by_sector, width='stretch')
             
             # Show info if some holdings were excluded
             excluded_count = len(portdf_no_totals) - len(portdf_for_treemap)
@@ -351,7 +351,7 @@ def render_portfolio_overview(
             margin=dict(t=40, l=10, r=10, b=10),
             yaxis=dict(tickformat='$,.0f'),
         )
-        st.plotly_chart(_perf_fig, use_container_width=True)
+        st.plotly_chart(_perf_fig, width='stretch')
     else:
         st.info("📈 Portfolio performance chart requires at least 2 months of historical data.")
     
@@ -367,19 +367,19 @@ def render_portfolio_overview(
     action_col1, action_col2, action_col3, action_col4 = st.columns(4)
     
     with action_col1:
-        if st.button("📝 Update Holdings", use_container_width=True, help="Edit your portfolio holdings"):
+        if st.button("📝 Update Holdings", width='stretch', help="Edit your portfolio holdings"):
             st.info("Switch to the 'Holdings' tab to edit your portfolio")
     
     with action_col2:
-        if st.button("⚖️ Rebalance", use_container_width=True, help="Analyze portfolio drift and rebalancing needs"):
+        if st.button("⚖️ Rebalance", width='stretch', help="Analyze portfolio drift and rebalancing needs"):
             st.info("Switch to the 'Optimization' tab to run rebalancing analysis")
     
     with action_col3:
-        if st.button("🌾 Harvest Losses", use_container_width=True, help="Identify tax-loss harvesting opportunities"):
+        if st.button("🌾 Harvest Losses", width='stretch', help="Identify tax-loss harvesting opportunities"):
             st.info("Switch to the 'Optimization' tab to find tax-loss harvesting opportunities")
     
     with action_col4:
-        if st.button("📊 View Analytics", use_container_width=True, help="See detailed performance metrics"):
+        if st.button("📊 View Analytics", width='stretch', help="See detailed performance metrics"):
             st.info("Switch to the 'Performance & Analytics' tab for detailed metrics")
 
 # Made with Bob

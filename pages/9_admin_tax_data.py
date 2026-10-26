@@ -203,7 +203,7 @@ for tab, (data_name, filename) in zip(tabs, TAX_DATA_FILES.items()):
             st.markdown(f"### Current Data ({CURRENT_YEAR-1}, {CURRENT_YEAR}, {CURRENT_YEAR+1})")
             # Calculate dynamic height: header (38px) + rows (35px each) + padding (10px)
             dynamic_height = min(38 + (len(df_display) * 35) + 10, 600)
-            st.dataframe(df_display, use_container_width=True, height=dynamic_height)
+            st.dataframe(df_display, width='stretch', height=dynamic_height)
             
             # Statistics
             col1, col2, col3 = st.columns(3)
@@ -264,7 +264,7 @@ for tab, (data_name, filename) in zip(tabs, TAX_DATA_FILES.items()):
                         # Editable dataframe (current year only)
                         edited_df = st.data_editor(
                             df_edit,
-                            use_container_width=True,
+                            width='stretch',
                             num_rows="dynamic",
                             key=f"{filename}_editor"
                         )
@@ -289,7 +289,7 @@ for tab, (data_name, filename) in zip(tabs, TAX_DATA_FILES.items()):
                     # No year column - edit all data
                     edited_df = st.data_editor(
                         df,
-                        use_container_width=True,
+                        width='stretch',
                         num_rows="dynamic",
                         key=f"{filename}_editor"
                     )
@@ -330,7 +330,7 @@ for tab, (data_name, filename) in zip(tabs, TAX_DATA_FILES.items()):
                     try:
                         new_df = pd.read_csv(uploaded_file)
                         st.markdown("**Preview of uploaded data:**")
-                        st.dataframe(new_df.head(10), use_container_width=True)
+                        st.dataframe(new_df.head(10), width='stretch')
                         
                         # Validate uploaded data
                         is_valid, validation_errors = validate_uploaded_data(new_df, filename)

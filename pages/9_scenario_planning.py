@@ -158,12 +158,12 @@ with _mgmt_col1:
     ]
 
 with _mgmt_col2:
-    if st.button("➕ New Scenario", use_container_width=True):
+    if st.button("➕ New Scenario", width='stretch'):
         st.session_state.editing_scenario = "new"
         st.rerun()
 
 with _mgmt_col3:
-    if st.button("📋 Clone Selected", use_container_width=True, 
+    if st.button("📋 Clone Selected", width='stretch', 
                  disabled=len(st.session_state.selected_scenarios) != 1):
         if len(st.session_state.selected_scenarios) == 1:
             scenario = _scenario_mgr.get_scenario(st.session_state.selected_scenarios[0])
@@ -174,7 +174,7 @@ with _mgmt_col3:
                 st.rerun()
 
 with _mgmt_col4:
-    if st.button("🗑️ Delete", use_container_width=True,
+    if st.button("🗑️ Delete", width='stretch',
                  disabled=len(st.session_state.selected_scenarios) != 1):
         if len(st.session_state.selected_scenarios) == 1:
             scenario_id = st.session_state.selected_scenarios[0]
@@ -311,7 +311,7 @@ with _tab1:
         height=500,
     )
     
-    st.plotly_chart(_traj_fig, use_container_width=True)
+    st.plotly_chart(_traj_fig, width='stretch')
     
     # Success probability comparison
     st.markdown("#### ✅ Success Probability Comparison")
@@ -355,7 +355,7 @@ with _tab1:
             height=400,
         )
         
-        st.plotly_chart(_success_fig, use_container_width=True)
+        st.plotly_chart(_success_fig, width='stretch')
 
 # ----------------------------------------------------------------------------
 # TAB 2: Cash Flow Analysis
@@ -440,7 +440,7 @@ with _tab2:
                 height=400,
             )
             
-            st.plotly_chart(_cf_fig, use_container_width=True)
+            st.plotly_chart(_cf_fig, width='stretch')
             
             # Summary metrics
             _cf_col1, _cf_col2, _cf_col3 = st.columns(3)
@@ -479,7 +479,7 @@ with _tab3:
                     for event in scenario.life_events
                 ])
                 
-                st.dataframe(_events_df, use_container_width=True, hide_index=True)
+                st.dataframe(_events_df, width='stretch', hide_index=True)
                 
                 # Check for conflicts
                 conflicts = detect_event_conflicts(scenario.life_events)
@@ -534,7 +534,7 @@ with _tab3:
                     legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.05),
                 )
                 
-                st.plotly_chart(_timeline_fig, use_container_width=True)
+                st.plotly_chart(_timeline_fig, width='stretch')
 
 # ----------------------------------------------------------------------------
 # TAB 4: Parameter Comparison
@@ -564,7 +564,7 @@ with _tab4:
         })
     
     _param_df = pd.DataFrame(_param_data)
-    st.dataframe(_param_df, use_container_width=True, hide_index=True)
+    st.dataframe(_param_df, width='stretch', hide_index=True)
     
     # Download comparison
     _csv = _param_df.to_csv(index=False)
@@ -648,9 +648,9 @@ with _tab5:
             
             _submit_col1, _submit_col2 = st.columns(2)
             with _submit_col1:
-                submitted = st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True)
+                submitted = st.form_submit_button("💾 Save Changes", type="primary", width='stretch')
             with _submit_col2:
-                rerun_analysis = st.form_submit_button("💾 Save & Re-run Analysis", use_container_width=True)
+                rerun_analysis = st.form_submit_button("💾 Save & Re-run Analysis", width='stretch')
             
             if submitted or rerun_analysis:
                 # Update scenario
@@ -715,9 +715,9 @@ with _tab5:
                 
                 _event_col1, _event_col2 = st.columns(2)
                 with _event_col1:
-                    add_event = st.form_submit_button("➕ Add Event", type="primary", use_container_width=True)
+                    add_event = st.form_submit_button("➕ Add Event", type="primary", width='stretch')
                 with _event_col2:
-                    cancel_event = st.form_submit_button("❌ Cancel", use_container_width=True)
+                    cancel_event = st.form_submit_button("❌ Cancel", width='stretch')
                 
                 if add_event:
                     # Create new event
@@ -762,12 +762,12 @@ st.markdown("---")
 _footer_col1, _footer_col2, _footer_col3, _footer_col4 = st.columns(4)
 
 with _footer_col1:
-    if st.button("🔄 Re-run All Analyses", use_container_width=True):
+    if st.button("🔄 Re-run All Analyses", width='stretch'):
         st.session_state.scenario_results = {}
         st.rerun()
 
 with _footer_col2:
-    if st.button("🔗 Generate Share Link", use_container_width=True,
+    if st.button("🔗 Generate Share Link", width='stretch',
                  disabled=not st.session_state.selected_scenarios):
         url_param = _scenario_mgr.encode_scenario_url(st.session_state.selected_scenarios)
         share_url = f"?scenarios={url_param}"
@@ -775,7 +775,7 @@ with _footer_col2:
         st.info("💡 Copy this parameter and append to your app URL to share these scenarios")
 
 with _footer_col3:
-    if st.button("📥 Export Scenarios", use_container_width=True,
+    if st.button("📥 Export Scenarios", width='stretch',
                  disabled=not st.session_state.selected_scenarios):
         export_data = []
         for scenario_id in st.session_state.selected_scenarios:
@@ -793,7 +793,7 @@ with _footer_col3:
         )
 
 with _footer_col4:
-    if st.button("ℹ️ Help", use_container_width=True):
+    if st.button("ℹ️ Help", width='stretch'):
         st.info("""
         **Scenario Planning Tips:**
         

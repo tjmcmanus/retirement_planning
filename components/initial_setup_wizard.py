@@ -346,7 +346,7 @@ def _step3_review() -> None:
             pd.DataFrame(sector_rows).style.format(
                 {"Total ($)": "${:,.0f}", "Weight (%)": "{:.1f}%"}
             ),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -360,7 +360,7 @@ def _step3_review() -> None:
             ].style.format(
                 {"current_price": "${:.2f}", "actual_amount": "${:,.0f}"}
             ),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -392,7 +392,7 @@ def _step3_review() -> None:
             data=csv_bytes,
             file_name="direct_index_initial_portfolio.csv",
             mime="text/csv",
-            use_container_width=True,
+            width='stretch',
         )
 
     with dl_col2:
@@ -401,7 +401,7 @@ def _step3_review() -> None:
             data=schwab_bytes,
             file_name="schwab_orders.csv",
             mime="text/csv",
-            use_container_width=True,
+            width='stretch',
             help="Import-ready CSV for Schwab order entry",
         )
 
@@ -426,7 +426,7 @@ def _step3_review() -> None:
             data=md_bytes,
             file_name="direct_index_portfolio.md",
             mime="text/markdown",
-            use_container_width=True,
+            width='stretch',
         )
 
     st.divider()

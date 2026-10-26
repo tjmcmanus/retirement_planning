@@ -137,7 +137,7 @@ def render_performance_tab(
         st.markdown("&nbsp;")  # Spacing
         export_pdf = st.button(
             "📄 Export PDF",
-            use_container_width=True,
+            width='stretch',
             help="Export performance report as PDF"
         )
     
@@ -324,7 +324,7 @@ def render_performance_tab(
             yaxis=dict(tickformat='$,.0f'),
             hovermode='x unified',
         )
-        st.plotly_chart(fig_perf, use_container_width=True)
+        st.plotly_chart(fig_perf, width='stretch')
     elif len(benchmark_returns) != len(analysis_data):
         st.warning(
             f"⚠️ Benchmark data length mismatch. Portfolio has {len(analysis_data)} periods "
@@ -349,7 +349,7 @@ def render_performance_tab(
             yaxis=dict(tickformat='$,.0f'),
             hovermode='x unified',
         )
-        st.plotly_chart(fig_perf, use_container_width=True)
+        st.plotly_chart(fig_perf, width='stretch')
     else:
         # Calculate benchmark cumulative values
         start_value = float(analysis_data['total'].iloc[0])  # type: ignore[union-attr]
@@ -410,7 +410,7 @@ def render_performance_tab(
             hovermode='x unified',
         )
         
-        st.plotly_chart(fig_perf, use_container_width=True)
+        st.plotly_chart(fig_perf, width='stretch')
     
     st.markdown("---")
     
@@ -456,7 +456,7 @@ def render_performance_tab(
             margin=dict(t=20, l=10, r=10, b=10),
             height=300,
         )
-        st.plotly_chart(fig_attr, use_container_width=True)
+        st.plotly_chart(fig_attr, width='stretch')
         
         st.caption(
             "💡 **Note:** Contribution tracking requires transaction history. "
@@ -511,7 +511,7 @@ def render_performance_tab(
             height=300,
         )
         
-        st.plotly_chart(fig_risk, use_container_width=True)
+        st.plotly_chart(fig_risk, width='stretch')
         
         # Interpretation
         if twr > 0 and volatility < 15:
@@ -594,7 +594,7 @@ def render_performance_tab(
                 hovermode='x unified',
             )
             
-            st.plotly_chart(fig_dd, use_container_width=True)
+            st.plotly_chart(fig_dd, width='stretch')
     else:
         st.info("📊 Drawdown analysis not available")
     

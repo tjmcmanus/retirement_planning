@@ -293,7 +293,7 @@ def render_holdings_tab(
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        if st.button("➕ Add Row", use_container_width=True, help="Add a new empty row"):
+        if st.button("➕ Add Row", width='stretch', help="Add a new empty row"):
             new_row = create_empty_row(curr_month, curr_year)
             st.session_state.holdings_data = pd.concat([
                 st.session_state.holdings_data,
@@ -303,7 +303,7 @@ def render_holdings_tab(
             st.rerun()
     
     with col2:
-        if st.button("📋 Copy Previous", use_container_width=True, help="Copy holdings from previous month"):
+        if st.button("📋 Copy Previous", width='stretch', help="Copy holdings from previous month"):
             success, message, prev_data = copy_from_previous_month(curr_month, curr_year)
             if success:
                 st.session_state.holdings_data = prev_data
@@ -314,14 +314,14 @@ def render_holdings_tab(
                 st.error(message)
     
     with col3:
-        if st.button("🔄 Reload", use_container_width=True, help="Reload from file (discard unsaved changes)"):
+        if st.button("🔄 Reload", width='stretch', help="Reload from file (discard unsaved changes)"):
             st.session_state.holdings_data = load_portfolio_data(curr_month, curr_year)
             st.session_state.holdings_modified = False
             st.info("Data reloaded from file")
             st.rerun()
     
     with col4:
-        if st.button("💾 Backup", use_container_width=True, help="Create a backup of portfolio data"):
+        if st.button("💾 Backup", width='stretch', help="Create a backup of portfolio data"):
             success, message = create_backup()
             if success:
                 st.success(message)
@@ -358,7 +358,7 @@ def render_holdings_tab(
     with enrich_col1:
         if st.button(
             "🔄 Enrich Names & Sectors",
-            use_container_width=True,
+            width='stretch',
             help="Fetch missing names and GICS sectors from Yahoo Finance for holdings "
                  "with blank names or generic sector values (Stock, Mutual Fund, Unknown…).",
             key="enrich_sectors_btn",
@@ -563,7 +563,7 @@ def render_holdings_tab(
         display_data,
         column_config=column_config,
         num_rows="dynamic",  # Allow adding/deleting rows
-        use_container_width=True,
+        width='stretch',
         height=dynamic_height,
         hide_index=True,
         key="holdings_editor",
@@ -593,10 +593,10 @@ def render_holdings_tab(
             st.info("✅ No unsaved changes")
     
     with col_save2:
-        validate_button = st.button("🔍 Validate", use_container_width=True, help="Check for errors before saving")
+        validate_button = st.button("🔍 Validate", width='stretch', help="Check for errors before saving")
     
     with col_save3:
-        save_button = st.button("💾 Save to File", use_container_width=True, type="primary", help="Save changes to portfolio_data_truth.csv")
+        save_button = st.button("💾 Save to File", width='stretch', type="primary", help="Save changes to portfolio_data_truth.csv")
     
     # Validation
     if validate_button:
@@ -706,7 +706,7 @@ def render_holdings_tab(
                 data=csv,
                 file_name=f"portfolio_holdings_{curr_month}_{curr_year}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width='stretch',
             )
         else:
             st.info("No data to export")

@@ -372,7 +372,7 @@ def render_chart_export_ui(fig: go.Figure, chart_title: str = "chart") -> None:
     
     with col1:
         # Export as PNG
-        if st.button("📥 PNG", key=f"export_png_{chart_title}", use_container_width=True):
+        if st.button("📥 PNG", key=f"export_png_{chart_title}", width='stretch'):
             img_buffer = export_chart_as_image(fig, chart_title, "png")
             st.download_button(
                 label="Download PNG",
@@ -384,7 +384,7 @@ def render_chart_export_ui(fig: go.Figure, chart_title: str = "chart") -> None:
     
     with col2:
         # Export as SVG
-        if st.button("📥 SVG", key=f"export_svg_{chart_title}", use_container_width=True):
+        if st.button("📥 SVG", key=f"export_svg_{chart_title}", width='stretch'):
             img_buffer = export_chart_as_image(fig, chart_title, "svg")
             st.download_button(
                 label="Download SVG",
@@ -396,7 +396,7 @@ def render_chart_export_ui(fig: go.Figure, chart_title: str = "chart") -> None:
     
     with col3:
         # Export as HTML
-        if st.button("📥 HTML", key=f"export_html_{chart_title}", use_container_width=True):
+        if st.button("📥 HTML", key=f"export_html_{chart_title}", width='stretch'):
             html_buffer = export_chart_as_html(fig, chart_title)
             st.download_button(
                 label="Download HTML",
@@ -408,7 +408,7 @@ def render_chart_export_ui(fig: go.Figure, chart_title: str = "chart") -> None:
     
     with col4:
         # Export as PDF
-        if st.button("📥 PDF", key=f"export_pdf_{chart_title}", use_container_width=True):
+        if st.button("📥 PDF", key=f"export_pdf_{chart_title}", width='stretch'):
             img_buffer = export_chart_as_image(fig, chart_title, "pdf")
             st.download_button(
                 label="Download PDF",

@@ -145,7 +145,7 @@ class ChartWidget(BaseWidget):
             st.error(f"Unsupported chart type: {chart_type}")
             return
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     def _create_line_chart(self, data: pd.DataFrame) -> go.Figure:
         """Create line chart."""
@@ -277,7 +277,7 @@ class TableWidget(BaseWidget):
         if self.get_config_value("editable", False):
             edited_df = st.data_editor(
                 table_data,
-                use_container_width=True,
+                width='stretch',
                 hide_index=self.get_config_value("hide_index", True)
             )
             # Store edited data back
@@ -287,7 +287,7 @@ class TableWidget(BaseWidget):
         else:
             st.dataframe(
                 table_data,
-                use_container_width=True,
+                width='stretch',
                 hide_index=self.get_config_value("hide_index", True)
             )
 

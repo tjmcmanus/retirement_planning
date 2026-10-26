@@ -234,7 +234,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             except ImportError:
                 balances_for_rebalance = PortfolioBalances(
                     cash=balances_with_ss.cash,
-                    taxable=balances_with_ss.taxable - daf_contribution,
+                    taxable=max(0.0, balances_with_ss.taxable - daf_contribution),
                     traditional=balances_with_ss.traditional,
                     roth=balances_with_ss.roth,
                     daf=balances_with_ss.daf,
@@ -627,7 +627,8 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             )
             
             return _calculate_daf_for_year(
-                survivor_age, 0, std_deduction, state_tax, property_tax, taxable_balance
+                survivor_age, 0, std_deduction, state_tax, property_tax, taxable_balance,
+                year=year
             )
         except Exception as e:
             logger.warning(f"Could not calculate DAF contribution: {e}")

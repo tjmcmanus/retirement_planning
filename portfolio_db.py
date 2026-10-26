@@ -471,10 +471,15 @@ def _normalise(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     for col in HOLDINGS_COLUMNS:
         if col not in df.columns:
-            df[col] = "" if col in ("account_name", "account_type", "owner",
-                                    "symbol", "name", "sector", "purchase_date") else 0
+            if col == "end_of_month_price":
+                df[col] = float("nan")  # unknown, NOT zero (0 would be treated as a real price)
+            else:
+                df[col] = "" if col in ("account_name", "account_type", "owner",
+                                        "symbol", "name", "sector", "purchase_date") else 0
 
-    df["end_of_month_price"] = pd.to_numeric(df["end_of_month_price"], errors="coerce")
+    # A non-positive end-of-month price is never valid; store it as NULL.
+    eom = pd.to_numeric(df["end_of_month_price"], errors="coerce")
+    df["end_of_month_price"] = eom.where(eom > 0)
 
     df["month"] = df["month"].astype(int)
     df["year"] = df["year"].astype(int)

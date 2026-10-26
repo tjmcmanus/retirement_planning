@@ -138,6 +138,10 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         growth_rate = kwargs.get('growth_rate', 1.07)
         brokerage_account = kwargs.get('brokerage_account')
         start_year = kwargs.get('start_year', year)
+        # Engine passes the global carryforward via kwarg; fall back to instance var.
+        _engine_carryforward = kwargs.get('daf_carryforward_prior', None)
+        if _engine_carryforward is not None:
+            self._daf_carryforward = float(_engine_carryforward)
         
         logger.debug(
             f"Stage 3 calculation for year {year}, expenses=${expenses:,.2f}"
@@ -1344,10 +1348,12 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 ss_benefits=0.0
             )
             
-            # Calculate DAF contribution
+            # Calculate DAF contribution — pass year so the function uses
+            # Jan-1 age for the contribution window (see _calculate_daf_for_year).
             daf_contribution, daf_tax_excess = _calculate_daf_for_year(
-                age_primary, age_spouse, std_deduction, 
-                state_tax, property_tax, taxable_balance
+                age_primary, age_spouse, std_deduction,
+                state_tax, property_tax, taxable_balance,
+                year=year
             )
             
             return daf_contribution, daf_tax_excess
@@ -1422,7 +1428,7 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             if daf_contribution > 0:
                 return PortfolioBalances(
                     cash=balances.cash,
-                    taxable=balances.taxable - daf_contribution,
+                    taxable=max(0.0, balances.taxable - daf_contribution),
                     traditional=balances.traditional,
                     roth=balances.roth,
                     daf=balances.daf,
@@ -1775,11 +1781,12 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             elif tax_difference < 0:
                 logger.info(f"Year {year}: Credited back over-estimated tax ${-tax_difference:,.2f} to cash")
         
-        if daf_contribution > 0:
+        if tax_result['daf_deductible_this_year'] > 0:
             logger.info(f"Year {year}: Final tax calculation with DAF:")
             logger.info(f"  AGI: ${agi:,.2f}")
+            logger.info(f"  DAF contribution: ${daf_contribution:,.2f}, carryforward_prior: ${daf_carryforward_prior:,.2f}")
             logger.info(f"  DAF deductible: ${tax_result['daf_deductible_this_year']:,.2f}")
-            logger.info(f"  DAF carryforward: ${tax_result['daf_carryforward_new']:,.2f}")
+            logger.info(f"  DAF carryforward_new: ${tax_result['daf_carryforward_new']:,.2f}")
             logger.info(f"  Deduction ({tax_result['deduction_type']}): ${tax_result['deduction']:,.2f}")
             logger.info(f"  Taxable Ordinary: ${ordinary_income:,.2f}")
             logger.info(f"  LTCG: ${brokerage_ltcg:,.2f}")
@@ -1804,6 +1811,10 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             transactions['roth_to_cash'] +
             transactions['roth_to_brokerage']
         )
+        # Expose the actual deductible amount (new donation + carryforward consumed,
+        # capped at 30% of AGI) so the engine can update _daf_carryforward correctly
+        # across stage transitions.
+        strategy.daf_deductible = tax_result['daf_deductible_this_year']
         
         # Return updated balances with state tax deducted
         return balances

@@ -140,6 +140,8 @@ class Stage4Medicare(BaseLifeStageStrategy):
         growth_rate = kwargs.get('growth_rate', 1.07)
         brokerage_account = kwargs.get('brokerage_account')
         start_year = kwargs.get('start_year', year)
+        # Engine-level DAF carryforward (persists across stage transitions)
+        _daf_carryforward_prior = float(kwargs.get('daf_carryforward_prior', 0.0))
         
         logger.debug(
             f"Stage 4 calculation for year {year}, prior MAGI=${prior_magi:,.2f}"
@@ -403,7 +405,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             expenses,
             age_primary=age_primary,
             age_spouse=age_spouse,
-            daf_carryforward_prior=0.0,  # TODO: track across years
+            daf_carryforward_prior=_daf_carryforward_prior,
             property_tax=0.0  # TODO: add to config
         )
         
@@ -417,7 +419,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             except ImportError:
                 new_balances = PortfolioBalances(
                     cash=new_balances.cash,
-                    taxable=new_balances.taxable - daf_contribution,
+                    taxable=max(0.0, new_balances.taxable - daf_contribution),
                     traditional=new_balances.traditional,
                     roth=new_balances.roth,
                     daf=new_balances.daf,
@@ -1009,8 +1011,9 @@ class Stage4Medicare(BaseLifeStageStrategy):
             )
             
             daf_contribution, daf_tax_excess = _calculate_daf_for_year(
-                age_primary, age_spouse, std_deduction, 
-                state_tax, property_tax, taxable_balance
+                age_primary, age_spouse, std_deduction,
+                state_tax, property_tax, taxable_balance,
+                year=year
             )
             
             return daf_contribution, daf_tax_excess
@@ -1070,7 +1073,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             if daf_contribution > 0:
                 return PortfolioBalances(
                     cash=balances.cash,
-                    taxable=balances.taxable - daf_contribution,
+                    taxable=max(0.0, balances.taxable - daf_contribution),
                     traditional=balances.traditional,
                     roth=balances.roth,
                     daf=balances.daf,
@@ -1273,32 +1276,51 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 f"Difference=${tax_difference:,.0f}"
             )
         
-        # Deduct any additional tax from cash (or credit back if we over-estimated)
-        # If cash is insufficient, pull from taxable account
+        # Deduct any additional tax from cash (or credit back if we over-estimated).
+        # Cascade: Cash → Taxable → Traditional so balances never go negative.
         new_cash = balances.cash - tax_difference
-        
+
         if new_cash < 0:
-            logger.warning(
-                f"Year {year}: Cash insufficient for tax adjustment "
-                f"(${balances.cash:,.2f} - ${tax_difference:,.2f} = ${new_cash:,.2f}). "
-                f"Pulling ${-new_cash:,.2f} from taxable account."
-            )
-            balances = PortfolioBalances(
-                cash=0,
-                taxable=balances.taxable + new_cash,  # new_cash is negative, so this reduces taxable
-                traditional=balances.traditional,
-                roth=balances.roth,
-                daf=balances.daf
-            )
+            # Cash is exhausted — try to cover the remainder from taxable
+            shortfall_from_taxable = -new_cash  # positive amount still owed
+            new_taxable = balances.taxable - shortfall_from_taxable
+
+            if new_taxable < 0:
+                # Taxable is also exhausted — pull the rest from Traditional
+                shortfall_from_trad = -new_taxable  # positive amount still owed
+                logger.warning(
+                    f"Year {year}: Cash AND taxable both insufficient for tax adjustment. "
+                    f"Pulling ${shortfall_from_trad:,.2f} from Traditional account."
+                )
+                balances = PortfolioBalances(
+                    cash=0,
+                    taxable=0,
+                    traditional=max(0, balances.traditional - shortfall_from_trad),
+                    roth=balances.roth,
+                    daf=balances.daf,
+                )
+            else:
+                logger.warning(
+                    f"Year {year}: Cash insufficient for tax adjustment "
+                    f"(${balances.cash:,.2f} - ${tax_difference:,.2f} = ${new_cash:,.2f}). "
+                    f"Pulling ${shortfall_from_taxable:,.2f} from taxable account."
+                )
+                balances = PortfolioBalances(
+                    cash=0,
+                    taxable=new_taxable,
+                    traditional=balances.traditional,
+                    roth=balances.roth,
+                    daf=balances.daf,
+                )
         else:
             balances = PortfolioBalances(
                 cash=new_cash,
                 taxable=balances.taxable,
                 traditional=balances.traditional,
                 roth=balances.roth,
-                daf=balances.daf
+                daf=balances.daf,
             )
-            
+
             if tax_difference > 0:
                 logger.info(f"Year {year}: Deducted additional tax ${tax_difference:,.2f} from cash")
             elif tax_difference < 0:
@@ -1327,6 +1349,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             transactions['roth_to_cash'] +
             transactions['roth_to_brokerage']
         )
+        strategy.daf_deductible = tax_result['daf_deductible_this_year']
         
         # Return updated balances with tax adjustments applied
         return balances

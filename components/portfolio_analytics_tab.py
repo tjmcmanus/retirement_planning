@@ -273,7 +273,7 @@ def _render_di_analytics() -> None:
             paper_bgcolor="#ffffff",
             yaxis=dict(zeroline=True, zerolinewidth=1.5, zerolinecolor="#e5e7eb"),
         )
-        st.plotly_chart(fig_drift, use_container_width=True)
+        st.plotly_chart(fig_drift, width='stretch')
 
         with st.expander("Full sector drift table", expanded=False):
             st.dataframe(
@@ -288,7 +288,7 @@ def _render_di_analytics() -> None:
                     vmin=-5,
                     vmax=5,
                 ),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
     else:
@@ -320,7 +320,7 @@ def _render_di_analytics() -> None:
             plot_bgcolor="#f7f8fa",
             paper_bgcolor="#ffffff",
         )
-        st.plotly_chart(fig_eff, use_container_width=True)
+        st.plotly_chart(fig_eff, width='stretch')
 
         latest = efficiency_df.iloc[-1]
         sm1, sm2, sm3 = st.columns(3)
