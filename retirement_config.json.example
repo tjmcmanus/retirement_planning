@@ -74,11 +74,9 @@
     "person1_ssi_amount": 2000,
     "person2_ssi_age": 70,
     "person2_ssi_amount": 2000,
-    "person1_birth_year": 1965,
     "person1_gender": "M",
     "person1_life_expectancy": 85,
     "person1_current_earnings": 0,
-    "person2_birth_year": 1966,
     "person2_gender": "F",
     "person2_life_expectancy": 87,
     "person2_current_earnings": 0
@@ -113,7 +111,8 @@
     "stage_4_max_conversion_rate": 32,
     "stage_5_max_conversion_rate": 24,
     "stage_6_max_conversion_rate": 24,
-    "stage_7_max_conversion_rate": 15
+    "stage_7_max_conversion_rate": 15,
+    "trad_prefund_schedule": []
   },
   "charitable_giving": {
     "annual_charitable_giving": 0,

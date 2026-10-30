@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Strategy - Retirement Planner</title>
+  <link rel="stylesheet" href="/vendor/tabulator_simple-6.3.1.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/vendor/tabulator-6.3.1.min.js"></script>
+  <script defer src="/static/strategy.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+  <style>
+    /* ── Tab bar ─────────────────────────────────────────────────── */
+    .stab-bar {
+      display: flex; gap: 0; border-bottom: 2px solid var(--border);
+      margin-bottom: 1.5rem; flex-wrap: wrap;
+    }
+    .stab-bar button {
+      background: none; border: none; padding: .5rem 1.1rem;
+      font-size: .85rem; cursor: pointer; color: var(--muted);
+      border-bottom: 3px solid transparent; margin-bottom: -2px;
+      white-space: nowrap;
+    }
+    .stab-bar button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+    .stab-panel { display: none; } .stab-panel.active { display: block; }
+
+    /* ── Metric cards ────────────────────────────────────────────── */
+    .metrics { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+    .metric-card {
+      flex: 1 1 160px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: .75rem 1rem;
+    }
+    .metric-card .label { font-size: .75rem; color: var(--muted); margin-bottom: .25rem; }
+    .metric-card .value { font-size: 1.35rem; font-weight: 700; color: var(--text); }
+
+    /* ── Timeline ────────────────────────────────────────────────── */
+    .timeline-wrap {
+      position: relative; height: 160px; margin: 2.5rem 0 1rem;
+      background: var(--surface); border-radius: 6px; border: 1px solid var(--border);
+    }
+    .timeline-filter { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .5rem 0; }
+    .timeline-filter button {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 999px; padding: .2rem .7rem; font-size: .75rem;
+      cursor: pointer; color: var(--muted);
+    }
+    .timeline-filter button.active { color: #fff; }
+    .timeline-line {
+      position: absolute; top: 50%; left: 2.5%; right: 2.5%;
+      height: 3px; background: var(--border); border-radius: 2px;
+    }
+    .timeline-event {
+      position: absolute; top: 50%; transform: translate(-50%, -50%);
+      cursor: default;
+    }
+    .timeline-event .dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.2);
+      margin: 0 auto;
+    }
+    .timeline-event .evt-label {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      white-space: nowrap; font-size: .7rem; text-align: center; width: 110px;
+    }
+    .evt-label .title { font-weight: 600; color: var(--text); }
+    .evt-label .year  { color: var(--muted); font-size: .65rem; }
+    .evt-label .detail{ color: var(--muted); font-size: .63rem; }
+    .evt-above { bottom: calc(50% + 14px); } /* label above dot */
+    .evt-below { top:    calc(50% + 14px); } /* label below dot */
+
+    /* Category colours */
+    .cat-ss       { background: #3b82d4; }
+    .cat-medicare { background: #4ecdc4; }
+    .cat-rmd      { background: #f38181; }
+    .cat-roth     { background: #aa96da; }
+
+    /* ── Tax tabs ────────────────────────────────────────────────── */
+    .tax-tab-bar { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .tax-tab-bar button {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: .35rem .8rem; font-size: .78rem;
+      cursor: pointer; color: var(--muted);
+    }
+    .tax-tab-bar button.active {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
+    .tax-panel { display: none; } .tax-panel.active { display: block; }
+
+    /* ── Monthly plan ────────────────────────────────────────────── */
+    .month-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 1rem; }
+    .month-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: .75rem 1rem;
+    }
+    .month-card h4 { font-size: .82rem; color: var(--accent); margin: 0 0 .5rem; border-bottom: 1px solid var(--border); padding-bottom: .35rem; }
+    .month-card ul { list-style: disc; padding-left: 1rem; margin: 0; }
+    .month-card li { font-size: .77rem; color: var(--text); margin-bottom: .25rem; }
+    .month-card li .amt { color: var(--muted); }
+    .month-card.empty { opacity: .45; }
+
+    /* ── Bucket bars ─────────────────────────────────────────────── */
+    .bucket-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .bucket-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 6px; padding: .85rem 1rem;
+    }
+    .bucket-card h4 { margin: 0 0 .5rem; font-size: .85rem; }
+    .bucket-card .bval { font-size: 1.2rem; font-weight: 700; }
+    .bucket-card .brow { display: flex; justify-content: space-between; font-size: .78rem; color: var(--muted); margin-top: .2rem; }
+    .drift-ok   { color: #22c55e; } .drift-warn { color: #f59e0b; } .drift-bad { color: #ef4444; }
+    .progress-bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: .5rem; }
+    .progress-bar .fill { height: 100%; border-radius: 3px; background: var(--accent); max-width: 100%; }
+
+    /* ── Why these numbers ───────────────────────────────────────── */
+    .why-group { margin-bottom: 1rem; }
+    .why-group h4 { font-size: .82rem; color: var(--accent); margin: 0 0 .4rem; }
+    .why-item {
+      background: var(--surface); border-left: 3px solid var(--accent);
+      padding: .5rem .75rem; margin-bottom: .5rem; border-radius: 0 4px 4px 0; font-size: .82rem;
+    }
+    .why-reason { margin-top: .2rem; }
+    .why-values { font-size: .72rem; margin-top: .25rem; word-break: break-word; }
+
+    /* ── Year selector ───────────────────────────────────────────── */
+    .year-select-row { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; }
+    .year-select-row label { font-size: .82rem; color: var(--muted); }
+    .year-select-row select { font-size: .85rem; padding: .25rem .5rem; border: 1px solid var(--border); border-radius: 4px; }
+
+    /* ── Insight list ────────────────────────────────────────────── */
+    .insights { list-style: none; padding: 0; margin: 0; }
+    .insights li {
+      background: var(--surface); border-left: 3px solid var(--accent);
+      padding: .5rem .75rem; margin-bottom: .6rem; font-size: .82rem;
+      border-radius: 0 4px 4px 0;
+    }
+
+    @media (max-width: 600px) {
+      .bucket-grid { grid-template-columns: 1fr; }
+      .metrics .metric-card { flex: 1 1 140px; }
+    }
+  </style>
+</head>
+<body x-data="strategyPage()" x-init="load()">
+  <header>
+    <h1>Long-Term Financial Strategy</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="error"  x-show="err"     x-text="err"></p>
+    <p class="muted"  x-show="loading">Calculating strategy…</p>
+
+    <template x-if="!loading && !err">
+      <div>
+        <!-- ── Tab bar ─────────────────────────────────────────── -->
+        <div class="stab-bar">
+          <template x-for="t in tabs" :key="t.id">
+            <button :class="activeTab===t.id ? 'active' : ''"
+              @click="activeTab=t.id; $nextTick(() => resizeTabCharts(t.id))"
+              x-text="t.label"></button>
+          </template>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════
+             TAB 1 – Long-Term Plan
+        ═══════════════════════════════════════════════════════ -->
+        <div class="stab-panel" :class="activeTab==='plan' ? 'active' : ''">
+          <h3>📍 Key Events Timeline</h3>
+          <p class="muted" x-show="timeline.loading">Loading timeline…</p>
+          <p class="error" x-show="timeline.error" x-text="timeline.error"></p>
+          <div class="timeline-filter" x-show="timeline.events && timeline.events.length">
+            <span class="muted">Show:</span>
+            <template x-for="c in timelineCategories" :key="c.id">
+              <button type="button"
+                :class="timelineFilter.includes(c.id) ? 'active' : ''"
+                :style="timelineFilter.includes(c.id) ? `background:${c.color};border-color:${c.color}` : ''"
+                @click="toggleTimelineCategory(c.id)" x-text="c.label"></button>
+            </template>
+          </div>
+          <p class="muted" x-show="timeline.events && timeline.events.length && !timelineFilter.length">Select an event type to display.</p>
+          <div class="timeline-wrap" x-show="timeline.events && timeline.events.length" id="timeline-container"></div>
+          <p class="muted" x-show="timeline.events && !timeline.events.length">No significant events in the first 15 years.</p>
+
+          <h3 style="margin-top:2rem">💸 Money Flow</h3>
+          <div class="year-select-row">
+            <label>Year:</label>
+            <select x-model="flowYear" @change="loadMoneyFlow()">
+              <template x-for="y in flowYears" :key="y">
+                <option :value="y" x-text="y"></option>
+              </template>
+            </select>
+          </div>
+          <p class="muted" x-show="flow.loading">Loading…</p>
+          <p class="error" x-show="flow.error" x-text="flow.error"></p>
+          <div id="chart-sankey" x-show="!flow.loading && !flow.error"></div>
+
+          <h3 style="margin-top:2rem">📋 Year-by-Year Details</h3>
+          <div id="table-strategy"></div>
+
+          <h3 style="margin-top:2rem">🧭 Why these numbers?</h3>
+          <p class="muted small">Pick a year (or click a row in the table above) to see the reasons the strategy engine recorded for it.</p>
+          <div class="year-select-row">
+            <label>Year:</label>
+            <select x-model.number="decisionYear" @change="loadDecisions()">
+              <option :value="null">Select a year…</option>
+              <template x-for="y in flowYears" :key="y">
+                <option :value="y" x-text="y"></option>
+              </template>
+            </select>
+          </div>
+          <p class="muted" x-show="decisions.loading">Loading…</p>
+          <p class="error" x-show="decisions.error" x-text="decisions.error"></p>
+          <template x-if="decisions.data && !decisions.loading">
+            <div class="why">
+              <p class="muted small" x-text="decisions.data.year + ' — ' + decisions.data.stage"></p>
+              <div class="metrics">
+                <div class="metric-card"><div class="label">Traditional Distribution</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_cash)"></div></div>
+                <div class="metric-card"><div class="label">Roth Conversion</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_roth)"></div></div>
+                <div class="metric-card"><div class="label">Brokerage → Cash</div><div class="value" x-text="fmt$(decisions.data.summary.brok_to_cash)"></div></div>
+                <div class="metric-card"><div class="label">DAF</div><div class="value" x-text="fmt$(decisions.data.summary.daf_contribution)"></div></div>
+              </div>
+              <p class="muted" x-show="!decisions.data.groups.length">The engine recorded no decisions for this year.</p>
+              <template x-for="g in decisions.data.groups" :key="g.category">
+                <div class="why-group">
+                  <h4 x-text="decisionCategoryLabel(g.category)"></h4>
+                  <template x-for="(d, i) in g.decisions" :key="i">
+                    <div class="why-item">
+                      <div class="why-head"><strong x-text="d.decision"></strong> — <span x-text="d.action"></span></div>
+                      <div class="why-reason" x-text="d.reason"></div>
+                      <div class="why-values muted" x-show="Object.keys(d.values).length" x-text="decisionValues(d.values)"></div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════
+             TAB 2 – Monthly Plan
+        ═══════════════════════════════════════════════════════ -->
+        <div class="stab-panel" :class="activeTab==='monthly' ? 'active' : ''">
+          <h3>📅 Month-by-Month Plan</h3>
+          <div class="year-select-row">
+            <label>Year:</label>
+            <select x-model="monthlyYear" @change="loadMonthly()">
+              <template x-for="y in monthlyYears" :key="y">
+                <option :value="y" x-text="y"></option>
+              </template>
+            </select>
+          </div>
+          <p class="muted" x-show="monthly.loading">Loading…</p>
+          <p class="error" x-show="monthly.error" x-text="monthly.error"></p>
+          <div class="month-grid" x-show="!monthly.loading && !monthly.error">
+            <template x-for="m in (monthly.data ? monthly.data.months : [])" :key="m.month">
+              <div class="month-card" :class="m.actions.length===0 ? 'empty' : ''">
+                <h4 x-text="m.month"></h4>
+                <ul x-show="m.actions.length">
+                  <template x-for="a in m.actions" :key="a.label">
+                    <li>
+                      <span x-text="a.label"></span>
+                      <span class="amt" x-show="a.amount > 0" x-text="' — $' + a.amount.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
+                      <span class="amt" x-show="a.detail" x-text="' (' + a.detail + ')'"></span>
+                    </li>
+                  </template>
+                </ul>
+                <p class="muted" x-show="!m.actions.length" style="font-size:.75rem;margin:0">No scheduled actions</p>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════
+             TAB 4 – Bucket Strategy
+        ═══════════════════════════════════════════════════════ -->
+        <div class="stab-panel" :class="activeTab==='buckets' ? 'active' : ''">
+          <h3>🪣 Bucket Strategy Analysis</h3>
+          <p class="muted" x-show="buckets.loading">Loading…</p>
+          <p class="error" x-show="buckets.error" x-text="buckets.error"></p>
+
+          <template x-if="buckets.data && !buckets.data.enabled">
+            <div class="muted" style="padding:1rem;background:var(--surface);border-radius:6px;border:1px solid var(--border)">
+              <strong>Bucket strategy is not enabled.</strong><br>
+              Enable it in Settings → Bucket Strategy to classify your portfolio into safety, transition, and growth buckets.
+            </div>
+          </template>
+
+          <template x-if="buckets.data && buckets.data.enabled">
+            <div>
+              <div class="bucket-grid">
+                <template x-for="b in bucketCards()" :key="b.label">
+                  <div class="bucket-card">
+                    <h4 x-text="b.label"></h4>
+                    <div class="bval" x-text="'$' + b.value.toLocaleString('en-US',{maximumFractionDigits:0})"></div>
+                    <div class="brow">
+                      <span>Target</span>
+                      <span x-text="'$' + b.target.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
+                    </div>
+                    <div class="brow">
+                      <span>Allocation</span>
+                      <span x-text="b.pct.toFixed(1) + '%'"></span>
+                    </div>
+                    <div class="brow">
+                      <span>Drift</span>
+                      <span :class="driftClass(b.drift)" x-text="(b.drift >= 0 ? '+' : '') + b.drift.toFixed(1) + '%'"></span>
+                    </div>
+                    <div class="progress-bar">
+                      <div class="fill" :style="'width:' + Math.min(b.value/b.target*100,100).toFixed(1) + '%'" x-show="b.target > 0"></div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div id="chart-buckets"></div>
+              <h4 style="margin-top:1.5rem">Holdings by Bucket</h4>
+              <div id="table-buckets"></div>
+            </div>
+          </template>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════
+             TAB 5 – Tax Analytics
+        ═══════════════════════════════════════════════════════ -->
+        <div class="stab-panel" :class="activeTab==='tax' ? 'active' : ''">
+          <h3>💰 Tax Analytics</h3>
+          <p class="muted" x-show="tax.loading">Loading…</p>
+          <p class="error" x-show="tax.error" x-text="tax.error"></p>
+          <template x-if="tax.data">
+            <div>
+              <div class="metrics">
+                <div class="metric-card">
+                  <div class="label">Total Taxes Paid</div>
+                  <div class="value" x-text="'$' + tax.data.summary.total_taxes.toLocaleString('en-US',{maximumFractionDigits:0})"></div>
+                </div>
+                <div class="metric-card">
+                  <div class="label">Avg Effective Rate</div>
+                  <div class="value" x-text="tax.data.summary.avg_effective_rate.toFixed(1) + '%'"></div>
+                </div>
+                <div class="metric-card">
+                  <div class="label">IRMAA Penalties</div>
+                  <div class="value" x-text="'$' + tax.data.summary.total_irmaa.toLocaleString('en-US',{maximumFractionDigits:0})"></div>
+                </div>
+                <div class="metric-card">
+                  <div class="label">Tax Efficiency Score</div>
+                  <div class="value" x-text="(100 - Math.min(tax.data.summary.avg_effective_rate, 100)).toFixed(0) + '/100'"></div>
+                </div>
+              </div>
+
+              <!-- Tax sub-tabs -->
+              <div class="tax-tab-bar">
+                <template x-for="t in taxTabs" :key="t.id">
+                  <button :class="activeTaxTab===t.id ? 'active' : ''"
+                    @click="activeTaxTab=t.id; $nextTick(() => resizeTaxChart(t.id))"
+                    x-text="t.label"></button>
+                </template>
+              </div>
+
+              <div class="tax-panel" :class="activeTaxTab==='overview' ? 'active' : ''">
+                <div id="chart-tax-burden"></div>
+              </div>
+              <div class="tax-panel" :class="activeTaxTab==='income' ? 'active' : ''">
+                <h4 style="margin:0 0 .25rem">Annual Income by Source</h4>
+                <p class="muted" style="margin:0 0 1rem;font-size:.8rem">Breakdown of all income sources over the planning period</p>
+                <div id="chart-income-by-source"></div>
+                <h4 style="margin:1.5rem 0 .25rem">Average Income Composition</h4>
+                <div id="chart-income-donut"></div>
+                <h4 style="margin:1.5rem 0 .25rem">Projected Account Balances</h4>
+                <div id="chart-balances"></div>
+                <div class="metrics" style="margin-top:1.25rem" x-show="tax.data">
+                  <div class="metric-card">
+                    <div class="label">Social Security Age</div>
+                    <div class="value" x-text="tax.data ? tax.data.summary.ss_age : '—'"></div>
+                  </div>
+                  <div class="metric-card">
+                    <div class="label">Max Roth Conv Rate</div>
+                    <div class="value" x-text="tax.data ? tax.data.summary.max_roth_rate.toFixed(1) + '%' : '—'"></div>
+                  </div>
+                  <div class="metric-card">
+                    <div class="label">Rate of Return</div>
+                    <div class="value" x-text="tax.data ? tax.data.summary.rate_of_return.toFixed(1) + '%' : '—'"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="tax-panel" :class="activeTaxTab==='rates' ? 'active' : ''">
+                <div id="chart-tax-rates"></div>
+              </div>
+              <div class="tax-panel" :class="activeTaxTab==='insights' ? 'active' : ''">
+                <ul class="insights">
+                  <template x-for="ins in taxInsights()" :key="ins">
+                    <li x-text="ins"></li>
+                  </template>
+                </ul>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════
+             TAB 6 – Income & Expenses
+        ═══════════════════════════════════════════════════════ -->
+        <div class="stab-panel" :class="activeTab==='incexp' ? 'active' : ''">
+          <h3>📊 Income Sources by Year</h3>
+          <p class="muted" x-show="incexp.loading">Loading…</p>
+          <p class="error" x-show="incexp.error" x-text="incexp.error"></p>
+          <template x-if="incexp.data">
+            <div>
+              <div id="chart-income"></div>
+              <h3 style="margin-top:2rem">Expenses by Year</h3>
+              <div id="chart-expenses"></div>
+            </div>
+          </template>
+        </div>
+
+      </div>
+    </template>
+  </main>
+
+  <footer class="muted">Data stays on this machine. No external scripts are loaded.</footer>
+</body>
+</html>

@@ -21,7 +21,8 @@ from dataclasses import dataclass, asdict
 logger = logging.getLogger(__name__)
 
 # Database path
-CACHE_DB_PATH = Path(__file__).parent.parent / "data" / "rebalancing_cache.db"
+from settings import data_path
+CACHE_DB_PATH = data_path("data", "rebalancing_cache.db")
 
 
 @dataclass

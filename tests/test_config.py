@@ -2,16 +2,33 @@
 Test script for configuration system.
 """
 
-from config import get_config_manager
+import os
+import tempfile
+
+from config import ConfigManager
 
 def test_config():
-    """Test configuration loading, saving, and retrieval."""
+    """Test configuration loading, saving, and retrieval.
+
+    Runs in a throwaway directory so the save/reset steps below can never
+    overwrite the real retirement_config.json (or write into its .backups/).
+    """
+    original_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            _run_config_checks()
+        finally:
+            os.chdir(original_cwd)
+
+
+def _run_config_checks():
     print("=" * 60)
     print("Testing Configuration System")
     print("=" * 60)
     
-    # Get configuration manager
-    cm = get_config_manager()
+    # Fresh manager on a temp config file (cwd is a temp dir)
+    cm = ConfigManager()
     print("✓ Config manager initialized")
     
     # Test reading default values
@@ -66,10 +83,35 @@ def test_config():
     print("=" * 60)
     print("All tests passed! ✓")
     print("=" * 60)
-    print("\nConfiguration file created: retirement_config.json")
-    print("You can now run the Streamlit app and access the Configuration page.")
+    print("\nTemporary configuration file removed; real config untouched.")
 
 if __name__ == "__main__":
     test_config()
 
 # Made with Bob
+
+
+def test_birth_year_is_derived_from_birth_date_not_stored(tmp_path, monkeypatch):
+    """One birth setting: social_security birth years are derived from personal_info dates."""
+    import json
+    from config import ConfigManager
+
+    monkeypatch.chdir(tmp_path)
+    # A legacy file that still carries the duplicate social_security.*_birth_year keys.
+    legacy = {
+        "personal_info": {"person1_birth_date": "1966-05-16", "person2_birth_date": "1967-03-22"},
+        "social_security": {"person1_birth_year": 1999, "person2_birth_year": 1999, "person1_gender": "M"},
+    }
+    (tmp_path / "retirement_config.json").write_text(json.dumps(legacy))
+
+    cm = ConfigManager()
+    assert cm.birth_year("person1") == 1966
+    assert cm.birth_year("person2") == 1967
+    assert "person1_birth_year" not in cm.config["social_security"]
+
+    cm.set("personal_info", "person1_birth_date", "1968-03-01")
+    assert cm.birth_year("person1") == 1968          # follows the date immediately
+    assert cm.save_config()
+    saved = json.loads((tmp_path / "retirement_config.json").read_text())
+    assert not [k for k in saved["social_security"] if k.endswith("_birth_year")]
+    assert saved["social_security"]["person1_gender"] == "M"   # other optimizer inputs kept

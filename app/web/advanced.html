@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Advanced Strategy Tools - Retirement Planner</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/static/advanced.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="advancedPage()" x-init="init()">
+  <header>
+    <h1>Advanced Strategy Tools</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="muted">Multi-year tax planning, backdoor Roth, NUA, QCD, and 72(t) SEPP calculators.</p>
+    <p class="error" x-show="metaError" x-text="metaError"></p>
+
+    <div class="tabs" role="tablist">
+      <template x-for="t in tabs" :key="t.id">
+        <button type="button" role="tab" :aria-selected="tab === t.id" :class="{active: tab === t.id}"
+                :data-tab="t.id" @click="tab = t.id; $nextTick(() => resizeCharts())" x-text="t.label"></button>
+      </template>
+    </div>
+
+    <!-- ───────────── Tax Planner ───────────── -->
+    <section class="panel" x-show="tab === 'planner'" id="panel-planner">
+      <h2>Tax Planner</h2>
+      <details @toggle="loadGuide('tax_planner', $event)">
+        <summary>Strategy: Why Use the Tax Planner?</summary>
+        <div class="guide" x-html="guides.tax_planner || 'Loading...'"></div>
+      </details>
+
+      <fieldset>
+        <legend>Create estimated taxes for next year</legend>
+        <div class="grid5">
+          <label class="fld">Wages <input type="number" name="wages" step="any" x-model.number="planner.wages"></label>
+          <label class="fld">Trad IRA Distribution <input type="number" name="trad_dist" step="any" x-model.number="planner.trad_dist"></label>
+          <label class="fld">Interest <input type="number" name="interest" step="any" x-model.number="planner.interest"></label>
+          <label class="fld">Long Term Cap Gains <input type="number" name="ltcg" step="any" x-model.number="planner.ltcg"></label>
+          <label class="fld">Short Term Cap Gains <input type="number" name="stcg" step="any" x-model.number="planner.stcg"></label>
+        </div>
+        <div class="grid5">
+          <label class="fld">Medicare Eligible
+            <select name="medicare" x-model.number="planner.medicare">
+              <template x-for="m in [0,1,2]" :key="m"><option :value="m" :selected="m === planner.medicare" x-text="m"></option></template>
+            </select>
+          </label>
+          <label class="fld">Tax Year
+            <select name="year" x-model.number="planner.year">
+              <template x-for="y in (meta ? meta.planner_years : [])" :key="y"><option :value="y" :selected="y === planner.year" x-text="y"></option></template>
+            </select>
+          </label>
+          <label class="fld">Max Donor Advised Fund
+            <select name="maxdaf" x-model="planner.maxdaf"><option value="N">N</option><option value="Y">Y</option></select>
+          </label>
+          <label class="fld">Charitable Contrib
+            <input type="number" name="charitable" step="any" x-model.number="planner.charitable" :disabled="planner.maxdaf === 'Y'">
+          </label>
+          <label class="fld">Max Conversion Rate
+            <select name="headroom_pct" x-model.number="planner.headroom_pct">
+              <template x-for="r in (meta ? meta.headroom_rates : [])" :key="r"><option :value="r" :selected="r === planner.headroom_pct" x-text="r + '%'"></option></template>
+            </select>
+          </label>
+        </div>
+        <div class="grid5">
+          <label class="fld">DAF Contribution Type
+            <select name="daf_type" x-model="planner.daf_type">
+              <option value="securities">securities</option><option value="cash">cash</option>
+            </select>
+          </label>
+          <p class="callout info small" style="grid-column: span 2; align-self:end">
+            <strong x-text="planner.daf_type === 'cash' ? '60%' : '30%'"></strong> of AGI limit.
+            Securities: 30% AGI limit, avoids cap gains. Cash: 60% AGI limit.
+          </p>
+        </div>
+        <div class="grid5">
+          <label class="fld">Roth Conversion Amount <input type="number" name="roth_amount" step="any" x-model.number="planner.roth_amount"></label>
+          <label class="fld">Estimated prepaid Fed taxes <input type="number" name="prepaid" step="any" x-model.number="planner.prepaid"></label>
+        </div>
+        <p class="muted small">Account balances below come from your latest net worth snapshot.
+          Leave Roth Conversion Amount at 0 to fill the bracket up to the Max Conversion Rate automatically.</p>
+        <button type="button" class="primary" id="run-planner" @click="run('planner')" :disabled="!!busy.planner">Project this year's changes</button>
+        <span class="muted" x-show="!!busy.planner">Calculating...</span>
+      </fieldset>
+      <p class="error" x-show="err.planner" x-text="err.planner"></p>
+
+      <template x-if="res.planner">
+        <div id="planner-result">
+          <template x-for="w in res.planner.warnings" :key="w"><p class="callout warning" x-text="w"></p></template>
+          <div class="grid5 result-cols">
+            <template x-for="col in res.planner.columns" :key="col.title">
+              <div class="rescol">
+                <h3 x-text="col.title"></h3>
+                <template x-for="m in col.metrics" :key="m.label">
+                  <div class="kpi" :data-metric="m.label">
+                    <div class="kpi-label" x-text="m.label"></div>
+                    <div class="kpi-value small-value" x-text="fmtMetric(m)"></div>
+                    <div class="kpi-delta" :class="m.delta > 0 ? 'up' : 'down'" x-show="m.delta != null" x-text="fmtDelta(m.delta)"></div>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ───────────── Multi-Year ───────────── -->
+    <section class="panel" x-show="tab === 'multi'" id="panel-multi">
+      <h2>5-Year Rolling Tax Optimization Window</h2>
+      <details @toggle="loadGuide('multi_year', $event)">
+        <summary>Strategy: Why Use Multi-Year Tax Planning?</summary>
+        <div class="guide" x-html="guides.multi_year || 'Loading...'"></div>
+      </details>
+
+      <fieldset>
+        <legend>Projection inputs</legend>
+        <div class="grid3">
+          <label class="fld">Start Year
+            <select name="start_year" x-model.number="multi.start_year">
+              <template x-for="y in yearRange(6)" :key="y"><option :value="y" :selected="y === multi.start_year" x-text="y"></option></template>
+            </select>
+          </label>
+          <label class="fld">Filing Status
+            <select name="filing_status" x-model="multi.filing_status">
+              <template x-for="f in filings" :key="f"><option :value="f" :selected="f === multi.filing_status" x-text="f"></option></template>
+            </select>
+          </label>
+          <label class="fld">Window (years): <strong x-text="multi.window"></strong>
+            <input type="range" name="window" min="3" max="10" step="1" x-model.number="multi.window">
+          </label>
+          <label class="fld">Annual Ordinary Income ($) <input type="number" name="income" min="0" step="5000" x-model.number="multi.income"></label>
+          <label class="fld">Annual Long-Term Cap Gains ($) <input type="number" name="cg_lt" min="0" step="1000" x-model.number="multi.cg_lt"></label>
+          <label class="fld">Annual Roth Conversion ($) <input type="number" name="conversion" min="0" step="5000" x-model.number="multi.conversion"></label>
+          <label class="fld">Annual QBI Income ($) <input type="number" name="qbi" min="0" step="5000" x-model.number="multi.qbi"></label>
+          <label class="fld">Capital Loss Carryforward ($) <input type="number" name="loss_cf" min="0" step="1000" x-model.number="multi.loss_cf"></label>
+        </div>
+        <button type="button" class="primary" id="run-multi" @click="run('multi')" :disabled="!!busy.multi">Run tax projection</button>
+        <span class="muted" x-show="!!busy.multi">Calculating...</span>
+      </fieldset>
+      <p class="error" x-show="err.multi" x-text="err.multi"></p>
+
+      <template x-if="res.multi">
+        <div id="multi-result">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label" x-text="`Total Tax (${res.multi.window}yr)`"></div><div class="kpi-value" x-text="fmt0(res.multi.total_tax_5yr)"></div></div>
+            <div class="kpi"><div class="kpi-label">Avg Effective Rate</div><div class="kpi-value" x-text="pct1(res.multi.avg_effective_rate)"></div></div>
+            <div class="kpi"><div class="kpi-label">Total Bracket Headroom</div><div class="kpi-value" x-text="fmt0(res.multi.total_bracket_headroom)"></div></div>
+            <div class="kpi"><div class="kpi-label">Optimization Opportunities</div><div class="kpi-value" x-text="res.multi.optimization_opportunities.length"></div></div>
+          </div>
+          <h3>Year-by-Year Projection</h3>
+          <div class="tablewrap">
+            <table id="multi-table">
+              <thead><tr><th>Year</th><th class="num">Ordinary Income</th><th class="num">Roth Conversion</th><th class="num">QBI Deduction</th>
+                <th class="num">AGI</th><th class="num">Federal Tax</th><th class="num">Effective Rate</th><th class="num">Marginal Rate</th><th class="num">Bracket Headroom</th></tr></thead>
+              <tbody>
+                <template x-for="p in res.multi.years" :key="p.year">
+                  <tr><td x-text="p.year"></td><td class="num" x-text="fmt0(p.ordinary_income)"></td><td class="num" x-text="fmt0(p.roth_conversion)"></td>
+                    <td class="num" x-text="fmt0(p.qbi_deduction)"></td><td class="num" x-text="fmt0(p.agi)"></td><td class="num" x-text="fmt0(p.federal_tax)"></td>
+                    <td class="num" x-text="pct1(p.effective_rate)"></td><td class="num" x-text="pct0(p.marginal_rate)"></td><td class="num" x-text="fmt0(p.bracket_headroom)"></td></tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <div id="chart-multi" class="chart"></div>
+          <template x-if="res.multi.optimization_opportunities.length">
+            <div>
+              <h3>Optimization Opportunities</h3>
+              <template x-for="o in res.multi.optimization_opportunities" :key="o"><p class="callout info" x-text="o"></p></template>
+            </div>
+          </template>
+          <template x-if="res.multi.recommended_conversions.length">
+            <div>
+              <h3>Recommended Roth Conversions</h3>
+              <table class="mini">
+                <thead><tr><th>Year</th><th class="num">Recommended Conversion</th></tr></thead>
+                <tbody><template x-for="c in res.multi.recommended_conversions" :key="c.year">
+                  <tr><td x-text="c.year"></td><td class="num" x-text="fmt0(c.amount)"></td></tr></template></tbody>
+              </table>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <hr>
+      <h2>QBI Deduction Calculator (IRC &sect;199A)</h2>
+      <details @toggle="loadGuide('qbi', $event)">
+        <summary>Strategy: Why Use the QBI Deduction Calculator?</summary>
+        <div class="guide" x-html="guides.qbi || 'Loading...'"></div>
+      </details>
+      <fieldset>
+        <legend>Calculate your Qualified Business Income deduction</legend>
+        <div class="grid3">
+          <label class="fld">QBI Income ($) <input type="number" name="qbi_income" min="0" step="5000" x-model.number="qbi.qbi_income"></label>
+          <label class="fld">Total Taxable Income ($) <input type="number" name="total_taxable_income" min="0" step="5000" x-model.number="qbi.total_taxable_income"></label>
+          <label class="fld">Filing Status
+            <select name="qbi_filing" x-model="qbi.filing_status">
+              <template x-for="f in filings" :key="f"><option :value="f" :selected="f === qbi.filing_status" x-text="f"></option></template>
+            </select>
+          </label>
+          <label class="fld">W-2 Wages Paid by Business ($) <input type="number" name="w2_wages" min="0" step="5000" x-model.number="qbi.w2_wages"></label>
+          <label class="fld">UBIA of Qualified Property ($) <input type="number" name="ubia" min="0" step="10000" x-model.number="qbi.ubia"></label>
+          <label class="check"><input type="checkbox" name="is_sstb" x-model="qbi.is_sstb"> Specified Service Trade or Business (SSTB)</label>
+        </div>
+        <button type="button" class="primary" id="run-qbi" @click="run('qbi')" :disabled="!!busy.qbi">Calculate QBI Deduction</button>
+      </fieldset>
+      <p class="error" x-show="err.qbi" x-text="err.qbi"></p>
+      <template x-if="res.qbi">
+        <div id="qbi-result">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label">QBI Deduction</div><div class="kpi-value" x-text="fmt0(res.qbi.deduction)"></div></div>
+            <div class="kpi"><div class="kpi-label">Base Deduction (20%)</div><div class="kpi-value" x-text="fmt0(res.qbi.base_deduction)"></div></div>
+            <div class="kpi"><div class="kpi-label">Phase-Out %</div><div class="kpi-value" x-text="pct1(res.qbi.phase_out_pct)"></div></div>
+          </div>
+          <h3>Calculation Details</h3>
+          <template x-for="n in res.qbi.notes" :key="n"><p class="muted small" x-text="n"></p></template>
+          <p class="callout success" x-show="res.qbi.deduction > 0">
+            <strong>Estimated Tax Savings:</strong> <span x-text="fmt0(res.qbi.estimated_savings)"></span> (assuming 24% marginal rate)
+          </p>
+        </div>
+      </template>
+    </section>
+
+    <!-- ───────────── Backdoor / BETR / Mega ───────────── -->
+    <section class="panel" x-show="tab === 'backdoor'" id="panel-backdoor">
+      <h2>Backdoor &amp; Mega Backdoor Roth</h2>
+      <details @toggle="loadGuide('backdoor', $event)">
+        <summary>Strategy: Why Use Backdoor &amp; Mega Backdoor Roth?</summary>
+        <div class="guide" x-html="guides.backdoor || 'Loading...'"></div>
+      </details>
+
+      <fieldset>
+        <legend>Backdoor Roth IRA Calculator</legend>
+        <div class="grid3">
+          <label class="fld">Tax Year
+            <select name="bd_year" x-model.number="backdoor.year">
+              <template x-for="y in yearRange(3)" :key="y"><option :value="y" :selected="y === backdoor.year" x-text="y"></option></template>
+            </select>
+          </label>
+          <label class="fld">Your Age <input type="number" name="bd_age" min="18" max="80" x-model.number="backdoor.age"></label>
+          <label class="fld">Filing Status
+            <select name="bd_filing" x-model="backdoor.filing_status">
+              <template x-for="f in filings" :key="f"><option :value="f" :selected="f === backdoor.filing_status" x-text="f"></option></template>
+            </select>
+          </label>
+          <label class="fld">MAGI ($) <input type="number" name="magi" min="0" step="5000" x-model.number="backdoor.magi"></label>
+          <label class="fld">Pre-Tax IRA Balance ($) <input type="number" name="trad_balance" min="0" step="10000" x-model.number="backdoor.trad_balance"></label>
+          <label class="fld">After-Tax IRA Basis ($) <input type="number" name="basis" min="0" step="1000" x-model.number="backdoor.basis"></label>
+        </div>
+        <button type="button" class="primary" id="run-backdoor" @click="run('backdoor')" :disabled="!!busy.backdoor">Analyze Backdoor Roth</button>
+      </fieldset>
+      <p class="error" x-show="err.backdoor" x-text="err.backdoor"></p>
+      <template x-if="res.backdoor">
+        <div id="backdoor-result">
+          <p class="callout info" x-show="!res.backdoor.eligible && res.backdoor.ineligible_reason" x-text="res.backdoor.ineligible_reason"></p>
+          <template x-if="res.backdoor.eligible || !res.backdoor.ineligible_reason">
+            <div>
+              <div class="kpis">
+                <div class="kpi"><div class="kpi-label">Contribution Amount</div><div class="kpi-value" x-text="fmt0(res.backdoor.contribution_amount)"></div></div>
+                <div class="kpi"><div class="kpi-label">Pro-Rata Tax</div><div class="kpi-value" x-text="fmt0(res.backdoor.pro_rata_tax)"></div></div>
+                <div class="kpi"><div class="kpi-label">20-Year Net Benefit</div><div class="kpi-value" x-text="fmt0(res.backdoor.net_benefit)"></div></div>
+              </div>
+              <template x-for="w in res.backdoor.warnings" :key="w"><p class="callout warning" x-text="w"></p></template>
+              <h3>Step-by-Step Instructions</h3>
+              <ul><template x-for="s in res.backdoor.steps" :key="s"><li x-text="s"></li></template></ul>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <hr>
+      <h2>BETR &mdash; Break-Even Tax Rate Analysis</h2>
+      <fieldset>
+        <legend>BETR Calculator</legend>
+        <div class="grid3">
+          <label class="fld">Conversion Amount ($) <input type="number" name="conversion_amount" min="1000" step="5000" x-model.number="betr.conversion_amount"></label>
+          <label class="fld">Traditional IRA Balance ($) <input type="number" name="betr_trad_balance" min="1000" step="10000" x-model.number="betr.trad_balance"></label>
+          <label class="fld">Nontaxable Basis ($) <input type="number" name="betr_basis" min="0" step="1000" x-model.number="betr.basis"></label>
+          <label class="fld">Current Marginal Rate: <strong x-text="betr.current_rate + '%'"></strong>
+            <input type="range" name="betr_current_rate" min="10" max="37" step="1" x-model.number="betr.current_rate"></label>
+          <label class="fld">Expected Future Rate: <strong x-text="betr.future_rate + '%'"></strong>
+            <input type="range" name="betr_future_rate" min="10" max="37" step="1" x-model.number="betr.future_rate"></label>
+          <label class="fld">Expected Annual Return: <strong x-text="betr.annual_return + '%'"></strong>
+            <input type="range" name="betr_return" min="2" max="12" step="1" x-model.number="betr.annual_return"></label>
+          <label class="fld">Years to Withdrawal <input type="number" name="betr_years" min="1" max="40" x-model.number="betr.years"></label>
+          <div class="fld">Pay Conversion Tax From
+            <label class="check"><input type="radio" name="betr_pay" :value="true" @change="betr.pay_from_taxable = true" :checked="betr.pay_from_taxable"> Taxable Account</label>
+            <label class="check"><input type="radio" name="betr_pay" :value="false" @change="betr.pay_from_taxable = false" :checked="!betr.pay_from_taxable"> IRA Assets</label>
+          </div>
+          <label class="fld">Taxable Account Balance ($) <input type="number" name="betr_taxable" min="0" step="10000" x-model.number="betr.taxable_balance"></label>
+        </div>
+        <button type="button" class="primary" id="run-betr" @click="run('betr')" :disabled="!!busy.betr">Calculate BETR</button>
+      </fieldset>
+      <p class="error" x-show="err.betr" x-text="err.betr"></p>
+      <template x-if="res.betr">
+        <div id="betr-result">
+          <p class="callout success" x-show="res.betr.conversion_recommended">
+            <strong>Conversion Recommended</strong> &mdash; Future Rate (<span x-text="pct0(res.betr.future_rate)"></span>) &gt; BETR (<span x-text="pct1(res.betr.betr)"></span>).</p>
+          <p class="callout warning" x-show="!res.betr.conversion_recommended">
+            <strong>Conversion May Not Be Optimal</strong> &mdash; Future Rate (<span x-text="pct0(res.betr.future_rate)"></span>) &le; BETR (<span x-text="pct1(res.betr.betr)"></span>).</p>
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label">BETR</div><div class="kpi-value" x-text="pct1(res.betr.betr)"></div>
+              <div class="kpi-delta" :class="res.betr.conversion_recommended ? 'up' : 'down'" x-text="pct1(res.betr.future_rate - res.betr.betr) + ' headroom vs future'"></div></div>
+            <div class="kpi"><div class="kpi-label">Conversion Tax</div><div class="kpi-value" x-text="fmt0(res.betr.conversion_tax)"></div></div>
+            <div class="kpi"><div class="kpi-label">Roth Future Value</div><div class="kpi-value" x-text="fmt0(res.betr.roth_future_value)"></div></div>
+            <div class="kpi"><div class="kpi-label">Net Benefit</div><div class="kpi-value" :class="res.betr.net_benefit > 0 ? 'up' : 'down'" x-text="fmt0(res.betr.net_benefit)"></div></div>
+          </div>
+          <div id="chart-betr" class="chart"></div>
+          <template x-for="n in res.betr.analysis_notes" :key="n"><p class="muted small" x-text="n"></p></template>
+        </div>
+      </template>
+
+      <hr>
+      <h2>Mega Backdoor Roth (401k After-Tax)</h2>
+      <fieldset>
+        <legend>Mega Backdoor Roth Calculator</legend>
+        <div class="grid3">
+          <label class="fld">Tax Year
+            <select name="mbr_year" x-model.number="mega.year">
+              <template x-for="y in yearRange(3)" :key="y"><option :value="y" :selected="y === mega.year" x-text="y"></option></template>
+            </select>
+          </label>
+          <label class="fld">Your Age <input type="number" name="mbr_age" min="18" max="80" x-model.number="mega.age"></label>
+          <label class="fld">Employee 401(k) Contribution ($) <input type="number" name="employee_deferral" min="0" step="500" x-model.number="mega.employee_deferral"></label>
+          <label class="fld">Employer Match ($) <input type="number" name="employer_match" min="0" step="500" x-model.number="mega.employer_match"></label>
+          <label class="check"><input type="checkbox" name="plan_allows_after_tax" x-model="mega.plan_allows_after_tax"> Plan allows after-tax contributions?</label>
+          <label class="check"><input type="checkbox" name="plan_allows_in_plan_conversion" x-model="mega.plan_allows_in_plan_conversion"> Plan allows in-service withdrawals?</label>
+        </div>
+        <p class="muted small">The after-tax contribution is computed as the room left under the 415(c) limit.</p>
+        <button type="button" class="primary" id="run-mega" @click="run('mega')" :disabled="!!busy.mega">Analyze Mega Backdoor Roth</button>
+      </fieldset>
+      <p class="error" x-show="err.mega" x-text="err.mega"></p>
+      <template x-if="res.mega">
+        <div id="mega-result">
+          <p class="callout info" x-show="!res.mega.eligible && res.mega.ineligible_reason" x-text="res.mega.ineligible_reason"></p>
+          <template x-if="res.mega.eligible || !res.mega.ineligible_reason">
+            <div>
+              <div class="kpis">
+                <div class="kpi"><div class="kpi-label">After-Tax Contribution</div><div class="kpi-value" x-text="fmt0(res.mega.after_tax_contribution)"></div></div>
+                <div class="kpi"><div class="kpi-label">In-Plan Conversion</div><div class="kpi-value" x-text="fmt0(res.mega.in_plan_conversion)"></div></div>
+                <div class="kpi"><div class="kpi-label">Rollover to Roth IRA</div><div class="kpi-value" x-text="fmt0(res.mega.rollover_to_roth_ira)"></div></div>
+                <div class="kpi"><div class="kpi-label">Net Benefit</div><div class="kpi-value" x-text="fmt0(res.mega.net_benefit)"></div></div>
+              </div>
+              <h3>Step-by-Step Instructions</h3>
+              <ul><template x-for="s in res.mega.steps" :key="s"><li x-text="s"></li></template></ul>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ───────────── NUA ───────────── -->
+    <section class="panel" x-show="tab === 'nua'" id="panel-nua">
+      <h2>Net Unrealized Appreciation (NUA)</h2>
+      <details @toggle="loadGuide('nua', $event)">
+        <summary>Strategy: Why Use NUA?</summary>
+        <div class="guide" x-html="guides.nua || 'Loading...'"></div>
+      </details>
+      <fieldset>
+        <legend>NUA Calculator</legend>
+        <div class="grid3">
+          <label class="fld">Cost Basis of Employer Stock ($) <input type="number" name="cost_basis" min="0" step="5000" x-model.number="nua.cost_basis"></label>
+          <label class="fld">Current Market Value ($) <input type="number" name="current_value" min="0" step="10000" x-model.number="nua.current_value"></label>
+          <label class="fld">Years to Hold After Distribution <input type="number" name="nua_years" min="0" max="30" x-model.number="nua.years"></label>
+          <label class="fld">Ordinary Income Rate: <strong x-text="nua.ordinary_rate + '%'"></strong>
+            <input type="range" name="nua_ordinary" min="10" max="37" step="1" x-model.number="nua.ordinary_rate"></label>
+          <label class="fld">LTCG Rate: <strong x-text="nua.ltcg_rate + '%'"></strong>
+            <input type="range" name="nua_ltcg" min="0" max="20" step="1" x-model.number="nua.ltcg_rate"></label>
+        </div>
+        <button type="button" class="primary" id="run-nua" @click="run('nua')" :disabled="!!busy.nua">Analyze NUA Strategy</button>
+      </fieldset>
+      <p class="error" x-show="err.nua" x-text="err.nua"></p>
+      <template x-if="res.nua">
+        <div id="nua-result">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label">NUA Amount</div><div class="kpi-value" x-text="fmt0(res.nua.nua_amount)"></div></div>
+            <div class="kpi"><div class="kpi-label">NUA Tax Savings</div><div class="kpi-value" x-text="fmt0(res.nua.tax_savings)"></div></div>
+            <div class="kpi"><div class="kpi-label">Recommendation</div><div class="kpi-value small-value" x-text="res.nua.strategy_recommended ? 'Use NUA' : 'Roll Over Instead'"></div></div>
+          </div>
+          <h3>NUA vs. Rollover Comparison</h3>
+          <div id="chart-nua" class="chart"></div>
+          <template x-if="res.nua.notes.length">
+            <div><h3>Analysis Notes</h3>
+              <template x-for="n in res.nua.notes" :key="n"><p class="muted small" x-text="n"></p></template></div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ───────────── QCD ───────────── -->
+    <section class="panel" x-show="tab === 'qcd'" id="panel-qcd">
+      <h2>Qualified Charitable Distribution (QCD) Optimizer</h2>
+      <details @toggle="loadGuide('qcd', $event)">
+        <summary>Strategy: Why Use QCD?</summary>
+        <div class="guide" x-html="guides.qcd || 'Loading...'"></div>
+      </details>
+      <p class="muted">QCDs allow IRA owners age 70&frac12;+ to donate up to $105,000/year directly from an IRA, satisfying RMDs tax-free.</p>
+      <fieldset>
+        <legend>QCD Calculator</legend>
+        <div class="grid3">
+          <label class="fld">Your Age <input type="number" name="qcd_age" min="70" max="100" x-model.number="qcd.age"></label>
+          <label class="fld">IRA Balance ($) <input type="number" name="ira_balance" min="0" step="10000" x-model.number="qcd.ira_balance"></label>
+          <label class="fld">Annual RMD ($) <input type="number" name="rmd" min="0" step="1000" x-model.number="qcd.rmd"></label>
+          <label class="fld">AGI Before QCD ($) <input type="number" name="qcd_agi" min="0" step="5000" x-model.number="qcd.agi"></label>
+          <label class="fld">Annual Charitable Giving Goal ($) <input type="number" name="charitable_goal" min="0" step="1000" x-model.number="qcd.charitable"></label>
+          <label class="fld">Filing Status
+            <select name="qcd_filing" x-model="qcd.filing_status">
+              <template x-for="f in filings" :key="f"><option :value="f" :selected="f === qcd.filing_status" x-text="f"></option></template>
+            </select>
+          </label>
+          <label class="fld">Marginal Tax Rate: <strong x-text="qcd.marginal_rate + '%'"></strong>
+            <input type="range" name="qcd_rate" min="10" max="37" step="1" x-model.number="qcd.marginal_rate"></label>
+          <label class="fld">Tax Year
+            <select name="qcd_year" x-model.number="qcd.year">
+              <template x-for="y in yearRange(3)" :key="y"><option :value="y" :selected="y === qcd.year" x-text="y"></option></template>
+            </select>
+          </label>
+        </div>
+        <button type="button" class="primary" id="run-qcd" @click="run('qcd')" :disabled="!!busy.qcd">Optimize QCD Strategy</button>
+      </fieldset>
+      <p class="error" x-show="err.qcd" x-text="err.qcd"></p>
+      <template x-if="res.qcd">
+        <div id="qcd-result">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label">QCD Amount</div><div class="kpi-value" x-text="fmt0(res.qcd.qcd_amount)"></div></div>
+            <div class="kpi"><div class="kpi-label">Tax Savings</div><div class="kpi-value" x-text="fmt0(res.qcd.tax_savings)"></div></div>
+            <div class="kpi"><div class="kpi-label">AGI Reduction</div><div class="kpi-value" x-text="fmt0(res.qcd.agi_reduction)"></div></div>
+            <div class="kpi"><div class="kpi-label">QCD Advantage</div><div class="kpi-value" x-text="fmt0(res.qcd.qcd_advantage)"></div></div>
+          </div>
+          <template x-if="res.qcd.notes.length">
+            <div><h3>Analysis Notes</h3>
+              <template x-for="n in res.qcd.notes" :key="n"><p class="muted small" x-text="n"></p></template></div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ───────────── SEPP ───────────── -->
+    <section class="panel" x-show="tab === 'sepp'" id="panel-sepp">
+      <h2>72(t) SEPP Calculator</h2>
+      <details @toggle="loadGuide('sepp', $event)">
+        <summary>Strategy: Why Use 72(t) SEPP?</summary>
+        <div class="guide" x-html="guides.sepp || 'Loading...'"></div>
+      </details>
+      <p class="muted">Substantially Equal Periodic Payments allow penalty-free IRA withdrawals before age 59&frac12;.</p>
+      <fieldset>
+        <legend>SEPP Calculator</legend>
+        <div class="grid3">
+          <label class="fld">IRA Balance ($) <input type="number" name="sepp_balance" min="1000" step="10000" x-model.number="sepp.balance"></label>
+          <label class="fld">Current Age <input type="number" name="sepp_age" min="18" max="58" x-model.number="sepp.age"></label>
+          <label class="fld">SEPP Method
+            <select name="sepp_method" x-model="sepp.method">
+              <template x-for="m in (meta ? meta.sepp_methods : [])" :key="m"><option :value="m" :selected="m === sepp.method" x-text="m"></option></template>
+            </select>
+          </label>
+          <label class="fld">Interest Rate: <strong x-text="sepp.rate.toFixed(1) + '%'"></strong>
+            <input type="range" name="sepp_rate" min="0.5" max="10" step="0.1" x-model.number="sepp.rate"></label>
+          <label class="fld">Marginal Tax Rate: <strong x-text="sepp.marginal_rate + '%'"></strong>
+            <input type="range" name="sepp_marginal" min="10" max="37" step="1" x-model.number="sepp.marginal_rate"></label>
+        </div>
+        <button type="button" class="primary" id="run-sepp" @click="run('sepp')" :disabled="!!busy.sepp">Calculate SEPP</button>
+      </fieldset>
+      <p class="error" x-show="err.sepp" x-text="err.sepp"></p>
+      <template x-if="res.sepp">
+        <div id="sepp-result">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label">Annual SEPP Payment</div><div class="kpi-value" x-text="fmt0(res.sepp.annual_payment)"></div></div>
+            <div class="kpi"><div class="kpi-label">Monthly Payment</div><div class="kpi-value" x-text="fmt0(res.sepp.monthly_payment)"></div></div>
+            <div class="kpi"><div class="kpi-label">Est. Annual Tax</div><div class="kpi-value" x-text="fmt0(res.sepp.estimated_annual_tax)"></div></div>
+            <div class="kpi"><div class="kpi-label">Years Required</div><div class="kpi-value" x-text="res.sepp.years_required"></div></div>
+          </div>
+          <template x-for="w in res.sepp.warnings" :key="w"><p class="callout warning" x-text="w"></p></template>
+          <template x-if="res.sepp.notes.length">
+            <div><h3>Important Notes</h3>
+              <template x-for="n in res.sepp.notes" :key="n"><p class="muted small" x-text="n"></p></template></div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ───────────── Loss harvesting ───────────── -->
+    <section class="panel" x-show="tab === 'harvest'" id="panel-harvest">
+      <h2>Multi-Year Capital Loss Harvesting Plan</h2>
+      <details @toggle="loadGuide('harvest', $event)">
+        <summary>Strategy: Why Use Capital Loss Harvesting?</summary>
+        <div class="guide" x-html="guides.harvest || 'Loading...'"></div>
+      </details>
+      <p class="muted">Model how harvesting unrealized losses in your brokerage account reduces taxes over multiple years.</p>
+      <fieldset>
+        <legend>Plan inputs</legend>
+        <div class="grid3">
+          <label class="fld">Annual Ordinary Income ($) <input type="number" name="hlv_income" min="0" step="5000" x-model.number="harvest.income"></label>
+          <label class="fld">Total Unrealized Losses ($) <input type="number" name="unrealized_losses" min="0" step="5000" x-model.number="harvest.unrealized_losses"></label>
+          <label class="fld">Filing Status
+            <select name="hlv_filing" x-model="harvest.filing_status">
+              <template x-for="f in filings" :key="f"><option :value="f" :selected="f === harvest.filing_status" x-text="f"></option></template>
+            </select>
+          </label>
+          <label class="fld">Start Year
+            <select name="hlv_start_year" x-model.number="harvest.start_year">
+              <template x-for="y in yearRange(3)" :key="y"><option :value="y" :selected="y === harvest.start_year" x-text="y"></option></template>
+            </select>
+          </label>
+          <label class="fld">Planning Window (years): <strong x-text="harvest.window"></strong>
+            <input type="range" name="hlv_window" min="1" max="10" step="1" x-model.number="harvest.window"></label>
+        </div>
+        <button type="button" class="primary" id="run-harvest" @click="run('harvest')" :disabled="!!busy.harvest">Build Loss Harvesting Plan</button>
+      </fieldset>
+      <p class="error" x-show="err.harvest" x-text="err.harvest"></p>
+      <template x-if="res.harvest">
+        <div id="harvest-result">
+          <div class="kpis">
+            <div class="kpi"><div class="kpi-label" x-text="`Total Tax Savings (${res.harvest.window}yr)`"></div><div class="kpi-value" x-text="fmt0(res.harvest.total_tax_savings)"></div></div>
+            <div class="kpi"><div class="kpi-label">Years Planned</div><div class="kpi-value" x-text="res.harvest.years_planned"></div></div>
+            <div class="kpi"><div class="kpi-label">Positions with Losses</div><div class="kpi-value" x-text="res.harvest.positions"></div></div>
+          </div>
+          <h3>Year-by-Year Harvesting Plan</h3>
+          <table id="harvest-table">
+            <thead><tr><th>Year</th><th class="num">Losses Harvested</th><th class="num">Tax Savings</th><th class="num">Carryforward</th></tr></thead>
+            <tbody><template x-for="r in res.harvest.rows" :key="r.year">
+              <tr><td x-text="r.year"></td><td class="num" x-text="fmt0(r.harvested)"></td><td class="num" x-text="fmt0(r.tax_savings)"></td><td class="num" x-text="fmt0(r.carryforward)"></td></tr>
+            </template></tbody>
+          </table>
+          <div id="chart-harvest" class="chart"></div>
+          <template x-if="res.harvest.notes.length">
+            <div><h3>Notes</h3>
+              <template x-for="n in res.harvest.notes" :key="n"><p class="muted small" x-text="n"></p></template></div>
+          </template>
+        </div>
+      </template>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,6 +1,5 @@
 import dataclasses
 import typing
-import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
@@ -9,6 +8,7 @@ import os
 from load_data import load_ssi_data,get_annual_ssi_data,get_std_deduction, get_income_tax_brackets,get_networth_by_month
 from calculations import calculate_taxable_income, calculate_std_deduction,get_rmd_value
 from config import get_config_manager
+from app_state import session
 from ssi_calculator import generate_ssi_schedule_from_config
 
 # Configure logging to match calculations.py pattern
@@ -323,7 +323,7 @@ class SimulationConfig:
     """
     Immutable snapshot of all configuration and session-state values needed
     by the simulation loop.  Separating config-reading from simulation logic
-    makes each unit independently testable without mocking st.session_state.
+    makes each unit independently testable without mocking session state.
     """
     expenses: float
     rate: float           # growth multiplier, e.g. 1.07 for 7 %
@@ -380,10 +380,10 @@ def _initialize_simulation_config() -> SimulationConfig:
     personal  = _read_personal_config(get_config_manager())
     portfolio = _load_portfolio_data(current_month, current_year)
 
-    expenses           = float(st.session_state.get("EXPENSE", "50000") or "50000")
-    rate               = 1 + float(st.session_state.get("RATE", "6.0") or "6.0") / 100
+    expenses           = float(session().get("EXPENSE", "50000") or "50000")
+    rate               = 1 + float(session().get("RATE", "6.0") or "6.0") / 100
     daf_rate           = 0.25   # hardcoded: 25% annual DAF spend-down (no longer user-configurable)
-    expense_multiplier = int(float(st.session_state.get("EXPENSE_MULTIPLIER", "4") or "4"))
+    expense_multiplier = int(float(session().get("EXPENSE_MULTIPLIER", "4") or "4"))
     planned_dist_2027  = 75000.0  # hardcoded: $75,000 planned 2027 distribution (no longer user-configurable)
 
     return SimulationConfig(

@@ -715,8 +715,8 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             std_deduction_value = None
             
             # Read bracket from income_rates.csv
-            import os as _os
-            _csv_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), 'income_rates.csv')
+            from settings import data_path as _data_path
+            _csv_path = str(_data_path('income_rates.csv'))
             with open(_csv_path) as f:
                 for row in csv.DictReader(f):
                     if (int(row['year']) == year and 
@@ -1232,9 +1232,14 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         already_reserved: float,
     ) -> float:
         """
-        Return the Traditional → Brokerage distribution amount for DAF pre-funding.
+        Return the Traditional → Brokerage distribution amount for pre-funding.
 
-        Fires in every calendar year within [start_year, end_year] inclusive.
+        Two independent sources are added together:
+          • DAF window: ``charitable_giving.daf_trad_prefund_*`` fires in every
+            calendar year within [start_year, end_year] inclusive.
+          • Year schedule: ``tax_strategy.trad_prefund_schedule`` is a list of
+            ``{"year", "amount"}`` rows (e.g. to seed a Direct Indexing portfolio).
+            It does not require a DAF or the window toggle.
         Year-based configuration removes all age/stage inference — what you set
         in the UI is exactly what executes, no conversion needed.
 
@@ -1253,17 +1258,20 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             config_mgr = get_config_manager()
 
             enabled = bool(config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False))
-            if not enabled:
-                return 0.0
-
-            prefund_amount = float(config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0))
             start_year = int(config_mgr.get("charitable_giving", "daf_trad_prefund_start_year", 9999))
             end_year   = int(config_mgr.get("charitable_giving", "daf_trad_prefund_end_year",   0))
 
-            if prefund_amount <= 0:
-                return 0.0
+            window_amount = 0.0
+            if enabled and start_year <= year <= end_year:
+                window_amount = max(0.0, float(config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0)))
 
-            if not (start_year <= year <= end_year):
+            schedule_amount = 0.0
+            for row in config_mgr.get("tax_strategy", "trad_prefund_schedule", []) or []:
+                if int(row.get("year", 0)) == year:
+                    schedule_amount += max(0.0, float(row.get("amount", 0) or 0))
+
+            prefund_amount = window_amount + schedule_amount
+            if prefund_amount <= 0:
                 return 0.0
 
             # Cap to Traditional balance available after normal buffer needs
@@ -1278,23 +1286,28 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 return 0.0
 
             logger.info(
-                f"Year {year}: DAF Trad→Brok pre-fund: ${actual_amount:,.0f} "
-                f"(year window {start_year}–{end_year}, age {age_primary})"
+                f"Year {year}: Trad→Brok pre-fund: ${actual_amount:,.0f} "
+                f"(DAF window ${window_amount:,.0f}, scheduled ${schedule_amount:,.0f}, age {age_primary})"
             )
+            sources = []
+            if window_amount > 0:
+                sources.append(f'DAF pre-fund window {start_year}–{end_year} (${window_amount:,.0f})')
+            if schedule_amount > 0:
+                sources.append(f'your pre-fund schedule for {year} (${schedule_amount:,.0f}, e.g. Direct Indexing seed)')
             self._log_decision(
                 strategy,
                 'tax_strategy',
-                'DAF Traditional → Brokerage Pre-Fund',
+                'Traditional → Brokerage Pre-Fund',
                 f'Distribute ${actual_amount:,.0f} from Traditional → Brokerage',
-                f'Pre-funding Brokerage with a Traditional distribution in {year} '
-                f'(configured window {start_year}–{end_year}) to ensure Brokerage has '
-                f'sufficient liquidity to fund upcoming DAF contributions. '
+                f'Pre-funding Brokerage with a Traditional distribution in {year} from '
+                f'{" and ".join(sources)}, so Brokerage has the cash for DAF contributions '
+                f'and/or a Direct Indexing seed. '
                 f'Roth conversion is suppressed this year; the distribution is taxed '
                 f'as ordinary income.',
                 year=year,
                 prefund_amount=actual_amount,
-                window_start=start_year,
-                window_end=end_year,
+                window_amount=window_amount,
+                schedule_amount=schedule_amount,
             )
             return actual_amount
 

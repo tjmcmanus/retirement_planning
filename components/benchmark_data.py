@@ -27,7 +27,8 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Database path for benchmark cache
-CACHE_DB_PATH = Path(__file__).parent.parent / "data" / "benchmark_cache.db"
+from settings import data_path
+CACHE_DB_PATH = data_path("data", "benchmark_cache.db")
 
 
 class BenchmarkType(Enum):

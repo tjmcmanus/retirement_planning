@@ -26,7 +26,8 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Database path
-DB_PATH = Path(__file__).parent.parent / "data" / "performance_history.db"
+from settings import data_path
+DB_PATH = data_path("data", "performance_history.db")
 
 
 @dataclass

@@ -1,4 +1,5 @@
 import streamlit as st
+import app_cache
 from streamlit_card import card
 import sys
 import os
@@ -62,11 +63,13 @@ def clear_all_cache():
     """Clear all Streamlit cache data and resources."""
     st.cache_data.clear()
     st.cache_resource.clear()
+    app_cache.clear_all()  # data-layer caches (Streamlit-free)
 
 
 def clear_withdrawal_strategy_cache():
     """Clear only withdrawal strategy related cache when expense values change."""
     st.cache_data.clear()
+    app_cache.clear_all()
 
 
 # Keys that require cache clearing when changed

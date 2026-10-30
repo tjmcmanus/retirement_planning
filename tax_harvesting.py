@@ -32,8 +32,9 @@ from typing import Optional, cast
 
 import numpy as np
 import pandas as pd
-import streamlit as st
 
+from app_cache import cache_data
+from app_state import ui_warning
 from load_data import get_cap_gains_brackets, _fetch_current_prices  # noqa: F401
 from portfolio import getPortfolioData
 
@@ -205,7 +206,7 @@ def _resolve_prices(
     failed = [s for s, p in raw.items() if p is None]
     if failed:
         logger.warning("Could not fetch prices for: %s", failed)
-        st.warning(f"Could not fetch prices for: {failed}")
+        ui_warning(f"Could not fetch prices for: {failed}")
     return {
         s: float(p) if p is not None else float(fallback.at[s])
         for s, p in raw.items()
@@ -232,7 +233,7 @@ def _gain_type(days_held: int) -> str:
 # LTCG bracket helpers
 # ---------------------------------------------------------------------------
 
-@st.cache_data(ttl=3600)
+@cache_data(ttl=3600)
 def get_ltcg_rate_for_income(agi: float, year: int) -> float:
     """
     Return the applicable LTCG rate (0.0, 0.15, or 0.20) for a given AGI and year.
@@ -247,7 +248,7 @@ def get_ltcg_rate_for_income(agi: float, year: int) -> float:
     return 0.20
 
 
-@st.cache_data(ttl=3600)
+@cache_data(ttl=3600)
 def get_ltcg_zero_threshold(year: int) -> float:
     """Return the upper income limit for the 0% LTCG bracket."""
     brackets = cast(pd.DataFrame, get_cap_gains_brackets(year))
@@ -298,7 +299,7 @@ def _enrich_with_prices(
     return df
 
 
-@st.cache_data(ttl=300)
+@cache_data(ttl=300)
 def build_harvesting_analysis(month: int, year: int) -> pd.DataFrame:
     """
     Build a DataFrame of all TAXABLE (Brokerage) holdings with:

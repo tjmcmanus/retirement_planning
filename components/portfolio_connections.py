@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
+
+import app_cache
 import streamlit as st
 
 from portfolio_db import db_load_all, db_upsert, db_overwrite_month, enrich_holdings
@@ -542,6 +544,7 @@ def _merge_synced_holdings(synced_df: pd.DataFrame, month: int, year: int) -> No
             
             # Clear Streamlit cache
             st.cache_data.clear()
+            app_cache.clear_all()
             logger.info("✓ Cleared Streamlit cache")
             
             # Rebuild portfolio display with new data

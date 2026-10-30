@@ -4,6 +4,7 @@ Allows users to view and edit application constants and preferences.
 """
 
 import streamlit as st
+import app_cache
 from datetime import datetime
 import json
 import pandas as pd
@@ -2824,13 +2825,10 @@ with tab4:
             
             with opt_col1:
                 st.subheader(f"{person1_name}'s Profile")
-                person1_birth_year = st.number_input(
-                    "Birth Year",
-                    min_value=1940,
-                    max_value=2010,
-                    value=config_mgr.get("social_security", "person1_birth_year", 1960),
-                    key="person1_birth_year_opt"
-                )
+                # Single birth setting: derived from the Birth Date on the Personal Info tab.
+                person1_birth_year = person1_birth_date.year
+                st.markdown(f"**Birth Year:** {person1_birth_year}")
+                st.caption("Taken from Birth Date on the Personal Info tab.")
                 person1_gender = st.selectbox(
                     "Gender",
                     options=['M', 'F'],
@@ -2858,13 +2856,9 @@ with tab4:
             
             with opt_col2:
                 st.subheader(f"{person2_name}'s Profile")
-                person2_birth_year = st.number_input(
-                    "Birth Year",
-                    min_value=1940,
-                    max_value=2010,
-                    value=config_mgr.get("social_security", "person2_birth_year", 1962),
-                    key="person2_birth_year_opt"
-                )
+                person2_birth_year = person2_birth_date.year
+                st.markdown(f"**Birth Year:** {person2_birth_year}")
+                st.caption("Taken from Birth Date on the Personal Info tab.")
                 person2_gender = st.selectbox(
                     "Gender",
                     options=['M', 'F'],
@@ -4323,7 +4317,7 @@ accumulation years, early retirement, or as part of your estate plan.
 
             # ── Optimal bundling suggestion ────────────────────────────────
             # RMD age is birth-year-aware (SECURE 2.0): 73 for born 1951–1959, 75 for born 1960+
-            _p1_birth_year = config_mgr.get("social_security", "person1_birth_year", 1960)
+            _p1_birth_year = person1_birth_date.year
             from strategy_core.stages.stage6_rmd import get_rmd_age as _get_rmd_age
             _rmd_age = _get_rmd_age(_p1_birth_year)
             _giving_years = max(1, daf_contribution_end_year - daf_contribution_start_year)
@@ -4962,6 +4956,7 @@ with tab6:
                 if success:
                     st.success(f"✅ {message}")
                     st.cache_data.clear()
+                    app_cache.clear_all()
                     st.session_state['portfolio_df'] = create_empty_entry_template(entry_month, entry_year)
                     st.session_state.cfg_confirm_scratch = False
                     st.rerun()
@@ -4984,6 +4979,7 @@ with tab6:
                 if success:
                     st.success(f"✅ {message}")
                     st.cache_data.clear()
+                    app_cache.clear_all()
                     _reverted = db_load_all()
                     st.session_state['portfolio_df'] = _reverted if not _reverted.empty else create_empty_entry_template(entry_month, entry_year)
                     st.session_state.cfg_confirm_revert = False
@@ -5666,14 +5662,20 @@ with tab10:
                 "person2_ssi_amount": st.session_state.get("person2_ssi_amount",
                     config_mgr.get("social_security", "person2_ssi_amount", 0)),
                 # SS Optimization fields
-                "person1_birth_year": st.session_state.get("person1_birth_year_opt", 1960),
-                "person1_gender": st.session_state.get("person1_gender_opt", 'M'),
-                "person1_life_expectancy": st.session_state.get("person1_life_exp_opt", 84),
-                "person1_current_earnings": st.session_state.get("person1_earnings_opt", 0),
-                "person2_birth_year": st.session_state.get("person2_birth_year_opt", 1962),
-                "person2_gender": st.session_state.get("person2_gender_opt", 'F'),
-                "person2_life_expectancy": st.session_state.get("person2_life_exp_opt", 87),
-                "person2_current_earnings": st.session_state.get("person2_earnings_opt", 0),
+                # Fall back to the saved value (not a hardcoded default) if a widget key is absent.
+                # Birth year is not stored here; it is derived from personal_info birth dates.
+                "person1_gender": st.session_state.get("person1_gender_opt",
+                    config_mgr.get("social_security", "person1_gender", 'M')),
+                "person1_life_expectancy": st.session_state.get("person1_life_exp_opt",
+                    config_mgr.get("social_security", "person1_life_expectancy", 84)),
+                "person1_current_earnings": st.session_state.get("person1_earnings_opt",
+                    config_mgr.get("social_security", "person1_current_earnings", 0)),
+                "person2_gender": st.session_state.get("person2_gender_opt",
+                    config_mgr.get("social_security", "person2_gender", 'F')),
+                "person2_life_expectancy": st.session_state.get("person2_life_exp_opt",
+                    config_mgr.get("social_security", "person2_life_expectancy", 87)),
+                "person2_current_earnings": st.session_state.get("person2_earnings_opt",
+                    config_mgr.get("social_security", "person2_current_earnings", 0)),
             })
             
             config_mgr.update_section("income", {
@@ -5870,6 +5872,17 @@ with tab10:
         
         if st.button("♻️ Reload from File", width='stretch'):
             reload_config()
+            # Keyed widgets keep their old value across reruns, so without this the next
+            # "Save All Changes" would write the stale widget values back over the file.
+            # Drop this page's widget keys so every widget re-reads the reloaded config.
+            import re as _re
+            from pathlib import Path as _Path
+            _src = _Path(__file__).read_text(encoding="utf-8")
+            _widget_keys = set(_re.findall(r'key\s*=\s*"([^"]+)"', _src))
+            _widget_prefixes = ("p1_cond_", "p2_cond_", "del_re_")  # f-string keys
+            for _k in list(st.session_state.keys()):
+                if _k in _widget_keys or _k.startswith(_widget_prefixes):
+                    del st.session_state[_k]
             st.success("Configuration reloaded from file. Please refresh the page.")
             st.rerun()
     

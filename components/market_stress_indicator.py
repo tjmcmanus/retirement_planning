@@ -19,7 +19,6 @@ from datetime import datetime
 from typing import Optional
 
 import requests
-import streamlit as st
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +148,9 @@ def render_stress_indicator_card() -> None:
     
     Displays current market stress level with actionable recommendations.
     """
+    # Imported here so the fetch/level helpers above can be used without Streamlit (the API service).
+    import streamlit as st
+
     st.caption("Real-time market stress monitoring powered by EventHorizonIQ")
     
     # Fetch stress data

@@ -1,0 +1,51 @@
+# Run with:  ./start.sh      (or: podman compose up -d --build)
+# Requires a .env file (see .env.example). Data persists in the retirement_data volume.
+name: retirement-planning
+
+services:
+  # HTML front end + JSON API (FastAPI). http://localhost:8000
+  web:
+    build: .
+    image: retirement-planning:local
+    command: ["uvicorn", "app.main:app", "--app-dir", "/app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - retirement_data:/data
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Legacy Streamlit UI. Same data volume. http://localhost:8501
+  streamlit:
+    build: .
+    image: retirement-planning:local
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      # Localhost only: this app holds sensitive financial data and has no login.
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - retirement_data:/data
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  retirement_data:

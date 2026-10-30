@@ -1,0 +1,1573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portfolio Hub - Retirement Planner</title>
+  <link rel="stylesheet" href="/vendor/tabulator_simple-6.3.1.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/vendor/tabulator-6.3.1.min.js"></script>
+  <script defer src="/static/portfolio.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="hub()" x-init="init()" @beforeunload.window="if (dirty) { $event.preventDefault(); $event.returnValue = ''; }">
+  <header>
+    <h1>Portfolio Hub</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="msg warn" x-show="meta && meta.stale" x-cloak>
+      No portfolio data found for <span x-text="meta && meta.stale && meta.stale.requested"></span>.
+      Showing <strong x-text="meta && meta.stale && meta.stale.showing"></strong> data instead. Please update your portfolio data.
+    </p>
+    <p class="error" x-show="metaError" x-text="metaError"></p>
+
+    <div class="tabs" role="tablist">
+      <template x-for="t in tabs" :key="t.key">
+        <button role="tab" :class="{active: tab === t.key}" @click="openTab(t.key)">
+          <span x-text="t.label"></span><span class="dot" x-show="t.key === 'holdings' && dirty" x-cloak title="Unsaved changes"></span>
+        </button>
+      </template>
+    </div>
+
+    <!-- ===================================================================== Overview -->
+    <div x-show="tab === 'overview'">
+      <p class="muted" x-show="ov.loading">Loading overview (live prices can take a minute)...</p>
+      <p class="error" x-show="ov.error" x-text="ov.error"></p>
+
+      <template x-if="ov.data">
+        <div>
+          <section>
+            <h2>Portfolio Summary</h2>
+            <div class="kpis">
+              <div class="kpi"><div class="kpi-label">Total Portfolio Value</div>
+                <div class="kpi-value" x-text="usd(ov.data.kpis.total_value)"></div></div>
+              <div class="kpi"><div class="kpi-label">Month Change</div>
+                <div class="kpi-value" x-text="usd(Math.abs(ov.data.kpis.month_change.amount))"></div>
+                <div class="kpi-delta" :class="ov.data.kpis.month_change.amount >= 0 ? 'up' : 'down'"
+                     x-text="(ov.data.kpis.month_change.amount >= 0 ? '▲ ' : '▼ ') + signedPct(ov.data.kpis.month_change.percent)"></div></div>
+              <div class="kpi"><div class="kpi-label">YTD Return</div>
+                <div class="kpi-value" x-text="usd(Math.abs(ov.data.kpis.ytd.amount))"></div>
+                <div class="kpi-delta" :class="ov.data.kpis.ytd.amount >= 0 ? 'up' : 'down'"
+                     x-text="(ov.data.kpis.ytd.amount >= 0 ? '▲ ' : '▼ ') + signedPct(ov.data.kpis.ytd.percent)"></div></div>
+              <div class="kpi"><div class="kpi-label" title="(Roth + Taxable Brokerage) / Total Portfolio">Tax Efficiency</div>
+                <div class="kpi-value" x-text="ov.data.kpis.tax_efficiency.score.toFixed(0) + '%'"></div>
+                <div class="kpi-delta" :class="ov.data.kpis.tax_efficiency.score >= 40 ? 'up' : 'down'" x-text="ov.data.kpis.tax_efficiency.label"></div></div>
+            </div>
+          </section>
+
+          <section>
+            <h2>Portfolio Tax Efficiency</h2>
+            <p class="muted small">Measures how much of your portfolio is in tax-flexible accounts (Roth + Taxable Brokerage).
+              Higher scores provide more flexibility for tax planning and withdrawals.</p>
+            <div class="kpis">
+              <div class="kpi"><div class="kpi-label">Portfolio Tax Efficiency Score</div>
+                <div class="kpi-value small-value" x-text="ov.data.tax.score.toFixed(0) + '%'"></div>
+                <div class="kpi-delta muted" x-text="ov.data.tax.label"></div></div>
+              <div class="kpi"><div class="kpi-label" title="Roth / (Roth + Traditional)">Roth Ratio</div>
+                <div class="kpi-value small-value" x-text="ov.data.tax.roth_ratio.toFixed(0) + '%'"></div></div>
+              <div class="kpi"><div class="kpi-label">Tax-Deferred (Trad)</div>
+                <div class="kpi-value small-value" x-text="usd(ov.data.tax.traditional)"></div></div>
+              <div class="kpi"><div class="kpi-label">Tax-Free (Roth)</div>
+                <div class="kpi-value small-value" x-text="usd(ov.data.tax.roth)"></div></div>
+            </div>
+            <template x-if="ov.data.tax.recommendations.length">
+              <details>
+                <summary x-text="ov.data.tax.recommendations.length + ' recommendation(s) to improve tax efficiency'"></summary>
+                <ul>
+                  <template x-for="r in ov.data.tax.recommendations" :key="r.title">
+                    <li><strong x-text="r.title"></strong> <span x-text="r.detail"></span></li>
+                  </template>
+                </ul>
+                <p class="muted small">Tax diversification spreads risk across tax treatments. Roth accounts give tax-free
+                  withdrawals and no RMDs. Taxable brokerage enables tax-loss harvesting and flexible access. Traditional
+                  accounts give an upfront deduction but create RMDs at age 73.</p>
+              </details>
+            </template>
+            <p class="callout success" x-show="!ov.data.tax.recommendations.length">Your portfolio tax efficiency is well-balanced.</p>
+          </section>
+
+          <section>
+            <h2>Account &amp; Asset Allocation</h2>
+            <p class="muted" x-show="!ov.data.history">Historical data not available.</p>
+            <div class="cols2" x-show="ov.data.history">
+              <div><h3>Net Worth by Account Type</h3><div id="chart-stacked"></div></div>
+              <div><h3>Current Asset Mix</h3><div id="chart-pie"></div></div>
+            </div>
+          </section>
+
+          <section>
+            <h2>Detailed Portfolio Breakdown</h2>
+            <p class="muted" x-show="tm.loading">Loading holdings with live prices...</p>
+            <p class="error" x-show="tm.error" x-text="tm.error"></p>
+            <p class="muted" x-show="tm.data && !tm.data.ready" x-text="tm.data && tm.data.reason"></p>
+            <div id="chart-treemap" x-show="tm.data && tm.data.ready"></div>
+            <p class="muted small" x-show="tm.data && tm.data.ready && tm.data.excluded > 0"
+               x-text="tm.data && (tm.data.excluded + ' holding(s) with zero/negative value excluded from the chart (e.g., options requiring manual price entry).')"></p>
+          </section>
+
+          <section>
+            <h2>Portfolio Performance vs Benchmark</h2>
+            <p class="muted" x-show="!ov.data.performance">Needs at least 2 months of historical data.</p>
+            <div id="chart-perf" x-show="ov.data.performance"></div>
+          </section>
+
+          <section>
+            <h2>Quick Actions</h2>
+            <div class="actions static">
+              <button @click="openTab('holdings')">Update Holdings</button>
+              <button @click="openTab('rebalancing')">Rebalance</button>
+              <button @click="openTab('harvest')">Harvest Losses</button>
+              <button @click="openTab('performance')">View Analytics</button>
+            </div>
+          </section>
+        </div>
+      </template>
+    </div>
+
+    <!-- ===================================================================== Holdings -->
+    <div x-show="tab === 'holdings'" x-cloak>
+      <section>
+        <h2>Portfolio Holdings Editor</h2>
+        <p class="muted small">Edit holdings inline, then <strong>Save</strong>. Saving replaces the selected month with exactly
+          the rows in the grid (rows you delete are removed), after copying the month to <code>.backups/</code>.</p>
+
+        <div class="actions static">
+          <label>Period
+            <select x-model="periodKey" @change="changePeriod()" :disabled="busy">
+              <template x-for="p in periodOptions" :key="p.key">
+                <option :value="p.key" x-text="p.label"></option>
+              </template>
+            </select>
+          </label>
+          <button @click="addRow()" :disabled="busy || !gridReady">Add row</button>
+          <button @click="copyPrevious()" :disabled="busy">Copy previous month</button>
+          <button @click="reload()" :disabled="busy">Reload</button>
+          <label class="btn-like">Import CSV
+            <input type="file" accept=".csv,text/csv" @change="importCsv($event)" :disabled="busy" hidden>
+          </label>
+          <button @click="downloadCsv()" :disabled="!gridReady">Download CSV</button>
+          <button @click="backupAll()" :disabled="busy">Backup all data</button>
+          <button @click="enrich()" :disabled="busy"
+                  title="Fills blank names and stale sectors (Stock, Mutual Fund, Unknown, blank) from Yahoo Finance">Enrich names &amp; sectors</button>
+        </div>
+
+        <p class="msg" :class="msg.kind" x-show="msg.text" x-text="msg.text" x-cloak></p>
+        <p class="muted" x-show="hold.loading">Loading holdings...</p>
+        <p class="error" x-show="hold.error" x-text="hold.error"></p>
+        <p class="muted" x-show="hold.loaded && summary.rows === 0">No holdings for this month. Use <em>Add row</em> or <em>Copy previous month</em> to get started.</p>
+
+        <div id="grid-holdings" x-show="hold.loaded"></div>
+        <p class="muted small" x-show="hold.loaded">Tab / Enter move between cells. The Market Indicator column is calculated
+          from 10- and 50-week moving averages and is not saved.</p>
+
+        <!-- Validation / save report -->
+        <div class="report" x-show="report.errors.length || report.warnings.length" x-cloak>
+          <template x-if="report.errors.length">
+            <div class="callout error">
+              <strong x-text="report.errors.length + ' error(s)'"></strong>
+              <ul><template x-for="(e, i) in report.errors" :key="'e' + i">
+                <li><a href="#" @click.prevent="focusRow(e.rid)" x-text="'Row ' + e.row + ' (' + e.label + ')'"></a>: <span x-text="e.message"></span></li>
+              </template></ul>
+            </div>
+          </template>
+          <template x-if="report.warnings.length">
+            <div class="callout warning">
+              <strong x-text="report.warnings.length + ' warning(s)'"></strong>
+              <ul><template x-for="(w, i) in report.warnings" :key="'w' + i">
+                <li><a href="#" @click.prevent="focusRow(w.rid)" x-text="'Row ' + w.row + ' (' + w.label + ')'"></a>: <span x-text="w.message"></span></li>
+              </template></ul>
+            </div>
+          </template>
+        </div>
+        <p class="callout success" x-show="report.ok" x-text="report.ok" x-cloak></p>
+
+        <div class="actions">
+          <span :class="dirty ? 'dirty' : 'muted'" x-text="dirty ? 'Unsaved changes (' + summary.rows + ' rows)' : 'No unsaved changes'"></span>
+          <span class="spacer"></span>
+          <button @click="validateRows()" :disabled="busy || !gridReady">Validate</button>
+          <button class="primary" @click="save()" :disabled="busy || !gridReady || !dirty">Save</button>
+        </div>
+
+        <details>
+          <summary>Lookup ticker symbol</summary>
+          <p class="muted small">Validate a ticker with Yahoo Finance and get its name, sector and price.</p>
+          <div class="inp">
+            <input type="text" x-model="lookup.symbol" placeholder="e.g. AAPL, VTI, MF:CASH" @keydown.enter="doLookup()" style="max-width:260px">
+            <button @click="doLookup()" :disabled="lookup.loading">Lookup</button>
+          </div>
+          <template x-if="lookup.result">
+            <div class="callout" :class="lookup.result.valid ? 'success' : 'error'">
+              <template x-if="lookup.result.valid">
+                <div><strong x-text="lookup.result.symbol"></strong> found.<br>
+                  Name: <span x-text="lookup.result.name"></span><br>
+                  Sector: <span x-text="lookup.result.sector || '(none)'"></span><br>
+                  <span x-show="lookup.result.price">Current price: <span x-text="'$' + (lookup.result.price || 0).toFixed(2)"></span></span></div>
+              </template>
+              <span x-show="!lookup.result.valid" x-text="lookup.result.error"></span>
+            </div>
+          </template>
+          <p class="error" x-show="lookup.error" x-text="lookup.error"></p>
+        </details>
+
+        <details>
+          <summary>Data summary</summary>
+          <p>Total holdings: <strong x-text="summary.rows"></strong> &middot; Accounts: <strong x-text="summary.accounts"></strong>
+            &middot; Unique symbols: <strong x-text="summary.symbols"></strong></p>
+          <table class="mini"><tbody>
+            <template x-for="e in summary.byType" :key="e.k"><tr><td x-text="e.k"></td><td x-text="e.n + ' holdings'"></td></tr></template>
+          </tbody></table>
+          <p class="muted small" x-show="summary.byIndicator.length">Market indicators:
+            <template x-for="e in summary.byIndicator" :key="e.k"><span x-text="e.k + ': ' + e.n + ' securities; '"></span></template></p>
+        </details>
+
+        <details>
+          <summary>Market indicator details</summary>
+          <p class="muted" x-show="ind.loading">Calculating market indicators (fetches price history)...</p>
+          <p class="error" x-show="ind.error" x-text="ind.error"></p>
+          <div class="tablewrap" x-show="indRows.length">
+            <table>
+              <thead><tr><th>Symbol</th><th>Signal</th><th>Price</th><th>10-wk MA</th><th>50-wk MA</th><th>Confidence</th><th>Recommendation</th></tr></thead>
+              <tbody>
+                <template x-for="r in indRows" :key="r.symbol">
+                  <tr><td x-text="r.symbol"></td><td><span class="ind" :class="'ind-' + r.condition" x-text="r.label"></span></td>
+                    <td x-text="'$' + r.price.toFixed(2)"></td>
+                    <td x-text="'$' + r.short_ma.toFixed(2) + ' (' + r.short_trend + ')'"></td>
+                    <td x-text="'$' + r.long_ma.toFixed(2) + ' (' + r.long_trend + ')'"></td>
+                    <td x-text="(r.confidence * 100).toFixed(0) + '%'"></td><td x-text="r.recommendation"></td></tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+    </div>
+
+    <!-- ===================================================================== Rebalancing -->
+    <div x-show="tab === 'rebalancing'" x-cloak>
+      <section>
+        <h2>Portfolio Rebalancing</h2>
+        <p class="muted small">Set your target Cash / Bonds / Stocks allocation. The plan shows current drift and
+          prioritised buy/sell actions — tax-advantaged accounts first.</p>
+
+        <p class="error" x-show="rb.error" x-text="rb.error"></p>
+
+        <fieldset>
+          <legend>Target Allocation</legend>
+          <div class="field row-group">
+            <label class="row">
+              <span class="lab">Cash %</span>
+              <span class="inp"><input type="number" min="0" max="100" step="1" x-model.number="rb.cash" @input="rb.result=null"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Bonds %</span>
+              <span class="inp"><input type="number" min="0" max="100" step="1" x-model.number="rb.bonds" @input="rb.result=null"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Stocks %</span>
+              <span class="inp"><input type="number" min="0" max="100" step="1" x-model.number="rb.stocks" @input="rb.result=null"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Drift Threshold %</span>
+              <span class="inp"><input type="number" min="1" max="20" step="1" x-model.number="rb.threshold" @input="rb.result=null"></span>
+            </label>
+          </div>
+          <p class="help muted">Cash + Bonds + Stocks must equal 100. Current total:
+            <strong :class="Math.abs(rb.cash+rb.bonds+rb.stocks-100)>0.01?'error':''">
+              <span x-text="rb.cash+rb.bonds+rb.stocks"></span>%
+            </strong>
+          </p>
+
+          <template x-if="rb.saved">
+            <p class="callout info small">
+              Saved targets: <strong x-text="rb.saved.cash_pct+'% cash, '+rb.saved.bonds_pct+'% bonds, '+rb.saved.stocks_pct+'% stocks'"></strong>
+              (threshold <span x-text="rb.saved.drift_threshold_pct+'%'"></span>) &mdash; last saved <span x-text="rb.saved.last_updated && rb.saved.last_updated.slice(0,10)"></span>
+            </p>
+          </template>
+
+          <div class="actions static">
+            <button class="primary" @click="rbCalculate(false)" :disabled="rb.busy || Math.abs(rb.cash+rb.bonds+rb.stocks-100)>0.01">
+              <span x-text="rb.busy ? 'Calculating…' : 'Calculate rebalancing plan'"></span>
+            </button>
+            <button @click="rbCalculate(true)" :disabled="rb.busy || Math.abs(rb.cash+rb.bonds+rb.stocks-100)>0.01"
+                    title="Calculate and save these targets for reports">
+              Save targets &amp; calculate
+            </button>
+          </div>
+          <p class="msg success" x-show="rb.savedMsg" x-text="rb.savedMsg" x-cloak></p>
+        </fieldset>
+
+        <template x-if="rb.result">
+          <div>
+            <!-- Status banner -->
+            <p class="callout" :class="rb.result.drift_triggered ? 'error' : 'success'" x-text="
+              rb.result.drift_triggered
+                ? 'Rebalancing required — one or more asset classes have drifted more than '+rb.result.drift_threshold_pct+'% from target.'
+                : 'Portfolio is balanced — all asset classes are within '+rb.result.drift_threshold_pct+'% of target.'
+            "></p>
+
+            <!-- Total value + period -->
+            <p class="muted small">Portfolio total: <strong x-text="usd(rb.result.total_portfolio_value)"></strong>
+              &nbsp;&middot;&nbsp; Period: <strong x-text="rbPeriodLabel()"></strong>
+              <template x-if="rb.result.brokerage_cash_pct !== null && !rb.result.brokerage_cash_ok">
+                <span class="error"> &nbsp;&middot;&nbsp; Brokerage cash low (<span x-text="rb.result.brokerage_cash_pct.toFixed(1)+'%'"></span> &lt; 10% target)</span>
+              </template>
+            </p>
+
+            <!-- Asset class KPIs -->
+            <div class="kpis">
+              <template x-for="s in rb.result.summary" :key="s.asset_class">
+                <div class="kpi">
+                  <div class="kpi-label" x-text="s.asset_class"></div>
+                  <div class="kpi-value small-value" x-text="s.current_pct.toFixed(1)+'%'"></div>
+                  <div class="kpi-delta" :class="s.is_drifted ? 'down' : 'up'"
+                       x-text="(s.drift_pct >= 0 ? '+' : '')+s.drift_pct.toFixed(1)+'% vs '+s.target_pct+'% target'"></div>
+                  <div class="muted small" x-text="usd(s.current_value) + (s.delta_value !== 0 ? ' ('+usd(Math.abs(s.delta_value))+' to rebalance)' : '')"></div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Allocation bar chart -->
+            <div id="chart-rebalancing" style="margin:1rem 0"></div>
+
+            <!-- Location issues -->
+            <template x-if="rb.result.location_issues && rb.result.location_issues.length">
+              <details>
+                <summary class="warn" x-text="rb.result.location_issues.length + ' asset-location suggestion(s)'"></summary>
+                <ul>
+                  <template x-for="(iss, i) in rb.result.location_issues" :key="i">
+                    <li x-text="iss"></li>
+                  </template>
+                </ul>
+              </details>
+            </template>
+
+            <!-- Action plan -->
+            <h3>Action Plan <span class="muted small" x-text="'('+rb.result.actions.length+' action'+(rb.result.actions.length!==1?'s':'')+' — tax-advantaged accounts first)'"></span></h3>
+            <template x-if="!rb.result.actions.length">
+              <p class="callout success">No trades required — portfolio is within tolerance.</p>
+            </template>
+            <template x-if="rb.result.actions.length">
+              <div class="rb-actions">
+                <template x-for="a in rb.result.actions" :key="a.priority">
+                  <div class="rb-action" :class="rbActionClass(a)">
+                    <div class="rb-action-header">
+                      <span class="rb-priority" x-text="'#'+a.priority"></span>
+                      <span class="rb-verb" x-text="a.action"></span>
+                      <span class="rb-symbol" x-text="a.symbol || '—'"></span>
+                      <span class="rb-ac muted" x-text="'['+a.asset_class+']'"></span>
+                      <span class="rb-amount" x-text="usd(a.amount)"></span>
+                    </div>
+                    <div class="rb-action-detail muted small">
+                      Account: <strong x-text="a.account"></strong>
+                      &nbsp;&middot;&nbsp; Tax: <span x-text="a.tax_impact"></span>
+                    </div>
+                    <div class="rb-action-rationale small" x-text="a.rationale"></div>
+                    <template x-if="a.location_note">
+                      <div class="rb-action-note muted small" x-text="'💡 '+a.location_note"></div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+      </section>
+    </div>
+
+    <!-- ===================================================================== Optimize -->
+    <div x-show="tab === 'harvest'" x-cloak>
+      <section>
+        <h2>Optimize — Tax Actions</h2>
+        <p class="muted small">Tax-smart moves for your taxable brokerage account: harvest losses/gains and donate
+          appreciated securities to charity via a Donor Advised Fund.</p>
+
+        <!-- Sub-tab switcher -->
+        <div class="sub-tabs" role="tablist">
+          <button role="tab" :class="{active: optSubTab==='harvest'}" @click="optSubTab='harvest'">Tax Harvesting</button>
+          <button role="tab" :class="{active: optSubTab==='daf'}" @click="optSubTab='daf'; dafMaybeInit()">DAF Bundling</button>
+          <button role="tab" :class="{active: optSubTab==='harvsav'}" @click="optSubTab='harvsav'; harvSavLoad()">Harvest Savings</button>
+          <button role="tab" :class="{active: optSubTab==='disetup'}" @click="optSubTab='disetup'">Direct Indexing</button>
+        </div>
+
+        <!-- ---- Tax Harvesting sub-tab ---- -->
+        <div x-show="optSubTab==='harvest'">
+
+        <p class="error" x-show="opt.error" x-text="opt.error"></p>
+
+        <fieldset>
+          <legend>Settings</legend>
+          <div class="field row-group">
+            <label class="row">
+              <span class="lab">Estimated AGI ($)</span>
+              <span class="inp"><input type="number" min="0" max="2000000" step="1000" x-model.number="opt.agi"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Marginal Tax Rate (%)</span>
+              <span class="inp"><input type="number" min="0" max="50" step="1" x-model.number="opt.marginalRate"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Loss Threshold ($)</span>
+              <span class="inp"><input type="number" min="0" max="100000" step="100" x-model.number="opt.lossThreshold"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Gain Threshold ($)</span>
+              <span class="inp"><input type="number" min="0" max="100000" step="100" x-model.number="opt.gainThreshold"></span>
+            </label>
+            <label class="row">
+              <span class="lab">Market Drop Trigger (%)</span>
+              <span class="inp"><input type="number" min="1" max="50" step="1" x-model.number="opt.dropTrigger"
+                title="Flag positions down this % from cost basis"></span>
+            </label>
+          </div>
+          <div class="actions static">
+            <button class="primary" @click="optScan()" :disabled="opt.busy">
+              <span x-text="opt.busy ? 'Scanning (fetching live prices)…' : 'Scan for opportunities'"></span>
+            </button>
+          </div>
+        </fieldset>
+
+        <template x-if="opt.result">
+          <div>
+            <!-- LTCG rate bar -->
+            <div class="kpis">
+              <div class="kpi">
+                <div class="kpi-label">Your LTCG Rate</div>
+                <div class="kpi-value small-value"
+                     :class="opt.result.ltcg.ltcg_rate===0?'up':(opt.result.ltcg.ltcg_rate===0.15?'':'down')"
+                     x-text="(opt.result.ltcg.ltcg_rate*100).toFixed(0)+'%'"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">0% LTCG Threshold</div>
+                <div class="kpi-value small-value" x-text="usd(opt.result.ltcg.zero_threshold)"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Headroom to 0% Rate</div>
+                <div class="kpi-value small-value" x-text="usd(opt.result.ltcg.headroom_to_zero)"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Recommended Strategy</div>
+                <div class="kpi-value small-value" x-text="opt.result.ltcg.strategy"
+                     :class="opt.result.ltcg.ltcg_rate===0?'up':''"></div>
+              </div>
+            </div>
+
+            <!-- No brokerage holdings -->
+            <template x-if="!opt.result.has_holdings">
+              <p class="callout info">No taxable (Brokerage) holdings found for this period. Harvesting only applies to taxable accounts.</p>
+            </template>
+
+            <template x-if="opt.result.has_holdings">
+              <div>
+                <!-- Drop trigger -->
+                <p class="callout" :class="opt.result.drop_trigger.triggered ? 'warning' : 'success'"
+                   x-text="opt.result.drop_trigger.message"></p>
+
+                <!-- Summary KPIs -->
+                <h3>Portfolio Gain / Loss Summary (Brokerage Only)</h3>
+                <div class="kpis">
+                  <div class="kpi">
+                    <div class="kpi-label">Total Unrealized Gains</div>
+                    <div class="kpi-value small-value up" x-text="usd(opt.result.summary.total_unrealized_gain)"></div>
+                  </div>
+                  <div class="kpi">
+                    <div class="kpi-label">Total Unrealized Losses</div>
+                    <div class="kpi-value small-value down" x-text="usd(Math.abs(opt.result.summary.total_unrealized_loss))"></div>
+                  </div>
+                  <div class="kpi">
+                    <div class="kpi-label">Net Unrealized</div>
+                    <div class="kpi-value small-value" :class="opt.result.summary.net_unrealized>=0?'up':'down'"
+                         x-text="usd(opt.result.summary.net_unrealized)"></div>
+                  </div>
+                  <div class="kpi">
+                    <div class="kpi-label">Harvestable Losses</div>
+                    <div class="kpi-value small-value" x-text="usd(Math.abs(opt.result.summary.harvestable_losses))"></div>
+                    <div class="muted small" x-text="opt.result.summary.num_loss_candidates+' candidate(s)'"></div>
+                  </div>
+                  <div class="kpi">
+                    <div class="kpi-label">Harvestable Gains (0%)</div>
+                    <div class="kpi-value small-value up" x-text="usd(opt.result.summary.harvestable_gains_at_zero)"></div>
+                    <div class="muted small" x-text="opt.result.summary.num_gain_candidates+' candidate(s)'"></div>
+                  </div>
+                </div>
+
+                <!-- Tax impact -->
+                <h3>Estimated Tax Impact</h3>
+                <div class="kpis">
+                  <div class="kpi">
+                    <div class="kpi-label">Tax Savings from Losses</div>
+                    <div class="kpi-value small-value up" x-text="usd(opt.result.tax_impact.ordinary_income_savings)"></div>
+                  </div>
+                  <div class="kpi">
+                    <div class="kpi-label">Tax Cost from Gains</div>
+                    <div class="kpi-value small-value" :class="opt.result.tax_impact.tax_on_net_gains>0?'down':''"
+                         x-text="usd(opt.result.tax_impact.tax_on_net_gains)"></div>
+                  </div>
+                  <div class="kpi">
+                    <div class="kpi-label">Net Tax Impact</div>
+                    <div class="kpi-value small-value" :class="opt.result.tax_impact.net_tax_impact>=0?'up':'down'"
+                         x-text="usd(opt.result.tax_impact.net_tax_impact)"></div>
+                  </div>
+                </div>
+
+                <!-- Holdings table -->
+                <h3>Harvesting Recommendations</h3>
+                <div class="tablewrap">
+                  <table>
+                    <thead><tr>
+                      <th>Account</th><th>Symbol</th><th>Name</th><th>Sector</th>
+                      <th class="num">Qty</th><th class="num">Cost</th><th class="num">Price</th>
+                      <th class="num">Value</th><th class="num">G/L $</th><th class="num">G/L %</th>
+                      <th>Days</th><th>Type</th><th>Recommendation</th>
+                    </tr></thead>
+                    <tbody>
+                      <template x-for="(h, i) in opt.result.holdings" :key="i">
+                        <tr :class="optRowClass(h)">
+                          <td x-text="h.account"></td>
+                          <td><code x-text="h.symbol"></code></td>
+                          <td x-text="h.name"></td>
+                          <td x-text="h.sector"></td>
+                          <td class="num" x-text="h.qty.toLocaleString()"></td>
+                          <td class="num" x-text="'$'+h.purchase_price.toFixed(2)"></td>
+                          <td class="num" x-text="'$'+h.current_price.toFixed(2)"></td>
+                          <td class="num" x-text="usd(h.current_value)"></td>
+                          <td class="num" :class="h.unrealized_gl>=0?'up':'down'"
+                              x-text="(h.unrealized_gl>=0?'+':'')+usd(h.unrealized_gl)"></td>
+                          <td class="num" :class="h.return_pct>=0?'up':'down'"
+                              x-text="(h.return_pct>=0?'+':'')+h.return_pct.toFixed(1)+'%'"></td>
+                          <td x-text="h.days_held"></td>
+                          <td x-text="h.gain_type==='Long-Term'?'LT':'ST'"></td>
+                          <td x-text="h.recommendation"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- Replacement suggestions (for harvest candidates only) -->
+                <template x-if="opt.result.holdings.filter(h=>h.recommendation.includes('Harvest')).length">
+                  <div>
+                    <h3>Wash-Sale-Safe Replacement Suggestions</h3>
+                    <p class="muted small">Sell the position, immediately buy the replacement to maintain market
+                      exposure without triggering the wash-sale rule (IRS: no repurchase within 30 days).</p>
+                    <template x-for="(h, i) in opt.result.holdings.filter(h=>h.recommendation.includes('Harvest'))" :key="i">
+                      <details style="margin-bottom:.5rem">
+                        <summary>
+                          <code x-text="h.symbol"></code>
+                          <span class="muted small" x-text="' — '+h.recommendation+' ('+usd(h.unrealized_gl)+')'"></span>
+                        </summary>
+                        <div style="padding:.5rem 1rem">
+                          <p class="muted small" x-text="h.action_detail"></p>
+                          <table class="mini">
+                            <thead><tr><th>Symbol</th><th>Name</th><th>Reason</th></tr></thead>
+                            <tbody>
+                              <template x-for="(r,ri) in h.replacements" :key="ri">
+                                <tr>
+                                  <td><code x-text="r.symbol"></code></td>
+                                  <td x-text="r.name"></td>
+                                  <td class="muted" x-text="r.reason"></td>
+                                </tr>
+                              </template>
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    </template>
+                  </div>
+                </template>
+
+              </div>
+            </template>
+          </div>
+        </template>
+        </div><!-- end harvest sub-tab -->
+
+        <!-- ---- DAF Bundling sub-tab ---- -->
+        <div x-show="optSubTab==='daf'" x-cloak>
+          <p class="muted small">Donate long-term appreciated securities to a Donor Advised Fund instead of cash.
+            You deduct the full fair market value, pay zero capital gains tax, and can grant to any IRS-qualified charity over time.</p>
+
+          <p class="error" x-show="daf.error" x-text="daf.error"></p>
+
+          <fieldset>
+            <legend>Settings</legend>
+            <div class="field row-group">
+              <label class="row">
+                <span class="lab">Estimated AGI ($)</span>
+                <span class="inp"><input type="number" min="0" max="2000000" step="1000" x-model.number="daf.agi"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Annual Charitable Giving ($)</span>
+                <span class="inp"><input type="number" min="0" max="500000" step="500" x-model.number="daf.annualGiving"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Years to Bundle</span>
+                <span class="inp">
+                  <select x-model.number="daf.yearsToBunde">
+                    <option value="2">2 years</option>
+                    <option value="3" selected>3 years</option>
+                    <option value="4">4 years</option>
+                    <option value="5">5 years</option>
+                  </select>
+                </span>
+              </label>
+              <label class="row">
+                <span class="lab">Marginal Tax Rate (%)</span>
+                <span class="inp"><input type="number" min="0" max="50" step="1" x-model.number="daf.marginalRate"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Standard Deduction ($)</span>
+                <span class="inp"><input type="number" min="0" max="100000" step="100" x-model.number="daf.stdDeduction"
+                  title="2026 MFJ standard deduction is approximately $29,200"></span>
+              </label>
+            </div>
+            <div class="actions static">
+              <button class="primary" @click="dafAnalyze()" :disabled="daf.busy">
+                <span x-text="daf.busy ? 'Analysing…' : 'Analyse DAF bundling'"></span>
+              </button>
+            </div>
+          </fieldset>
+
+          <template x-if="daf.result && !daf.result.available">
+            <p class="callout warning" x-text="daf.result.reason"></p>
+          </template>
+
+          <template x-if="daf.result && daf.result.available">
+            <div>
+              <!-- Recommendation banner -->
+              <p class="callout" :class="daf.result.recommendation.startsWith('🟢')?'success':(daf.result.recommendation.startsWith('🟡')?'warning':'info')"
+                 x-text="daf.result.recommendation"></p>
+
+              <!-- Summary KPIs -->
+              <div class="kpis">
+                <div class="kpi">
+                  <div class="kpi-label">Bundled Contribution</div>
+                  <div class="kpi-value small-value" x-text="usd(daf.result.summary.bundled_contribution)"></div>
+                  <div class="muted small" x-text="daf.result.summary.years_to_bundle+' yrs × '+usd(daf.result.summary.annual_giving)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Deductible Amount</div>
+                  <div class="kpi-value small-value" x-text="usd(daf.result.summary.deductible_amount)"></div>
+                  <div class="muted small" x-text="'vs std. deduction '+usd(daf.result.summary.standard_deduction)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Tax Savings vs Std. Deduction</div>
+                  <div class="kpi-value small-value up" x-text="usd(daf.result.summary.tax_savings_vs_standard)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Securities Value to Donate</div>
+                  <div class="kpi-value small-value" x-text="usd(daf.result.summary.total_securities_value)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Capital Gains Tax Avoided</div>
+                  <div class="kpi-value small-value up" x-text="usd(daf.result.summary.total_avoided_cg_tax)"></div>
+                </div>
+                <template x-if="daf.result.summary.carryforward_amount > 0">
+                  <div class="kpi">
+                    <div class="kpi-label">5-Year Carryforward</div>
+                    <div class="kpi-value small-value" x-text="usd(daf.result.summary.carryforward_amount)"></div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- Notes -->
+              <ul class="daf-notes">
+                <template x-for="(n, i) in daf.result.notes" :key="i">
+                  <li x-text="n"></li>
+                </template>
+              </ul>
+
+              <!-- Securities to donate -->
+              <template x-if="daf.result.securities.length">
+                <div>
+                  <h3>Recommended Securities to Donate</h3>
+                  <p class="muted small">Donate these positions to your DAF before selling — you get a full FMV deduction and pay zero capital gains tax.</p>
+                  <div class="tablewrap">
+                    <table>
+                      <thead><tr>
+                        <th>Account</th><th>Symbol</th><th>Name</th>
+                        <th class="num">Qty</th><th class="num">Cost Basis</th>
+                        <th class="num">FMV</th><th class="num">Gain</th>
+                        <th class="num">Gain %</th><th class="num">CG Tax Avoided</th>
+                      </tr></thead>
+                      <tbody>
+                        <template x-for="(s, i) in daf.result.securities" :key="i">
+                          <tr>
+                            <td x-text="s.account"></td>
+                            <td><code x-text="s.symbol"></code></td>
+                            <td x-text="s.name"></td>
+                            <td class="num" x-text="s.qty.toLocaleString()"></td>
+                            <td class="num" x-text="usd(s.cost_basis)"></td>
+                            <td class="num" x-text="usd(s.current_value)"></td>
+                            <td class="num up" x-text="usd(s.unrealized_gain)"></td>
+                            <td class="num" x-text="s.gain_pct.toFixed(1)+'%'"></td>
+                            <td class="num up" x-text="usd(s.avoided_cg_tax)"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </template>
+
+              <!-- All long-term candidates (not all selected) -->
+              <template x-if="daf.result.all_candidates.length > daf.result.securities.length">
+                <details style="margin-top:1rem">
+                  <summary class="muted small">All long-term appreciated holdings
+                    (<span x-text="daf.result.all_candidates.length"></span> total)</summary>
+                  <div class="tablewrap" style="margin-top:.5rem">
+                    <table class="mini">
+                      <thead><tr><th>Symbol</th><th>Name</th><th class="num">FMV</th>
+                        <th class="num">Gain</th><th class="num">Days Held</th><th class="num">CG Tax Avoided</th></tr></thead>
+                      <tbody>
+                        <template x-for="(c, i) in daf.result.all_candidates" :key="i">
+                          <tr>
+                            <td><code x-text="c.symbol"></code></td>
+                            <td x-text="c.name"></td>
+                            <td class="num" x-text="usd(c.current_value)"></td>
+                            <td class="num up" x-text="usd(c.unrealized_gain)"></td>
+                            <td class="num" x-text="c.days_held"></td>
+                            <td class="num up" x-text="usd(c.avoided_cg_tax)"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </template>
+            </div>
+          </template>
+        </div><!-- end DAF sub-tab -->
+
+        <!-- ---- Harvest Savings sub-tab ---- -->
+        <div x-show="optSubTab==='harvsav'" x-cloak>
+          <p class="muted small">Year-to-date summary of realized losses and estimated tax savings from direct-index tax-loss harvesting.</p>
+
+          <div class="field row-group" style="margin-bottom:1rem;">
+            <label class="row">
+              <span class="lab">Tax Year</span>
+              <span class="inp">
+                <select x-model.number="harvSav.year" @change="harvSav.data=null; harvSavLoad()">
+                  <template x-for="y in [new Date().getFullYear(), new Date().getFullYear()-1, new Date().getFullYear()-2]" :key="y">
+                    <option :value="y" x-text="y"></option>
+                  </template>
+                </select>
+              </span>
+            </label>
+          </div>
+
+          <p class="muted" x-show="harvSav.loading">Loading harvest savings&hellip;</p>
+          <p class="error" x-show="harvSav.error" x-text="harvSav.error"></p>
+
+          <div x-show="!harvSav.loading && !harvSav.data && !harvSav.error">
+            <div class="callout info">
+              Harvest Savings tracks executed direct-index tax-loss harvests.
+              This feature requires the <code>tax_savings_tracker</code> module and a running direct-index portfolio.
+              If you&rsquo;re not running a direct-index strategy yet, use the <strong>DI Setup</strong> sub-tab to get started.
+            </div>
+          </div>
+
+          <template x-if="harvSav.data">
+            <div>
+              <div class="kpis">
+                <div class="kpi">
+                  <div class="kpi-label">Total Harvests</div>
+                  <div class="kpi-value" x-text="harvSav.data.summary.total_harvests"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Realized Losses</div>
+                  <div class="kpi-value down" x-text="usd(Math.abs(harvSav.data.summary.total_realized_losses))"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Est. Tax Savings</div>
+                  <div class="kpi-value up" x-text="usd(harvSav.data.summary.total_estimated_savings)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Actual Savings</div>
+                  <div class="kpi-value" x-text="harvSav.data.summary.total_actual_savings > 0 ? usd(harvSav.data.summary.total_actual_savings) : 'TBD'"></div>
+                </div>
+              </div>
+
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">
+                <div>
+                  <h3>By Term</h3>
+                  <table class="mini">
+                    <thead><tr><th>Term</th><th class="num">Losses</th><th class="num">Savings</th></tr></thead>
+                    <tbody>
+                      <tr><td>Short-term</td>
+                        <td class="num down" x-text="usd(Math.abs(harvSav.data.summary.short_term_losses))"></td>
+                        <td class="num up" x-text="usd(harvSav.data.summary.short_term_savings)"></td></tr>
+                      <tr><td>Long-term</td>
+                        <td class="num down" x-text="usd(Math.abs(harvSav.data.summary.long_term_losses))"></td>
+                        <td class="num up" x-text="usd(harvSav.data.summary.long_term_savings)"></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div x-show="Object.keys(harvSav.data.summary.by_account || {}).length">
+                  <h3>By Account</h3>
+                  <table class="mini">
+                    <thead><tr><th>Account</th><th class="num">Harvests</th><th class="num">Savings</th></tr></thead>
+                    <tbody>
+                      <template x-for="[acct, stats] in Object.entries(harvSav.data.summary.by_account || {})" :key="acct">
+                        <tr>
+                          <td x-text="acct"></td>
+                          <td class="num" x-text="stats.harvests"></td>
+                          <td class="num up" x-text="usd(stats.estimated_savings)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <template x-if="harvSav.data.history && harvSav.data.history.length">
+                <div style="margin-top:1rem;">
+                  <h3>Harvest History</h3>
+                  <div class="tablewrap">
+                    <table class="mini">
+                      <thead><tr><th>Date</th><th>Sold</th><th>Bought</th><th class="num">Shares</th>
+                        <th class="num">Realized Loss</th><th class="num">Est. Savings</th></tr></thead>
+                      <tbody>
+                        <template x-for="(r,i) in harvSav.data.history" :key="i">
+                          <tr>
+                            <td x-text="r.harvest_date || ''"></td>
+                            <td><code x-text="r.symbol_sold || ''"></code></td>
+                            <td><code x-text="r.symbol_bought || ''"></code></td>
+                            <td class="num" x-text="(r.shares || 0).toFixed(4)"></td>
+                            <td class="num down" x-text="usd(Math.abs(r.realized_loss || 0))"></td>
+                            <td class="num up" x-text="usd(r.estimated_tax_savings || 0)"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div><!-- end Harvest Savings sub-tab -->
+
+        <!-- ---- DI Setup sub-tab ---- -->
+        <div x-show="optSubTab==='disetup'" x-cloak>
+          <h3 style="margin-bottom:.5rem;">Direct Indexing Setup</h3>
+          <p>Direct Indexing lets you replicate the S&amp;P 500 (RSP equal-weight) by buying individual stocks directly,
+             then harvest tax losses on specific positions. It&rsquo;s a power-user strategy suited to taxable accounts
+             with $100k+ that want to go beyond ETFs.</p>
+
+          <h4 style="margin:.75rem 0 .4rem;">Step 1 &mdash; Generate your initial portfolio</h4>
+          <p>The setup wizard walks you through investment amount, index coverage %, position weighting, and generates
+             a full buy list. Run it once to get started.</p>
+          <p><a class="btn" :href="legacyUrl" target="_blank" rel="noopener">Open Setup Wizard &rarr;</a>
+             <span class="muted small" style="margin-left:.5rem;">Opens Portfolio Hub → Setup &amp; Config tab</span></p>
+
+          <h4 style="margin:.75rem 0 .4rem;">Step 2 &mdash; Configure harvest thresholds</h4>
+          <p>After generating the portfolio, set your loss threshold, replacement strategy, and wash-sale rules in
+             <a href="/settings" @click.prevent="$dispatch('navigate', '/settings#di')"><strong>Settings → Direct Indexing</strong></a>.</p>
+
+          <h4 style="margin:.75rem 0 .4rem;">Step 3 &mdash; Sync &amp; harvest</h4>
+          <p>Sync your executed positions via the <a href="#connections" @click.prevent="openTab('connections')"><strong>Connections</strong></a> tab,
+             then use <strong>Tax Harvesting</strong> (this tab) for ongoing opportunity scanning.</p>
+        </div><!-- end DI Setup sub-tab -->
+
+      </section>
+    </div>
+
+    <!-- ===================================================================== Performance -->
+    <div x-show="tab === 'performance'" x-cloak>
+      <section>
+        <h2>Performance &amp; Analytics</h2>
+        <p class="muted small">Time-weighted returns, risk metrics (Sharpe, Sortino, drawdown), and benchmark comparison
+          using your monthly net-worth history.</p>
+
+        <p class="error" x-show="perf.error" x-text="perf.error"></p>
+
+        <!-- Sub-tab switcher -->
+        <div class="sub-tabs" role="tablist">
+          <button role="tab" :class="{active: perfSubTab==='metrics'}" @click="perfSubTab='metrics'">Metrics</button>
+          <button role="tab" :class="{active: perfSubTab==='factors'}" @click="perfSubTab='factors'; factorsMaybeLoad()">Factors</button>
+        </div>
+
+        <!-- ---- Metrics sub-tab ---- -->
+        <div x-show="perfSubTab==='metrics'">
+        <fieldset>
+          <legend>Settings</legend>
+          <div class="field row-group">
+            <label class="row">
+              <span class="lab">Time Period</span>
+              <span class="inp">
+                <select x-model="perf.period" @change="perf.result=null">
+                  <option value="1y">1 Year</option>
+                  <option value="3y">3 Years</option>
+                  <option value="5y">5 Years</option>
+                  <option value="all" selected>All Time</option>
+                </select>
+              </span>
+            </label>
+            <label class="row">
+              <span class="lab">Benchmark</span>
+              <span class="inp">
+                <select x-model="perf.benchmarkPreset" @change="perf.updateBenchmark()">
+                  <option value="^GSPC">S&amp;P 500 (^GSPC)</option>
+                  <option value="^IXIC">Nasdaq (^IXIC)</option>
+                  <option value="^DJI">Dow Jones (^DJI)</option>
+                  <option value="VTI">Total Stock Market (VTI)</option>
+                  <option value="custom">Custom ticker…</option>
+                </select>
+              </span>
+            </label>
+            <label class="row" x-show="perf.benchmarkPreset === 'custom'">
+              <span class="lab">Custom Ticker</span>
+              <span class="inp"><input type="text" x-model="perf.customTicker" placeholder="e.g. SPY" maxlength="20"
+                @input="perf.benchmark=perf.customTicker"></span>
+            </label>
+          </div>
+          <div class="actions static">
+            <button class="primary" @click="perfLoad()" :disabled="perf.busy">
+              <span x-text="perf.busy ? 'Calculating (fetching benchmark)…' : 'Calculate performance'"></span>
+            </button>
+          </div>
+        </fieldset>
+
+        <template x-if="perf.result && !perf.result.available">
+          <p class="callout warning" x-text="perf.result.reason"></p>
+        </template>
+
+        <template x-if="perf.result && perf.result.available">
+          <div>
+            <p class="muted small">
+              <span x-text="perf.result.data_points"></span> monthly snapshots &nbsp;&middot;&nbsp;
+              <span x-text="perf.result.start_date"></span> → <span x-text="perf.result.end_date"></span>
+              &nbsp;&middot;&nbsp; Benchmark: <strong x-text="perf.result.benchmark"></strong>
+            </p>
+
+            <!-- Row 1: return KPIs -->
+            <div class="kpis">
+              <div class="kpi">
+                <div class="kpi-label">Time-Weighted Return</div>
+                <div class="kpi-value small-value" :class="perf.result.kpis.twr>=0?'up':'down'"
+                     x-text="(perf.result.kpis.twr>=0?'+':'')+perf.result.kpis.twr.toFixed(2)+'%'"></div>
+                <div class="muted small">Eliminates cash-flow timing effects</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Money-Weighted Return</div>
+                <div class="kpi-value small-value" :class="perf.result.kpis.mwr>=0?'up':'down'"
+                     x-text="(perf.result.kpis.mwr>=0?'+':'')+perf.result.kpis.mwr.toFixed(2)+'%'"></div>
+                <div class="muted small">Accounts for contribution timing (IRR)</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Total Return</div>
+                <div class="kpi-value small-value" :class="perf.result.kpis.total_return>=0?'up':'down'"
+                     x-text="(perf.result.kpis.total_return>=0?'+':'')+perf.result.kpis.total_return.toFixed(2)+'%'"></div>
+              </div>
+              <template x-if="perf.result.kpis.benchmark_return !== null">
+                <div class="kpi">
+                  <div class="kpi-label">Benchmark Return</div>
+                  <div class="kpi-value small-value" :class="perf.result.kpis.benchmark_return>=0?'up':'down'"
+                       x-text="(perf.result.kpis.benchmark_return>=0?'+':'')+perf.result.kpis.benchmark_return.toFixed(2)+'%'"></div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Row 2: risk KPIs -->
+            <div class="kpis" style="margin-top:.5rem">
+              <div class="kpi">
+                <div class="kpi-label">Sharpe Ratio</div>
+                <div class="kpi-value small-value" x-text="perf.result.kpis.sharpe.toFixed(2)"></div>
+                <div class="muted small" x-text="perfRatingLabel('sharpe', perf.result.kpis.sharpe)"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Sortino Ratio</div>
+                <div class="kpi-value small-value" x-text="perf.result.kpis.sortino.toFixed(2)"></div>
+                <div class="muted small" x-text="perfRatingLabel('sortino', perf.result.kpis.sortino)"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Max Drawdown</div>
+                <div class="kpi-value small-value down" x-text="perf.result.kpis.max_drawdown.toFixed(2)+'%'"></div>
+                <div class="muted small" x-show="perf.result.drawdown_info.recovery_months"
+                     x-text="perf.result.drawdown_info.recovery_months+' months to recover'"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Volatility (ann.)</div>
+                <div class="kpi-value small-value" x-text="perf.result.kpis.volatility.toFixed(2)+'%'"></div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Alpha</div>
+                <div class="kpi-value small-value" :class="perf.result.kpis.alpha>=0?'up':'down'"
+                     x-text="(perf.result.kpis.alpha>=0?'+':'')+perf.result.kpis.alpha.toFixed(2)+'%'"></div>
+                <div class="muted small">Excess return vs benchmark</div>
+              </div>
+              <div class="kpi">
+                <div class="kpi-label">Beta</div>
+                <div class="kpi-value small-value" x-text="perf.result.kpis.beta.toFixed(2)"></div>
+                <div class="muted small" x-text="perfRatingLabel('beta', perf.result.kpis.beta)"></div>
+              </div>
+            </div>
+
+            <!-- Portfolio vs benchmark chart -->
+            <h3>Portfolio vs Benchmark</h3>
+            <div id="chart-perf-line" style="margin:.5rem 0 1rem"></div>
+
+            <!-- Attribution + risk-return side by side -->
+            <div class="cols2">
+              <div>
+                <h3>Return Attribution</h3>
+                <div id="chart-perf-attr" style="margin:.5rem 0"></div>
+                <p class="muted small">Contribution tracking requires transaction history. Growth is estimated from TWR.</p>
+              </div>
+              <div>
+                <h3>Risk-Return Profile</h3>
+                <div id="chart-perf-rr" style="margin:.5rem 0"></div>
+              </div>
+            </div>
+          </div>
+        </template>
+        </div><!-- end metrics sub-tab -->
+
+        <!-- ---- Factors sub-tab ---- -->
+        <div x-show="perfSubTab==='factors'" x-cloak>
+          <p class="muted small">Factor scores are fetched from Yahoo Finance and cached for 24 hours.
+            ETFs and index funds typically have limited factor data.</p>
+          <p class="error" x-show="fac.error" x-text="fac.error"></p>
+
+          <div class="actions static">
+            <button class="primary" @click="factorsLoad()" :disabled="fac.busy">
+              <span x-text="fac.busy ? 'Fetching factor data (may take 30–60 s on first load)…' : 'Load factor analysis'"></span>
+            </button>
+          </div>
+
+          <template x-if="fac.result && !fac.result.available">
+            <p class="callout warning" x-text="fac.result.reason"></p>
+          </template>
+
+          <template x-if="fac.result && fac.result.available">
+            <div>
+              <p class="muted small">
+                <span x-text="fac.result.analyzed"></span> of <span x-text="fac.result.total"></span> holdings analysed
+                &nbsp;(<span x-text="fac.result.coverage_pct.toFixed(0)+'%'"></span> by value) &nbsp;&middot;&nbsp;
+                Style: <strong x-text="fac.result.style.primary"></strong>
+                <template x-if="fac.result.style.secondary">
+                  <span> / <span x-text="fac.result.style.secondary"></span></span>
+                </template>
+                &nbsp;(purity <span x-text="fac.result.style.purity.toFixed(0)"></span>/100)
+              </p>
+
+              <!-- Factor exposure radar KPIs -->
+              <div class="kpis">
+                <template x-for="(f, key) in [{k:'value',l:'Value'},{k:'growth',l:'Growth'},{k:'momentum',l:'Momentum'},{k:'quality',l:'Quality'}]" :key="f.k">
+                  <div class="kpi">
+                    <div class="kpi-label" x-text="f.l+' Score'"></div>
+                    <div class="kpi-value small-value" x-text="fac.result.exposure[f.k].toFixed(1)"></div>
+                    <div class="factor-bar"><div class="factor-fill"
+                      :style="'width:'+fac.result.exposure[f.k]+'%;background:'+factorColor(fac.result.tilt[f.k])"></div></div>
+                    <div class="muted small"
+                         x-text="(fac.result.tilt[f.k]>=0?'+':'')+fac.result.tilt[f.k].toFixed(1)+' vs S&P 500 (50)'"></div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- Radar chart -->
+              <div id="chart-factors-radar" style="margin:.75rem 0 1.5rem"></div>
+
+              <!-- Per-holding table -->
+              <h3>Holdings Factor Scores</h3>
+              <div class="tablewrap">
+                <table>
+                  <thead><tr>
+                    <th>Symbol</th><th>Name</th><th>Sector</th><th class="num">Weight</th>
+                    <th class="num">Value</th><th class="num">Growth</th>
+                    <th class="num">Momentum</th><th class="num">Quality</th>
+                    <th class="num">Overall</th><th>Data</th>
+                  </tr></thead>
+                  <tbody>
+                    <template x-for="(h, i) in fac.result.holdings" :key="i">
+                      <tr>
+                        <td><code x-text="h.symbol"></code></td>
+                        <td x-text="h.name"></td>
+                        <td x-text="h.sector"></td>
+                        <td class="num" x-text="h.weight_pct.toFixed(1)+'%'"></td>
+                        <td class="num" x-text="h.value_score.toFixed(0)"></td>
+                        <td class="num" x-text="h.growth_score.toFixed(0)"></td>
+                        <td class="num" x-text="h.momentum_score.toFixed(0)"></td>
+                        <td class="num" x-text="h.quality_score.toFixed(0)"></td>
+                        <td class="num"><strong x-text="h.overall_score.toFixed(0)"></strong></td>
+                        <td><span class="ind" :class="'ind-'+h.data_quality" x-text="h.data_quality"></span></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div><!-- end factors sub-tab -->
+
+      </section>
+    </div>
+
+    <!-- ===================================================================== Connections -->
+    <div x-show="tab === 'connections'" x-cloak>
+      <section>
+        <h2>Brokerage Connections</h2>
+        <p class="muted small">Automatic portfolio sync via <a href="https://snaptrade.com" target="_blank" rel="noopener">SnapTrade</a>
+          &mdash; connects to Schwab, Fidelity, Vanguard, TD Ameritrade, and 12,000+ other institutions.</p>
+
+        <!-- ── Not configured ─────────────────────────────────────────── -->
+        <div x-show="conn.state === 'unconfigured'">
+          <div class="callout warn">
+            <strong>SnapTrade credentials not configured.</strong>
+            Set these environment variables (or add them to your <code>.env</code> file), then restart the app:
+          </div>
+          <div class="conn-setup">
+            <h3>Setup steps</h3>
+            <ol>
+              <li>Sign up at <a href="https://snaptrade.com" target="_blank" rel="noopener">snaptrade.com</a> and create an application to get your <strong>Client ID</strong> and <strong>Consumer Key</strong>.</li>
+              <li>Install the required packages:
+                <pre><code>pip install snaptrade-python cryptography python-dotenv</code></pre>
+              </li>
+              <li>Add to your <code>.env</code> file:
+                <pre><code>SNAPTRADE_CLIENT_ID=your_client_id_here
+SNAPTRADE_CONSUMER_KEY=your_consumer_key_here
+ENCRYPTION_KEY=your_fernet_key_here   # generate below</code></pre>
+              </li>
+              <li>Generate an encryption key (run once):
+                <pre><code>python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code></pre>
+              </li>
+              <li>Restart the app, then come back here to connect your brokerage.</li>
+            </ol>
+            <p class="muted small">&#x1F512; Never commit your <code>.env</code> file to version control. Credentials are encrypted at rest.</p>
+          </div>
+        </div>
+
+        <!-- ── Loading ────────────────────────────────────────────────── -->
+        <p class="muted" x-show="conn.state === 'loading'">Checking connection status&hellip;</p>
+
+        <!-- ── Error ──────────────────────────────────────────────────── -->
+        <p class="error" x-show="conn.state === 'error'" x-text="conn.error"></p>
+
+        <!-- ── Not yet connected (credentials ok, no accounts linked) ── -->
+        <div x-show="conn.state === 'ready' && !conn.data.connected">
+          <div class="callout info">
+            Credentials are configured. Click <strong>Connect Brokerage</strong> to link your accounts via SnapTrade&rsquo;s secure OAuth flow.
+          </div>
+          <div class="conn-actions">
+            <button class="btn primary" @click="connGetLink()" :disabled="conn.linking">
+              <span x-text="conn.linking ? 'Generating link\u2026' : 'Connect Brokerage'"></span>
+            </button>
+          </div>
+          <div x-show="conn.authLink" class="callout ok" style="margin-top:1rem;">
+            <p><strong>Authorization link ready.</strong> Click below to authenticate with your brokerage in a new tab, then come back and click <em>I&rsquo;ve finished connecting</em>.</p>
+            <p><a class="btn" :href="conn.authLink" target="_blank" rel="noopener">Open SnapTrade &rarr;</a></p>
+            <button class="btn" style="margin-top:.5rem;" @click="connRefreshStatus()">I&rsquo;ve finished connecting</button>
+          </div>
+        </div>
+
+        <!-- ── Connected ──────────────────────────────────────────────── -->
+        <div x-show="conn.state === 'ready' && conn.data.connected">
+          <div class="conn-status-row">
+            <span class="conn-badge ok">&#10004; Connected &mdash; <span x-text="conn.data.account_count"></span> account<span x-show="conn.data.account_count !== 1">s</span></span>
+            <span class="muted small" x-show="conn.data.last_sync">Last sync: <span x-text="conn.data.last_sync ? new Date(conn.data.last_sync).toLocaleString() : ''"></span></span>
+          </div>
+
+          <!-- Account cards -->
+          <div class="conn-accounts">
+            <template x-for="acc in conn.data.accounts" :key="acc.id">
+              <div class="conn-account-card">
+                <div class="conn-account-info">
+                  <strong x-text="acc.institution || 'Unknown Institution'"></strong>
+                  <span class="muted" x-text="acc.name || acc.id"></span>
+                  <span class="ind ind-ok" x-text="acc.type || 'Account'"></span>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Sync controls -->
+          <div class="conn-actions" style="margin-top:1rem;">
+            <div class="conn-period">
+              <label>Sync into month:
+                <select x-model.number="conn.syncMonth">
+                  <option value="1">January</option>
+                  <option value="2">February</option>
+                  <option value="3">March</option>
+                  <option value="4">April</option>
+                  <option value="5">May</option>
+                  <option value="6">June</option>
+                  <option value="7">July</option>
+                  <option value="8">August</option>
+                  <option value="9">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+              </label>
+              <label>Year:
+                <input type="number" x-model.number="conn.syncYear" min="2000" max="2100" style="width:5rem;">
+              </label>
+            </div>
+            <button class="btn primary" @click="connSync()" :disabled="conn.syncing">
+              <span x-text="conn.syncing ? 'Syncing\u2026' : 'Sync Holdings Now'"></span>
+            </button>
+          </div>
+
+          <div x-show="conn.syncMsg.text" class="msg" :class="conn.syncMsg.kind" x-text="conn.syncMsg.text" style="margin-top:.75rem;"></div>
+
+          <!-- Disconnect -->
+          <div style="margin-top:2rem;border-top:1px solid var(--line);padding-top:1rem;">
+            <p class="muted small">Disconnecting revokes access and removes stored credentials. Your already-synced holdings are not deleted.</p>
+            <template x-if="!conn.confirmDisconnect">
+              <button class="btn danger" @click="conn.confirmDisconnect = true">Disconnect SnapTrade</button>
+            </template>
+            <template x-if="conn.confirmDisconnect">
+              <span>
+                <span class="muted small">Are you sure? This cannot be undone.</span>
+                <button class="btn danger" style="margin-left:.5rem;" @click="connDisconnect()">Yes, disconnect</button>
+                <button class="btn" style="margin-left:.25rem;" @click="conn.confirmDisconnect = false">Cancel</button>
+              </span>
+            </template>
+          </div>
+        </div>
+
+        <!-- ═════════════════════ Schwab Direct API ═════════════════════ -->
+        <div style="margin-top:2.5rem;border-top:1px solid var(--line);padding-top:1.25rem;">
+          <h2>Direct Schwab API</h2>
+          <p class="muted small">Real-time positions and transaction history straight from Schwab, with no intermediary.</p>
+
+          <p class="muted" x-show="sw.loading">Checking Schwab status&hellip;</p>
+
+          <!-- Not configured -->
+          <div x-show="sw.loaded && !sw.configured">
+            <div class="callout warn">
+              <strong>Schwab Direct API not configured.</strong>
+              <span class="muted small" x-text="sw.detail"></span>
+            </div>
+            <div class="conn-setup">
+              <ol>
+                <li>Create an app at the <a href="https://developer.schwab.com/" target="_blank" rel="noopener">Schwab Developer Portal</a> and note the App Key and App Secret.</li>
+                <li>Add to your <code>.env</code> file, then restart the app:
+                  <pre><code>SCHWAB_APP_KEY=your_app_key_here
+SCHWAB_APP_SECRET=your_app_secret_here
+SCHWAB_CALLBACK_URL=https://localhost:8080/callback
+ENCRYPTION_KEY=your_fernet_key_here</code></pre>
+                </li>
+              </ol>
+            </div>
+          </div>
+
+          <!-- Configured, not connected -->
+          <div x-show="sw.loaded && sw.configured && !sw.connected">
+            <div class="conn-actions">
+              <button class="btn primary" @click="swAuthorize()" :disabled="sw.busy">
+                <span x-text="sw.busy ? 'Working\u2026' : 'Authorize Schwab'"></span>
+              </button>
+            </div>
+            <div x-show="sw.authUrl" class="callout ok" style="margin-top:1rem;">
+              <p><strong>Step 1:</strong> <a :href="sw.authUrl" target="_blank" rel="noopener">Authorize with Schwab &rarr;</a></p>
+              <p><strong>Step 2:</strong> After approving, copy the full URL from your browser&rsquo;s address bar (it will fail to load &mdash; that&rsquo;s expected) and paste it here:</p>
+              <input type="text" x-model="sw.callbackUrl" placeholder="https://localhost:8080/callback?code=..." style="width:100%;max-width:40rem;font:inherit;padding:.3rem .5rem;border:1px solid var(--line);border-radius:4px;">
+              <p><button class="btn primary" style="margin-top:.5rem;" @click="swComplete()" :disabled="sw.busy || !sw.callbackUrl.trim()">Complete Authorization</button></p>
+            </div>
+          </div>
+
+          <!-- Connected -->
+          <div x-show="sw.loaded && sw.configured && sw.connected">
+            <div class="conn-status-row">
+              <span class="conn-badge ok">&#10004; Connected to Schwab &mdash; <span x-text="sw.accounts.length"></span> account<span x-show="sw.accounts.length !== 1">s</span></span>
+            </div>
+            <div class="conn-accounts">
+              <template x-for="acc in sw.accounts" :key="acc.id">
+                <div class="conn-account-card">
+                  <div class="conn-account-info">
+                    <strong x-text="'Schwab ' + acc.type.replace(/_/g,' ') + ' \u2026' + acc.last4"></strong>
+                    <span class="muted" x-text="'Total value: $' + Number(acc.total_value).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})"></span>
+                    <span class="muted" x-text="'Cash: $' + Number(acc.cash).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div class="conn-actions" style="margin-top:1rem;">
+              <div class="conn-period">
+                <label>Sync into month:
+                  <select x-model.number="conn.syncMonth">
+                    <option value="1">January</option>
+                    <option value="2">February</option>
+                    <option value="3">March</option>
+                    <option value="4">April</option>
+                    <option value="5">May</option>
+                    <option value="6">June</option>
+                    <option value="7">July</option>
+                    <option value="8">August</option>
+                    <option value="9">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                  </select>
+                </label>
+                <label>Year:
+                  <input type="number" x-model.number="conn.syncYear" min="2000" max="2100" style="width:5rem;">
+                </label>
+              </div>
+              <button class="btn primary" @click="swSync()" :disabled="sw.syncing">
+                <span x-text="sw.syncing ? 'Syncing\u2026' : 'Sync Schwab Now'"></span>
+              </button>
+            </div>
+            <div style="margin-top:1.25rem;">
+              <template x-if="!sw.confirmDisconnect">
+                <button class="btn danger" @click="sw.confirmDisconnect = true">Disconnect Schwab</button>
+              </template>
+              <template x-if="sw.confirmDisconnect">
+                <span>
+                  <span class="muted small">Remove stored Schwab tokens? You can re-authorize later.</span>
+                  <button class="btn danger" style="margin-left:.5rem;" @click="swDisconnect()">Yes, disconnect</button>
+                  <button class="btn" style="margin-left:.25rem;" @click="sw.confirmDisconnect = false">Cancel</button>
+                </span>
+              </template>
+            </div>
+          </div>
+
+          <div x-show="sw.msg.text" class="msg" :class="sw.msg.kind" x-text="sw.msg.text" style="margin-top:.75rem;"></div>
+        </div>
+
+      </section>
+    </div>
+
+    <!-- ===================================================================== Tax Records -->
+    <div x-show="tab === 'tax_records'" x-cloak>
+      <section>
+        <h2>Tax Records</h2>
+        <p class="muted small">Transaction history, cost basis tracking, and capital gains reporting across all brokerage accounts.
+          Transactions are imported each time you sync a brokerage on the <a href="#connections" @click.prevent="openTab('connections')">Connections</a> tab.</p>
+
+        <!-- Sub-tab switcher -->
+        <div class="sub-tabs" role="tablist">
+          <button role="tab" :class="{active: txr.subTab==='transactions'}" @click="txr.subTab='transactions'">Transactions</button>
+          <button role="tab" :class="{active: txr.subTab==='costbasis'}" @click="txrSub('costbasis')">Cost Basis</button>
+          <button role="tab" :class="{active: txr.subTab==='capgains'}" @click="txrSub('capgains')">Capital Gains</button>
+        </div>
+
+        <!-- ---- Transactions ---- -->
+        <div x-show="txr.subTab==='transactions'">
+          <p class="error" x-show="txr.error" x-text="txr.error"></p>
+
+          <div class="conn-actions" style="margin-top:.25rem;">
+            <div class="conn-period">
+              <label>Account
+                <select x-model="txr.f.account" @change="txrLoad()">
+                  <option value="">All accounts</option>
+                  <template x-for="a in txr.data.choices.accounts" :key="a"><option :value="a" x-text="a"></option></template>
+                </select>
+              </label>
+              <label>Symbol
+                <input type="text" x-model="txr.f.symbol" @keydown.enter="txrLoad()" @change="txrLoad()" placeholder="e.g. VTI" style="width:7rem;">
+              </label>
+              <label>From <input type="date" x-model="txr.f.start" @change="txrLoad()"></label>
+              <label>To <input type="date" x-model="txr.f.end" @change="txrLoad()"></label>
+            </div>
+            <button class="btn" @click="txrClear()">Clear filters</button>
+            <button class="btn" @click="txrExportCsv()" :disabled="!txr.data.rows.length">Export CSV</button>
+          </div>
+
+          <div style="margin-top:.75rem;display:flex;gap:.4rem;flex-wrap:wrap;">
+            <template x-for="t in txr.data.choices.types" :key="t">
+              <button class="btn" :class="{primary: txr.f.types.includes(t)}" @click="txrToggleType(t)" x-text="t.replace(/_/g,' ')"></button>
+            </template>
+          </div>
+
+          <p class="muted" x-show="txr.loading" style="margin-top:.75rem;">Loading transactions&hellip;</p>
+
+          <div class="callout info" x-show="txr.loaded && !txr.loading && txr.data.total === 0 && !txr.data.choices.accounts.length">
+            No transactions stored yet. Sync a brokerage on the <a href="#connections" @click.prevent="openTab('connections')">Connections</a> tab and they will appear here.
+          </div>
+          <p class="muted" x-show="txr.loaded && !txr.loading && txr.data.total === 0 && txr.data.choices.accounts.length" style="margin-top:.75rem;">No transactions match these filters.</p>
+
+          <div x-show="txr.data.total > 0">
+            <p class="muted small" style="margin-top:.75rem;">
+              <span x-text="txr.data.total.toLocaleString()"></span> transaction<span x-show="txr.data.total !== 1">s</span>
+              <span x-show="txr.data.truncated"> &mdash; showing the newest <span x-text="txr.data.rows.length.toLocaleString()"></span></span>
+            </p>
+            <table class="mini">
+              <thead><tr><th>Type</th><th class="num">Count</th><th class="num">Net amount</th></tr></thead>
+              <tbody>
+                <template x-for="t in txrTotalsList()" :key="t.type">
+                  <tr><td x-text="t.type.replace(/_/g,' ')"></td><td class="num" x-text="t.count"></td><td class="num" x-text="txrMoney(t.amount)"></td></tr>
+                </template>
+              </tbody>
+            </table>
+
+            <div class="tablewrap" style="max-height:34rem;overflow:auto;margin-top:.75rem;">
+              <table>
+                <thead><tr>
+                  <th>Date</th><th>Account</th><th>Type</th><th>Symbol</th><th>Description</th>
+                  <th class="num">Quantity</th><th class="num">Price</th><th class="num">Amount</th><th class="num">Fee</th>
+                </tr></thead>
+                <tbody>
+                  <template x-for="(r,i) in txr.data.rows" :key="i">
+                    <tr>
+                      <td x-text="r.date"></td><td x-text="r.account"></td>
+                      <td x-text="r.type.replace(/_/g,' ')"></td><td x-text="r.symbol"></td>
+                      <td x-text="r.description"></td>
+                      <td class="num" x-text="txrQty(r.quantity)"></td>
+                      <td class="num" x-text="txrPrice(r.price)"></td>
+                      <td class="num" x-text="txrMoney(r.amount)"></td>
+                      <td class="num" x-text="txrMoney(r.fee)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- Cost Basis ---- -->
+        <div x-show="txr.subTab==='costbasis'" x-cloak>
+          <p class="error" x-show="txr.cb.error" x-text="txr.cb.error"></p>
+          <div class="conn-actions" style="align-items:flex-end;">
+            <label>Method
+              <select x-model="txr.cb.method" @change="cbLoad()">
+                <option value="FIFO">FIFO</option><option value="LIFO">LIFO</option>
+                <option value="HIFO">HIFO</option><option value="LOFO">LOFO</option>
+              </select>
+            </label>
+            <label>Account
+              <select x-model="txr.cb.account" @change="cbLoad()">
+                <option value="">All accounts</option>
+                <template x-for="a in txr.cb.data.choices.accounts" :key="a"><option :value="a" x-text="a"></option></template>
+              </select>
+            </label>
+            <label>Symbol <input type="text" x-model="txr.cb.symbol" @keydown.enter="cbLoad()" @change="cbLoad()" placeholder="e.g. VTI" style="width:7rem;"></label>
+            <button class="btn" @click="cbExportCsv()" :disabled="!txr.cb.data.lots.length">Export CSV</button>
+          </div>
+          <p class="muted" x-show="txr.cb.loading" style="margin-top:.75rem;">Loading lots&hellip;</p>
+          <div class="callout info" x-show="txr.cb.loaded && !txr.cb.loading && !txr.cb.data.lots.length" style="margin-top:.75rem;">
+            No open lots. Lots are built from BUY and SELL transactions &mdash; sync Schwab on the <strong>Connections</strong> tab to import trade history.
+          </div>
+          <div x-show="txr.cb.data.lots.length">
+            <p class="muted small" style="margin:.75rem 0 .5rem;">
+              <span x-text="txr.cb.data.lots.length.toLocaleString()"></span> open lot<span x-show="txr.cb.data.lots.length !== 1">s</span>
+              &middot; total basis <strong x-text="txrMoney(txr.cb.data.total_basis)"></strong>.
+              Rebuilt from imported trades; shares acquired outside the imported history (transfers, reinvestments, pre-2016) are not included.
+            </p>
+            <div class="tablewrap">
+              <table>
+                <thead><tr>
+                  <th>Account</th><th>Symbol</th><th>Acquired</th><th class="num">Qty</th>
+                  <th class="num">Unit cost</th><th class="num">Basis</th><th>Term</th><th>Type</th>
+                </tr></thead>
+                <tbody>
+                  <template x-for="(l,i) in txr.cb.data.lots" :key="i">
+                    <tr>
+                      <td x-text="l.account"></td>
+                      <td x-text="l.symbol"></td>
+                      <td x-text="l.acquired"></td>
+                      <td class="num" x-text="txrQty(l.quantity) + (l.side==='short' ? ' (short)' : '')"></td>
+                      <td class="num" x-text="txrPrice(l.unit_cost)"></td>
+                      <td class="num" x-text="txrMoney(l.basis)"></td>
+                      <td x-text="l.term === 'long' ? 'Long' : 'Short'"></td>
+                      <td x-text="l.account_type"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- Capital Gains ---- -->
+        <div x-show="txr.subTab==='capgains'" x-cloak>
+          <p class="error" x-show="txr.cg.error" x-text="txr.cg.error"></p>
+          <div class="conn-actions" style="align-items:flex-end;">
+            <label>Method
+              <select x-model="txr.cg.method" @change="cgLoad()">
+                <option value="FIFO">FIFO</option><option value="LIFO">LIFO</option>
+                <option value="HIFO">HIFO</option><option value="LOFO">LOFO</option>
+              </select>
+            </label>
+            <label>Tax year
+              <select x-model="txr.cg.year" @change="cgLoad()">
+                <option value="">All years</option>
+                <template x-for="y in txr.cg.data.years" :key="y.year"><option :value="y.year" x-text="y.year"></option></template>
+              </select>
+            </label>
+            <label><input type="checkbox" x-model="txr.cg.taxableOnly" @change="cgLoad()"> Taxable (Brokerage) accounts only</label>
+            <button class="btn" @click="cgExportCsv()" :disabled="!txr.cg.data.rows.length">Export CSV</button>
+          </div>
+          <p class="muted" x-show="txr.cg.loading" style="margin-top:.75rem;">Calculating&hellip;</p>
+          <div class="callout info" x-show="txr.cg.loaded && !txr.cg.loading && !txr.cg.data.years.length" style="margin-top:.75rem;">
+            No realized gains found. Gains need SELL transactions in
+            <span x-show="txr.cg.taxableOnly">a taxable Brokerage account (Roth and Traditional gains are not taxable &mdash; untick the box to see them)</span><span x-show="!txr.cg.taxableOnly">any account</span>.
+          </div>
+
+          <div x-show="txr.cg.data.years.length">
+            <div class="tablewrap" style="margin-top:.75rem;">
+              <table>
+                <thead><tr>
+                  <th>Tax year</th><th class="num">Short-term</th><th class="num">Long-term</th>
+                  <th class="num">Total gain</th><th class="num">Proceeds</th><th class="num">Basis</th>
+                </tr></thead>
+                <tbody>
+                  <template x-for="y in txr.cg.data.years" :key="y.year">
+                    <tr>
+                      <td x-text="y.year"></td>
+                      <td class="num" x-text="txrMoney(y.short)"></td>
+                      <td class="num" x-text="txrMoney(y.long)"></td>
+                      <td class="num"><strong x-text="txrMoney(y.total)"></strong></td>
+                      <td class="num" x-text="txrMoney(y.proceeds)"></td>
+                      <td class="num" x-text="txrMoney(y.basis)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="callout warn" x-show="txr.cg.data.unmatched.length" style="margin-top:.75rem;">
+              <strong x-text="txr.cg.data.unmatched.length"></strong> sale(s) have no matching purchase in the imported history
+              (shares acquired by transfer, reinvestment or before 2016), so their gain cannot be computed and they are excluded above.
+            </div>
+
+            <h3 style="margin-top:1.25rem;">Sale detail</h3>
+            <div class="tablewrap">
+              <table>
+                <thead><tr>
+                  <th>Sold</th><th>Acquired</th><th>Account</th><th>Symbol</th><th class="num">Qty</th>
+                  <th class="num">Proceeds</th><th class="num">Basis</th><th class="num">Gain</th><th>Term</th>
+                </tr></thead>
+                <tbody>
+                  <template x-for="(r,i) in txr.cg.data.rows" :key="i">
+                    <tr>
+                      <td x-text="r.sold"></td>
+                      <td x-text="r.acquired"></td>
+                      <td x-text="r.account"></td>
+                      <td x-text="r.symbol"></td>
+                      <td class="num" x-text="txrQty(r.quantity)"></td>
+                      <td class="num" x-text="txrMoney(r.proceeds)"></td>
+                      <td class="num" x-text="txrMoney(r.basis)"></td>
+                      <td class="num" x-text="txrMoney(r.gain)"></td>
+                      <td x-text="r.term === 'long' ? 'Long' : 'Short'"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </div>
+
+    <!-- ===================================================================== Not migrated yet -->
+    <template x-for="t in tabs.filter(t => t.legacy)" :key="t.key">
+      <div x-show="tab === t.key" x-cloak>
+        <section>
+          <h2 x-text="t.label"></h2>
+          <p class="callout info">This tab has not been migrated to the new interface yet. It works unchanged in the
+            Streamlit version, which uses the same data.</p>
+          <p><a class="btn" :href="legacyUrl" target="_blank" rel="noopener">Open Portfolio Hub in Streamlit</a>
+            <span class="muted small">then choose the &ldquo;<span x-text="t.label"></span>&rdquo; tab.</span></p>
+        </section>
+      </div>
+    </template>
+  </main>
+  <footer class="muted">Portfolio Hub - unified portfolio management for retirement planning</footer>
+</body>
+</html>

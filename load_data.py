@@ -1,11 +1,13 @@
 import pandas as pd
-import streamlit as st
 import yfinance as yf
-from datetime import datetime
+from app_cache import cache_data
+from app_state import session
+from datetime import datetime, timezone
 from dateutil import parser as _dateutil_parser
 import logging
 import os
 import threading as _threading
+import market_hours
 import time
 from typing import Callable, Optional
 
@@ -41,8 +43,7 @@ def _config_filing_status() -> str:
         return 'married_filing_jointly'
 
 
-#@st.cache(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
+@cache_data()
 def get_income_tax_brackets(year, filing_status=None):
    if filing_status is None:
        filing_status = _config_filing_status()
@@ -51,8 +52,7 @@ def get_income_tax_brackets(year, filing_status=None):
    #print(df.head())
    return df
 
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
+@cache_data()
 def get_cap_gains_brackets(year, filing_status=None):
    if filing_status is None:
        filing_status = _config_filing_status()
@@ -61,8 +61,7 @@ def get_cap_gains_brackets(year, filing_status=None):
    #print(cgdf.head())
    return cgdf
  
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
+@cache_data()
 def get_std_deduction(year, filing_status=None):
     stddectdfyear =pd.read_csv('standard.csv')
     
@@ -91,15 +90,14 @@ def get_std_deduction(year, filing_status=None):
     return stddectdf
     
     
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)    
-@st.cache_data()
+@cache_data()
 def get_medicare_costs(year):
    irmaadfyear =pd.read_csv('irmaa.csv')
    irmaadf= irmaadfyear[irmaadfyear['year'] == year]
    #print(irmaadf.head())
    return irmaadf
 
-@st.cache_data()
+@cache_data()
 def get_medicare_premiums(year: int) -> pd.DataFrame:
     """Load Medigap, out-of-pocket, and LTC premium data for a given year.
 
@@ -141,15 +139,13 @@ def get_medicare_premiums(year: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
+@cache_data()
 def get_atm_costs(year):
    atmdfyear =pd.read_csv('atm.csv')
    atmdf = atmdfyear[atmdfyear['year'] == year]
    #print(atmdf.head())
    return atmdf
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
+@cache_data()
 def get_ira_limits(year):
    """
    Get IRA contribution limits and Roth phase-out thresholds for a given year.
@@ -189,7 +185,7 @@ def get_fica_limits(year: int) -> pd.DataFrame:
    return fica_df[fica_df['year'] == year]
 
 
-@st.cache_data()
+@cache_data()
 def get_qbi_limits(year: int) -> pd.DataFrame:
     """Load QBI §199A phase-out thresholds for a given year from qbi_limits.csv.
 
@@ -215,8 +211,7 @@ def get_qbi_limits(year: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-#@st.cache_data(allow_output_mutation=True, show_spinner=True)
-@st.cache_data()
+@cache_data()
 def get_net_worth(ret_date):
    """
    Get net worth values for a specific date using portfolio truth data.
@@ -350,7 +345,7 @@ def _auto_migrate_if_needed() -> None:
     """
     if DB_PATH.exists():
         return  # Already migrated
-    csv = os.path.join(os.path.dirname(__file__), 'portfolio_data_truth.csv')
+    csv = os.path.join(os.getcwd(), 'portfolio_data_truth.csv')
     if not os.path.exists(csv):
         return  # Nothing to migrate
     try:
@@ -364,7 +359,7 @@ def _auto_migrate_if_needed() -> None:
 _auto_migrate_if_needed()
 
 
-@st.cache_data()
+@cache_data()
 def load_portfolio_truth(_db_mtime=None):
    """
    Load the complete portfolio data truth dataset from portfolio.db.
@@ -390,6 +385,23 @@ def _get_portfolio_file_mtime():
            return os.path.getmtime('portfolio_data_truth.csv')
        except OSError:
            return None
+
+def db_stamp() -> str:
+    """Fingerprint of portfolio.db: changes whenever any process writes to it.
+
+    The database runs in WAL mode, so a write may land in ``portfolio.db-wal`` and leave the main
+    file untouched; both files are included. Used to tell whether a cache was built from the
+    holdings that are in the database now (the Streamlit and web containers share one volume).
+    """
+    parts = []
+    for suffix in ("", "-wal"):
+        try:
+            st = os.stat(str(DB_PATH) + suffix)
+            parts.append(f"{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            parts.append("-")
+    return "|".join(parts)
+
 
 def get_latest_portfolio_month_year() -> tuple[int, int]:
     """
@@ -483,38 +495,85 @@ def _fetch_prices(symbols: list[str], target_date: Optional[datetime] = None) ->
     if not tradeable_symbols:
         return price_map
     
-    # Batch fetch all tradeable symbols at once (MAJOR PERFORMANCE IMPROVEMENT)
+    # Names with whitespace (option contracts) are not Yahoo tickers; they never had a price here.
+    fetchable = [s for s in tradeable_symbols if not any(ch.isspace() for ch in s)]
+    price_map.update({s: None for s in tradeable_symbols if s not in fetchable})
+    if not fetchable:
+        return price_map
+
     try:
-        tickers = yf.Tickers(' '.join(tradeable_symbols))
+        if target_date is None:
+            closes = _download_closes(fetchable, period='4d')
+            window = None
+        else:
+            # Month-end lookups share one cached year of daily closes instead of a download per month.
+            # The window is a week before the target date up to the day after, as before.
+            window = (pd.Timestamp(target_date) - pd.Timedelta(days=7), pd.Timestamp(target_date) + pd.Timedelta(days=1))
+            if window[0] >= pd.Timestamp.now().normalize() - pd.Timedelta(days=_HISTORY_DAYS - 7):
+                closes = _cached_daily_closes(fetchable)
+            else:
+                closes = _download_closes(fetchable, start=window[0], end=window[1])
     except Exception as e:
-        logger.error(f"Failed to initialize yfinance Tickers: {e}", exc_info=True)
-        return {symbol: None for symbol in symbols}
-    
-    for symbol in tradeable_symbols:
-        try:
-            if target_date is None:
-                # Fetch recent prices (current behavior)
-                hist = tickers.tickers[symbol].history(period='4d')
-            else:
-                # Fetch historical prices for specific date
-                # Get a range around the target date to handle weekends/holidays
-                start_date = target_date - pd.Timedelta(days=7)
-                end_date = target_date + pd.Timedelta(days=1)
-                hist = tickers.tickers[symbol].history(start=start_date, end=end_date)
-            
-            if not hist.empty and 'Close' in hist.columns:
-                price_map[symbol] = float(hist['Close'].iloc[-1])
-            else:
-                logger.warning(f"No price data available for {symbol}" +
-                             (f" on {target_date.date()}" if target_date else ""))
-                price_map[symbol] = None
-        except Exception as e:
-            logger.warning(f"Could not fetch price for {symbol}: {e}", exc_info=True)
-            price_map[symbol] = None
-    
+        logger.error(f"Failed to download prices from Yahoo Finance: {e}", exc_info=True)
+        return {**price_map, **{symbol: None for symbol in fetchable}}
+
+    for symbol in fetchable:
+        series = closes.get(symbol)
+        price = None
+        if series is not None:
+            price = float(series.iloc[-1]) if window is None else _last_close_between(series, *window)
+        if price is None:
+            logger.warning(f"No price data available for {symbol}" +
+                           (f" on {target_date.date()}" if target_date else ""))
+        price_map[symbol] = price
+
     return price_map
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes to balance freshness and performance
+
+_HISTORY_DAYS = 430            # daily closes kept for month-end lookups (covers the 12-month net-worth trend)
+_HISTORY_TTL_SECONDS = 3600    # past closes do not change; an hour keeps a long session cheap
+_history_cache: dict[str, tuple[float, pd.Series]] = {}
+_history_lock = _threading.Lock()
+
+
+def _download_closes(symbols: list[str], **kwargs) -> dict[str, Optional[pd.Series]]:
+    """One batched Yahoo Finance request for every symbol; returns the Close series (None when no data)."""
+    df = yf.download(symbols, group_by='ticker', auto_adjust=True, progress=False, threads=True, **kwargs)
+    out: dict[str, Optional[pd.Series]] = {}
+    for symbol in symbols:
+        try:
+            col = df[symbol]['Close'] if isinstance(df.columns, pd.MultiIndex) else df['Close']
+        except KeyError:
+            out[symbol] = None
+            continue
+        col = col.dropna()
+        out[symbol] = col if not col.empty else None
+    return out
+
+
+def _cached_daily_closes(symbols: list[str]) -> dict[str, Optional[pd.Series]]:
+    """Daily closes for the last ``_HISTORY_DAYS`` days, downloading only symbols that are missing or stale."""
+    now = time.time()
+    with _history_lock:
+        missing = [s for s in symbols if s not in _history_cache or now - _history_cache[s][0] > _HISTORY_TTL_SECONDS]
+    if missing:
+        fetched = _download_closes(missing, start=pd.Timestamp.now().normalize() - pd.Timedelta(days=_HISTORY_DAYS))
+        with _history_lock:
+            for symbol, series in fetched.items():
+                if series is not None:          # a failed lookup is retried next time rather than remembered
+                    _history_cache[symbol] = (now, series)
+    with _history_lock:
+        return {s: (_history_cache[s][1] if s in _history_cache else None) for s in symbols}
+
+
+def _last_close_between(series: pd.Series, start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
+    """Last close on or after ``start`` and before ``end`` (end exclusive, like ``Ticker.history``)."""
+    idx = series.index.tz_localize(None) if series.index.tz is not None else series.index
+    window = series[(idx >= start) & (idx < end)]
+    return float(window.iloc[-1]) if not window.empty else None
+
+
+@cache_data(ttl=300)  # Cache for 5 minutes to balance freshness and performance
 def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Calculate net worth for a specific month using stored or fetched prices.
@@ -591,8 +650,9 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
     if has_stored_prices and not is_current_month:
         # Use stored historical prices for past months
         # A stored price of 0 (or less) is bad data, not a real price - treat as missing
-        stored_price_mask = detailed_df['end_of_month_price'].fillna(0) > 0
-        detailed_df.loc[stored_price_mask, 'current_price'] = detailed_df.loc[stored_price_mask, 'end_of_month_price']
+        stored_prices = pd.to_numeric(detailed_df['end_of_month_price'], errors='coerce').fillna(0.0)
+        stored_price_mask = stored_prices > 0
+        detailed_df.loc[stored_price_mask, 'current_price'] = stored_prices[stored_price_mask]
         
         # Identify symbols that need prices fetched
         needs_fetch_mask = ~stored_price_mask & ~detailed_df['symbol'].isin(CASH_SYMBOLS)
@@ -676,12 +736,17 @@ def get_networth_by_month(month: int, year: int) -> tuple[pd.DataFrame, pd.DataF
 # DataFrame as a Parquet file so the Dashboard can render instantly on startup
 # without waiting for live yfinance price fetches across 12 months of data.
 # The cache is keyed by num_months and has a 5-minute TTL that matches the
-# @st.cache_data(ttl=300) on get_networth_by_month().
+# @cache_data(ttl=300) on get_networth_by_month().
 NETWORTH_CACHE_FILE = "networth_cache.parquet"
 NETWORTH_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 # Canonical column list for the net worth history DataFrame.
 NETWORTH_COLUMNS = ["cash", "taxable", "tax_deferred", "tax_free", "total"]
+
+
+def _networth_period() -> str:
+    """The month the history runs to (local time, like build_historical_networth)."""
+    return datetime.now().strftime("%Y-%m")
 
 
 def save_networth_cache(networth_df: pd.DataFrame, num_months: int) -> None:
@@ -699,6 +764,8 @@ def save_networth_cache(networth_df: pd.DataFrame, num_months: int) -> None:
         out = networth_df.copy().reset_index()  # move DatetimeIndex → 'date' column
         out["_cache_num_months"] = int(num_months)
         out["_cache_ts"] = datetime.utcnow().isoformat()
+        out["_cache_db"] = db_stamp()
+        out["_cache_period"] = _networth_period()
         out.to_parquet(NETWORTH_CACHE_FILE, index=False)
     except Exception as exc:
         logger.warning(f"[networth cache] save failed: {exc}", exc_info=True)
@@ -734,12 +801,22 @@ def load_networth_cache(num_months: int) -> pd.DataFrame:
         if cached_nm != num_months:
             return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
 
-        # Validate TTL
+        # The history ends at the current month, so a cache from an earlier month is out of date even
+        # if the market has been closed ever since.
+        if "_cache_period" not in cached.columns or str(cached["_cache_period"].iloc[0]) != _networth_period():
+            return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+        # Built from the holdings that are in the database now?  If not, drop the in-memory copies too.
+        if "_cache_db" not in cached.columns or str(cached["_cache_db"].iloc[0]) != db_stamp():
+            from app_cache import clear_all
+            clear_all()
+            return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
+
+        # Young enough, or built while the market was closed and not opened since?
         cached_ts_str = cached["_cache_ts"].iloc[0] if "_cache_ts" in cached.columns else None
         if cached_ts_str:
             cached_ts = datetime.fromisoformat(str(cached_ts_str))
-            age_seconds = (datetime.utcnow() - cached_ts).total_seconds()
-            if age_seconds > NETWORTH_CACHE_TTL_SECONDS:
+            if not market_hours.is_fresh(cached_ts, NETWORTH_CACHE_TTL_SECONDS):
                 return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
 
         # Strip metadata columns and restore DatetimeIndex
@@ -805,11 +882,11 @@ def render_networth(
     **Background rebuild**
     The background thread sets *done_event* when it finishes.  Callers that
     want to trigger a Streamlit rerun once live data is ready should check
-    ``done_event.is_set()`` and call ``st.rerun()`` accordingly.
+    ``done_event.is_set()`` and call ``st.rerun()`` accordingly (UI side).
 
     Args:
         num_months:   Number of months of history to fetch.
-        done_event:   A :class:`threading.Event` stored in ``st.session_state``
+        done_event:   A :class:`threading.Event` stored in the session state
                       so it survives Streamlit reruns.
         build_fn:     Callable that accepts ``num_months`` and returns the net
                       worth DataFrame (i.e. ``build_historical_networth``).
@@ -824,9 +901,11 @@ def render_networth(
         # rebuild has already finished (event is set) AND enough time has passed
         # since the last rebuild in this session (TTL guard).
         if done_event.is_set():
-            _last_ts = st.session_state.get("_networth_last_rebuild_ts", 0.0)
-            if time.time() - _last_ts >= NETWORTH_CACHE_TTL_SECONDS:
-                st.session_state["_networth_last_rebuild_ts"] = time.time()
+            _last_ts = session().get("_networth_last_rebuild_ts", 0.0)
+            # See render_portfolio: no refresh while nothing could have changed since the last one.
+            _settled = market_hours.prices_unchanged_since(datetime.fromtimestamp(_last_ts, timezone.utc))
+            if time.time() - _last_ts >= NETWORTH_CACHE_TTL_SECONDS and not _settled:
+                session()["_networth_last_rebuild_ts"] = time.time()
                 done_event.clear()
                 _t = _threading.Thread(
                     target=_rebuild_networth_and_cache,
@@ -842,7 +921,7 @@ def render_networth(
         return pd.DataFrame(columns=pd.Index(NETWORTH_COLUMNS))
 
     # Launch a fresh background rebuild
-    st.session_state["_networth_last_rebuild_ts"] = time.time()
+    session()["_networth_last_rebuild_ts"] = time.time()
     done_event.clear()
     _t = _threading.Thread(
         target=_rebuild_networth_and_cache,

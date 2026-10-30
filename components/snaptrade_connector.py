@@ -16,10 +16,12 @@ import pandas as pd
 
 try:
     from snaptrade_client import SnapTrade  # type: ignore
+    from snaptrade_client.auth import SnapTradeAuth  # type: ignore
     SNAPTRADE_AVAILABLE = True
 except ImportError:
     SNAPTRADE_AVAILABLE = False
     SnapTrade = None  # type: ignore
+    SnapTradeAuth = None  # type: ignore
     logging.warning("snaptrade-python not installed. Run: pip install snaptrade-python")
 
 from components.credential_manager import CredentialManager
@@ -54,10 +56,19 @@ class SnapTradeConnector:
         self.client_id = client_id
         self.consumer_key = consumer_key
         self.credential_manager = credential_manager
-        self.client = SnapTrade(  # type: ignore
-            consumer_key=consumer_key,
-            client_id=client_id
-        )
+        # SDK v13+ requires auth object; fall back to legacy kwargs for older versions
+        try:
+            from snaptrade_client.auth import SnapTradeAuth as _Auth  # type: ignore
+            self.client = SnapTrade(auth=_Auth.personal_api_key(  # type: ignore
+                consumer_key=consumer_key,
+                client_id=client_id,
+            ))
+        except (ImportError, AttributeError):
+            # SDK <v13 (legacy positional kwargs)
+            self.client = SnapTrade(  # type: ignore
+                consumer_key=consumer_key,
+                client_id=client_id,
+            )
     
     def delete_user(self, user_id: str = "default") -> bool:
         """
@@ -328,6 +339,18 @@ class SnapTradeConnector:
             logger.error(f"Failed to get accounts: {e}")
             return []
     
+    def _account_positions(self, user_id: str, user_secret: str, account_id: str) -> list:
+        """Positions for one account. SDK >= 13 dropped get_user_account_positions;
+        get_user_holdings returns {"account", "positions", "balances", ...}."""
+        resp = self.client.account_information.get_user_holdings(
+            user_id=user_id,
+            user_secret=user_secret,
+            account_id=account_id,
+        )
+        body = resp.body if hasattr(resp, 'body') else resp
+        positions = body.get('positions') if isinstance(body, dict) else None
+        return list(positions) if positions else []
+
     def get_holdings(self, user_id: str = "default", user_secret: Optional[str] = None, account_id: Optional[str] = None) -> list[dict]:
         """
         Get holdings for user's accounts.
@@ -364,28 +387,14 @@ class SnapTradeConnector:
             
             if account_id:
                 # Get holdings for specific account
-                holdings = self.client.account_information.get_user_account_positions(
-                    user_id=user_id,
-                    user_secret=user_secret,
-                    account_id=account_id
-                )
+                holdings = self._account_positions(user_id, user_secret, account_id)
             else:
                 # Get holdings for all accounts
                 accounts = self.get_accounts(user_id, user_secret)
                 holdings = []
                 for account in accounts:
-                    acc_holdings = self.client.account_information.get_user_account_positions(
-                        user_id=user_id,
-                        user_secret=user_secret,
-                        account_id=account['id']
-                    )
-                    # Extract holdings from ApiResponseFor200 object
-                    holdings_list = []
-                    if hasattr(acc_holdings, 'body'):
-                        holdings_list = acc_holdings.body if isinstance(acc_holdings.body, list) else []
-                    elif isinstance(acc_holdings, list):
-                        holdings_list = acc_holdings
-                    
+                    holdings_list = self._account_positions(user_id, user_secret, account['id'])
+
                     # Add account info to each holding and convert to dict
                     for holding in holdings_list:
                         # Convert holding to dict if it's an object
@@ -919,8 +928,9 @@ class SnapTradeConnector:
                     {
                         'id': acc.get('id'),
                         'name': acc.get('name'),
-                        'type': acc.get('type'),
-                        'institution': acc.get('institution', {}).get('name', 'Unknown')
+                        'type': acc.get('raw_type') or acc.get('type'),
+                        'institution': acc.get('institution_name')
+                        or (acc.get('institution') or {}).get('name', 'Unknown')
                     }
                     for acc in accounts
                 ]
@@ -934,6 +944,79 @@ class SnapTradeConnector:
                 'error': str(e)
             }
     
+    @staticmethod
+    def _flatten_activity(activity: dict, account: dict) -> dict:
+        """One SnapTrade activity -> the flat shape TransactionImporter/TransactionStorage use."""
+        sym = activity.get('symbol')
+        if isinstance(sym, dict):
+            sym = sym.get('raw_symbol') or sym.get('symbol') or ''
+        currency = activity.get('currency')
+        return {
+            'id': activity.get('id', ''),
+            'date': str(activity.get('trade_date') or activity.get('settlement_date') or '')[:10],
+            'type': activity.get('type', ''),
+            'symbol': sym or activity.get('option_symbol') or '',
+            'quantity': activity.get('units') or 0.0,
+            'price': activity.get('price') or 0.0,
+            'amount': activity.get('amount') or 0.0,
+            'fees': activity.get('fee') or 0.0,
+            'currency': currency.get('code', 'USD') if isinstance(currency, dict) else (currency or 'USD'),
+            'description': activity.get('description', ''),
+            'account_id': account.get('id'),
+            'account_name': account.get('name', 'Unknown'),
+            'account_type': account.get('raw_type') or account.get('type') or 'Unknown',
+        }
+
+    # SnapTrade activity type -> stored transaction_type
+    _ACTIVITY_TYPES = {
+        'BUY': 'BUY', 'SELL': 'SELL', 'DIVIDEND': 'DIVIDEND', 'STOCK_DIVIDEND': 'DIVIDEND',
+        'INTEREST': 'INTEREST', 'FEE': 'FEE', 'TAX': 'FEE',
+        'TRANSFER': 'DEPOSIT', 'CONTRIBUTION': 'DEPOSIT', 'WITHDRAWAL': 'WITHDRAWAL',
+        'TRANSFERIN': 'TRANSFER_IN', 'TRANSFEROUT': 'TRANSFER_OUT',
+        'EXCHANGEIN': 'EXCHANGE_IN', 'EXCHANGEOUT': 'EXCHANGE_OUT',
+        'REALIZEDGAINLOSS': 'REALIZED_GAIN_LOSS', 'REI': 'DIVIDEND', 'OPTIONEXPIRATION': 'OPTION_EXPIRATION',
+        'OPTIONASSIGNMENT': 'OPTION_ASSIGNMENT', 'OPTIONEXERCISE': 'OPTION_EXERCISE',
+    }
+
+    def import_transactions(self, user_id: str = "default", user_secret: Optional[str] = None,
+                            days_back: int = 1095) -> dict:
+        """Fetch SnapTrade activity for every account and upsert it into transactions.db.
+
+        Re-running is safe: SnapTrade activity ids are stable and used as transaction_id.
+        Returns ``{"fetched": n, "stored": m}``.
+        """
+        from datetime import timedelta
+        from components.transaction_storage import TransactionStorage
+
+        end = datetime.now()
+        raw = self.get_transactions(
+            user_id=user_id,
+            user_secret=user_secret,
+            start_date=(end - timedelta(days=days_back)).strftime("%Y-%m-%d"),
+            end_date=end.strftime("%Y-%m-%d"),
+        )
+        rows = []
+        for t in raw:
+            raw_type = str(t['type'] or '').upper().replace('_', '')
+            rows.append({
+                'transaction_id': str(t['id']),
+                'date': t['date'],
+                'symbol': t['symbol'],
+                'transaction_type': self._ACTIVITY_TYPES.get(raw_type, raw_type or 'ADJUSTMENT'),
+                'quantity': t['quantity'],
+                'price': t['price'],
+                'amount': t['amount'],
+                'fee': t['fees'],
+                'description': t['description'],
+                'account_id': t['account_id'],
+                'account_name': t['account_name'],
+                'account_type': t['account_type'],
+            })
+        if not rows:
+            return {"fetched": 0, "stored": 0}
+        stored = TransactionStorage().store_transactions(pd.DataFrame(rows), user_id="default")
+        return {"fetched": len(rows), "stored": stored}
+
     def get_transactions(
         self,
         user_id: str = "default",
@@ -990,41 +1073,33 @@ class SnapTradeConnector:
                     continue
                 
                 try:
-                    # Fetch activities (transactions) from SnapTrade
-                    activities = self.client.account_information.get_account_activities(
-                        user_id=user_id,
-                        user_secret=user_secret,
-                        account_id=acc_id,
-                        start_date=start_date,
-                        end_date=end_date
-                    )
-                    
-                    # Extract activities list
-                    activities_list = []
-                    if hasattr(activities, 'body'):
-                        activities_list = activities.body if isinstance(activities.body, list) else []
-                    elif isinstance(activities, list):
-                        activities_list = activities
-                    
+                    # SDK >= 13 returns {"data": [...], "pagination": {offset, limit, total}}
+                    page_size, offset, activities_list = 1000, 0, []
+                    while True:
+                        resp = self.client.account_information.get_account_activities(
+                            user_id=user_id,
+                            user_secret=user_secret,
+                            account_id=acc_id,
+                            start_date=start_date,
+                            end_date=end_date,
+                            offset=offset,
+                            limit=page_size,
+                        )
+                        body = resp.body if hasattr(resp, 'body') else resp
+                        page = (body.get('data') if isinstance(body, dict) else body) or []
+                        activities_list.extend(page)
+                        total = ((body.get('pagination') or {}).get('total') if isinstance(body, dict) else None) or 0
+                        offset += len(page)
+                        if not page or offset >= total:
+                            break
+
                     logger.info(f"Retrieved {len(activities_list)} transactions for account {acc_id}")
-                    
-                    # Transform each activity
+
                     for activity in activities_list:
-                        # Convert to dict
-                        if hasattr(activity, '__dict__'):
-                            activity_dict = self._convert_to_dict(activity)
-                        elif isinstance(activity, dict):
-                            activity_dict = activity
-                        else:
+                        if not isinstance(activity, dict):
                             continue
-                        
-                        # Add account info
-                        activity_dict['account_id'] = acc_id
-                        activity_dict['account_name'] = account.get('name', 'Unknown')
-                        activity_dict['account_type'] = account.get('type', 'Unknown')
-                        
-                        all_transactions.append(activity_dict)
-                
+                        all_transactions.append(self._flatten_activity(activity, account))
+
                 except Exception as e:
                     logger.error(f"Failed to get transactions for account {acc_id}: {e}")
                     continue

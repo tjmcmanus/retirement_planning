@@ -219,7 +219,8 @@ class JanuaryBracketFillOrchestrator:
         import os
         
         # Path to income_rates.csv (in project root)
-        csv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'income_rates.csv')
+        from settings import data_path
+        csv_path = str(data_path('income_rates.csv'))
         
         try:
             with open(csv_path, 'r') as f:

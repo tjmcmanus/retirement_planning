@@ -1,6 +1,6 @@
 # Core Dependencies
 streamlit>=1.31.0
-pandas>=2.0.0
+pandas>=2.0.0,<3
 numpy>=1.24.0
 
 # Data Visualization
@@ -8,10 +8,17 @@ plotly>=5.17.0
 graphviz>=0.20.0
 
 # Financial Data
-yfinance>=0.2.28
+yfinance>=0.2.28,<=1.2.0  # 1.2.1+ break on delisted tickers (ticker.dividends); host verified on 1.2.0
+
+# HTML table parsing for pandas.read_html (S&P 500 constituents in rsp_holdings_fetcher)
+lxml>=4.9.0
 
 # Parquet support (portfolio disk cache)
 pyarrow>=14.0.0
+
+# HTML front end API (FastAPI service in app/)
+fastapi>=0.115.0
+uvicorn>=0.30.0
 
 # Streamlit Extensions
 streamlit-card>=0.0.4
@@ -23,6 +30,9 @@ python-dateutil>=2.8.2
 
 # Markdown Export
 tabulate>=0.10.0
+
+# YAML config files (direct_indexing_config.yaml, etc.)
+PyYAML>=6.0.0
 
 # Brokerage Integration (Phase 2)
 snaptrade-python-sdk>=2.0.0
@@ -42,6 +52,10 @@ kaleido>=0.2.1
 
 # Email Scheduling (Phase 4)
 schedule>=1.2.0
+
+# Container tooling (host-side only; used by `podman compose`, not by the app at runtime)
+# Exclude from the container image when requirements are split into prod/dev
+podman-compose>=1.0.6
 
 # Testing
 pytest>=7.4.0
