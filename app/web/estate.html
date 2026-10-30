@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Estate Planning - Retirement Planner</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/static/estate.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="estatePage()" x-init="init()" x-cloak>
+  <header>
+    <h1>Estate Planning</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="muted">
+      Comprehensive estate planning checklist, situation assessment, estate tax calculator, trust modeling, and document tracker.
+    </p>
+
+    <!-- Feedback alerts -->
+    <div class="msg ok" x-show="statusMsg" x-text="statusMsg" style="margin-bottom: 1rem;"></div>
+    <div class="msg error" x-show="errorMsg" x-text="errorMsg" style="margin-bottom: 1rem;"></div>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs" role="tablist">
+      <template x-for="t in tabs" :key="t.id">
+        <button type="button" role="tab" :aria-selected="tab === t.id" :class="{active: tab === t.id}"
+                :data-tab="t.id" @click="tab = t.id; $nextTick(() => resizeCharts())" x-text="t.label"></button>
+      </template>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 1: ASSESSMENT -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'assess'">
+      <h2>Situation Assessment</h2>
+      <p class="muted">Answer the questions below to determine recommended estate planning tools for your situation.</p>
+
+      <!-- Children summary banner -->
+      <template x-if="meta.children && meta.children.length">
+        <div class="callout info" style="margin-bottom: 1rem;">
+          <strong>Configured Children: </strong>
+          <template x-for="(c, idx) in meta.children" :key="idx">
+            <span style="margin-right: 1rem;">
+              <span x-text="c.name"></span> (Age: <span x-text="c.age || '?'"></span>)
+              <span class="badge yellow" x-show="c.special_needs">Special Needs</span>
+            </span>
+          </template>
+        </div>
+      </template>
+
+      <div class="grid3">
+        <fieldset>
+          <legend>Family & Beneficiaries</legend>
+          <label class="check"><input type="checkbox" x-model="data.assessment.married"> Married / Domestic Partner</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.minor_children" :disabled="meta.children.length > 0"> Minor Children (under 18)</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.adult_children" :disabled="meta.children.length > 0"> Adult Children</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.special_needs_dependent" :disabled="meta.children.length > 0"> Special Needs Dependent</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.blended_family"> Blended Family (step-children)</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.elderly_parents"> Supporting Elderly Parents</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Assets & Estate Size</legend>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_real_estate"> Own Real Estate</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_business"> Business Ownership / Interests</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_retirement_accounts"> Retirement Accounts (IRA/401k)</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.estate_over_threshold"> Estate Over Exemption (~$7M-$13M)</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_life_insurance"> Life Insurance Policies</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_digital_assets"> Significant Digital Assets</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Existing Documents</legend>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_will"> Current Will in Place</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_trust"> Revocable Living Trust</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_poa"> Durable Power of Attorney</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.has_healthcare_directive"> Healthcare Directive / Living Will</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.beneficiaries_current"> Beneficiaries Current</label>
+          <label class="check"><input type="checkbox" x-model="data.assessment.titling_reviewed"> Titling Reviewed</label>
+        </fieldset>
+      </div>
+
+      <div class="actions" style="margin: 1rem 0;">
+        <button type="button" class="primary" @click="saveSection('assessment')" :disabled="isSaving">Save Assessment</button>
+      </div>
+
+      <div style="margin-top: 1.5rem;">
+        <h3>Recommendations Based on Your Situation</h3>
+        <div style="display: grid; gap: 0.75rem;">
+          <template x-for="(rec, idx) in recommendations" :key="idx">
+            <div :class="`callout ${rec.level === 'red' ? 'error' : (rec.level === 'yellow' ? 'warning' : 'success')}`">
+              <strong x-text="rec.title"></strong>
+              <p style="margin: 0.25rem 0 0;" x-text="rec.desc"></p>
+            </div>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 2: ESTATE TAX CALCULATOR -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'tax'">
+      <h2>Estate Tax Calculator</h2>
+      <p class="muted">Model Federal and State estate taxes, TCJA 2026 sunset exemption drop, and lifetime gifting savings.</p>
+
+      <fieldset>
+        <legend>Estate Parameters</legend>
+        <div class="grid4">
+          <label class="fld">Estimated Estate Value ($)
+            <input type="number" min="0" step="100000" x-model.number="taxCalc.estate_value">
+          </label>
+          <label class="fld">Tax Year
+            <select x-model.number="taxCalc.year">
+              <template x-for="y in meta.exemption_years" :key="y">
+                <option :value="y" :selected="y === taxCalc.year" x-text="y"></option>
+              </template>
+            </select>
+          </label>
+          <label class="fld">Marital Status
+            <select x-model="taxCalc.marital_status">
+              <option value="married">Married Filing Jointly</option>
+              <option value="single">Single / Individual</option>
+            </select>
+          </label>
+          <label class="fld">State
+            <select x-model="taxCalc.state">
+              <option value="None">None (No State Estate Tax)</option>
+              <template x-for="st in meta.state_estate_tax_states" :key="st">
+                <option :value="st" :selected="st === taxCalc.state" x-text="st"></option>
+              </template>
+            </select>
+          </label>
+        </div>
+        <div class="grid4" style="margin-top: 0.75rem;">
+          <label class="fld">Prior Taxable Gifts ($)
+            <input type="number" min="0" step="50000" x-model.number="taxCalc.prior_taxable_gifts">
+          </label>
+          <label class="fld">DSUE Portability ($)
+            <input type="number" min="0" step="100000" x-model.number="taxCalc.deceased_spousal_unused_exemption">
+          </label>
+          <label class="fld">Annual Gift Recipients
+            <input type="number" min="1" max="20" x-model.number="taxCalc.gift_recipients">
+          </label>
+          <label class="fld">Gifting Horizon (Years)
+            <input type="number" min="1" max="30" x-model.number="taxCalc.gift_years">
+          </label>
+        </div>
+      </fieldset>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runTaxCalculation()">Calculate Estate Taxes</button>
+      </div>
+
+      <template x-if="taxResult">
+        <div>
+          <div class="kpis">
+            <div class="kpi">
+              <div class="kpi-label">Federal Exemption</div>
+              <div class="kpi-value" x-text="formatCurrency(taxResult.comprehensive.federal_exemption)"></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Taxable Estate</div>
+              <div class="kpi-value" x-text="formatCurrency(taxResult.comprehensive.taxable_estate)"></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Federal Estate Tax</div>
+              <div class="kpi-value" style="color: var(--down);" x-text="formatCurrency(taxResult.comprehensive.federal_tax)"></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">Net to Heirs</div>
+              <div class="kpi-value" style="color: var(--up);" x-text="formatCurrency(taxResult.comprehensive.net_to_heirs)"></div>
+            </div>
+          </div>
+
+          <div class="grid2" style="margin-top: 1.5rem;">
+            <div class="callout warning">
+              <strong>TCJA Sunset Impact (2026+)</strong>
+              <p>Current Exemption: <strong x-text="formatCurrency(taxResult.tcja_comparison.current_exemption)"></strong></p>
+              <p>Post-Sunset Exemption: <strong x-text="formatCurrency(taxResult.tcja_comparison.post_sunset_exemption)"></strong></p>
+              <p>Additional Tax Due to Sunset: <strong style="color: var(--down);" x-text="formatCurrency(taxResult.tcja_comparison.additional_tax_due_to_sunset)"></strong> (+<span x-text="taxResult.tcja_comparison.percentage_increase.toFixed(1)"></span>%)</p>
+            </div>
+
+            <div class="callout success">
+              <strong>Lifetime Gifting Program ROI</strong>
+              <p>Total Gifted over <span x-text="taxCalc.gift_years"></span> yrs: <strong x-text="formatCurrency(taxResult.gifting_impact.total_gifted)"></strong></p>
+              <p>Estate Tax Saved: <strong x-text="formatCurrency(taxResult.gifting_impact.estate_tax_saved)"></strong></p>
+              <p>Net Wealth Transferred Benefit: <strong x-text="formatCurrency(taxResult.gifting_impact.net_benefit)"></strong></p>
+            </div>
+          </div>
+
+          <h3 style="margin-top: 1.5rem;">Estate Tax Comparison Chart</h3>
+          <div id="chart-estate-tax" style="height: 380px; width: 100%;"></div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 3: BENEFICIARIES -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'beneficiary'">
+      <h2>Beneficiary Optimization & SECURE Act Modeling</h2>
+      <p class="muted">Compare inherited IRA distribution strategies under the SECURE Act (10-year rule, stretch IRA, conduit vs accumulation trusts).</p>
+
+      <fieldset>
+        <legend>Strategy Selector</legend>
+        <div class="grid3">
+          <label class="fld">Strategy Type
+            <select x-model="benCalc.type">
+              <option value="ten_year_rule">SECURE Act 10-Year Rule</option>
+              <option value="spousal_options">Spousal Rollover vs Inherited</option>
+              <option value="trust_beneficiary">Trust as Beneficiary (Conduit vs Accumulation)</option>
+              <option value="compare_all">Compare All Strategies</option>
+            </select>
+          </label>
+          <label class="fld">Inherited IRA Balance ($)
+            <input type="number" min="10000" step="25000" x-model.number="benCalc.ira_balance">
+          </label>
+          <label class="fld">Beneficiary Tax Rate (%)
+            <input type="number" min="0" max="50" step="1" :value="benCalc.tax_rate * 100" @input="benCalc.tax_rate = $event.target.value / 100">
+          </label>
+        </div>
+      </fieldset>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runBeneficiaryCalculation()">Calculate Beneficiary Strategy</button>
+      </div>
+
+      <template x-if="benResult">
+        <div>
+          <template x-if="benCalc.type === 'ten_year_rule'">
+            <div>
+              <div class="kpis">
+                <div class="kpi"><div class="kpi-label">Total Distributed</div><div class="kpi-value" x-text="formatCurrency(benResult.total_distributed)"></div></div>
+                <div class="kpi"><div class="kpi-label">Total Tax Paid</div><div class="kpi-value" style="color:var(--down);" x-text="formatCurrency(benResult.total_tax_paid)"></div></div>
+                <div class="kpi"><div class="kpi-label">Net to Beneficiary</div><div class="kpi-value" style="color:var(--up);" x-text="formatCurrency(benResult.net_to_beneficiary)"></div></div>
+              </div>
+              <h3 style="margin-top: 1rem;">10-Year Distribution Schedule</h3>
+              <div class="tablewrap">
+                <table>
+                  <thead><tr><th>Year</th><th>Beginning Balance</th><th>Distribution</th><th>Tax Paid</th><th>Ending Balance</th></tr></thead>
+                  <tbody>
+                    <template x-for="r in benResult.schedule" :key="r.year">
+                      <tr>
+                        <td x-text="r.year"></td>
+                        <td x-text="formatCurrency(r.beginning_balance)"></td>
+                        <td x-text="formatCurrency(r.distribution)"></td>
+                        <td x-text="formatCurrency(r.tax_paid)"></td>
+                        <td x-text="formatCurrency(r.ending_balance)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="benCalc.type === 'spousal_options'">
+            <div class="tablewrap">
+              <table>
+                <thead><tr><th>Option</th><th>Description</th><th>Pros</th><th>Cons</th><th>Recommendation</th></tr></thead>
+                <tbody>
+                  <template x-for="(opt, optKey) in benResult" :key="optKey">
+                    <tr>
+                      <td style="font-weight: 600;" x-text="opt.option_name"></td>
+                      <td x-text="opt.description"></td>
+                      <td><ul><template x-for="p in opt.pros" :key="p"><li x-text="p"></li></template></ul></td>
+                      <td><ul><template x-for="c in opt.cons" :key="c"><li x-text="c"></li></template></ul></td>
+                      <td x-text="opt.best_for"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <template x-if="benCalc.type === 'trust_beneficiary'">
+            <div>
+              <div class="kpis">
+                <div class="kpi"><div class="kpi-label">Trust Structure</div><div class="kpi-value" x-text="benResult.trust_type === 'conduit' ? 'Conduit Trust' : 'Accumulation Trust'"></div></div>
+                <div class="kpi"><div class="kpi-label">Total Tax Paid</div><div class="kpi-value" style="color:var(--down);" x-text="formatCurrency(benResult.total_tax_paid)"></div></div>
+                <div class="kpi"><div class="kpi-label">Net to Beneficiary</div><div class="kpi-value" style="color:var(--up);" x-text="formatCurrency(benResult.net_to_beneficiary)"></div></div>
+              </div>
+              <div class="callout info" style="margin-top: 1rem;">
+                <strong>Trust Notes:</strong>
+                <ul><template x-for="n in benResult.notes" :key="n"><li x-text="n"></li></template></ul>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 4: CHARITABLE GIVING -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'charitable'">
+      <h2>Charitable Giving & Trust Modeling</h2>
+      <p class="muted">Model Charitable Remainder Trusts (CRUT/CRAT), Private Foundations vs Donor-Advised Funds (DAF), and QCD benefits.</p>
+
+      <fieldset>
+        <legend>Charitable Tool</legend>
+        <div class="grid3">
+          <label class="fld">Tool
+            <select x-model="charCalc.tool">
+              <option value="crut">Charitable Remainder Unitrust (CRUT)</option>
+              <option value="crat">Charitable Remainder Annuity Trust (CRAT)</option>
+              <option value="foundation_vs_daf">Private Foundation vs DAF</option>
+              <option value="qcd">Qualified Charitable Distribution (QCD)</option>
+            </select>
+          </label>
+          <label class="fld">Asset Value ($)
+            <input type="number" min="10000" step="25000" x-model.number="charCalc.asset_value">
+          </label>
+          <label class="fld">Cost Basis ($)
+            <input type="number" min="0" step="25000" x-model.number="charCalc.cost_basis">
+          </label>
+        </div>
+      </fieldset>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runCharitableCalculation()">Calculate Charitable Strategy</button>
+      </div>
+
+      <template x-if="charResult">
+        <div>
+          <template x-if="charCalc.tool === 'crut' || charCalc.tool === 'crat'">
+            <div class="kpis">
+              <div class="kpi"><div class="kpi-label">Charitable Deduction</div><div class="kpi-value" x-text="formatCurrency(charResult.charitable_deduction)"></div></div>
+              <div class="kpi"><div class="kpi-label">Cap Gains Tax Saved</div><div class="kpi-value" style="color:var(--up);" x-text="formatCurrency(charResult.capital_gains_tax_saved)"></div></div>
+              <div class="kpi"><div class="kpi-label">Total Income to Donor</div><div class="kpi-value" x-text="formatCurrency(charResult.total_income_to_donor)"></div></div>
+              <div class="kpi"><div class="kpi-label">Remainder to Charity</div><div class="kpi-value" x-text="formatCurrency(charResult.remainder_to_charity)"></div></div>
+            </div>
+          </template>
+
+          <template x-if="charCalc.tool === 'foundation_vs_daf'">
+            <div class="grid2">
+              <div class="kpi">
+                <h3>Donor-Advised Fund (DAF)</h3>
+                <p>Initial Contribution: <strong x-text="formatCurrency(charResult.daf.initial_contribution)"></strong></p>
+                <p>Deduction Limit (Cash): <strong x-text="charResult.daf.tax_deduction_limits.cash"></strong></p>
+                <p>Deduction Limit (Appreciated): <strong x-text="charResult.daf.tax_deduction_limits.appreciated_stock"></strong></p>
+                <p>Privacy: <strong x-text="charResult.daf.privacy"></strong></p>
+              </div>
+              <div class="kpi">
+                <h3>Private Foundation</h3>
+                <p>Initial Contribution: <strong x-text="formatCurrency(charResult.private_foundation.initial_contribution)"></strong></p>
+                <p>Setup Cost: <strong x-text="formatCurrency(charResult.private_foundation.setup_cost)"></strong></p>
+                <p>Annual Maintenance: <strong x-text="formatCurrency(charResult.private_foundation.annual_maintenance)"></strong></p>
+                <p>Excise Tax: <strong x-text="charResult.private_foundation.excise_tax"></strong></p>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="charCalc.tool === 'qcd'">
+            <div class="kpis">
+              <div class="kpi"><div class="kpi-label">QCD Amount</div><div class="kpi-value" x-text="formatCurrency(charResult.qcd_amount)"></div></div>
+              <div class="kpi"><div class="kpi-label">Direct Tax Savings</div><div class="kpi-value" style="color:var(--up);" x-text="formatCurrency(charResult.tax_savings)"></div></div>
+              <div class="kpi"><div class="kpi-label">AGI Reduction</div><div class="kpi-value" x-text="formatCurrency(charResult.agi_reduction)"></div></div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 5: LEGAL DOCUMENTS -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'legal'">
+      <h2>Legal Documents Checklist</h2>
+      <p class="muted">Track core estate planning documents, incapacity plans, and advanced trusts.</p>
+
+      <div class="grid3">
+        <fieldset>
+          <legend>Core Documents</legend>
+          <template x-for="(doc, docKey) in data.legal.core_docs" :key="docKey">
+            <div style="margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line);">
+              <label class="check" style="font-weight: 600;">
+                <input type="checkbox" x-model="doc.done">
+                <span x-text="docKey.replace(/_/g, ' ').toUpperCase()"></span>
+              </label>
+              <input type="text" placeholder="Notes (e.g. attorney name, signed date)" x-model="doc.notes" style="margin-top: 0.25rem;">
+            </div>
+          </template>
+        </fieldset>
+
+        <fieldset>
+          <legend>Incapacity Documents</legend>
+          <template x-for="(doc, docKey) in data.legal.incapacity_docs" :key="docKey">
+            <div style="margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line);">
+              <label class="check" style="font-weight: 600;">
+                <input type="checkbox" x-model="doc.done">
+                <span x-text="docKey.replace(/_/g, ' ').toUpperCase()"></span>
+              </label>
+              <input type="text" placeholder="Notes (e.g. agent names)" x-model="doc.notes" style="margin-top: 0.25rem;">
+            </div>
+          </template>
+        </fieldset>
+
+        <fieldset>
+          <legend>Advanced Trusts</legend>
+          <template x-for="(doc, docKey) in data.legal.advanced_docs" :key="docKey">
+            <div style="margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line);">
+              <label class="check" style="font-weight: 600;">
+                <input type="checkbox" x-model="doc.done">
+                <span x-text="docKey.replace(/_/g, ' ').toUpperCase()"></span>
+              </label>
+              <input type="text" placeholder="Notes (e.g. trustee, terms)" x-model="doc.notes" style="margin-top: 0.25rem;">
+            </div>
+          </template>
+        </fieldset>
+      </div>
+
+      <div class="actions" style="margin-top: 1rem;">
+        <button type="button" class="primary" @click="saveSection('legal')" :disabled="isSaving">Save Legal Documents</button>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 6: FINANCIAL & ACCOUNTS -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'financial'">
+      <h2>Financial Accounts & Beneficiaries</h2>
+      <p class="muted">Review beneficiary designations and trust re-titling for all financial accounts.</p>
+
+      <h3>Beneficiary Designations</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Account</th><th>Primary Beneficiary</th><th>Contingent Beneficiary</th><th>Reviewed</th></tr></thead>
+          <tbody>
+            <template x-for="(ben, accKey) in data.financial.beneficiaries" :key="accKey">
+              <tr>
+                <td style="font-weight: 600;" x-text="accKey.replace(/_/g, ' ')"></td>
+                <td><input type="text" x-model="ben.primary" placeholder="e.g. Spouse / Trust"></td>
+                <td><input type="text" x-model="ben.contingent" placeholder="e.g. Children / SNT"></td>
+                <td style="text-align: center;"><input type="checkbox" x-model="ben.reviewed"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top: 1.5rem;">Trust Re-Titling Status</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Account</th><th>Action Required</th><th>Status</th><th>Notes</th></tr></thead>
+          <tbody>
+            <template x-for="(tr, accKey) in data.financial.trust_accounts" :key="accKey">
+              <tr>
+                <td style="font-weight: 600;" x-text="accKey.replace(/_/g, ' ')"></td>
+                <td x-text="tr.action || 'Re-title in trust'"></td>
+                <td><label class="check"><input type="checkbox" x-model="tr.done"> Re-titled</label></td>
+                <td><input type="text" x-model="tr.notes" placeholder="Account # or date completed"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top: 1.5rem;">Financial Housekeeping</h3>
+      <div class="grid3">
+        <template x-for="(item, itemKey) in data.financial.housekeeping" :key="itemKey">
+          <div style="padding: 0.5rem; background: var(--surface); border: 1px solid var(--line); border-radius: 4px;">
+            <label class="check" style="font-weight: 600;">
+              <input type="checkbox" x-model="item.done">
+              <span x-text="itemKey.replace(/_/g, ' ').toUpperCase()"></span>
+            </label>
+            <input type="text" placeholder="Notes" x-model="item.notes" style="margin-top: 0.25rem;">
+          </div>
+        </template>
+      </div>
+
+      <div class="actions" style="margin-top: 1.5rem;">
+        <button type="button" class="primary" @click="saveSection('financial')" :disabled="isSaving">Save Financial Accounts</button>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 7: PROPERTY & LEGACY -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'property'">
+      <h2>Real Estate, Personal Items & Family Legacy</h2>
+      <p class="muted">Track real estate deeds transferred to trust, valuable personal property, and family wishes.</p>
+
+      <h3>Real Estate Trust Re-Titling</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Property</th><th>Deed Re-titled</th><th>Recorded with County</th><th>Title Ins. Updated</th><th>Lender Notified</th><th>Notes</th></tr></thead>
+          <tbody>
+            <template x-for="(prop, propKey) in data.property.real_estate_trust" :key="propKey">
+              <tr>
+                <td style="font-weight: 600;" x-text="propKey.replace(/_/g, ' ')"></td>
+                <td style="text-align: center;"><input type="checkbox" x-model="prop.deed_retitled"></td>
+                <td style="text-align: center;"><input type="checkbox" x-model="prop.deed_recorded"></td>
+                <td style="text-align: center;"><input type="checkbox" x-model="prop.title_insurance_updated"></td>
+                <td style="text-align: center;"><input type="checkbox" x-model="prop.lender_notified"></td>
+                <td><input type="text" x-model="prop.notes" placeholder="Deed book/page"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid2" style="margin-top: 1.5rem;">
+        <fieldset>
+          <legend>Personal Property Inventory</legend>
+          <template x-for="(item, k) in data.property.personal_items" :key="k">
+            <label class="check" style="margin-bottom: 0.4rem;">
+              <input type="checkbox" x-model="item.done">
+              <span x-text="k.replace(/_/g, ' ').toUpperCase()"></span>
+            </label>
+          </template>
+        </fieldset>
+
+        <fieldset>
+          <legend>Family Wishes & Digital Legacy</legend>
+          <template x-for="(item, k) in data.property.family_items" :key="k">
+            <label class="check" style="margin-bottom: 0.4rem;">
+              <input type="checkbox" x-model="item.done">
+              <span x-text="k.replace(/_/g, ' ').toUpperCase()"></span>
+            </label>
+          </template>
+        </fieldset>
+      </div>
+
+      <div class="actions" style="margin-top: 1.5rem;">
+        <button type="button" class="primary" @click="saveSection('property')" :disabled="isSaving">Save Property Data</button>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 8: DOCUMENT LOCATIONS -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'docs'">
+      <h2>Document Locations Tracker</h2>
+      <p class="muted">Keep an inventory of where original paper documents and digital copies are stored.</p>
+
+      <div class="grid2">
+        <fieldset>
+          <legend>Legal Documents</legend>
+          <template x-for="(doc, k) in data.document_locations.legal_documents" :key="k">
+            <div style="margin-bottom: 0.5rem;">
+              <strong x-text="k.replace(/_/g, ' ').toUpperCase()"></strong>
+              <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.2rem;">
+                <input type="text" placeholder="Physical location (safe, cabinet)" x-model="doc.location">
+                <label class="check" style="white-space: nowrap;"><input type="checkbox" x-model="doc.has_copy"> Digital Copy</label>
+              </div>
+            </div>
+          </template>
+        </fieldset>
+
+        <fieldset>
+          <legend>Financial Records</legend>
+          <template x-for="(doc, k) in data.document_locations.financial_documents" :key="k">
+            <div style="margin-bottom: 0.5rem;">
+              <strong x-text="k.replace(/_/g, ' ').toUpperCase()"></strong>
+              <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.2rem;">
+                <input type="text" placeholder="Physical location / safe deposit" x-model="doc.location">
+                <label class="check" style="white-space: nowrap;"><input type="checkbox" x-model="doc.has_copy"> Digital Copy</label>
+              </div>
+            </div>
+          </template>
+        </fieldset>
+      </div>
+
+      <div class="actions" style="margin-top: 1.5rem;">
+        <button type="button" class="primary" @click="saveSection('document_locations')" :disabled="isSaving">Save Document Locations</button>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 9: REVIEW SCHEDULE -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'schedule'">
+      <h2>Estate Plan Review Schedule</h2>
+      <p class="muted">Review schedule and trigger event monitoring to ensure estate plans stay legally current.</p>
+
+      <div class="grid2">
+        <fieldset>
+          <legend>Annual Review Checklist</legend>
+          <label class="check"><input type="checkbox" x-model="data.review_schedule.annual_beneficiaries"> Review all primary and contingent beneficiaries</label>
+          <label class="check"><input type="checkbox" x-model="data.review_schedule.annual_fiduciaries"> Confirm executors, trustees, and agents are still willing and able</label>
+          <label class="check"><input type="checkbox" x-model="data.review_schedule.annual_assets"> Check new bank or brokerage accounts are titled in trust</label>
+          <label class="check"><input type="checkbox" x-model="data.review_schedule.annual_tax_law"> Review estate tax exemption thresholds and state rules</label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Life Event Triggers</legend>
+          <p class="small muted">Review your entire estate plan immediately if any of these events occur:</p>
+          <ul>
+            <li>Marriage, divorce, or remarriage</li>
+            <li>Birth or adoption of a child or grandchild</li>
+            <li>Death or incapacity of a named executor, trustee, or guardian</li>
+            <li>Substantial change in estate net worth (&plusmn;20%)</li>
+            <li>Relocation to another state or country</li>
+            <li>New federal tax law changes (e.g. TCJA sunset)</li>
+          </ul>
+        </fieldset>
+      </div>
+
+      <div class="actions" style="margin-top: 1.5rem;">
+        <button type="button" class="primary" @click="saveSection('review_schedule')" :disabled="isSaving">Save Review Schedule</button>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 10: PROGRESS SUMMARY -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'progress'">
+      <h2>Estate Planning Overall Progress</h2>
+      <p class="muted">Summary of completion metrics across all categories.</p>
+
+      <div class="kpis" style="margin-bottom: 1.5rem;">
+        <div class="kpi">
+          <div class="kpi-label">Overall Readiness</div>
+          <div class="kpi-value" style="color: var(--accent);" x-text="progress.overall_percent + '%'"></div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Completed Items</div>
+          <div class="kpi-value" x-text="progress.total_done + ' / ' + progress.total_items"></div>
+        </div>
+      </div>
+
+      <h3>Category Readiness</h3>
+      <div style="display: grid; gap: 0.75rem; margin-bottom: 1.5rem;">
+        <template x-for="cat in progress.categories" :key="cat.name">
+          <div class="kpi">
+            <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 0.3rem;">
+              <span x-text="cat.name"></span>
+              <span x-text="cat.done + ' / ' + cat.total + ' (' + cat.percent + '%)'"></span>
+            </div>
+            <div class="job-progress-bar" style="margin: 0;">
+              <div class="job-progress-fill" :style="`width: ${cat.percent}%`"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <template x-if="progress.pending_items && progress.pending_items.length">
+        <div>
+          <h3>Priority Pending Action Items</h3>
+          <ul class="muted small" style="margin-left: 1.2rem;">
+            <template x-for="item in progress.pending_items" :key="item">
+              <li x-text="item"></li>
+            </template>
+          </ul>
+        </div>
+      </template>
+    </section>
+  </main>
+
+  <footer>
+    Made with IBM Bob &bull; Retirement Planning Platform
+  </footer>
+</body>
+</html>

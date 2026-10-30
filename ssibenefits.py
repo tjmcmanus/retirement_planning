@@ -1,6 +1,6 @@
 import pandas as pd
-import streamlit as st
 import numpy as np
+from app_state import session
 import logging
 import os
 from load_data import get_annual_ssi_data, load_ssi_data
@@ -117,11 +117,11 @@ def get_claiming_age():
     logger.debug("get_claiming_age called")
     
     try:
-        if "SSI_AGE" not in st.session_state:
+        if "SSI_AGE" not in session():
             logger.warning("SSI_AGE not found in session state")
             raise KeyError("SSI_AGE not found in session state")
         
-        ss_age = st.session_state["SSI_AGE"]
+        ss_age = session()["SSI_AGE"]
         age = int(ss_age)
         logger.debug(f"Retrieved claiming age={age} from session state")
         return age

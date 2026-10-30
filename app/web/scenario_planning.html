@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scenario Planning - Retirement Planner</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/static/scenario_planning.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="scenarioPage()" x-init="init()" x-cloak>
+  <header>
+    <h1>Scenario Planning & What-If Analysis</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="muted">
+      Compare multiple retirement scenarios side-by-side. Model life events, adjust parameters, and see how different choices affect your retirement success.
+    </p>
+
+    <!-- Feedback messages -->
+    <div class="msg ok" x-show="statusMsg" x-text="statusMsg" style="margin-bottom: 1rem;"></div>
+    <div class="msg error" x-show="errorMsg" x-text="errorMsg" style="margin-bottom: 1rem;"></div>
+
+    <!-- Scenario Management Bar -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div style="flex: 1; min-width: 320px;">
+          <label style="display: block; font-weight: 600; margin-bottom: 0.4rem;">Select Scenarios to Compare (max 4):</label>
+          <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+            <template x-for="s in availableScenarios" :key="s.id">
+              <button type="button"
+                      :class="{'active': selectedScenarioIds.includes(s.id)}"
+                      class="btn"
+                      style="font-size: 0.85rem; padding: 0.35rem 0.75rem;"
+                      @click="toggleScenario(s.id)">
+                <span x-text="s.name"></span>
+                <span x-show="s.is_baseline" class="badge" style="margin-left: 0.3rem;">Baseline</span>
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button type="button" class="btn primary" @click="openNewScenarioModal()">➕ New Scenario</button>
+          <button type="button" class="btn" :disabled="selectedScenarioIds.length !== 1" @click="cloneSelectedScenario()">📋 Clone</button>
+          <button type="button" class="btn danger" :disabled="selectedScenarioIds.length !== 1" @click="deleteSelectedScenario()">🗑️ Delete</button>
+          <button type="button" class="btn" :disabled="loading" @click="runAnalysisForSelected()">🔄 Re-run Analysis</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading / Progress Indicator -->
+    <div class="card" x-show="loading" style="margin-bottom: 1.5rem; text-align: center; padding: 1.5rem;">
+      <div class="spinner" style="margin: 0 auto 0.75rem auto;"></div>
+      <p style="font-weight: 600; margin: 0;" x-text="loadingMsg || 'Running scenario simulation...'"></p>
+    </div>
+
+    <!-- Quick Metrics Cards -->
+    <div class="grid" :style="`grid-template-columns: repeat(${Math.max(1, selectedScenarios.length)}, 1fr); gap: 1rem; margin-bottom: 1.5rem;`" x-show="selectedScenarios.length > 0">
+      <template x-for="sc in selectedScenarios" :key="sc.id">
+        <div class="card" style="border-top: 4px solid var(--accent, #3b82d4);">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+            <h3 style="margin: 0; font-size: 1.1rem;" x-text="sc.name"></h3>
+            <span class="badge" x-show="sc.is_baseline">Baseline</span>
+          </div>
+          <p class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem;" x-text="sc.description || 'No description'"></p>
+
+          <template x-if="results[sc.id]">
+            <div>
+              <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border);">
+                <span class="muted">Success Rate:</span>
+                <strong :class="{'ok-text': results[sc.id].success_probability >= 0.9, 'warn-text': results[sc.id].success_probability >= 0.75 && results[sc.id].success_probability < 0.9, 'err-text': results[sc.id].success_probability < 0.75}"
+                        x-text="formatPct(results[sc.id].success_probability)"></strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border);">
+                <span class="muted">Median Final:</span>
+                <strong x-text="formatCurrency(results[sc.id].median_final)"></strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border);">
+                <span class="muted">Retirement Age:</span>
+                <span x-text="sc.retirement_age"></span>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 0.3rem 0;">
+                <span class="muted">Annual Expenses:</span>
+                <span x-text="formatCurrency(sc.annual_expenses)"></span>
+              </div>
+            </div>
+          </template>
+          <template x-if="!results[sc.id]">
+            <p class="muted" style="font-style: italic;">Analysis pending...</p>
+          </template>
+        </div>
+      </template>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs" role="tablist" x-show="selectedScenarios.length > 0">
+      <button type="button" role="tab" :class="{active: activeTab === 'trajectories'}" @click="activeTab = 'trajectories'; $nextTick(() => resizeCharts())">📈 Portfolio Trajectories</button>
+      <button type="button" role="tab" :class="{active: activeTab === 'cashflow'}" @click="activeTab = 'cashflow'; $nextTick(() => resizeCharts())">💰 Cash Flow Analysis</button>
+      <button type="button" role="tab" :class="{active: activeTab === 'events'}" @click="activeTab = 'events'; $nextTick(() => resizeCharts())">📅 Life Events Timeline</button>
+      <button type="button" role="tab" :class="{active: activeTab === 'params'}" @click="activeTab = 'params'">⚙️ Parameter Comparison</button>
+      <button type="button" role="tab" :class="{active: activeTab === 'edit'}" @click="activeTab = 'edit'">✏️ Edit Scenario</button>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 1: PORTFOLIO TRAJECTORIES -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="activeTab === 'trajectories' && selectedScenarios.length > 0">
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <h2>📈 Portfolio Value Projections (Median Path)</h2>
+        <p class="muted">Compare median projected portfolio balances over time across selected scenarios.</p>
+        <div id="chart-trajectories" style="width: 100%; height: 450px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>✅ Success Probability Comparison</h2>
+        <p class="muted">Probability that the portfolio sustains all retirement expenses without depletion through plan end age.</p>
+        <div id="chart-success" style="width: 100%; height: 350px;"></div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 2: CASH FLOW ANALYSIS -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="activeTab === 'cashflow' && selectedScenarios.length > 0">
+      <template x-for="sc in selectedScenarios" :key="sc.id">
+        <div class="card" style="margin-bottom: 1.5rem;">
+          <h2 x-text="`💰 ${sc.name} - Annual Cash Flow`"></h2>
+          <p class="muted">Income (Social Security + event additions) vs. Expenses and Net Cash Flow.</p>
+          <div :id="`chart-cashflow-${sc.id}`" style="width: 100%; height: 380px;"></div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 3: LIFE EVENTS TIMELINE -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="activeTab === 'events' && selectedScenarios.length > 0">
+      <template x-for="sc in selectedScenarios" :key="sc.id">
+        <div class="card" style="margin-bottom: 1.5rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h2 style="margin: 0;" x-text="`📅 ${sc.name} - Life Events (${(sc.life_events || []).length})`"></h2>
+            <button type="button" class="btn primary" @click="openAddEventModal(sc.id)">➕ Add Event</button>
+          </div>
+
+          <!-- Conflict alerts -->
+          <template x-if="results[sc.id] && results[sc.id].conflicts && results[sc.id].conflicts.length">
+            <div class="callout warning" style="margin-bottom: 1rem;">
+              <strong>⚠️ Potential Event Conflict(s) Detected:</strong>
+              <ul style="margin: 0.5rem 0 0 1.2rem;">
+                <template x-for="(cf, idx) in results[sc.id].conflicts" :key="idx">
+                  <li x-text="cf.message"></li>
+                </template>
+              </ul>
+            </div>
+          </template>
+
+          <!-- Out of range warnings -->
+          <template x-if="results[sc.id] && results[sc.id].notes && results[sc.id].notes.length">
+            <div class="callout info" style="margin-bottom: 1rem;">
+              <strong>ℹ️ Simulation Notes:</strong>
+              <ul style="margin: 0.5rem 0 0 1.2rem;">
+                <template x-for="(n, idx) in results[sc.id].notes" :key="idx">
+                  <li x-text="n"></li>
+                </template>
+              </ul>
+            </div>
+          </template>
+
+          <template x-if="!sc.life_events || sc.life_events.length === 0">
+            <p class="muted" style="font-style: italic;">No life events configured for this scenario.</p>
+          </template>
+
+          <template x-if="sc.life_events && sc.life_events.length > 0">
+            <div>
+              <table class="table" style="width: 100%; margin-bottom: 1rem;">
+                <thead>
+                  <tr>
+                    <th>Event Name</th>
+                    <th>Type</th>
+                    <th>Ages</th>
+                    <th>Annual Income</th>
+                    <th>Annual Expense</th>
+                    <th>One-Time</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="ev in sc.life_events" :key="ev.id">
+                    <tr>
+                      <td>
+                        <span :style="`display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: ${ev.color || '#3b82f6'}; margin-right: 6px;`"></span>
+                        <strong x-text="ev.name"></strong>
+                        <div class="muted" style="font-size: 0.8rem;" x-text="ev.notes" x-show="ev.notes"></div>
+                      </td>
+                      <td x-text="ev.event_type ? ev.event_type.replace('_', ' ') : 'custom'"></td>
+                      <td>
+                        <span x-text="ev.start_age"></span>
+                        <span x-show="ev.end_age && ev.end_age !== ev.start_age" x-text="` - ${ev.end_age}`"></span>
+                        <span x-show="!ev.end_age" class="muted">(One-time)</span>
+                      </td>
+                      <td x-text="ev.income_change ? formatCurrency(ev.income_change) : '-'"></td>
+                      <td x-text="ev.expense_change ? formatCurrency(ev.expense_change) : '-'"></td>
+                      <td x-text="ev.one_time_amount ? formatCurrency(ev.one_time_amount) : '-'"></td>
+                      <td>
+                        <button type="button" class="btn danger" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;" @click="deleteLifeEvent(sc.id, ev.id)">Delete</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+
+              <!-- Event Timeline Chart -->
+              <div :id="`chart-events-${sc.id}`" style="width: 100%; height: 260px;"></div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 4: PARAMETER COMPARISON -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="activeTab === 'params' && selectedScenarios.length > 0">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h2 style="margin: 0;">⚙️ Scenario Parameters</h2>
+          <button type="button" class="btn" @click="downloadComparisonCsv()">📥 Download CSV</button>
+        </div>
+
+        <table class="table" style="width: 100%;">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <th x-text="sc.name"></th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Starting Portfolio</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="formatCurrency(sc.initial_portfolio)"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Annual Expenses</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="formatCurrency(sc.annual_expenses)"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Retirement Age</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="sc.retirement_age"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Plan End Age</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="sc.plan_to_age"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Inflation Rate</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="formatPct(sc.inflation_rate)"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Social Security (Person 1)</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="`${formatCurrency(sc.social_security?.person1_amount || 0)} at age ${sc.social_security?.person1_start_age || 67}`"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Life Events Count</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="(sc.life_events || []).length"></td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Monte Carlo Success Rate</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td>
+                  <strong :class="{'ok-text': results[sc.id]?.success_probability >= 0.9, 'warn-text': results[sc.id]?.success_probability >= 0.75 && results[sc.id]?.success_probability < 0.9, 'err-text': results[sc.id]?.success_probability < 0.75}"
+                          x-text="results[sc.id] ? formatPct(results[sc.id].success_probability) : 'N/A'"></strong>
+                </td>
+              </template>
+            </tr>
+            <tr>
+              <td><strong>Median Final Portfolio</strong></td>
+              <template x-for="sc in selectedScenarios" :key="sc.id">
+                <td x-text="results[sc.id] ? formatCurrency(results[sc.id].median_final) : 'N/A'"></td>
+              </template>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 5: EDIT SCENARIO -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="activeTab === 'edit'">
+      <div class="card" x-show="editingScenario">
+        <h2 x-text="`✏️ Edit Scenario: ${editingScenario?.name || ''}`"></h2>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+          <div>
+            <h3>Basic Info & Financials</h3>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Scenario Name:</label>
+              <input type="text" x-model="editingScenario.name">
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Description:</label>
+              <textarea x-model="editingScenario.description" rows="2"></textarea>
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Starting Portfolio ($):</label>
+              <input type="number" step="10000" x-model.number="editingScenario.initial_portfolio">
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Annual Living Expenses ($):</label>
+              <input type="number" step="1000" x-model.number="editingScenario.annual_expenses">
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Inflation Rate (%):</label>
+              <input type="number" step="0.1" :value="(editingScenario.inflation_rate * 100).toFixed(1)" @input="editingScenario.inflation_rate = parseFloat($event.target.value) / 100">
+            </div>
+          </div>
+
+          <div>
+            <h3>Personal & Social Security</h3>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Retirement Age:</label>
+              <input type="number" min="40" max="80" x-model.number="editingScenario.retirement_age">
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Plan To Age:</label>
+              <input type="number" min="65" max="110" x-model.number="editingScenario.plan_to_age">
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Social Security Annual Benefit ($):</label>
+              <input type="number" step="1000" x-model.number="editingScenario.social_security.person1_amount">
+            </div>
+            <div class="field" style="margin-bottom: 1rem;">
+              <label>Social Security Claiming Age:</label>
+              <input type="number" min="62" max="70" x-model.number="editingScenario.social_security.person1_start_age">
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
+          <button type="button" class="btn primary" @click="saveScenarioChanges()">💾 Save Changes & Re-Analyze</button>
+        </div>
+      </div>
+
+      <div class="card" x-show="!editingScenario">
+        <p class="muted">Select a scenario to edit from the top selector.</p>
+      </div>
+    </section>
+
+    <!-- Modal: New Scenario -->
+    <div class="modal-backdrop" x-show="showNewModal" @click.self="showNewModal = false">
+      <div class="modal-card">
+        <h2>➕ Create New Scenario</h2>
+        <div class="field" style="margin-bottom: 1rem;">
+          <label>Scenario Name:</label>
+          <input type="text" x-model="newScenarioName" placeholder="e.g., Retire at 60 with Part-Time Work">
+        </div>
+        <div class="field" style="margin-bottom: 1.5rem;">
+          <label>Description:</label>
+          <textarea x-model="newScenarioDesc" placeholder="Brief notes about assumptions..."></textarea>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+          <button type="button" class="btn" @click="showNewModal = false">Cancel</button>
+          <button type="button" class="btn primary" @click="createNewScenario()">Create Scenario</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Add Life Event -->
+    <div class="modal-backdrop" x-show="showEventModal" @click.self="showEventModal = false">
+      <div class="modal-card" style="max-width: 550px;">
+        <h2>➕ Add Life Event</h2>
+
+        <div class="field" style="margin-bottom: 1rem;">
+          <label>Event Template:</label>
+          <select x-model="selectedTemplateName" @change="applyTemplate()">
+            <option value="">Custom Event</option>
+            <template x-for="t in eventTemplates" :key="t.name">
+              <option :value="t.name" x-text="t.name"></option>
+            </template>
+          </select>
+        </div>
+
+        <div class="field" style="margin-bottom: 1rem;">
+          <label>Event Name:</label>
+          <input type="text" x-model="newEvent.name">
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+          <div class="field">
+            <label>Start Age:</label>
+            <input type="number" min="18" max="110" x-model.number="newEvent.start_age">
+          </div>
+          <div class="field">
+            <label>End Age (0 = One-Time):</label>
+            <input type="number" min="0" max="110" x-model.number="newEvent.end_age">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem;">
+          <div class="field">
+            <label>Annual Income ($):</label>
+            <input type="number" step="1000" x-model.number="newEvent.income_change">
+          </div>
+          <div class="field">
+            <label>Annual Expense ($):</label>
+            <input type="number" step="1000" x-model.number="newEvent.expense_change">
+          </div>
+          <div class="field">
+            <label>One-Time Amount ($):</label>
+            <input type="number" step="5000" x-model.number="newEvent.one_time_amount">
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom: 1.5rem;">
+          <label>Notes / Description:</label>
+          <textarea x-model="newEvent.notes" rows="2"></textarea>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+          <button type="button" class="btn" @click="showEventModal = false">Cancel</button>
+          <button type="button" class="btn primary" @click="submitAddLifeEvent()">Add Life Event</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

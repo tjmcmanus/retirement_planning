@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard - Retirement Planner</title>
+  <link rel="stylesheet" href="/vendor/tabulator_simple-6.3.1.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/vendor/tabulator-6.3.1.min.js"></script>
+  <script defer src="/static/dashboard.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="dashboard()" x-init="load()">
+  <header>
+    <h1>Financial Dashboard</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <section>
+      <h2>Key Metrics</h2>
+      <p class="error" x-show="networth.error" x-text="networth.error"></p>
+      <p class="muted" x-show="networth.loading">Loading net worth (live prices can take a minute)...</p>
+      <p class="muted" x-show="networth.data && !networth.data.ready" x-text="networth.data && networth.data.reason"></p>
+
+      <div class="kpis" x-show="networth.data && networth.data.ready">
+        <template x-for="k in kpiCards" :key="k.label">
+          <div class="kpi">
+            <div class="kpi-label" x-text="k.label"></div>
+            <div class="kpi-value" x-text="k.value"></div>
+            <div class="kpi-delta" :class="k.delta === null ? '' : (k.up ? 'up' : 'down')" x-text="k.delta"></div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <section>
+      <h2>Market Forecast</h2>
+      <div class="tabs" role="tablist">
+        <template x-for="t in forecastTabs" :key="t.key">
+          <button role="tab" :class="{active: mf.tab === t.key}" @click="openForecast(t.key)" x-text="t.label"></button>
+        </template>
+      </div>
+      <p class="muted" x-show="mf.loading[mf.tab]">Loading (fetches market data, can take a few seconds)...</p>
+      <p class="error" x-show="mf.error[mf.tab]" x-text="mf.error[mf.tab]"></p>
+
+      <!-- Long / Intermediate / Short term -->
+      <div x-show="mf.tab !== 'stress' && fc">
+        <template x-if="fc && !fc.available"><p class="msg warn" x-text="fc.message"></p></template>
+        <template x-if="fc && fc.available">
+          <div>
+            <p class="muted" x-text="fc.blurb"></p>
+            <div class="kpis">
+              <div class="kpi"><div class="kpi-label">Market Condition</div>
+                <div class="kpi-value small-value" :style="'color:' + fc.colour" x-text="fc.condition_label"></div></div>
+              <div class="kpi"><div class="kpi-label" x-text="fc.phase_label"></div>
+                <div class="kpi-value small-value" x-text="fc.phase"></div></div>
+              <div class="kpi"><div class="kpi-label" x-text="fc.adjustment_label"></div>
+                <div class="kpi-value small-value" x-text="signedPct(fc.adjustment)"></div></div>
+              <div class="kpi"><div class="kpi-label">Confidence</div>
+                <div class="kpi-value small-value" :style="'color:' + fc.confidence_colour" x-text="fc.confidence.toFixed(1) + '%'"></div></div>
+            </div>
+            <details>
+              <summary x-text="fc.detail_title"></summary>
+              <div class="cols3">
+                <div>
+                  <p><b>Current price:</b> <span x-text="'$' + fc.detail.price.toFixed(2)"></span></p>
+                  <p><b x-text="fc.detail.short_label + ' EMA:'"></b> <span x-text="'$' + fc.detail.short_ema.toFixed(2)"></span></p>
+                  <p><b x-text="fc.detail.long_label + ' EMA:'"></b> <span x-text="'$' + fc.detail.long_ema.toFixed(2)"></span></p>
+                </div>
+                <div>
+                  <p><b x-text="'Price vs ' + fc.detail.short_label + ':'"></b> <span x-text="signedPct(fc.detail.price_vs_short)"></span></p>
+                  <p><b x-text="'Price vs ' + fc.detail.long_label + ':'"></b> <span x-text="signedPct(fc.detail.price_vs_long)"></span></p>
+                  <p><b>EMA crossover distance:</b> <span x-text="signedPct(fc.detail.crossover)"></span></p>
+                </div>
+                <div>
+                  <p><b x-text="fc.detail.short_label + ' trend:'"></b> <span x-text="fc.detail.short_trend + ' (' + slope(fc.detail.short_slope, fc.detail) + ')'"></span></p>
+                  <p><b x-text="fc.detail.long_label + ' trend:'"></b> <span x-text="fc.detail.long_trend + ' (' + slope(fc.detail.long_slope, fc.detail) + ')'"></span></p>
+                  <p><b x-text="fc.detail.count_label + ':'"></b> <span x-text="fc.detail.count"></span></p>
+                </div>
+              </div>
+              <p class="muted small" x-text="'Updated ' + fc.detail.updated"></p>
+            </details>
+            <div class="callout" :class="fc.guidance.level">
+              <b x-text="fc.guidance_title + ': ' + fc.guidance.title"></b>
+              <div x-text="fc.guidance.text"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Market stress -->
+      <div x-show="mf.tab === 'stress' && stress">
+        <template x-if="stress && !stress.available"><p class="msg warn" x-text="stress.message"></p></template>
+        <template x-if="stress && stress.available">
+          <div>
+            <div class="kpis">
+              <div class="kpi"><div class="kpi-label">Stress Index</div>
+                <div class="kpi-value" :style="'color:' + stress.colour" x-text="stress.stress_index.toFixed(1) + ' / 100'"></div>
+                <div class="kpi-delta muted" x-text="stress.sensor_count + ' sensors'"></div></div>
+              <div class="kpi"><div class="kpi-label">Regime</div>
+                <div class="kpi-value" :style="'color:' + stress.colour" x-text="stress.regime"></div>
+                <div class="kpi-delta muted" x-text="stress.recommendation"></div></div>
+            </div>
+            <div class="callout" :class="stress.action.level">
+              <b x-text="stress.action.title"></b>
+              <div><b x-text="stress.action.heading"></b></div>
+              <ul><template x-for="b in stress.action.bullets" :key="b"><li x-text="b"></li></template></ul>
+              <div class="muted small" x-text="stress.action.footer"></div>
+            </div>
+            <h3>Sensor Breakdown</h3>
+            <table class="mini">
+              <template x-for="[k, label] in stressRows" :key="k">
+                <tr><td x-text="label"></td><td x-text="stress.breakdown[k]"></td></tr>
+              </template>
+            </table>
+            <details>
+              <summary>About this indicator</summary>
+              <p class="small" x-text="stress.methodology"></p>
+              <p class="muted small" x-text="'As of ' + stress.as_of"></p>
+            </details>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <section x-show="networth.data && networth.data.ready">
+      <h2>Net Worth Overview</h2>
+      <div class="tabs" role="tablist">
+        <template x-for="t in nwTabs" :key="t.key">
+          <button role="tab" :class="{active: nw.tab === t.key}" @click="openNw(t.key)" x-text="t.label"></button>
+        </template>
+      </div>
+
+      <div x-show="nw.tab === 'trend'"><div id="chart-trend"></div></div>
+
+      <div x-show="nw.tab === 'statement'">
+        <p class="muted" x-show="nw.loading.statement">Loading...</p>
+        <p class="error" x-show="nw.error.statement" x-text="nw.error.statement"></p>
+        <template x-if="nw.data.statement && !nw.data.statement.ready"><p class="msg warn" x-text="nw.data.statement.reason"></p></template>
+        <template x-if="nw.data.statement && nw.data.statement.ready">
+          <div class="tablewrap">
+            <h4 class="stmt-title" x-text="'Net Worth Statement \u2014 ' + nw.data.statement.as_of"></h4>
+            <table class="statement">
+              <thead><tr><th>Type</th><th class="num">Type Total</th><th class="num">Account Total</th><th>Account</th></tr></thead>
+              <template x-for="g in nw.data.statement.groups" :key="g.type">
+                <tbody>
+                  <template x-for="(a, i) in g.accounts" :key="a.name">
+                    <tr :style="'background:' + g.background">
+                      <td x-show="i === 0" :rowspan="g.accounts.length" class="type" :style="'border-left:4px solid ' + g.accent" x-text="g.label"></td>
+                      <td x-show="i === 0" :rowspan="g.accounts.length" class="num type-total" x-text="acct(g.total)"></td>
+                      <td class="num" x-text="acct(a.value)"></td><td x-text="a.name"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </template>
+              <tfoot>
+                <tr class="total">
+                  <td>Total net worth</td><td class="num" x-text="acct(nw.data.statement.total)"></td>
+                  <td class="num" :class="nw.data.statement.month_change >= 0 ? 'up' : 'down'">Change from last month</td>
+                  <td class="num" :class="nw.data.statement.month_change >= 0 ? 'up' : 'down'" x-text="acct(nw.data.statement.month_change)"></td>
+                </tr>
+                <tr class="summary"><td colspan="2">Year to date gains (losses)</td>
+                  <td colspan="2" class="num" :class="nw.data.statement.ytd_gain >= 0 ? 'up' : 'down'" x-text="acct(nw.data.statement.ytd_gain)"></td></tr>
+                <tr class="summary"><td colspan="2">Rolling 12 month gains (losses)</td>
+                  <td colspan="2" class="num" :class="nw.data.statement.rolling_gain >= 0 ? 'up' : 'down'" x-text="acct(nw.data.statement.rolling_gain)"></td></tr>
+              </tfoot>
+            </table>
+          </div>
+        </template>
+      </div>
+
+      <template x-for="k in ['accounts', 'portfolio']" :key="k">
+        <div x-show="nw.tab === k">
+          <p class="muted" x-show="nw.loading[k]">Loading (portfolio mix can fetch live prices)...</p>
+          <p class="error" x-show="nw.error[k]" x-text="nw.error[k]"></p>
+          <template x-if="nw.data[k] && nw.data[k].stale">
+            <p class="msg warn" x-text="'No portfolio data found for ' + nw.data[k].stale.requested + '. Showing ' + nw.data[k].stale.showing + ' data instead. Please update your portfolio data.'"></p>
+          </template>
+          <template x-if="nw.data[k] && !nw.data[k].ready"><p class="msg warn" x-text="nw.data[k].reason"></p></template>
+          <div :id="'chart-' + k"></div>
+        </div>
+      </template>
+    </section>
+
+    <section>
+      <h2>Financial Plan Readiness Indicator</h2>
+      <p class="muted" x-show="ready.loading">Loading...</p>
+      <p class="error" x-show="ready.error" x-text="ready.error"></p>
+      <template x-if="ready.data && !ready.data.ready"><p class="msg warn" x-text="ready.data.reason"></p></template>
+      <div class="rri" x-show="ready.data && ready.data.ready">
+        <div>
+          <div id="chart-gauge"></div>
+          <p class="status" :style="ready.data && ('color:' + ready.data.colour)" x-text="ready.data && ready.data.label"></p>
+        </div>
+        <div class="bars">
+          <template x-for="i in (ready.data && ready.data.indicators) || []" :key="i.key">
+            <div class="bar-row">
+              <div class="bar-name" x-text="i.name"></div>
+              <div class="bar"><div :style="'width:' + Math.trunc(i.score) + '%;background:' + i.colour"></div></div>
+              <div class="bar-score" x-text="Math.trunc(i.score) + '%'" :style="'color:' + i.colour"></div>
+              <div class="muted small bar-detail" x-text="i.detail"></div>
+            </div>
+          </template>
+        </div>
+        <details x-show="ready.data && ready.data.actions && ready.data.actions.length">
+          <summary>Action items</summary>
+          <template x-for="a in (ready.data && ready.data.actions) || []" :key="a.title">
+            <div class="callout warning"><b x-text="a.title"></b><div x-text="a.text"></div></div>
+          </template>
+        </details>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="muted">Data stays on this machine. No external scripts are loaded.</footer>
+</body>
+</html>

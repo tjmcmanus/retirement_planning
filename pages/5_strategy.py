@@ -217,7 +217,7 @@ def render_summary_cards(strategy_df: pd.DataFrame, phase: str) -> None:
         )
 
 
-def render_timeline_view(strategy_df: pd.DataFrame) -> None:
+def render_timeline_view(strategy_df: pd.DataFrame, key: str = "timeline") -> None:
     """Render a timeline visualization of key financial events."""
     if strategy_df.empty or 'Year' not in strategy_df.columns:
         return
@@ -279,6 +279,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
                 events.append({
                     'year': year,
                     'event': f'🎯 {person1_name} Retires',
+                    'category': 'Retirement',
                     'details': f"Age {age_primary}",
                     'color': '#FF6B6B'
                 })
@@ -287,6 +288,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
                 events.append({
                     'year': year,
                     'event': f'🎯 {person2_name} Retires',
+                    'category': 'Retirement',
                     'details': f"Age {age_spouse}",
                     'color': '#FF8C8C'
                 })
@@ -296,6 +298,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
             events.append({
                 'year': year,
                 'event': f'🏥 {person1_name} Medicare',
+                'category': 'Medicare',
                 'details': f"Age 65",
                 'color': '#4ECDC4'
             })
@@ -305,6 +308,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
             events.append({
                 'year': year,
                 'event': f'🏥 {person2_name} Medicare',
+                'category': 'Medicare',
                 'details': f"Age 65",
                 'color': '#6EDDD5'
             })
@@ -317,6 +321,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
                 events.append({
                     'year': year,
                     'event': f'💰 {person1_name} SS Begins',
+                    'category': 'Social Security',
                     'details': f"Age {age_primary}",
                     'color': '#95E1D3'
                 })
@@ -327,6 +332,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
                 events.append({
                     'year': year,
                     'event': f'💰 {person2_name} SS Begins',
+                    'category': 'Social Security',
                     'details': f"Age {age_spouse}",
                     'color': '#B5F1E3'
                 })
@@ -337,6 +343,7 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
             events.append({
                 'year': year,
                 'event': '📊 RMDs Begin',
+                'category': 'RMDs',
                 'details': f"${row['RMD']:,.0f} required",
                 'color': '#F38181'
             })
@@ -348,10 +355,26 @@ def render_timeline_view(strategy_df: pd.DataFrame) -> None:
             events.append({
                 'year': year,
                 'event': '🔄 Major Roth Conversion',
+                'category': 'Roth Conversions',
                 'details': f"${conversion_amount:,.0f}",
                 'color': '#AA96DA'
             })
     
+    # Let the user choose which event types to display
+    if events:
+        available_categories = list(dict.fromkeys(e['category'] for e in events))
+        selected_categories = st.multiselect(
+            "Show event types",
+            options=available_categories,
+            default=[c for c in available_categories if c != 'Roth Conversions'],
+            key=f"{key}_event_filter",
+            help="Filter the timeline to reduce clutter",
+        )
+        events = [e for e in events if e['category'] in selected_categories]
+        if not events:
+            st.info("No events selected. Choose at least one event type to display.")
+            return
+
     if events:
         # Create timeline visualization based on actual event years (not full strategy period)
         event_years = [e['year'] for e in events]
@@ -3335,7 +3358,7 @@ if phase == "📈 Accumulation (Pre-Retirement)":
             st.markdown("---")
             
             # Timeline view
-            render_timeline_view(accum_strategy_df)
+            render_timeline_view(accum_strategy_df, key="timeline_accum")
             st.markdown("---")
             
             # Interactive Sankey
@@ -4071,7 +4094,7 @@ else:
             st.markdown("---")
             
             # Timeline view
-            render_timeline_view(strategy_df_w)
+            render_timeline_view(strategy_df_w, key="timeline_withdrawal")
             st.markdown("---")
             
             # Interactive Sankey

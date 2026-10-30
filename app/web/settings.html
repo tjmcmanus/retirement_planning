@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings - Retirement Planner</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/static/settings.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="settings()" x-init="init()">
+  <header>
+    <h1>Settings</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="muted" x-show="loading">Loading settings...</p>
+    <p class="msg" :class="message && message.kind" x-show="message" x-text="message && message.text" role="status"></p>
+
+    <template x-if="schema">
+      <div>
+        <div class="tabs" role="tablist">
+          <template x-for="sec in schema.sections" :key="sec.id">
+            <button type="button" role="tab" :aria-selected="tab === sec.id" :class="{active: tab === sec.id}"
+                    :data-tab="sec.id" @click="tab = sec.id">
+              <span x-text="sec.label"></span><span class="dot" x-show="sectionDirty(sec)" title="Unsaved changes"></span>
+            </button>
+          </template>
+          <button type="button" role="tab" :class="{active: tab === 'di'}" @click="diOpen()">Direct Indexing</button>
+        </div>
+
+        <template x-for="sec in schema.sections" :key="sec.id">
+          <section class="panel" x-show="tab === sec.id" :id="'panel-' + sec.id">
+            <template x-for="(g, gi) in sec.groups" :key="gi">
+              <fieldset x-show="groupVisible(g)">
+                <legend x-text="lbl(g.title)"></legend>
+                <template x-for="(f, fi) in g.fields" :key="fi">
+                  <div class="field" x-show="visible(f)">
+
+                    <template x-if="f.type === 'number'">
+                      <label class="row">
+                        <span class="lab" x-text="lbl(f.label)"></span>
+                        <span class="inp">
+                          <span class="affix" x-show="f.prefix" x-text="f.prefix"></span>
+                          <input type="number" :name="f.path" :min="f.min" :max="f.max" :step="f.step"
+                                 x-model.number="form[f.path]"
+                                 @input="f.path.startsWith('social_security.') && refreshSS(f.path.includes('person1') ? 1 : 2)"
+                                 :class="{invalid: fieldErrors(f).length}">
+                          <span class="affix" x-show="f.suffix" x-text="f.suffix"></span>
+                        </span>
+                      </label>
+                    </template>
+
+                    <template x-if="f.type === 'text'">
+                      <label class="row">
+                        <span class="lab" x-text="lbl(f.label)"></span>
+                        <span class="inp"><input type="text" :name="f.path" :maxlength="f.max_len" x-model="form[f.path]"
+                                                 :class="{invalid: fieldErrors(f).length}"></span>
+                      </label>
+                    </template>
+
+                    <template x-if="f.type === 'date'">
+                      <label class="row">
+                        <span class="lab" x-text="lbl(f.label)"></span>
+                        <span class="inp"><input type="date" :name="f.path" x-model="form[f.path]"
+                                                 :class="{invalid: fieldErrors(f).length}"></span>
+                      </label>
+                    </template>
+
+                    <template x-if="f.type === 'bool'">
+                      <label class="row check">
+                        <span class="inp"><input type="checkbox" :name="f.path" x-model="form[f.path]"></span>
+                        <span class="lab" x-text="lbl(f.label)"></span>
+                      </label>
+                    </template>
+
+                    <template x-if="f.type === 'select'">
+                      <label class="row">
+                        <span class="lab" x-text="lbl(f.label)"></span>
+                        <span class="inp">
+                          <select :name="f.path" x-model="form[f.path]" :class="{invalid: fieldErrors(f).length}">
+                            <template x-if="f.nullable"><option :value="null">(not set)</option></template>
+                            <template x-for="o in f.options" :key="optVal(o)">
+                              <option :value="optVal(o)" x-text="optLabel(o)"></option>
+                            </template>
+                          </select>
+                        </span>
+                      </label>
+                    </template>
+
+                    <template x-if="f.type === 'multi'">
+                      <div>
+                        <div class="lab" x-text="lbl(f.label)"></div>
+                        <div class="checks">
+                          <template x-for="o in f.options" :key="o[0]">
+                            <label class="check"><input type="checkbox" :name="f.path + '.' + o[0]"
+                                                        :checked="form[f.path].includes(o[0])"
+                                                        @change="toggleMulti(f.path, o[0])"> <span x-text="o[1]"></span></label>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+
+                    <template x-if="f.type === 'table'">
+                      <div class="tablewrap">
+                        <table>
+                          <thead><tr>
+                            <template x-for="c in f.columns" :key="c.key"><th x-text="c.label"></th></template>
+                            <th></th>
+                          </tr></thead>
+                          <tbody>
+                            <template x-for="(row, ri) in form[f.path]" :key="ri">
+                              <tr>
+                                <template x-for="c in f.columns" :key="c.key">
+                                  <td>
+                                    <template x-if="c.type === 'bool'"><input type="checkbox" x-model="row[c.key]"></template>
+                                    <template x-if="c.type === 'number'"><input type="number" :min="c.min" :max="c.max" :step="c.step || 1" x-model.number="row[c.key]"></template>
+                                    <template x-if="c.type === 'text'"><input type="text" :maxlength="c.max_len" x-model="row[c.key]"></template>
+                                    <template x-if="c.type === 'date'"><input type="date" x-model="row[c.key]"></template>
+                                  </td>
+                                </template>
+                                <td><button type="button" class="link" @click="removeRow(f, ri)">Remove</button></td>
+                              </tr>
+                            </template>
+                            <tr x-show="!form[f.path].length"><td :colspan="f.columns.length + 1" class="muted">None yet.</td></tr>
+                          </tbody>
+                        </table>
+                        <button type="button" :data-add="f.path" @click="addRow(f)">Add row</button>
+                      </div>
+                    </template>
+
+                    <template x-if="f.type === 'computed'">
+                      <div class="computed" x-show="computedView(f).items.length || computedView(f).table">
+                        <template x-for="it in computedView(f).items" :key="it.label">
+                          <div><span class="muted" x-text="it.label"></span> <strong x-text="it.value"></strong></div>
+                        </template>
+                        <table x-show="computedView(f).table" class="mini">
+                          <thead><tr><template x-for="h in (computedView(f).table || {head: []}).head" :key="h"><th x-text="h"></th></template></tr></thead>
+                          <tbody>
+                            <template x-for="r in (computedView(f).table || {rows: []}).rows" :key="r[0]">
+                              <tr><template x-for="(cell, ci) in r" :key="ci"><td x-text="cell"></td></template></tr>
+                            </template>
+                          </tbody>
+                        </table>
+                      </div>
+                    </template>
+
+                    <p class="help muted" x-show="f.help" x-text="f.help"></p>
+                    <template x-for="m in (f.path ? fieldErrors(f) : [])" :key="m"><p class="error" x-text="m"></p></template>
+                  </div>
+                </template>
+              </fieldset>
+            </template>
+          </section>
+        </template>
+
+        <div class="actions">
+          <button type="button" id="save" class="primary" :disabled="saving || !dirtyPaths.length" @click="save()">
+            <span x-text="saving ? 'Saving...' : 'Save changes'"></span>
+          </button>
+          <button type="button" id="discard" :disabled="saving || !dirtyPaths.length" @click="discard()">Discard changes</button>
+          <span class="muted" x-text="dirtyPaths.length ? dirtyPaths.length + ' unsaved change(s)' : 'All changes saved'"></span>
+          <span class="spacer"></span>
+          <a class="btn" href="/api/config/export" download>Export bundle (.zip)</a>
+          <button type="button" id="reset" class="danger" :disabled="saving" @click="resetDefaults()">Reset to defaults</button>
+        </div>
+        <p class="muted small">
+          Not on this page yet (still in the Streamlit app): long-term-care and HSA analyzers, Medicare and Social Security guides,
+          the Social Security optimizer, and configuration import.
+          Portfolio holdings editing is on the <a href="/portfolio#holdings">Portfolio → Holdings</a> tab.
+        </p>
+      </div>
+    </template>
+
+    <!-- ===================================================================== Direct Indexing tab (standalone, not schema-driven) -->
+    <div x-show="tab === 'di'" x-cloak>
+      <p class="muted" x-show="di.loading">Loading Direct Indexing config&hellip;</p>
+      <p class="error" x-show="di.error" x-text="di.error"></p>
+      <p class="msg ok" x-show="di.saved" x-text="di.saved"></p>
+
+      <template x-if="di.cfg">
+        <div>
+          <fieldset>
+            <legend>Harvest Thresholds</legend>
+            <div class="field row-group">
+              <label class="row">
+                <span class="lab">Loss threshold (%)</span>
+                <span class="inp"><input type="number" min="1" max="50" step="1"
+                  x-model.number="di.cfg.thresholds.loss_threshold_pct"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Min loss amount ($)</span>
+                <span class="inp"><input type="number" min="0" step="100"
+                  x-model.number="di.cfg.thresholds.min_loss_amount"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Max harvests per quarter</span>
+                <span class="inp"><input type="number" min="1" max="100" step="1"
+                  x-model.number="di.cfg.thresholds.max_harvests_per_quarter"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Enable gains harvesting (0% LTCG)</span>
+                <span class="inp"><input type="checkbox" x-model="di.cfg.thresholds.enable_gains_harvesting"></span>
+              </label>
+              <label class="row" x-show="di.cfg.thresholds.enable_gains_harvesting">
+                <span class="lab">Gains threshold (%)</span>
+                <span class="inp"><input type="number" min="1" max="100" step="1"
+                  x-model.number="di.cfg.thresholds.gains_threshold_pct"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Min holding period (days)</span>
+                <span class="inp"><input type="number" min="0" max="365" step="1"
+                  x-model.number="di.cfg.thresholds.min_holding_period_days"></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Replacement Strategy</legend>
+            <div class="field row-group">
+              <label class="row">
+                <span class="lab">Strategy</span>
+                <span class="inp">
+                  <select x-model="di.cfg.replacement.strategy">
+                    <option value="sector_based">Sector-based</option>
+                    <option value="correlation_based">Correlation-based</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                </span>
+              </label>
+              <label class="row">
+                <span class="lab">Alternatives to suggest</span>
+                <span class="inp"><input type="number" min="1" max="10" step="1"
+                  x-model.number="di.cfg.replacement.num_alternatives"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Prefer larger-cap replacements</span>
+                <span class="inp"><input type="checkbox" x-model="di.cfg.replacement.prefer_larger_cap"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Allow cross-sector replacements</span>
+                <span class="inp"><input type="checkbox" x-model="di.cfg.replacement.allow_cross_sector"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Exclude symbols (comma-separated)</span>
+                <span class="inp"><input type="text" placeholder="TSLA, GME"
+                  :value="(di.cfg.replacement.exclude_from_replacements || []).join(', ')"
+                  @input="di.cfg.replacement.exclude_from_replacements = $event.target.value.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean)"></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Wash Sale Settings</legend>
+            <div class="field row-group">
+              <label class="row">
+                <span class="lab">Wash sale window (days)</span>
+                <span class="inp"><input type="number" min="1" max="90" step="1"
+                  x-model.number="di.cfg.wash_sale.window_days"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Auto-exclude wash sale risks</span>
+                <span class="inp"><input type="checkbox" x-model="di.cfg.wash_sale.auto_exclude"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Check substantially identical securities</span>
+                <span class="inp"><input type="checkbox" x-model="di.cfg.wash_sale.check_similar_securities"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Consider ETFs as substantially identical</span>
+                <span class="inp"><input type="checkbox" x-model="di.cfg.wash_sale.consider_etfs_identical"></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Index Coverage &amp; Data Refresh</legend>
+            <div class="field row-group">
+              <label class="row">
+                <span class="lab">Index coverage (%)</span>
+                <span class="inp">
+                  <input type="number" min="10" max="100" step="5"
+                    x-model.number="di.cfg.initial_setup.index_coverage_pct">
+                  <span class="affix">%</span>
+                </span>
+              </label>
+              <label class="row">
+                <span class="lab">Position weighting</span>
+                <span class="inp">
+                  <select x-model="di.cfg.initial_setup.weighting_mode">
+                    <option value="stock">Equal weight per stock (RSP-style)</option>
+                    <option value="sector">Equal weight per sector</option>
+                  </select>
+                </span>
+              </label>
+              <label class="row">
+                <span class="lab">RSP holdings refresh (days)</span>
+                <span class="inp"><input type="number" min="1" max="30" step="1"
+                  x-model.number="di.cfg.data.rsp_refresh_days"></span>
+              </label>
+              <label class="row">
+                <span class="lab">Price refresh (hours)</span>
+                <span class="inp"><input type="number" min="1" max="72" step="1"
+                  x-model.number="di.cfg.data.price_refresh_hours"></span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="actions">
+            <button type="button" class="primary" :disabled="di.saving" @click="diSave()">
+              <span x-text="di.saving ? 'Saving…' : 'Save Direct Indexing config'"></span>
+            </button>
+          </div>
+          <p class="muted small" style="margin-top:.5rem;">
+            Saves to <code>config/direct_indexing_config.yaml</code>.
+            Run the <a href="/portfolio#harvest">DI Setup wizard</a> in Portfolio → Optimize after changing index coverage or weighting.
+          </p>
+        </div>
+      </template>
+    </div>
+  </main>
+
+  <footer class="muted">Data stays on this machine. No external scripts are loaded.</footer>
+</body>
+</html>

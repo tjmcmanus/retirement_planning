@@ -22,8 +22,8 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import streamlit as st
 import yfinance as yf
+from app_cache import cache_data
 
 logger = logging.getLogger(__name__)
 
@@ -598,7 +598,7 @@ def calculate_attribution(
 # Benchmark Comparison
 # =============================================================================
 
-@st.cache_data(ttl=3600)
+@cache_data(ttl=3600)
 def fetch_benchmark_data(
     benchmark_symbol: str,
     start_date: datetime,

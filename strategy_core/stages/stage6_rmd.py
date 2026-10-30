@@ -724,7 +724,7 @@ class Stage6RMD(BaseLifeStageStrategy):
             import pandas as pd
             
             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
-            std_deduction = self._get_standard_deduction(year, 'married')
+            std_deduction = self._get_standard_deduction(year, 'married_filing_jointly')
             
             # Target 15% bracket (not 0% - RMD already fills lower brackets)
             cg_15_percent = pd.DataFrame(cg_brackets[cg_brackets['rate'] == 0.15])
@@ -954,8 +954,8 @@ class Stage6RMD(BaseLifeStageStrategy):
             std_deduction_value = None
             
             # Read bracket from income_rates.csv
-            import os as _os
-            _csv_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), 'income_rates.csv')
+            from settings import data_path as _data_path
+            _csv_path = str(_data_path('income_rates.csv'))
             with open(_csv_path) as f:
                 for row in csv.DictReader(f):
                     if (int(row['year']) == year and 
@@ -1186,6 +1186,9 @@ class Stage6RMD(BaseLifeStageStrategy):
         """Get standard deduction for the year."""
         try:
             from load_data import get_std_deduction
+            # Normalise short form used in some call sites
+            if filing_status == 'married':
+                filing_status = 'married_filing_jointly'
             std_deduction_df = get_std_deduction(year, filing_status)
             return std_deduction_df.iloc[0]['deduction']
         except Exception as e:

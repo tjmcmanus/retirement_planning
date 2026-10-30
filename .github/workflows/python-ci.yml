@@ -30,7 +30,14 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # constraints.txt = exact versions verified on Python 3.11. Python 3.13 is
+        # not covered by the pins, so it resolves requirements.txt freely.
+        run: |
+          if [ "${{ matrix.python-version }}" = "3.11" ]; then
+            pip install -c constraints.txt -r requirements.txt
+          else
+            pip install -r requirements.txt
+          fi
 
       - name: Run tests
         run: |

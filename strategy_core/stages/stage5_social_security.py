@@ -1040,8 +1040,8 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             std_deduction_value = None
             
             # Read bracket from income_rates.csv
-            import os as _os
-            _csv_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), 'income_rates.csv')
+            from settings import data_path as _data_path
+            _csv_path = str(_data_path('income_rates.csv'))
             with open(_csv_path) as f:
                 for row in csv.DictReader(f):
                     if (int(row['year']) == year and 

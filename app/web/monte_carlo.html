@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Monte Carlo Simulation - Retirement Planner</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/plotly-2.35.2.min.js"></script>
+  <script defer src="/static/monte_carlo.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="monteCarloPage()" x-init="init()" x-cloak>
+  <header>
+    <h1>Monte Carlo Simulation</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="muted">
+      Run 10,000+ retirement simulations to estimate the probability your portfolio
+      survives your lifetime under realistic market volatility.
+    </p>
+
+    <!-- Error message display -->
+    <div class="msg error" x-show="errorMsg" x-text="errorMsg" style="margin-bottom: 1rem;"></div>
+
+    <!-- ───────────── Simulation Settings Panel ───────────── -->
+    <details class="callout" style="margin-bottom: 1.25rem;">
+      <summary style="font-size: 1rem; font-weight: 600;">Simulation Settings</summary>
+      <div style="margin-top: 1rem;">
+        <div class="grid4">
+          <label class="fld">Starting Portfolio ($)
+            <input type="number" min="10000" step="25000" x-model.number="inputs.portfolio">
+            <span class="help muted">Current portfolio balance</span>
+          </label>
+          <label class="fld">Annual Withdrawal ($)
+            <input type="number" min="1000" step="5000" x-model.number="inputs.withdrawal">
+            <span class="help muted">Expected annual spending</span>
+          </label>
+          <label class="fld">Retirement Age
+            <input type="number" min="40" max="80" x-model.number="inputs.start_age">
+            <span class="help muted">Planned retirement start</span>
+          </label>
+          <label class="fld">Plan To Age
+            <input type="number" min="70" max="110" x-model.number="inputs.end_age">
+            <span class="help muted">Horizon (typically 90-95)</span>
+          </label>
+        </div>
+        <div class="grid4" style="margin-top: 0.75rem;">
+          <label class="fld">Annual Social Security ($)
+            <input type="number" min="0" step="1000" x-model.number="inputs.ss_annual">
+            <span class="help muted">Annual benefits</span>
+          </label>
+          <label class="fld">SS Start Age
+            <input type="number" min="62" max="70" x-model.number="inputs.ss_start_age">
+            <span class="help muted">Claiming age (62-70)</span>
+          </label>
+          <label class="fld">Inflation Rate (%)
+            <input type="number" min="0.5" max="20" step="0.1" x-model.number="inputs.inflation_pct">
+            <span class="help muted">Annual inflation adjustment</span>
+          </label>
+          <label class="fld">Portfolio Allocation
+            <select x-model="inputs.allocation">
+              <template x-for="p in meta.portfolio_presets" :key="p">
+                <option :value="p" :selected="p === inputs.allocation" x-text="p"></option>
+              </template>
+            </select>
+            <span class="help muted">Asset allocation preset</span>
+          </label>
+        </div>
+        <div class="grid4" style="margin-top: 0.75rem;">
+          <label class="fld">Simulations Count
+            <select x-model.number="inputs.n_simulations">
+              <option :value="1000">1,000 (Fast)</option>
+              <option :value="2000">2,000</option>
+              <option :value="5000">5,000</option>
+              <option :value="10000">10,000 (Standard)</option>
+              <option :value="20000">20,000 (High Precision)</option>
+            </select>
+            <span class="help muted">Monte Carlo iterations</span>
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <!-- ───────────── Active Background Job Progress ───────────── -->
+    <div class="job-progress" x-show="job">
+      <div class="job-progress-status">
+        <span style="font-weight: 600;" x-text="job ? job.message : 'Running...'"></span>
+        <span x-text="(job ? job.progress : 0) + '%'"></span>
+      </div>
+      <div class="job-progress-bar">
+        <div class="job-progress-fill" :style="`width: ${job ? job.progress : 0}%`"></div>
+      </div>
+    </div>
+
+    <!-- ───────────── Navigation Tabs ───────────── -->
+    <div class="tabs" role="tablist">
+      <template x-for="t in tabs" :key="t.id">
+        <button type="button" role="tab" :aria-selected="tab === t.id" :class="{active: tab === t.id}"
+                :data-tab="t.id" @click="tab = t.id; $nextTick(() => resizeCharts())" x-text="t.label"></button>
+      </template>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 1: RUN SIMULATION -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'sim'">
+      <div class="kpis" style="margin-bottom: 1rem;">
+        <div class="kpi">
+          <div class="kpi-label">Starting Portfolio</div>
+          <div class="kpi-value" x-text="formatCurrency(inputs.portfolio)"></div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Annual Withdrawal</div>
+          <div class="kpi-value" x-text="formatCurrency(inputs.withdrawal)"></div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Retirement Age</div>
+          <div class="kpi-value" x-text="inputs.start_age"></div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Plan To Age</div>
+          <div class="kpi-value" x-text="inputs.end_age"></div>
+        </div>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runSimulation()" :disabled="!!job">
+          <span x-show="!job">Run Monte Carlo Simulation</span>
+          <span x-show="job">Simulation in Progress...</span>
+        </button>
+      </div>
+
+      <template x-if="simResult">
+        <div>
+          <!-- Success banner -->
+          <div :class="`success-banner ${getSuccessBadgeClass(simResult.success_probability)}`">
+            <span>Success Probability: <strong x-text="formatPercent(simResult.success_probability)"></strong></span>
+            <span class="small" style="font-weight: normal;">
+              <span x-show="simResult.success_probability >= 0.90">High confidence (Target &ge; 90%)</span>
+              <span x-show="simResult.success_probability >= 0.75 && simResult.success_probability < 0.90">Moderate risk (75-90%)</span>
+              <span x-show="simResult.success_probability < 0.75">High risk of early depletion (&lt; 75%)</span>
+            </span>
+          </div>
+
+          <!-- Outcome KPIs -->
+          <div class="kpis" style="margin: 1rem 0;">
+            <div class="kpi">
+              <div class="kpi-label">Median Final Portfolio</div>
+              <div class="kpi-value" x-text="formatCurrency(simResult.median_final_portfolio)"></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">10th Pct Final Portfolio</div>
+              <div class="kpi-value" x-text="formatCurrency(simResult.p10_final_portfolio)"></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">90th Pct Final Portfolio</div>
+              <div class="kpi-value" x-text="formatCurrency(simResult.p90_final_portfolio)"></div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">P10 Depletion Age</div>
+              <div class="kpi-value" x-text="simResult.years_to_depletion_p10 ? simResult.years_to_depletion_p10 : 'Never'"></div>
+            </div>
+          </div>
+
+          <!-- Safe Withdrawal Rate Callout -->
+          <template x-if="simResult.safe_withdrawal_rates && simResult.safe_withdrawal_rates.swr_90">
+            <div class="callout info" style="margin: 1rem 0;">
+              <strong>Safe Withdrawal Rate (90% Confidence): </strong>
+              <span x-text="formatCurrency(simResult.safe_withdrawal_rates.swr_90.amount) + ' / year (' + simResult.safe_withdrawal_rates.swr_90.pct.toFixed(2) + '% of initial portfolio)'"></span>
+            </div>
+          </template>
+
+          <!-- Fan Chart -->
+          <h3>Portfolio Outcome Fan Chart</h3>
+          <p class="muted small">Shaded bands show outcome percentiles across all simulations. The solid line is the median (P50).</p>
+          <div id="chart-fan" style="height: 380px; width: 100%;"></div>
+
+          <!-- Success Rate by Age -->
+          <h3 style="margin-top: 1.5rem;">Probability of Success by Age</h3>
+          <div id="chart-success-age" style="height: 280px; width: 100%;"></div>
+
+          <!-- Sequence of Returns Risk -->
+          <template x-if="simResult.sequence_risk && simResult.sequence_risk.worst_paths_success_rate !== undefined">
+            <div style="margin-top: 1.5rem;">
+              <h3>Sequence-of-Returns Risk Analysis</h3>
+              <p class="muted small">Retiring into an early market downturn dramatically impacts portfolio survival. The worst 1% of sequences are shown below:</p>
+              <div class="kpis">
+                <div class="kpi">
+                  <div class="kpi-label">Worst-Sequence Success Rate</div>
+                  <div class="kpi-value" x-text="formatPercent(simResult.sequence_risk.worst_paths_success_rate)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Avg First-5yr Return (Worst)</div>
+                  <div class="kpi-value" x-text="formatPercent(simResult.sequence_risk.avg_first5yr_return_worst)"></div>
+                </div>
+                <div class="kpi">
+                  <div class="kpi-label">Depletion Age (Worst Median)</div>
+                  <div class="kpi-value" x-text="simResult.sequence_risk.depletion_age_worst_median || 'N/A'"></div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Notes -->
+          <template x-if="simResult.notes && simResult.notes.length">
+            <details style="margin-top: 1rem;">
+              <summary>Simulation Notes & Assumptions</summary>
+              <ul style="margin: 0.5rem 0 0 1.2rem; font-size: 0.85rem;" class="muted">
+                <template x-for="note in simResult.notes" :key="note">
+                  <li x-text="note"></li>
+                </template>
+              </ul>
+            </details>
+          </template>
+
+          <div class="actions" style="margin-top: 1.5rem;">
+            <button type="button" @click="downloadCsv(true, true)">Download Monte Carlo Report (CSV)</button>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 2: STRESS TESTS -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'stress'">
+      <h2>Stress Test Scenarios</h2>
+      <p class="muted">Test your retirement plan against severe historical market crashes and stagflation regimes.</p>
+
+      <fieldset>
+        <legend>Select Stress Scenarios</legend>
+        <div class="checks">
+          <template x-for="scen in meta.stress_scenarios" :key="scen">
+            <label class="check">
+              <input type="checkbox" :value="scen" x-model="selectedStress">
+              <span x-text="scen"></span>
+            </label>
+          </template>
+        </div>
+      </fieldset>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runStressTests()" :disabled="!!job">
+          Run Stress Tests
+        </button>
+      </div>
+
+      <template x-if="stressResult">
+        <div>
+          <h3>Stress Test Summary</h3>
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Description</th>
+                  <th>Success</th>
+                  <th>Median Final</th>
+                  <th>P10 Final</th>
+                  <th>Depletion Age</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="row in stressResult.results" :key="row.scenario_name">
+                  <tr>
+                    <td style="font-weight: 600;" x-text="row.scenario_name"></td>
+                    <td class="muted small" x-text="row.description"></td>
+                    <td>
+                      <span :class="`badge ${getSuccessBadgeClass(row.success_probability)}`" x-text="formatPercent(row.success_probability)"></span>
+                    </td>
+                    <td x-text="formatCurrency(row.median_final_portfolio)"></td>
+                    <td x-text="formatCurrency(row.p10_final_portfolio)"></td>
+                    <td x-text="row.years_to_depletion_median ? row.years_to_depletion_median : 'Never'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 style="margin-top: 1.5rem;">Median Portfolio Path by Scenario</h3>
+          <div id="chart-stress-paths" style="height: 380px; width: 100%;"></div>
+
+          <div class="actions" style="margin-top: 1.5rem;">
+            <button type="button" @click="downloadCsv(true, false)">Download Stress Test Report (CSV)</button>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 3: LONGEVITY RISK -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'longevity'">
+      <h2>Longevity Risk Analysis</h2>
+      <p class="muted">Analyze how your portfolio holds up if you live well past normal life expectancy (ages 85 to 105).</p>
+
+      <fieldset>
+        <legend>Select Longevity Horizons</legend>
+        <div class="checks">
+          <template x-for="scen in meta.longevity_scenarios" :key="scen">
+            <label class="check">
+              <input type="checkbox" :value="scen" x-model="selectedLongevity">
+              <span x-text="scen"></span>
+            </label>
+          </template>
+        </div>
+      </fieldset>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runLongevity()" :disabled="!!job">
+          Run Longevity Analysis
+        </button>
+      </div>
+
+      <template x-if="longevityResult">
+        <div>
+          <h3>Longevity Scenario Summary</h3>
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Plan To Age</th>
+                  <th>Success</th>
+                  <th>Median Final</th>
+                  <th>P10 Final</th>
+                  <th>P10 Depletion Age</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="row in longevityResult.summary" :key="row.scenario">
+                  <tr>
+                    <td style="font-weight: 600;" x-text="row.scenario"></td>
+                    <td x-text="row.plan_to_age"></td>
+                    <td>
+                      <span :class="`badge ${getSuccessBadgeClass(row.success_probability)}`" x-text="formatPercent(row.success_probability)"></span>
+                    </td>
+                    <td x-text="formatCurrency(row.median_final_portfolio)"></td>
+                    <td x-text="formatCurrency(row.p10_final_portfolio)"></td>
+                    <td x-text="row.p10_depletion_age ? row.p10_depletion_age : 'Never'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 style="margin-top: 1.5rem;">Success Probability by Longevity Horizon</h3>
+          <div id="chart-longevity-bar" style="height: 320px; width: 100%;"></div>
+
+          <h3 style="margin-top: 1.5rem;">Median Portfolio Path by Horizon</h3>
+          <div id="chart-longevity-paths" style="height: 360px; width: 100%;"></div>
+
+          <div class="actions" style="margin-top: 1.5rem;">
+            <button type="button" @click="downloadCsv(false, true)">Download Longevity Report (CSV)</button>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 4: SUCCESS HEATMAP -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'heatmap'">
+      <h2>Success Probability Heatmap</h2>
+      <p class="muted">2D sensitivity matrix mapping Annual Withdrawal vs Portfolio Asset Allocation.</p>
+
+      <fieldset>
+        <legend>Heatmap Parameters</legend>
+        <div class="grid3">
+          <label class="fld">Base Annual Withdrawal ($)
+            <input type="number" min="10000" step="5000" x-model.number="heatmapWithdrawal">
+          </label>
+          <label class="fld">Simulations Per Cell
+            <select x-model.number="heatmapSims">
+              <option :value="500">500 (Fast)</option>
+              <option :value="1000">1,000 (Recommended)</option>
+              <option :value="2000">2,000 (High Precision)</option>
+            </select>
+          </label>
+        </div>
+      </fieldset>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runHeatmap()" :disabled="!!job">
+          Build Heatmap Matrix
+        </button>
+      </div>
+
+      <template x-if="heatmapResult">
+        <div>
+          <h3>Success Probability (%) Matrix</h3>
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Annual Withdrawal</th>
+                  <template x-for="col in heatmapResult.columns" :key="col">
+                    <th style="text-align: center;" x-text="col"></th>
+                  </template>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="(rowVals, rowIdx) in heatmapResult.values" :key="rowIdx">
+                  <tr>
+                    <td style="font-weight: 600;" x-text="heatmapResult.index[rowIdx]"></td>
+                    <template x-for="(val, colIdx) in rowVals" :key="colIdx">
+                      <td :class="`heatmap-cell ${val >= 90 ? 'high' : (val >= 75 ? 'med' : 'low')}`" x-text="val.toFixed(0) + '%'"></td>
+                    </template>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 style="margin-top: 1.5rem;">Visual Heatmap</h3>
+          <div id="chart-heatmap" style="height: 420px; width: 100%;"></div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- TAB 5: SCENARIO COMPARISON -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section x-show="tab === 'compare'">
+      <h2>Full Scenario Comparison</h2>
+      <p class="muted">Compare Baseline, Stress Tests, and Longevity scenarios side-by-side in a single run.</p>
+
+      <div class="grid2">
+        <fieldset>
+          <legend>Stress Scenarios to Include</legend>
+          <div class="checks">
+            <template x-for="scen in meta.stress_scenarios" :key="scen">
+              <label class="check">
+                <input type="checkbox" :value="scen" x-model="cmpStress">
+                <span x-text="scen"></span>
+              </label>
+            </template>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Longevity Scenarios to Include</legend>
+          <div class="checks">
+            <template x-for="scen in meta.longevity_scenarios" :key="scen">
+              <label class="check">
+                <input type="checkbox" :value="scen" x-model="cmpLongevity">
+                <span x-text="scen"></span>
+              </label>
+            </template>
+          </div>
+        </fieldset>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <button type="button" class="primary" @click="runComparison()" :disabled="!!job">
+          Run Full Comparison
+        </button>
+      </div>
+
+      <template x-if="compareResult">
+        <div>
+          <h3>All Scenarios — Side-by-Side</h3>
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th>Success Probability</th>
+                  <th>Median Final Portfolio</th>
+                  <th>10th Pct Final Portfolio</th>
+                  <th>90th Pct Final Portfolio</th>
+                  <th>P10 Depletion Age</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="row in compareResult.table" :key="row.Scenario">
+                  <tr>
+                    <td style="font-weight: 600;" x-text="row['Scenario']"></td>
+                    <td>
+                      <span class="badge"
+                            :class="parseFloat(row['Success Probability']) >= 90 ? 'green' : (parseFloat(row['Success Probability']) >= 75 ? 'yellow' : 'red')"
+                            x-text="row['Success Probability']"></span>
+                    </td>
+                    <td x-text="row['Median Final Portfolio']"></td>
+                    <td x-text="row['10th Pct Final Portfolio']"></td>
+                    <td x-text="row['90th Pct Final Portfolio']"></td>
+                    <td x-text="row['P10 Depletion Age']"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 style="margin-top: 1.5rem;">Success Probability Comparison Chart</h3>
+          <div id="chart-compare-bar" style="height: 380px; width: 100%;"></div>
+
+          <div class="actions" style="margin-top: 1.5rem;">
+            <button type="button" @click="downloadCsv(true, true)">Download Full Comparison Report (CSV)</button>
+          </div>
+        </div>
+      </template>
+    </section>
+  </main>
+
+  <footer>
+    Made with IBM Bob &bull; Retirement Planning Platform
+  </footer>
+</body>
+</html>

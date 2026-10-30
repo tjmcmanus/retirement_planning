@@ -1763,8 +1763,8 @@ class IntroductionRenderer(SectionRenderer):
             p2_name = config.get("personal_info", "person2_name", "")
             is_single = config.get("personal_info", "is_single_person", False)
             
-            p1_birth_year = config.get("social_security", "person1_birth_year", 1966)
-            p2_birth_year = config.get("social_security", "person2_birth_year", 1967)
+            p1_birth_year = config.birth_year("person1")
+            p2_birth_year = config.birth_year("person2")
             current_year = datetime.date.today().year
             p1_age = current_year - p1_birth_year
             p2_age = current_year - p2_birth_year

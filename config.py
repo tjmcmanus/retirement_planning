@@ -9,6 +9,8 @@ import os
 from datetime import datetime, date
 from typing import Dict, Any, Optional, Tuple
 
+from app_state import session
+
 # Default configuration file path
 CONFIG_FILE = "retirement_config.json"
 
@@ -87,11 +89,11 @@ DEFAULT_CONFIG = {
         "person1_ssi_amount": 2000,
         "person2_ssi_age": 70,
         "person2_ssi_amount": 2000,
-        "person1_birth_year": 1965,
+        # Birth year is NOT stored here: it is derived from personal_info.person*_birth_date
+        # (see ConfigManager.birth_year) so there is a single birth setting.
         "person1_gender": "M",
         "person1_life_expectancy": 85,
         "person1_current_earnings": 0,
-        "person2_birth_year": 1966,
         "person2_gender": "F",
         "person2_life_expectancy": 87,
         "person2_current_earnings": 0,
@@ -127,6 +129,9 @@ DEFAULT_CONFIG = {
         "stage_5_max_conversion_rate": 24,
         "stage_6_max_conversion_rate": 24,
         "stage_7_max_conversion_rate": 15,
+        # Optional [{"year": 2027, "amount": 200000}, ...]: extra Traditional → Brokerage
+        # distributions (e.g. to seed Direct Indexing). Executed in Stage 3 years.
+        "trad_prefund_schedule": [],
     },
     "charitable_giving": {
         "annual_charitable_giving": 0,
@@ -232,7 +237,25 @@ class ConfigManager:
                 merged[section].update(values)
             else:
                 merged[section] = values
+        # Legacy duplicate of personal_info.person*_birth_date; dropped on load so it
+        # disappears from the file on the next save.
+        for _legacy in ("person1_birth_year", "person2_birth_year"):
+            merged.get("social_security", {}).pop(_legacy, None)
         return merged
+
+    def birth_year(self, person: str = "person1") -> int:
+        """Birth year for ``person`` ("person1" or "person2"), derived from
+        ``personal_info.<person>_birth_date`` (YYYY-MM-DD).
+
+        This is the year Social Security claiming is measured from
+        (claiming year = birth_year + claiming age).
+        """
+        default = "1965-01-01" if person == "person1" else "1966-01-01"
+        raw = self.get("personal_info", f"{person}_birth_date", default)
+        try:
+            return int(str(raw).split("-")[0])
+        except (ValueError, IndexError):
+            return int(default.split("-")[0])
     
     def save_config(self) -> bool:
         """
@@ -265,6 +288,9 @@ class ConfigManager:
                 print(f"Warning: could not back up {self.config_file}: {backup_exc}")
 
         try:
+            # Birth year is derived from personal_info birth dates; never persist the legacy copy.
+            for _legacy in ("person1_birth_year", "person2_birth_year"):
+                self.config.get("social_security", {}).pop(_legacy, None)
             self.config["metadata"]["last_updated"] = datetime.now().isoformat()
             with open(self.config_file, 'w') as f:
                 json.dump(self.config, f, indent=2)
@@ -576,9 +602,9 @@ def default_retirement_date(birth_date_str: str, default_age: int = 60) -> str:
         return f"{datetime.now().year + default_age}-01-01"
 
 
-# Module-level cache — valid within a single process/worker lifetime.
-_config_manager = None
-
+# The ConfigManager lives in app_state.session(): per browser session inside the
+# Streamlit app (so it survives reruns), and one process-wide instance when running
+# headless (tests, scripts, the API service). This module never imports Streamlit.
 _SESSION_KEY = "_retirement_config_manager"
 
 
@@ -586,27 +612,18 @@ def get_config_manager() -> ConfigManager:
     """
     Get the configuration manager instance.
 
-    The instance is stored in st.session_state so it survives Streamlit
-    re-runs within the same browser session.  A module-level reference is
-    kept as a fast fallback for code that calls this outside a Streamlit
-    request context (e.g. unit tests or CLI scripts).
+    Inside the Streamlit app the instance is kept in ``st.session_state`` so it
+    survives re-runs of the same browser session; headless callers share one
+    process-wide instance (see :mod:`app_state`).
 
     Returns:
         ConfigManager instance
     """
-    global _config_manager
-    try:
-        import streamlit as st
-        if _SESSION_KEY not in st.session_state:
-            # First access this session — load from file.
-            st.session_state[_SESSION_KEY] = ConfigManager()
-        _config_manager = st.session_state[_SESSION_KEY]
-        return _config_manager
-    except (ImportError, AttributeError):
-        # Not running inside Streamlit — fall back to module-level global.
-        if _config_manager is None:
-            _config_manager = ConfigManager()
-        return _config_manager
+    state = session()
+    if _SESSION_KEY not in state:
+        # First access this session — load from file.
+        state[_SESSION_KEY] = ConfigManager()
+    return state[_SESSION_KEY]
 
 def get_config_value(section: str, key: str, default: Any = None) -> Any:
     """
@@ -643,26 +660,16 @@ def get_value_with_session_override(section: str, key: str, session_key: str, de
     Returns:
         Value from session state if present, otherwise from config, otherwise default
     """
-    try:
-        import streamlit as st
-        if session_key in st.session_state:
-            return st.session_state[session_key]
-    except (ImportError, AttributeError, KeyError):
-        pass
-    
+    state = session()
+    if session_key in state:
+        return state[session_key]
+
     config_mgr = get_config_manager()
     return config_mgr.get(section, key, default)
 
 
 def reload_config() -> None:
-    """Reload configuration from file, replacing both the session and module cache."""
-    global _config_manager
-    fresh = ConfigManager()
-    _config_manager = fresh
-    try:
-        import streamlit as st
-        st.session_state[_SESSION_KEY] = fresh
-    except (ImportError, AttributeError):
-        pass
+    """Reload configuration from file, replacing the cached ConfigManager."""
+    session()[_SESSION_KEY] = ConfigManager()
 
 # Made with Bob

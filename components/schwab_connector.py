@@ -7,6 +7,7 @@ The actual Schwab API endpoints and authentication flow may require the official
 schwab-py library or adjustments based on your specific Schwab developer account setup.
 """
 
+import json
 import requests
 import logging
 from typing import Dict, List, Optional
@@ -14,6 +15,67 @@ from datetime import datetime, timedelta
 import pandas as pd
 from components.schwab_oauth import SchwabOAuth, TokenManager
 from components.credential_manager import CredentialManager
+
+
+def schwab_trades_to_rows(raw_transactions: List[Dict], account_hash: str) -> List[Dict]:
+    """
+    Convert Schwab TRADE activities into transaction rows, one per real security item.
+
+    - ``transaction_id`` is ``"<activityId>:<symbol>"`` so items never collide.
+    - CURRENCY items (COMMISSION, SEC_FEE, TAF_FEE, ...) are not trades; their cost is
+      folded into ``fee`` (split across the real items by gross value).
+    - BUY/SELL comes from the sign of ``amount`` (positive = bought).
+    - ``amount`` is the gross cash value ``abs(cost)``; ``fee`` is separate.
+    """
+    from components.schwab_data_transformer import get_account_config, get_schwab_account_name
+
+    rows: List[Dict] = []
+    for txn in raw_transactions:
+        try:
+            items = txn.get('transferItems', []) or []
+            real = [i for i in items if (i.get('instrument') or {}).get('assetType') != 'CURRENCY'
+                    and (i.get('instrument') or {}).get('symbol')]
+            if not real:
+                continue
+            fees = sum(abs(i.get('cost') or i.get('amount') or 0) for i in items
+                       if (i.get('instrument') or {}).get('assetType') == 'CURRENCY')
+            gross = [abs(i.get('cost') or 0) or abs((i.get('amount') or 0) * (i.get('price') or 0)) for i in real]
+            gross_total = sum(gross)
+
+            number = str(txn.get('accountNumber') or '')
+            name = get_schwab_account_name(number) if number else ''
+            acct_type = get_account_config(name).get('account_type', '') if name else ''
+            activity_id = txn.get('activityId', '')
+            date = str(txn.get('tradeDate') or txn.get('time') or '')[:10]
+
+            for item, g in zip(real, gross):
+                inst = item['instrument']
+                symbol = inst['symbol']
+                qty = abs(item.get('amount') or 0)
+                ttype = 'BUY' if (item.get('amount') or 0) > 0 else 'SELL'
+                price = item.get('price') or 0
+                share = (g / gross_total) if gross_total else 1 / len(real)
+                rows.append({
+                    'transaction_id': f"{activity_id}:{symbol}",
+                    'date': date,
+                    'symbol': symbol,
+                    'transaction_type': ttype,
+                    'quantity': qty,
+                    'price': price,
+                    'amount': g,
+                    'fee': round(fees * share, 4),
+                    'account_id': account_hash,
+                    'account_name': name,
+                    'account_type': acct_type,
+                    'description': f"{ttype} {qty:g} {symbol} @ ${price}",
+                    'raw_data': json.dumps({'asset_type': inst.get('assetType'),
+                                            'position_effect': item.get('positionEffect'),
+                                            'order_id': txn.get('orderId'),
+                                            'net_amount': txn.get('netAmount')}),
+                })
+        except Exception as e:
+            logger.warning(f"Failed to process Schwab transaction {txn.get('activityId')}: {e}")
+    return rows
 
 logger = logging.getLogger(__name__)
 
@@ -783,131 +845,51 @@ class SchwabConnector:
             logger.error(f"Failed to get positions: {e}")
             raise
     
+    # The Trader API rejects transaction windows longer than one year (HTTP 400).
+    _TXN_WINDOW_DAYS = 364
+
     def _import_transactions_for_positions(
         self,
         account_hash: Optional[str] = None,
         days_back: int = 365
     ):
         """
-        Import order history for positions (internal helper)
-        
-        Note: Schwab API uses "orders" endpoint, not "transactions".
-        This method fetches filled orders which provide purchase dates for positions.
-        
-        Args:
-            account_hash: Specific account hash, or None for all accounts
-            days_back: Number of days of order history to import
+        Import TRADE history for an account into transactions.db (internal helper).
+
+        Walks the range in <=1-year windows (the API limit) and upserts, so history
+        accumulates across runs and is never deleted. ``days_back`` may be many years.
         """
-        try:
-            from components.transaction_importer import TransactionImporter
-            from components.transaction_storage import TransactionStorage
-            
-            logger.info(f"Starting transaction import for Schwab (days_back={days_back})")
-            
-            # Ensure API is initialized
-            if not self.api:
-                logger.error("Schwab API not initialized - cannot import transactions")
-                return
-            
-            # Ensure account_hash is provided
-            if not account_hash:
-                logger.error("Account hash required for transaction import")
-                return
-            
-            # Initialize storage component
-            storage = TransactionStorage()
-            
-            # Calculate date range
-            end_time = datetime.now()
-            start_time = end_time - timedelta(days=days_back)
-            
-            # Format dates for Schwab API (ISO 8601)
-            start_date = start_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            end_date = end_time.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            
-            # Fetch transactions from Schwab API (better than orders endpoint)
-            logger.info(f"Fetching transactions from Schwab API ({start_date} to {end_date})...")
-            raw_transactions = self.api.get_transactions(
+        if not self.api:
+            logger.error("Schwab API not initialized - cannot import transactions")
+            return
+        if not account_hash:
+            logger.error("Account hash required for transaction import")
+            return
+
+        from components.transaction_storage import TransactionStorage
+        storage = TransactionStorage()
+
+        fmt = '%Y-%m-%dT%H:%M:%S.000Z'
+        floor = datetime.utcnow() - timedelta(days=days_back)
+        window_end = datetime.utcnow()
+        total = 0
+        while window_end > floor:
+            window_start = max(floor, window_end - timedelta(days=self._TXN_WINDOW_DAYS))
+            raw = self.api.get_transactions(
                 account_hash=account_hash,
-                start_date=start_date,
-                end_date=end_date,
-                transaction_types='TRADE'  # Focus on trades (buys/sells)
+                start_date=window_start.strftime(fmt),
+                end_date=window_end.strftime(fmt),
+                transaction_types='TRADE',
             )
-            
-            logger.info(f"Fetched {len(raw_transactions)} transactions from Schwab")
-            
-            # Convert Schwab transactions to standard format
-            transactions = []
-            for txn in raw_transactions:
-                try:
-                    # Extract basic transaction info
-                    activity_id = txn.get('activityId', '')
-                    txn_time = txn.get('time', '')
-                    trade_date = txn.get('tradeDate', '')
-                    txn_type = txn.get('type', '')
-                    
-                    # Process transfer items (the actual trades)
-                    for item in txn.get('transferItems', []):
-                        instrument = item.get('instrument', {})
-                        symbol = instrument.get('symbol', '')
-                        
-                        # Determine if BUY or SELL based on amount sign
-                        amount = item.get('amount', 0)
-                        quantity = abs(amount)
-                        transaction_type = 'BUY' if amount > 0 else 'SELL'
-                        
-                        # Get price
-                        price = item.get('price', 0)
-                        if not price:
-                            price = item.get('cost', 0)
-                        
-                        # Create transaction record
-                        transaction = {
-                            'transaction_id': f"{activity_id}",
-                            'date': trade_date if trade_date else txn_time[:10],
-                            'symbol': symbol,
-                            'transaction_type': transaction_type,
-                            'quantity': quantity,
-                            'price': price,
-                            'amount': quantity * price,
-                            'account_id': account_hash,
-                            'description': f"{transaction_type} {quantity} {symbol} @ ${price}"
-                        }
-                        transactions.append(transaction)
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to process transaction {txn.get('activityId')}: {e}")
-                    continue
-            
-            # Convert to DataFrame
-            transactions_df = pd.DataFrame(transactions)
-            logger.info(f"Converted {len(transactions_df)} transactions to standard format")
-            
-            if len(transactions_df) > 0:
-                # Log transaction types
-                if 'transaction_type' in transactions_df.columns:
-                    type_counts = transactions_df['transaction_type'].value_counts()
-                    logger.info(f"Transaction types: {dict(type_counts)}")
-                
-                # Log unique symbols
-                if 'symbol' in transactions_df.columns:
-                    unique_symbols = transactions_df['symbol'].unique()
-                    logger.info(f"Transactions for {len(unique_symbols)} unique symbols")
-                    logger.info(f"Sample symbols: {list(unique_symbols)[:10]}")
-                
-                # Store transactions
-                logger.info("Storing transactions in database...")
-                storage.store_transactions(
-                    transactions_df,
-                    user_id="default"
+            rows = schwab_trades_to_rows(raw, account_hash)
+            if rows:
+                # Replace rows written by the old importer (id = bare activityId) for these activities.
+                storage.delete_by_transaction_ids(
+                    sorted({str(t.get('activityId')) for t in raw if t.get('activityId') is not None})
                 )
-                logger.info(f"✅ Successfully imported and stored {len(transactions_df)} orders as transactions")
-            else:
-                logger.warning("⚠️ No orders to import - this may be normal if no filled orders in date range")
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to import orders: {e}", exc_info=True)
-            raise
+                total += storage.store_transactions(pd.DataFrame(rows), user_id="default")
+            window_end = window_start
+        logger.info(f"Schwab trade import for {account_hash[:8]}: stored {total} trades ({days_back} days back)")
     
     def get_transactions(
         self,

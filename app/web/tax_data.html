@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tax Data Admin - Retirement Planner</title>
+  <link rel="stylesheet" href="/vendor/tabulator_simple-6.3.1.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/nav.js"></script>
+  <script defer src="/vendor/tabulator-6.3.1.min.js"></script>
+  <script defer src="/static/tax_data.js"></script>
+  <script defer src="/vendor/alpine-3.14.9.min.js"></script>
+</head>
+<body x-data="taxAdmin()" x-init="init()" @beforeunload.window="if (dirty) { $event.preventDefault(); $event.returnValue = ''; }">
+  <header>
+    <h1>Tax Data Admin</h1>
+    <nav id="main-nav"></nav>
+  </header>
+
+  <main>
+    <p class="muted">
+      Update the IRS lookup tables for the annual cost-of-living adjustments. Saving writes the CSV file in your data folder
+      and keeps a copy of the previous file in <code>.backups/</code>.
+    </p>
+    <p class="callout warning"><strong>Important:</strong> always verify values against the official IRS publications before saving.</p>
+
+    <p class="muted" x-show="loading">Loading tax tables...</p>
+    <p class="msg" :class="message && message.kind" x-show="message" x-text="message && message.text" role="status"></p>
+
+    <div class="tabs" role="tablist">
+      <template x-for="t in tables" :key="t.key">
+        <button type="button" role="tab" :class="{active: current === t.key}" :data-table="t.key" @click="openTable(t.key)">
+          <span x-text="t.name"></span><span class="dot" x-show="current === t.key && dirty" x-cloak title="Unsaved changes"></span>
+        </button>
+      </template>
+    </div>
+
+    <template x-if="data">
+      <div id="table-panel">
+        <h2 x-text="data.name"></h2>
+        <p class="error" x-show="data.error" x-text="data.error"></p>
+
+        <div class="kpis">
+          <div class="kpi"><div class="kpi-label" x-text="data.has_year ? 'Rows shown (year ' + data.year + ')' : 'Rows'"></div>
+            <div class="kpi-value small-value" id="kpi-shown" x-text="rowCount"></div></div>
+          <div class="kpi"><div class="kpi-label">Total rows in file</div>
+            <div class="kpi-value small-value" id="kpi-total" x-text="data.total_rows"></div></div>
+          <div class="kpi"><div class="kpi-label" x-text="data.year_span ? 'Years in file' : 'Columns'"></div>
+            <div class="kpi-value small-value" x-text="data.year_span ? data.year_span[0] + '-' + data.year_span[1] : data.columns.length"></div></div>
+        </div>
+
+        <div class="actions static">
+          <label x-show="data.has_year">Year
+            <select id="year-select" x-model.number="year" @change="changeYear()">
+              <template x-for="y in data.years" :key="y"><option :value="y" :selected="y === data.year" x-text="y"></option></template>
+            </select>
+          </label>
+          <button type="button" id="add-row" @click="addRow()">Add row</button>
+          <button type="button" id="save" class="primary" :disabled="busy || !dirty" @click="save()">
+            <span x-text="busy ? 'Working...' : 'Save changes'"></span>
+          </button>
+          <button type="button" id="discard" :disabled="busy || !dirty" @click="discard()">Discard changes</button>
+          <span class="muted" id="dirty-note" x-text="dirty ? 'Unsaved changes' : 'All changes saved'"></span>
+          <span class="spacer"></span>
+          <a class="btn" id="download" :href="'/api/tax-data/' + data.key + '/download'" download>Download CSV</a>
+        </div>
+        <p class="muted small" x-show="data.has_year">
+          This view edits one year at a time; rows of other years are not touched. To add a new year, pick it in the list
+          (the previous, current and next year are always offered) and add its rows.
+        </p>
+
+        <div id="grid-tax"></div>
+
+        <div class="report" id="save-errors" x-show="errorLines.length" x-cloak>
+          <p class="error"><strong>Not saved.</strong> Fix these and try again:</p>
+          <ul><template x-for="(l, i) in errorLines" :key="i"><li class="error" x-text="l"></li></template></ul>
+        </div>
+
+        <details id="upload-box" :open="up.open" @toggle="up.open = $event.target.open">
+          <summary>Upload replacement file</summary>
+          <p class="callout warning">This replaces <strong>all</strong> rows in <code x-text="data.filename"></code>. The current file is backed up first.</p>
+          <input type="file" id="upload-file" accept=".csv,text/csv" @change="pickFile($event)">
+          <p class="error" x-show="up.error" x-text="up.error"></p>
+
+          <template x-if="up.report">
+            <div>
+              <p class="msg ok" x-show="up.report.valid">Validation passed: <span x-text="up.report.rows"></span> row(s).</p>
+              <div x-show="!up.report.valid">
+                <p class="error"><strong>Validation failed:</strong></p>
+                <ul><template x-for="(l, i) in up.report.errors" :key="i"><li class="error" x-text="l"></li></template></ul>
+              </div>
+              <p class="msg warn" x-show="up.report.warnings.length" x-text="up.report.warnings.join(' ')"></p>
+              <h3>Preview (first 10 rows)</h3>
+              <div class="tablewrap">
+                <table class="mini" id="upload-preview">
+                  <thead><tr><template x-for="c in up.report.columns" :key="c"><th x-text="c"></th></template></tr></thead>
+                  <tbody>
+                    <template x-for="(r, i) in up.report.preview" :key="i">
+                      <tr><template x-for="c in up.report.columns" :key="c"><td x-text="r[c]"></td></template></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <button type="button" id="confirm-upload" class="primary" x-show="up.report.valid" :disabled="busy" @click="confirmUpload()">Confirm upload</button>
+            </div>
+          </template>
+        </details>
+      </div>
+    </template>
+
+    <h2 style="margin-top:2rem">Documentation &amp; resources</h2>
+    <details>
+      <summary>Official IRS resources</summary>
+      <p class="small muted">Adjustments are typically published in October to November.</p>
+      <ul>
+        <li><a href="https://www.irs.gov/newsroom/irs-provides-tax-inflation-adjustments-for-tax-year" target="_blank" rel="noopener">IRS cost-of-living adjustments</a> (tax brackets, standard deduction)</li>
+        <li><a href="https://www.irs.gov/retirement-plans/plan-participant-employee/retirement-topics-contributions" target="_blank" rel="noopener">IRS retirement topics: contribution limits</a></li>
+        <li><a href="https://www.irs.gov/publications/p590a" target="_blank" rel="noopener">IRS Publication 590-A</a> (IRA contributions)</li>
+        <li><a href="https://www.irs.gov/taxtopics/tc409" target="_blank" rel="noopener">IRS Topic 409</a> (capital gains and losses)</li>
+        <li><a href="https://www.medicare.gov/your-medicare-costs/part-b-costs" target="_blank" rel="noopener">Medicare.gov: Part B costs</a> and
+            <a href="https://www.medicare.gov/drug-coverage-part-d/costs-for-medicare-drug-coverage" target="_blank" rel="noopener">Part D costs</a> (IRMAA)</li>
+        <li><a href="https://www.irs.gov/publications/p590b" target="_blank" rel="noopener">IRS Publication 590-B</a> (RMDs; Uniform Lifetime Table, Appendix B)</li>
+        <li><a href="https://www.ssa.gov/oact/cola/colaseries.html" target="_blank" rel="noopener">SSA cost-of-living adjustments</a></li>
+      </ul>
+    </details>
+    <details>
+      <summary>Annual update checklist</summary>
+      <ol>
+        <li>Wait for the official IRS announcements (October to November).</li>
+        <li>Download the official publications.</li>
+        <li>Download a copy of each table with the <em>Download CSV</em> button.</li>
+        <li>Update each table for the new year: standard deduction, income tax brackets and capital gains brackets (both filing statuses), IRA &amp; 401(k) limits, IRMAA thresholds.</li>
+        <li>Verify every entry against the official source.</li>
+        <li>Run a strategy with sample data to check the results.</li>
+      </ol>
+      <p class="small muted">
+        The HTML app drops its cached results on every save. The Streamlit app runs in a separate process and keeps its own
+        cache: use <em>Refresh All Data</em> in its sidebar (or restart it) to pick up the change there.
+      </p>
+    </details>
+    <details>
+      <summary>Common pitfalls</summary>
+      <ul>
+        <li><strong>Filing status:</strong> brackets and the standard deduction have separate rows for married_filing_jointly and single. Update both.</li>
+        <li><strong>Brackets:</strong> they must not overlap, and the top bracket needs a very high upper limit (for example 4000000).</li>
+        <li><strong>IRMAA:</strong> it uses MAGI from two years earlier; thresholds are for married filing jointly, and single is typically half.</li>
+        <li><strong>IRA limits:</strong> catch-up amounts start at age 50, with a special 401(k) catch-up at ages 60 to 63 (SECURE 2.0); Roth phase-out ranges differ by filing status.</li>
+        <li><strong>Data types:</strong> years are whole numbers (2026, not "2026"); rates are decimals (0.22, not 22).</li>
+      </ul>
+    </details>
+  </main>
+
+  <footer class="muted">Data stays on this machine. No external scripts are loaded.</footer>
+</body>
+</html>

@@ -4,14 +4,18 @@
 
 import yfinance as yf
 import pandas as pd
-import streamlit as st
 import os
+import app_cache
+from app_cache import cache_data
+from app_state import session
 import threading as _threading
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year
+from load_data import get_portfolio_truth_by_month, get_latest_portfolio_month_year, CASH_SYMBOLS, db_stamp
+import market_hours
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,19 @@ logger = logging.getLogger(__name__)
 # for live yfinance price fetches.  The cache is keyed by month/year so stale
 # data from a different period is never shown as current.
 PORTFOLIO_CACHE_FILE = "portfolio_display_cache.parquet"
-PORTFOLIO_CACHE_TTL_SECONDS = 300  # 5 minutes — matches @st.cache_data(ttl=300)
+PORTFOLIO_CACHE_TTL_SECONDS = 300  # 5 minutes — matches @cache_data(ttl=300)
+# The cache is also discarded when portfolio.db has changed since it was built (another process,
+# e.g. the Streamlit container, edited the holdings), and it stays valid past the TTL while the
+# market is closed and no open has happened since it was built (see market_hours.py).
+
+def is_cash_symbol(symbol) -> bool:
+    """True for cash / money-market positions ("CASH" and "MF:CASH").
+
+    Yahoo Finance has a real ticker called CASH (about $76 a share), so these must never be
+    sent to it.
+    """
+    return str(symbol).strip().upper() in CASH_SYMBOLS
+
 
 def color_negative_positive(value):
     """
@@ -33,43 +49,76 @@ def color_negative_positive(value):
         return 'color: red' if value < 0 else 'color: green'
     return ''
 
-@st.cache_data(ttl=300)  # refresh every 5 minutes
+def _last_known_price(symbol: str) -> float:
+    """Return the most recent purchase_price stored in the DB for *symbol*.
+
+    Used as a fallback when yfinance cannot fetch a live price (e.g. a
+    delisted mutual fund).  Returns 0.0 when the symbol is absent, which
+    makes the current-value column show $0 — an obvious signal to the user
+    that manual price entry is needed, rather than silently showing $1/share.
+    """
+    try:
+        from portfolio_db import get_db_connection
+        # Do not close: get_db_connection() returns the thread's shared, persistent connection.
+        # Closing it breaks every later query on this thread ("Cannot operate on a closed database").
+        conn = get_db_connection()
+        row = conn.execute(
+            "SELECT purchase_price FROM holdings "
+            "WHERE symbol = ? AND purchase_price > 0 "
+            "ORDER BY year DESC, month DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+        if row:
+            return float(row[0])
+    except Exception:
+        pass
+    return 0.0
+
+
+@cache_data(ttl=300)  # refresh every 5 minutes
 def get_current_price(symbol):
     # For cash holdings, return 1.0 (no price lookup needed)
-    if symbol == "MF:CASH":
+    if is_cash_symbol(symbol):
         return 1.0
-    
+
     # Check if this is an options contract
     from portfolio_data_entry import is_option_symbol
     is_option, underlying, option_type = is_option_symbol(symbol)
-    
+
     if is_option:
         # Options contracts don't have reliable price data in yfinance
         # Return 0.0 to indicate manual price entry is needed
         logger.info(f"Options contract detected: {symbol}. Manual price entry required.")
         return 0.0
-    
+
     try:
         ticker = yf.Ticker(symbol)
-        
+
         # Mutual funds (5-letter tickers) need longer period for price data
         # They update less frequently than stocks
         if len(symbol) == 5 and symbol.isalpha():
             period = '5d'  # Use 5 days for mutual funds
         else:
             period = '4d'  # Use 4 days for stocks/ETFs
-        
+
         todays_data = ticker.history(period=period).tail(1)
         if todays_data.empty:
-            logger.warning(f"No price data available for {symbol}, treating as cash (MF:CASH)")
-            return 1.0  # Treat as cash if no price data available
+            fallback = _last_known_price(symbol)
+            logger.warning(
+                "No price data for %s (possibly delisted); using last known price $%.4f",
+                symbol, fallback,
+            )
+            return fallback
         return todays_data['Close'].iloc[0]
     except Exception as e:
-        # yfinance raises many undocumented exception types for HTTP errors, bad symbols, etc.
-        logger.warning(f"Error fetching price for {symbol}: {e}. Treating as cash (MF:CASH)", exc_info=True)
-        return 1.0  # Treat invalid symbols as cash
+        fallback = _last_known_price(symbol)
+        logger.warning(
+            "Error fetching price for %s: %s. Using last known price $%.4f",
+            symbol, e, fallback,
+        )
+        return fallback
 
-@st.cache_data()
+@cache_data()
 def _get_symbol_row(symbol, month=None, year=None):
     """Return the first portfolio row for *symbol* as a dict, or None if missing.
 
@@ -99,10 +148,9 @@ def get_tax_type(symbol, month=None, year=None):
     row = _get_symbol_row(symbol, month=month, year=year)
     return row['account_type'] if row is not None else ''
 
-#@st.cache_data()
 def get_ticker_name(symbol, month=None, year=None):
     # For cash holdings, return "Cash"
-    if symbol == "MF:CASH":
+    if is_cash_symbol(symbol):
         return "Cash"
     
     ticker = yf.Ticker(symbol)
@@ -125,7 +173,7 @@ def get_ticker_name(symbol, month=None, year=None):
 
 def get_sector(symbol, month=None, year=None):
     # For cash holdings, return "MF:Cash"
-    if symbol == "MF:CASH":
+    if is_cash_symbol(symbol):
         return "MF:Cash"
 
     # Check stored sector first — reuse the cached row to avoid a second filter
@@ -206,7 +254,7 @@ def calculate_cost_basis(symbol, month=None, year=None):
 
 def get_current_dividend(symbol, month=None, year=None):
     # Cash holdings don't have dividends
-    if symbol == "MF:CASH":
+    if is_cash_symbol(symbol):
         return "na", 0.00, 0
     
     ticker = yf.Ticker(symbol)
@@ -227,7 +275,7 @@ def get_current_dividend(symbol, month=None, year=None):
 
 def get_dividend_frequency(symbol):
     # Cash holdings don't have dividends
-    if symbol == "MF:CASH":
+    if is_cash_symbol(symbol):
         return 0
     
     ticker = yf.Ticker(symbol)
@@ -267,7 +315,7 @@ def get_effective_portfolio_month_year(month=None, year=None):
     return month, year
 
 
-@st.cache_data()
+@cache_data()
 def getPortfolioData(month: Optional[int] = None, year: Optional[int] = None) -> pd.DataFrame:
     """
     Get portfolio data for a specific month and year.
@@ -386,7 +434,11 @@ def _build_totals_row(portdf: pd.DataFrame) -> pd.DataFrame:
     return totals.reindex(portdf.columns).to_frame().T
 
 
-@st.cache_data()
+_LOOKUP_WORKERS = 8   # concurrent Yahoo Finance lookups when building the display table
+
+
+# ttl: without one, a rebuild after the disk cache expires would replay the old in-memory prices forever.
+@cache_data(ttl=PORTFOLIO_CACHE_TTL_SECONDS)
 def build_portfolio_display(month=None, year=None):
     """
     Build portfolio display with unique account_name + symbol combinations.
@@ -404,10 +456,16 @@ def build_portfolio_display(month=None, year=None):
     # Pre-fetch per-symbol data once to avoid redundant external calls for
     # symbols that appear across multiple accounts.
     unique_symbols = portfolio_data['symbol'].unique()
-    price_cache  = {s: get_current_price(s)                            for s in unique_symbols}
-    sector_cache = {s: get_sector(s, month=month, year=year)           for s in unique_symbols}
-    name_cache   = {s: get_ticker_name(s, month=month, year=year)      for s in unique_symbols}
-    div_cache    = {s: get_current_dividend(s, month=month, year=year) for s in unique_symbols}
+    # Each lookup is a separate Yahoo Finance request, so run them concurrently. get_sector stays
+    # sequential and on this thread: it can write to the database, and writers must not overlap.
+    with ThreadPoolExecutor(max_workers=_LOOKUP_WORKERS) as pool:
+        price_jobs = {s: pool.submit(get_current_price, s)                            for s in unique_symbols}
+        name_jobs  = {s: pool.submit(get_ticker_name, s, month=month, year=year)      for s in unique_symbols}
+        div_jobs   = {s: pool.submit(get_current_dividend, s, month=month, year=year) for s in unique_symbols}
+        sector_cache = {s: get_sector(s, month=month, year=year)                      for s in unique_symbols}
+        price_cache = {s: j.result() for s, j in price_jobs.items()}
+        name_cache  = {s: j.result() for s, j in name_jobs.items()}
+        div_cache   = {s: j.result() for s, j in div_jobs.items()}
 
     # Build a flat per-symbol lookup DataFrame (Suggestion 3).
     # Unpacking the dividend tuple here keeps the downstream merge + assign clean.
@@ -429,7 +487,7 @@ def build_portfolio_display(month=None, year=None):
 
     merged['Account']                = merged['account_name']
     merged['Tax Type']               = merged['account_type']
-    merged['Ticker']                 = merged['symbol'].where(merged['symbol'] != 'MF:CASH', 'Cash')
+    merged['Ticker']                 = merged['symbol'].where(~merged['symbol'].map(is_cash_symbol), 'Cash')
     merged['Quantity']               = merged['qty'].map(format_quantity)
     merged['Current value']          = merged['qty'] * merged['Price']
     merged['Cost Basis']             = merged['qty'] * merged['purchase_price']
@@ -487,6 +545,7 @@ def save_portfolio_cache(portdf: pd.DataFrame, month: int, year: int) -> None:
             "_cache_month": [int(month)],
             "_cache_year":  [int(year)],
             "_cache_ts":    [datetime.utcnow().isoformat()],
+            "_cache_db":    [db_stamp()],
         })
         # Pad meta to match portdf row count (fill with NaN) so concat works.
         meta_padded = meta.reindex(portdf.index)
@@ -496,6 +555,7 @@ def save_portfolio_cache(portdf: pd.DataFrame, month: int, year: int) -> None:
         out["_cache_month"] = meta_padded["_cache_month"]
         out["_cache_year"]  = meta_padded["_cache_year"]
         out["_cache_ts"]    = meta_padded["_cache_ts"]
+        out["_cache_db"]    = meta_padded["_cache_db"]
 
         out.to_parquet(PORTFOLIO_CACHE_FILE, index=False)
     except Exception as exc:
@@ -535,12 +595,18 @@ def load_portfolio_cache(month: int, year: int) -> pd.DataFrame:
         if cached_month != month or cached_year != year:
             return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
-        # Validate TTL
+        # Built from the holdings that are in the database now?  A cache from before another process
+        # edited them is wrong however young it is; drop the in-memory copies too, because they hold
+        # the same old holdings and would otherwise be used to rebuild.
+        if "_cache_db" not in cached.columns or str(cached["_cache_db"].iloc[0]) != db_stamp():
+            app_cache.clear_all()
+            return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
+
+        # Young enough, or built while the market was closed and not opened since?
         cached_ts_str = cached["_cache_ts"].iloc[0] if "_cache_ts" in cached.columns else None
         if cached_ts_str:
             cached_ts = datetime.fromisoformat(str(cached_ts_str))
-            age_seconds = (datetime.utcnow() - cached_ts).total_seconds()
-            if age_seconds > PORTFOLIO_CACHE_TTL_SECONDS:
+            if not market_hours.is_fresh(cached_ts, PORTFOLIO_CACHE_TTL_SECONDS):
                 return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
         # Strip internal metadata columns before returning
@@ -591,12 +657,12 @@ def render_portfolio(month: int, year: int, done_event: "_threading.Event") -> p
     **Background rebuild**
     The background thread sets *done_event* when it finishes.  Callers that
     want to trigger a Streamlit rerun once live data is ready should check
-    ``done_event.is_set()`` and call ``st.rerun()`` accordingly.
+    ``done_event.is_set()`` and call ``st.rerun()`` accordingly (UI side).
 
     Args:
         month:       Portfolio month (1-12).
         year:        Portfolio year (e.g. 2025).
-        done_event:  A :class:`threading.Event` stored in ``st.session_state``
+        done_event:  A :class:`threading.Event` stored in the session state
                      so it survives Streamlit reruns.  Pass the same object on
                      every call within a session.
 
@@ -610,9 +676,12 @@ def render_portfolio(month: int, year: int, done_event: "_threading.Event") -> p
         # already been set (meaning a previous rebuild finished) AND enough time
         # has passed since the last rebuild in this session (TTL guard).
         if done_event.is_set():
-            _last_ts = st.session_state.get("_portfolio_last_rebuild_ts", 0.0)
-            if time.time() - _last_ts >= PORTFOLIO_CACHE_TTL_SECONDS:
-                st.session_state["_portfolio_last_rebuild_ts"] = time.time()
+            _last_ts = session().get("_portfolio_last_rebuild_ts", 0.0)
+            # No refresh when the last rebuild already captured the closing prices and the market
+            # has not opened since: nothing a new fetch could return would differ.
+            _settled = market_hours.prices_unchanged_since(datetime.fromtimestamp(_last_ts, timezone.utc))
+            if time.time() - _last_ts >= PORTFOLIO_CACHE_TTL_SECONDS and not _settled:
+                session()["_portfolio_last_rebuild_ts"] = time.time()
                 done_event.clear()
                 _t = _threading.Thread(
                     target=_rebuild_and_cache,
@@ -629,7 +698,7 @@ def render_portfolio(month: int, year: int, done_event: "_threading.Event") -> p
         return pd.DataFrame(columns=pd.Index(PORTFOLIO_DISPLAY_COLUMNS))
 
     # Launch a fresh background rebuild
-    st.session_state["_portfolio_last_rebuild_ts"] = time.time()
+    session()["_portfolio_last_rebuild_ts"] = time.time()
     done_event.clear()
     _t = _threading.Thread(
         target=_rebuild_and_cache,

@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 
 # Cache database path
-CACHE_DB_PATH = Path(__file__).parent / "data" / "factor_cache.db"
+from settings import data_path
+CACHE_DB_PATH = data_path("data", "factor_cache.db")
 
 _CREATE_CACHE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS factor_cache (

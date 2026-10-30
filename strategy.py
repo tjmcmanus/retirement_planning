@@ -4777,7 +4777,8 @@ class WithdrawalStrategyEngine:
                 'Roth Balance': s.balances.roth,
                     'DAF Balance': s.balances.daf,
                     'Total Portfolio': s.balances.total(),
-                    'Decision Log': getattr(s, 'decision_log', None),
+                    # Stages record reasons on `decisions`; `decision_log` is the legacy attribute.
+                    'Decision Log': getattr(s, 'decisions', None) or getattr(s, 'decision_log', None),
                 })
             except Exception as e:
                 logger.error(f"Error converting strategy {idx+1} (Year {s.year}): {e}", exc_info=True)

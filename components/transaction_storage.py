@@ -198,7 +198,21 @@ class TransactionStorage:
 
         logger.info(f"Backfilled account names for {updated_count} transactions")
         return updated_count
-    
+
+    def delete_by_transaction_ids(self, transaction_ids: List[str]) -> int:
+        """Delete rows whose transaction_id exactly matches one of ``transaction_ids``.
+
+        Used only to drop superseded rows (e.g. the old Schwab importer's bare activityId)
+        right before re-inserting the corrected rows for the same activities.
+        """
+        if not transaction_ids:
+            return 0
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.executemany("DELETE FROM transactions WHERE transaction_id = ?",
+                                   [(t,) for t in transaction_ids])
+            conn.commit()
+            return cur.rowcount
+
     def store_transactions(
         self,
         transactions: pd.DataFrame,
