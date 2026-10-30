@@ -1,0 +1,42 @@
+{
+  "id": "b8ccf4f7-2ee0-4cf0-901f-61a136d7910b",
+  "name": "Baseline (Current Plan)",
+  "description": "Current retirement plan based on configuration",
+  "created_at": "2026-10-30T16:52:13.947611",
+  "modified_at": "2026-10-30T16:52:13.947624",
+  "is_baseline": true,
+  "financial": {
+    "initial_portfolio": 8419372.467369583,
+    "annual_expenses": 128300,
+    "inflation_rate": 0.03,
+    "portfolio_allocation": {
+      "stocks": 0.7,
+      "bonds": 0.25,
+      "cash": 0.05
+    }
+  },
+  "personal": {
+    "person1_age": 60,
+    "person2_age": 59,
+    "retirement_age": 60,
+    "plan_to_age": 95,
+    "is_single": false
+  },
+  "income_sources": {
+    "social_security": {
+      "person1_amount": 50460,
+      "person1_start_age": 70,
+      "person2_amount": 50460,
+      "person2_start_age": 70
+    },
+    "pension": null,
+    "part_time_income": null
+  },
+  "life_events": [],
+  "tax_strategy": {
+    "roth_conversion_strategy": "fill_bracket",
+    "tax_harvesting_enabled": true,
+    "target_tax_bracket": 0.24
+  },
+  "last_run_results": null
+}

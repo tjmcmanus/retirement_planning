@@ -200,3 +200,6 @@ strategy.py.bak2
 .backups/retirement_config_*.json
 .backups/portfolio.db.tom.old
 ssincome.csv
+
+# IBM Bob temporary files and scratch directory
+.bob/
