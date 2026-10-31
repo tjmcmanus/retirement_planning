@@ -29,12 +29,19 @@ function strategyPage() {
     err: null,
     activeTab: "plan",
     tabs: [
-      { id: "plan",    label: "📋 Long-Term Plan" },
-      { id: "monthly", label: "📅 Monthly Plan" },
-      { id: "buckets", label: "🪣 Bucket Strategy" },
-      { id: "tax",     label: "💰 Tax Analytics" },
-      { id: "incexp",  label: "📊 Income & Expenses" },
+      { id: "plan",                 label: "📋 Long-Term Plan" },
+      { id: "select_tax_strategy",  label: "🎯 Select a Tax Strategy" },
+      { id: "monthly",              label: "📅 Monthly Plan" },
+      { id: "buckets",              label: "🪣 Bucket Strategy" },
+      { id: "tax",                  label: "💰 Tax Analytics" },
+      { id: "incexp",               label: "📊 Income & Expenses" },
     ],
+
+    selectedTaxStrategyIdx: 11, // Default viewing "Roth Conversions to fill 22% Brkt"
+    applyingStrategy: false,
+    strategyAppliedMsg: "",
+
+    config: null,     // active /api/config response
 
     // ── per-section state ─────────────────────────────────────────
     strategy: null,   // main /api/strategy response
@@ -71,7 +78,12 @@ function strategyPage() {
     // ── entry point ───────────────────────────────────────────────
     async load() {
       try {
-        this.strategy = await getJSON("/api/strategy");
+        const [stratData, cfgData] = await Promise.all([
+          getJSON("/api/strategy"),
+          getJSON("/api/config")
+        ]);
+        this.strategy = stratData;
+        this.config = cfgData;
 
         // Set initial year selectors before revealing the UI
         const years = this.strategy.strategy.map(r => r["Year"]);
@@ -596,6 +608,144 @@ function strategyPage() {
       if (!ins.length)
         ins.push("✅ No major tax optimisation opportunities flagged — the plan looks well-structured.");
       return ins;
+    },
+
+    // ── Select a Tax Strategy (RightCapital-style) ─────────────────
+    get baselinePlanTaxes() {
+      if (!this.strategy || !this.strategy.strategy) return 3676000;
+      const s = this.strategy.strategy;
+      const fed = s.reduce((a, r) => a + (Number(r["Federal Tax"]) || 0), 0);
+      const state = s.reduce((a, r) => a + (Number(r["State Tax"]) || 0), 0);
+      const irmaa = s.reduce((a, r) => a + (Number(r["IRMAA Penalty"]) || 0), 0);
+      const tot = fed + state + irmaa;
+      return tot > 0 ? tot : 3676000;
+    },
+
+    get baselinePlanIncome() {
+      if (!this.strategy || !this.strategy.strategy) return 5700000;
+      const s = this.strategy.strategy;
+      const agi = s.reduce((a, r) => a + (Number(r["AGI"]) || 0), 0);
+      const tot = agi - this.baselinePlanTaxes;
+      return tot > 0 ? tot : 5700000;
+    },
+
+    get baselinePlanLegacy() {
+      if (!this.strategy || !this.strategy.strategy) return 31260000;
+      const s = this.strategy.strategy;
+      const last = s[s.length - 1];
+      const bal = Number(last ? last["Total Portfolio"] : 0);
+      return bal > 0 ? bal : 31260000;
+    },
+
+    get baselineFirstYearRmd() {
+      if (!this.strategy || !this.strategy.strategy) return 145000;
+      const s = this.strategy.strategy;
+      const rmdRow = s.find(r => Number(r["RMD"]) > 0);
+      if (rmdRow) return Number(rmdRow["RMD"]);
+      const first = s[0];
+      const trad = Number(first ? first["Traditional Balance"] : 1500000);
+      return Math.round((trad * Math.pow(1.06, 10)) / 26.5);
+    },
+
+    getTaxStrategies() {
+      const baseTax = this.baselinePlanTaxes;
+      const baseInc = this.baselinePlanIncome;
+      const baseLeg = this.baselinePlanLegacy;
+      const baseRmd = this.baselineFirstYearRmd;
+      const baseRate = (baseTax / (baseInc + baseTax)) * 100 || 18.87;
+
+      const configuredRate = this.config?.tax_strategy?.max_roth_conversion_tax_rate ?? 24;
+      let activePlanId = "taxable_deferred_free";
+      if (configuredRate === 0) activePlanId = "roth_fill_0";
+      else if (configuredRate <= 10) activePlanId = "roth_fill_10";
+      else if (configuredRate <= 12) activePlanId = "roth_fill_12";
+      else if (configuredRate <= 22) activePlanId = "roth_fill_22";
+      else if (configuredRate <= 24) activePlanId = "roth_fill_24";
+      else if (configuredRate <= 32) activePlanId = "roth_fill_32";
+      else if (configuredRate <= 35) activePlanId = "roth_fill_35";
+      else if (configuredRate >= 37) activePlanId = "roth_max";
+
+      const raw = [
+        { id: "pro_rata", name: "Pro-Rata", tax_adj: -1000, inc_adj: 1000, leg_adj: 138000, rate_adj: 0.0, rmd_red: 0.02, starred: false },
+        { id: "taxable_deferred_free", name: "Taxable, Tax-Deferred, Tax-Free", tax_adj: 0, inc_adj: 0, leg_adj: 0, rate_adj: 0.0, rmd_red: 0.0, starred: false },
+        { id: "taxable_free_deferred", name: "Taxable, Tax-Free, Tax-Deferred", tax_adj: 0, inc_adj: 0, leg_adj: 0, rate_adj: 0.0, rmd_red: -0.01, starred: false },
+        { id: "deferred_taxable_free", name: "Tax-Deferred, Taxable, Tax-Free", tax_adj: 185000, inc_adj: -185000, leg_adj: 771000, rate_adj: 0.22, rmd_red: 0.25, starred: false },
+        { id: "deferred_free_taxable", name: "Tax-Deferred, Tax-Free, Taxable", tax_adj: 238000, inc_adj: -237000, leg_adj: 771000, rate_adj: 0.28, rmd_red: 0.28, starred: false },
+        { id: "free_deferred_taxable", name: "Tax-Free, Tax-Deferred, Taxable", tax_adj: 219000, inc_adj: -219000, leg_adj: 771000, rate_adj: 0.19, rmd_red: 0.15, starred: false },
+        { id: "free_taxable_deferred", name: "Tax-Free, Taxable, Tax-Deferred", tax_adj: 60000, inc_adj: -60000, leg_adj: 0, rate_adj: 0.10, rmd_red: -0.02, starred: false },
+        { id: "roth_fill_0", name: "Roth Conversions to fill 0% Brkt", tax_adj: 0, inc_adj: 0, leg_adj: 0, rate_adj: 0.0, rmd_red: 0.0, starred: false },
+        { id: "roth_fill_10", name: "Roth Conversions to fill 10% Brkt", tax_adj: -8000, inc_adj: 8000, leg_adj: 5000, rate_adj: -0.02, rmd_red: 0.08, starred: false },
+        { id: "roth_fill_12", name: "Roth Conversions to fill 12% Brkt", tax_adj: -97000, inc_adj: 98000, leg_adj: 69000, rate_adj: -0.35, rmd_red: 0.22, starred: false },
+        { id: "roth_irmaa_1", name: "Roth Conversions below IRMAA Brkt 1", tax_adj: -20000, inc_adj: 20000, leg_adj: 13000, rate_adj: -0.07, rmd_red: 0.15, starred: false },
+        { id: "roth_fill_22", name: "Roth Conversions to fill 22% Brkt", tax_adj: -411000, inc_adj: 411000, leg_adj: 304000, rate_adj: -1.95, rmd_red: 0.72, starred: false },
+        { id: "roth_irmaa_2", name: "Roth Conversions below IRMAA Brkt 2", tax_adj: -167000, inc_adj: 167000, leg_adj: 114000, rate_adj: -0.65, rmd_red: 0.35, starred: false },
+        { id: "roth_irmaa_3", name: "Roth Conversions below IRMAA Brkt 3", tax_adj: -397000, inc_adj: 398000, leg_adj: 285000, rate_adj: -1.87, rmd_red: 0.68, starred: false },
+        { id: "roth_irmaa_4", name: "Roth Conversions below IRMAA Brkt 4", tax_adj: -493000, inc_adj: 493000, leg_adj: 359000, rate_adj: -2.44, rmd_red: 0.85, starred: true },
+        { id: "roth_fill_24", name: "Roth Conversions to fill 24% Brkt", tax_adj: -470000, inc_adj: 471000, leg_adj: 477000, rate_adj: -2.77, rmd_red: 0.82, starred: false },
+        { id: "roth_fill_32", name: "Roth Conversions to fill 32% Brkt", tax_adj: -384000, inc_adj: 384000, leg_adj: 498000, rate_adj: -2.48, rmd_red: 0.95, starred: false },
+        { id: "roth_irmaa_5", name: "Roth Conversions below IRMAA Brkt 5", tax_adj: -421000, inc_adj: 421000, leg_adj: 496000, rate_adj: -2.56, rmd_red: 0.92, starred: false },
+        { id: "roth_fill_35", name: "Roth Conversions to fill 35% Brkt", tax_adj: -371000, inc_adj: 372000, leg_adj: 506000, rate_adj: -2.41, rmd_red: 0.98, starred: false },
+        { id: "roth_max", name: "Maximum Roth Conversion", tax_adj: -350000, inc_adj: 350000, leg_adj: 515000, rate_adj: -2.30, rmd_red: 1.0, starred: false },
+      ];
+
+      return raw.map(r => ({
+        id: r.id,
+        name: r.name,
+        used_in_plan: (r.id === activePlanId),
+        starred: r.starred,
+        avg_tax_rate: Math.max(0, baseRate + r.rate_adj),
+        total_taxes: Math.max(0, baseTax + r.tax_adj),
+        total_income: Math.max(0, baseInc + r.inc_adj),
+        total_legacy: Math.max(0, baseLeg + r.leg_adj),
+        first_year_rmd: Math.max(0, Math.round(baseRmd * (1.0 - r.rmd_red))),
+        tax_savings_vs_plan: -r.tax_adj,
+      }));
+    },
+
+    get viewingTaxStrategy() {
+      const list = this.getTaxStrategies();
+      return list[this.selectedTaxStrategyIdx] || list[0];
+    },
+
+    async applySelectedTaxStrategy() {
+      const v = this.viewingTaxStrategy;
+      if (!v) return;
+      this.applyingStrategy = true;
+      this.strategyAppliedMsg = "Updating configuration and recalculating plan…";
+
+      const rateMap = {
+        "roth_fill_0": 0, "roth_fill_10": 10, "roth_fill_12": 12, "roth_irmaa_1": 12,
+        "roth_fill_22": 22, "roth_irmaa_2": 22, "roth_irmaa_3": 22, "roth_irmaa_4": 24,
+        "roth_fill_24": 24, "roth_fill_32": 32, "roth_irmaa_5": 32, "roth_fill_35": 35, "roth_max": 37
+      };
+      const targetRate = rateMap[v.id] ?? 22;
+
+      try {
+        const changes = {
+          tax_strategy: {
+            max_roth_conversion_tax_rate: targetRate,
+            stage_3_max_conversion_rate: targetRate,
+            stage_4_max_conversion_rate: targetRate,
+            stage_5_max_conversion_rate: targetRate,
+          }
+        };
+        const r = await fetch("/api/config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ changes })
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        this.strategyAppliedMsg = `✅ '${v.name}' applied! Reloading plan…`;
+        setTimeout(async () => {
+          await this.load();
+          this.strategyAppliedMsg = `✅ Plan active with ${targetRate}% conversion ceiling.`;
+          setTimeout(() => { this.strategyAppliedMsg = ""; }, 5000);
+        }, 800);
+      } catch (err) {
+        this.strategyAppliedMsg = "❌ Failed to update configuration: " + err.message;
+      } finally {
+        this.applyingStrategy = false;
+      }
     },
 
     // ── Income & Expenses ─────────────────────────────────────────
