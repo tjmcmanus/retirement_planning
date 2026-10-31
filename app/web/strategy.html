@@ -142,8 +142,10 @@
     .tax-strat-title-group { display: flex; align-items: baseline; gap: 1.5rem; }
     .tax-strat-title { font-size: 1.35rem; font-weight: 700; color: var(--text); }
     .tax-strat-subtabs { display: flex; gap: 1.25rem; font-size: 0.88rem; font-weight: 600; }
-    .tax-strat-subtab.active { color: var(--text); border-bottom: 2px solid var(--text); padding-bottom: 2px; }
-    .tax-strat-subtab.inactive { color: var(--muted); cursor: pointer; }
+    .tax-strat-subtab { cursor: pointer; padding-bottom: 3px; border-bottom: 2px solid transparent; transition: all 0.15s ease; user-select: none; }
+    .tax-strat-subtab.active { color: var(--text); border-bottom-color: var(--text); font-weight: 700; }
+    .tax-strat-subtab.inactive { color: var(--muted); }
+    .tax-strat-subtab.inactive:hover { color: var(--text); }
     .tax-strat-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 0.5rem; background: var(--surface); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
     .tax-strat-table th { background: #f9fafb; border-bottom: 2px solid var(--border); padding: 9px 12px; font-weight: 600; color: #374151; text-align: right; font-size: 0.78rem; }
     .tax-strat-table th.l { text-align: left; }
@@ -156,7 +158,9 @@
     .badge-star { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; font-size: 0.72rem; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 8px; }
     .cell-plan-highlight { background-color: #fef08a !important; font-weight: 700; color: #111827; }
     .cell-green-shade { background-color: #ecfdf5; color: #065f46; font-weight: 600; }
+    .cell-red-shade { background-color: #fef2f2; color: #991b1b; font-weight: 600; }
     .cell-green-pill { background-color: #d1fae5; color: #065f46; font-weight: 700; border-radius: 4px; padding: 2px 6px; display: inline-block; }
+    .cell-red-pill { background-color: #fee2e2; color: #991b1b; font-weight: 700; border-radius: 4px; padding: 2px 6px; display: inline-block; }
 
     @media (max-width: 600px) {
       .bucket-grid { grid-template-columns: 1fr; }
@@ -269,16 +273,19 @@
               <div class="tax-strat-title-group">
                 <span class="tax-strat-title">Select a Tax Strategy</span>
                 <div class="tax-strat-subtabs">
-                  <span class="tax-strat-subtab active">What if</span>
-                  <span class="tax-strat-subtab inactive">Compared to</span>
+                  <span class="tax-strat-subtab" :class="taxStrategyViewMode === 'what_if' ? 'active' : 'inactive'" @click="taxStrategyViewMode = 'what_if'">What if</span>
+                  <span class="tax-strat-subtab" :class="taxStrategyViewMode === 'compared_to' ? 'active' : 'inactive'" @click="taxStrategyViewMode = 'compared_to'">Compared to</span>
                 </div>
               </div>
-              <div class="muted small">Values shown in <strong>today's dollars</strong>.</div>
+              <div class="muted small">
+                <span x-show="taxStrategyViewMode === 'what_if'">Values shown in <strong>today's dollars</strong>.</span>
+                <span x-show="taxStrategyViewMode === 'compared_to'">Differences shown <strong>relative to plan baseline</strong> (⚑ Used in Plan).</span>
+              </div>
             </div>
 
             <table class="tax-strat-table">
               <thead>
-                <tr>
+                <tr x-show="taxStrategyViewMode === 'what_if'">
                   <th class="l">Strategy</th>
                   <th>Avg. Tax Rate</th>
                   <th>Total Taxes</th>
@@ -286,10 +293,19 @@
                   <th>Total Net Legacy</th>
                   <th>Anticipated 1st Yr RMD</th>
                 </tr>
+                <tr x-show="taxStrategyViewMode === 'compared_to'">
+                  <th class="l">Strategy</th>
+                  <th>Tax Rate Diff</th>
+                  <th>Tax Savings / Drag</th>
+                  <th>Total Net Income Diff</th>
+                  <th>Total Net Legacy Diff</th>
+                  <th>1st Yr RMD Reduction</th>
+                </tr>
               </thead>
               <tbody>
                 <template x-for="(s, idx) in getTaxStrategies()" :key="s.id">
                   <tr :class="idx === selectedTaxStrategyIdx ? 'viewing-row' : ''" @click="selectedTaxStrategyIdx = idx" style="cursor:pointer">
+                    <!-- Strategy Name & Badges -->
                     <td class="l">
                       <span style="margin-right:6px; font-size:12px;" x-text="idx === selectedTaxStrategyIdx ? '🔘' : '⚪'"></span>
                       <strong x-text="s.name" :style="idx === selectedTaxStrategyIdx ? 'color:#1f2328; font-weight:600;' : 'color:#374151; font-weight:400;'"></strong>
@@ -297,18 +313,61 @@
                       <span class="badge-viewing" x-show="idx === selectedTaxStrategyIdx">✓ Viewing Now</span>
                       <span class="badge-star" x-show="s.starred">☆</span>
                     </td>
-                    <td x-text="s.avg_tax_rate.toFixed(2) + '%'"></td>
-                    <td :class="s.used_in_plan ? 'cell-plan-highlight' : (s.tax_savings_vs_plan > 0 ? 'cell-green-shade' : '')" x-text="'$' + s.total_taxes.toLocaleString('en-US',{maximumFractionDigits:0})"></td>
-                    <td :class="s.total_income > baselinePlanIncome ? 'cell-green-shade' : ''" x-text="'$' + s.total_income.toLocaleString('en-US',{maximumFractionDigits:0})"></td>
-                    <td>
-                      <template x-if="s.total_legacy >= 31800000 || s.starred">
-                        <span class="cell-green-pill" x-text="'$' + s.total_legacy.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
-                      </template>
-                      <template x-if="!(s.total_legacy >= 31800000 || s.starred)">
-                        <span x-text="'$' + s.total_legacy.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
-                      </template>
-                    </td>
-                    <td style="font-weight:600; color:#4b5563;" x-text="'$' + s.first_year_rmd.toLocaleString('en-US',{maximumFractionDigits:0})"></td>
+
+                    <!-- WHAT IF (TOTALS) COLUMNS -->
+                    <template x-if="taxStrategyViewMode === 'what_if'">
+                      <td x-text="s.avg_tax_rate.toFixed(2) + '%'"></td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'what_if'">
+                      <td :class="s.used_in_plan ? 'cell-plan-highlight' : (s.tax_savings_vs_plan > 0 ? 'cell-green-shade' : '')" x-text="'$' + s.total_taxes.toLocaleString('en-US',{maximumFractionDigits:0})"></td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'what_if'">
+                      <td :class="s.total_income > baselinePlanIncome ? 'cell-green-shade' : ''" x-text="'$' + s.total_income.toLocaleString('en-US',{maximumFractionDigits:0})"></td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'what_if'">
+                      <td>
+                        <template x-if="s.total_legacy >= 31800000 || s.starred">
+                          <span class="cell-green-pill" x-text="'$' + s.total_legacy.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
+                        </template>
+                        <template x-if="!(s.total_legacy >= 31800000 || s.starred)">
+                          <span x-text="'$' + s.total_legacy.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
+                        </template>
+                      </td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'what_if'">
+                      <td style="font-weight:600; color:#4b5563;" x-text="'$' + s.first_year_rmd.toLocaleString('en-US',{maximumFractionDigits:0})"></td>
+                    </template>
+
+                    <!-- COMPARED TO (DELTAS) COLUMNS -->
+                    <template x-if="taxStrategyViewMode === 'compared_to'">
+                      <td :class="s.rate_diff < 0 ? 'cell-green-shade' : (s.rate_diff > 0 ? 'cell-red-shade' : '')"
+                          x-text="s.used_in_plan ? '0.00% (Baseline)' : (s.rate_diff > 0 ? '+' : '') + s.rate_diff.toFixed(2) + '%'"></td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'compared_to'">
+                      <td :class="s.used_in_plan ? 'cell-plan-highlight' : (s.tax_diff < 0 ? 'cell-green-shade' : (s.tax_diff > 0 ? 'cell-red-shade' : ''))"
+                          x-text="s.used_in_plan ? '$0 (Baseline)' : (s.tax_diff < 0 ? 'Save $' + Math.abs(s.tax_diff).toLocaleString('en-US',{maximumFractionDigits:0}) : '+$' + s.tax_diff.toLocaleString('en-US',{maximumFractionDigits:0}))"></td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'compared_to'">
+                      <td :class="s.income_diff > 0 ? 'cell-green-shade' : (s.income_diff < 0 ? 'cell-red-shade' : '')"
+                          x-text="s.income_diff > 0 ? '+$' + s.income_diff.toLocaleString('en-US',{maximumFractionDigits:0}) : (s.income_diff < 0 ? '-$' + Math.abs(s.income_diff).toLocaleString('en-US',{maximumFractionDigits:0}) : '$0')"></td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'compared_to'">
+                      <td>
+                        <template x-if="s.legacy_diff > 0">
+                          <span class="cell-green-pill" x-text="'+$' + s.legacy_diff.toLocaleString('en-US',{maximumFractionDigits:0})"></span>
+                        </template>
+                        <template x-if="s.legacy_diff < 0">
+                          <span class="cell-red-pill" x-text="'-$' + Math.abs(s.legacy_diff).toLocaleString('en-US',{maximumFractionDigits:0})"></span>
+                        </template>
+                        <template x-if="s.legacy_diff === 0">
+                          <span x-text="'$0'"></span>
+                        </template>
+                      </td>
+                    </template>
+                    <template x-if="taxStrategyViewMode === 'compared_to'">
+                      <td :class="s.rmd_diff < 0 ? 'cell-green-shade' : (s.rmd_diff > 0 ? 'cell-red-shade' : '')"
+                          x-text="s.rmd_diff < 0 ? '-$' + Math.abs(s.rmd_diff).toLocaleString('en-US',{maximumFractionDigits:0}) : (s.rmd_diff > 0 ? '+$' + s.rmd_diff.toLocaleString('en-US',{maximumFractionDigits:0}) : '$0')"></td>
+                    </template>
                   </tr>
                 </template>
               </tbody>
