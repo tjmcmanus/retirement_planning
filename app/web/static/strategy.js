@@ -38,6 +38,7 @@ function strategyPage() {
     ],
 
     selectedTaxStrategyIdx: 11, // Default viewing "Roth Conversions to fill 22% Brkt"
+    taxStrategyViewMode: "what_if", // "what_if" or "compared_to"
     applyingStrategy: false,
     strategyAppliedMsg: "",
 
@@ -688,18 +689,31 @@ function strategyPage() {
         { id: "roth_max", name: "Maximum Roth Conversion", tax_adj: -350000, inc_adj: 350000, leg_adj: 515000, rate_adj: -2.30, rmd_red: 1.0, starred: false },
       ];
 
-      return raw.map(r => ({
-        id: r.id,
-        name: r.name,
-        used_in_plan: (r.id === activePlanId),
-        starred: r.starred,
-        avg_tax_rate: Math.max(0, baseRate + r.rate_adj),
-        total_taxes: Math.max(0, baseTax + r.tax_adj),
-        total_income: Math.max(0, baseInc + r.inc_adj),
-        total_legacy: Math.max(0, baseLeg + r.leg_adj),
-        first_year_rmd: Math.max(0, Math.round(baseRmd * (1.0 - r.rmd_red))),
-        tax_savings_vs_plan: -r.tax_adj,
-      }));
+      return raw.map(r => {
+        const avg_tax_rate = Math.max(0, baseRate + r.rate_adj);
+        const total_taxes = Math.max(0, baseTax + r.tax_adj);
+        const total_income = Math.max(0, baseInc + r.inc_adj);
+        const total_legacy = Math.max(0, baseLeg + r.leg_adj);
+        const first_year_rmd = Math.max(0, Math.round(baseRmd * (1.0 - r.rmd_red)));
+
+        return {
+          id: r.id,
+          name: r.name,
+          used_in_plan: (r.id === activePlanId),
+          starred: r.starred,
+          avg_tax_rate: avg_tax_rate,
+          total_taxes: total_taxes,
+          total_income: total_income,
+          total_legacy: total_legacy,
+          first_year_rmd: first_year_rmd,
+          tax_savings_vs_plan: -r.tax_adj,
+          rate_diff: r.rate_adj,
+          tax_diff: r.tax_adj,
+          income_diff: r.inc_adj,
+          legacy_diff: r.leg_adj,
+          rmd_diff: first_year_rmd - baseRmd,
+        };
+      });
     },
 
     get viewingTaxStrategy() {

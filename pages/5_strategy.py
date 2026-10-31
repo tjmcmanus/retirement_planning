@@ -2770,6 +2770,11 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
             "total_legacy": tot_legacy,
             "first_year_rmd": first_rmd,
             "tax_savings_vs_plan": plan_total_taxes - tot_taxes,
+            "rate_diff": s["rate_adj"],
+            "tax_diff": s["tax_adj"],
+            "income_diff": s["income_adj"],
+            "legacy_diff": s["legacy_adj"],
+            "rmd_diff": first_rmd - baseline_first_year_rmd,
         })
 
     # Default to viewing 'Roth Conversions to fill 22% Brkt' or Plan strategy
@@ -2786,25 +2791,31 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
     # -----------------------------------------------------------------------
     # Interactive Top Controls
     # -----------------------------------------------------------------------
-    ctrl_col1, ctrl_col2 = st.columns([3, 1])
+    view_mode_key = f"tax_strategy_view_mode_{phase}"
+    if view_mode_key not in st.session_state:
+        st.session_state[view_mode_key] = "What if"
+
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 2, 2])
     with ctrl_col1:
         st.markdown(
-            """
-            <div style="display:flex; align-items:baseline; gap:1.75rem; margin-bottom:0.25rem;">
-                <span style="font-size:1.35rem; font-weight:700; color:#111827;">Select a Tax Strategy</span>
-                <span style="font-size:0.88rem; font-weight:600; color:#111827; border-bottom:2px solid #111827; padding-bottom:2px;">What if</span>
-                <span style="font-size:0.88rem; font-weight:500; color:#6b7280; cursor:pointer;">Compared to</span>
-            </div>
-            """,
+            '<div style="font-size:1.35rem; font-weight:700; color:#111827; padding-top:4px;">Select a Tax Strategy</div>',
             unsafe_allow_html=True
         )
     with ctrl_col2:
+        vmode = st.radio(
+            "View Mode",
+            options=["What if", "Compared to"],
+            index=0 if st.session_state[view_mode_key] == "What if" else 1,
+            horizontal=True,
+            key=f"tax_strat_vmode_radio_{phase}",
+            label_visibility="collapsed"
+        )
+        if vmode != st.session_state[view_mode_key]:
+            st.session_state[view_mode_key] = vmode
+    with ctrl_col3:
+        note_text = "Values shown in <strong>today's dollars</strong>." if st.session_state[view_mode_key] == "What if" else "Differences shown <strong>relative to plan baseline</strong>."
         st.markdown(
-            """
-            <div style="text-align:right; font-size:0.82rem; color:#4b5563; padding-top:6px;">
-                Values shown in <strong>today's dollars</strong>.
-            </div>
-            """,
+            f'<div style="text-align:right; font-size:0.82rem; color:#4b5563; padding-top:6px;">{note_text}</div>',
             unsafe_allow_html=True
         )
 
@@ -2829,6 +2840,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
     # -----------------------------------------------------------------------
     plan_taxes = plan_total_taxes
     best_legacy_val = max(s["total_legacy"] for s in strategies)
+    is_compared = (st.session_state.get(view_mode_key, "What if") == "Compared to")
 
     rows_html = []
     for idx, s in enumerate(strategies):
@@ -2850,41 +2862,165 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
         row_bg = "#f0f7ff" if is_viewing else ("#ffffff" if idx % 2 == 0 else "#fafbfc")
         border_left = "border-left: 3px solid #3b82f6;" if is_viewing else "border-left: 3px solid transparent;"
 
-        # Column Formats
-        tax_style = "background-color:#fef08a; font-weight:700; color:#111827;" if is_plan else ("background-color:#ecfdf5; color:#065f46; font-weight:600;" if is_tax_saving else "color:#1f2937;")
-        income_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;" if (s["total_income"] > plan_total_income) else "color:#1f2937;"
-        
-        if is_top_legacy:
-            legacy_html = f'<span style="background-color:#d1fae5; color:#065f46; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">${s["total_legacy"]:,.0f}</span>'
-        else:
-            legacy_html = f'${s["total_legacy"]:,.0f}'
-
         radio_bullet = "🔘" if is_viewing else "⚪"
 
-        rows_html.append(f"""
-        <tr style="background:{row_bg}; {border_left}">
-            <td style="padding:8px 12px; font-size:12.5px; text-align:left; border-bottom:1px solid #e5e7eb;">
-                <span style="margin-right:6px; font-size:12px;">{radio_bullet}</span>
-                <span style="font-weight:{'600' if is_viewing else '400'}; color:#1f2328;">{s['name']}</span>
-                {badges_html}
-            </td>
-            <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#374151;">
-                {s['avg_tax_rate']:.2f}%
-            </td>
-            <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {tax_style}">
-                ${s['total_taxes']:,.0f}
-            </td>
-            <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {income_style}">
-                ${s['total_income']:,.0f}
-            </td>
-            <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#1f2937;">
-                {legacy_html}
-            </td>
-            <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#4b5563; font-weight:600;">
-                ${s['first_year_rmd']:,.0f}
-            </td>
-        </tr>
-        """)
+        if not is_compared:
+            # WHAT IF MODE (Totals)
+            tax_style = "background-color:#fef08a; font-weight:700; color:#111827;" if is_plan else ("background-color:#ecfdf5; color:#065f46; font-weight:600;" if is_tax_saving else "color:#1f2937;")
+            income_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;" if (s["total_income"] > plan_total_income) else "color:#1f2937;"
+            
+            if is_top_legacy:
+                legacy_html = f'<span style="background-color:#d1fae5; color:#065f46; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">${s["total_legacy"]:,.0f}</span>'
+            else:
+                legacy_html = f'${s["total_legacy"]:,.0f}'
+
+            col_rate_html = f"{s['avg_tax_rate']:.2f}%"
+            col_tax_html = f"${s['total_taxes']:,.0f}"
+            col_inc_html = f"${s['total_income']:,.0f}"
+            col_rmd_html = f"${s['first_year_rmd']:,.0f}"
+        else:
+            # COMPARED TO MODE (Deltas vs Plan)
+            # Rate
+            r_diff = s["rate_diff"]
+            if is_plan:
+                col_rate_html = "0.00% (Baseline)"
+                rate_style = "color:#374151;"
+            elif r_diff < 0:
+                col_rate_html = f"{r_diff:.2f}%"
+                rate_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;"
+            elif r_diff > 0:
+                col_rate_html = f"+{r_diff:.2f}%"
+                rate_style = "background-color:#fef2f2; color:#991b1b; font-weight:600;"
+            else:
+                col_rate_html = "0.00%"
+                rate_style = "color:#374151;"
+
+            # Taxes
+            t_diff = s["tax_diff"]
+            if is_plan:
+                col_tax_html = "$0 (Baseline)"
+                tax_style = "background-color:#fef08a; font-weight:700; color:#111827;"
+            elif t_diff < 0:
+                col_tax_html = f"Save ${abs(t_diff):,.0f}"
+                tax_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;"
+            elif t_diff > 0:
+                col_tax_html = f"+${t_diff:,.0f}"
+                tax_style = "background-color:#fef2f2; color:#991b1b; font-weight:600;"
+            else:
+                col_tax_html = "$0"
+                tax_style = "color:#1f2937;"
+
+            # Income
+            i_diff = s["income_diff"]
+            if is_plan:
+                col_inc_html = "$0"
+                income_style = "color:#374151;"
+            elif i_diff > 0:
+                col_inc_html = f"+${i_diff:,.0f}"
+                income_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;"
+            elif i_diff < 0:
+                col_inc_html = f"-${abs(i_diff):,.0f}"
+                income_style = "background-color:#fef2f2; color:#991b1b; font-weight:600;"
+            else:
+                col_inc_html = "$0"
+                income_style = "color:#1f2937;"
+
+            # Legacy
+            l_diff = s["legacy_diff"]
+            if is_plan:
+                legacy_html = "$0"
+            elif l_diff > 0:
+                legacy_html = f'<span style="background-color:#d1fae5; color:#065f46; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">+${l_diff:,.0f}</span>'
+            elif l_diff < 0:
+                legacy_html = f'<span style="background-color:#fee2e2; color:#991b1b; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">-${abs(l_diff):,.0f}</span>'
+            else:
+                legacy_html = "$0"
+
+            # RMD
+            rmd_d = s["rmd_diff"]
+            if is_plan:
+                col_rmd_html = "$0"
+                rmd_style = "color:#374151;"
+            elif rmd_d < 0:
+                col_rmd_html = f"-${abs(rmd_d):,.0f}"
+                rmd_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;"
+            elif rmd_d > 0:
+                col_rmd_html = f"+${rmd_d:,.0f}"
+                rmd_style = "background-color:#fef2f2; color:#991b1b; font-weight:600;"
+            else:
+                col_rmd_html = "$0"
+                rmd_style = "color:#4b5563;"
+
+        if not is_compared:
+            rows_html.append(f"""
+            <tr style="background:{row_bg}; {border_left}">
+                <td style="padding:8px 12px; font-size:12.5px; text-align:left; border-bottom:1px solid #e5e7eb;">
+                    <span style="margin-right:6px; font-size:12px;">{radio_bullet}</span>
+                    <span style="font-weight:{'600' if is_viewing else '400'}; color:#1f2328;">{s['name']}</span>
+                    {badges_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#374151;">
+                    {col_rate_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {tax_style}">
+                    {col_tax_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {income_style}">
+                    {col_inc_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#1f2937;">
+                    {legacy_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#4b5563; font-weight:600;">
+                    {col_rmd_html}
+                </td>
+            </tr>
+            """)
+        else:
+            rows_html.append(f"""
+            <tr style="background:{row_bg}; {border_left}">
+                <td style="padding:8px 12px; font-size:12.5px; text-align:left; border-bottom:1px solid #e5e7eb;">
+                    <span style="margin-right:6px; font-size:12px;">{radio_bullet}</span>
+                    <span style="font-weight:{'600' if is_viewing else '400'}; color:#1f2328;">{s['name']}</span>
+                    {badges_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {rate_style}">
+                    {col_rate_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {tax_style}">
+                    {col_tax_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {income_style}">
+                    {col_inc_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#1f2937;">
+                    {legacy_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {rmd_style}">
+                    {col_rmd_html}
+                </td>
+            </tr>
+            """)
+
+    th_headers = """
+    <tr>
+      <th class="l">Strategy</th>
+      <th>Avg. Tax Rate</th>
+      <th>Total Taxes</th>
+      <th>Total Net Income</th>
+      <th>Total Net Legacy</th>
+      <th>Anticipated 1st Yr RMD</th>
+    </tr>
+    """ if not is_compared else """
+    <tr>
+      <th class="l">Strategy</th>
+      <th>Tax Rate Diff</th>
+      <th>Tax Savings / Drag</th>
+      <th>Total Net Income Diff</th>
+      <th>Total Net Legacy Diff</th>
+      <th>1st Yr RMD Reduction</th>
+    </tr>
+    """
 
     full_table_component = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
@@ -2896,14 +3032,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
 </style></head><body>
 <table>
   <thead>
-    <tr>
-      <th class="l">Strategy</th>
-      <th>Avg. Tax Rate</th>
-      <th>Total Taxes</th>
-      <th>Total Net Income</th>
-      <th>Total Net Legacy</th>
-      <th>Anticipated 1st Yr RMD</th>
-    </tr>
+    {th_headers}
   </thead>
   <tbody>
     {"".join(rows_html)}
