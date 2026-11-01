@@ -214,12 +214,19 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         contribution_401k = wages * contribution_rates['traditional']
         contribution_roth = wages * contribution_rates['roth']
         
+        # Expected retirement rate and employer match settings
+        _, match_pct, retirement_rate = self._get_split_settings()
+        
+        # Employer match on the 401k deferral; always pre-tax, so it is added to
+        # the Traditional balance regardless of the Roth/Traditional choice.
+        employer_match = wages * min(contribution_rates['traditional'], match_pct)
+        
         # Decision 1: Should new 401k contributions go Roth or Traditional?
         prefer_roth_401k, contrib_reason = self._determine_contribution_type(
             wages,
             contribution_401k,
             balances,
-            max_conversion_rate,
+            retirement_rate,
             filing_status,
             year
         )
@@ -255,10 +262,21 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             'Roth 401k' if prefer_roth_401k else 'Traditional 401k',
             contrib_reason,
             current_rate=max_rate,
-            expected_retirement_rate=max_conversion_rate,
+            expected_retirement_rate=retirement_rate,
             trad_balance=balances.traditional,
             roth_balance=balances.roth
         )
+        
+        if employer_match > 0:
+            self._log_decision(
+                strategy,
+                'contribution_decisions',
+                'Employer Match',
+                f'${employer_match:,.0f} added pre-tax to Traditional',
+                'Employer match always goes in pre-tax, regardless of the '
+                'Roth/Traditional choice for your own deferral.',
+                employer_match=employer_match
+            )
 
         # Decision 2: Backdoor Roth IRA
         backdoor_roth_amount = self._calculate_backdoor_roth(
@@ -426,14 +444,16 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         
         # Update balances after contributions and conversions
         if prefer_roth_401k:
-            strategy.traditional_balance = balances.traditional - roth_conversion
+            strategy.traditional_balance = (
+                balances.traditional + employer_match - roth_conversion
+            )
             strategy.roth_balance = (
-                balances.roth + contribution_401k + contribution_roth + 
+                balances.roth + contribution_401k + contribution_roth +
                 backdoor_roth_amount + roth_conversion
             )
         else:
             strategy.traditional_balance = (
-                balances.traditional + contribution_401k - roth_conversion
+                balances.traditional + contribution_401k + employer_match - roth_conversion
             )
             strategy.roth_balance = (
                 balances.roth + contribution_roth + backdoor_roth_amount + roth_conversion
@@ -540,12 +560,15 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         
         Decision logic:
         1. If Traditional > 2× Roth, prefer Roth 401k to rebalance
-        2. If current marginal rate > expected retirement rate, prefer Roth 401k
-        3. Otherwise, prefer Traditional 401k
+        2. If current marginal rate < expected retirement rate, prefer Roth 401k
+        3. Otherwise (today's rate at or above retirement rate), prefer Traditional
+        
+        Today's rate is measured on wages before the deferral (the rate on the
+        dollars being deferred).
         
         Args:
             wages: Annual wages
-            contribution_401k: Traditional 401k contribution amount
+            contribution_401k: Unused; kept for signature compatibility
             balances: Current balances
             expected_retirement_rate: Expected tax rate in retirement
             filing_status: Filing status
@@ -571,31 +594,26 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
             )
             return True, reason
         
-        # Calculate preliminary tax rate with Traditional assumption
-        preliminary_agi = wages - contribution_401k
+        # Marginal rate on the dollars being deferred (wages before deferral)
         std_deduction = self.tax_calculator.calculate_standard_deduction(
             filing_status, year, 0, 0
         )
-        preliminary_taxable = max(0, preliminary_agi - std_deduction)
+        preliminary_taxable = max(0, wages - std_deduction)
         _, preliminary_rate, _ = self.tax_calculator.calculate_federal_tax(
             preliminary_taxable, filing_status, year
         )
         
-        # Compare current rate to expected retirement rate
-        if preliminary_rate > expected_retirement_rate:
-            reason = (
-                f"Current marginal rate ({preliminary_rate:.1%}) exceeds expected retirement rate "
-                f"({expected_retirement_rate:.1%}). Paying Roth tax now is cheaper than "
-                "paying ordinary income tax on Traditional withdrawals in retirement."
+        if preliminary_rate < expected_retirement_rate:
+            return True, (
+                f"Current marginal rate ({preliminary_rate:.1%}) is below the expected "
+                f"retirement rate ({expected_retirement_rate:.1%}). Paying tax now at the "
+                "lower rate and withdrawing tax-free later favors Roth 401k."
             )
-            return True, reason
-        else:
-            reason = (
-                f"Current marginal rate ({preliminary_rate:.1%}) is at or below the expected retirement rate "
-                f"({expected_retirement_rate:.1%}). Deferring tax now is more efficient; "
-                "Traditional 401k reduces AGI and current-year tax bill."
-            )
-            return False, reason
+        return False, (
+            f"Current marginal rate ({preliminary_rate:.1%}) is at or above the expected "
+            f"retirement rate ({expected_retirement_rate:.1%}). Deferring tax now at the "
+            "higher rate favors Traditional 401k."
+        )
     
     def _calculate_backdoor_roth(
         self,

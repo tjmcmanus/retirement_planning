@@ -34,8 +34,7 @@ from advanced_strategies import (
 )
 from betr_roth_conversion import BETRInputs, calculate_betr
 from calculations import (
-    calc_agi,
-    calc_daf_value,
+    _CONTRIBUTION_LIMITS,
     calc_roth_conversions,
     calc_roth_conversions_tax,
     calculate_atm,
@@ -216,6 +215,8 @@ def tax_planner(
     tax_exempt_dividends: float = 0.0,
     ordinary_dividends: float = 0.0,
     qualified_dividends: float = 0.0,
+    cash_contributions: float = 0.0,
+    other_itemized: float = 0.0,
 ) -> dict[str, Any]:
     """Single-year projection. ``balances`` overrides the net worth lookup (used by tests).
 
@@ -227,6 +228,13 @@ def tax_planner(
     AGI but taxed at the preferential capital-gains rates, stacked on top of ordinary income. ``tax_exempt_dividends``
     (e.g. municipal bond fund dividends) are not part of AGI or taxable income, but are added back to get MAGI, which is
     what IRMAA is based on, and count toward the Social Security combined income.
+
+    Deductions: AGI is computed once from all income (ordinary + preferential + taxable Social Security + the
+    conversion). The deduction is the larger of the standard deduction and the itemized total (DAF + ``cash_contributions``
+    + ``other_itemized``). It comes off ordinary income first; any left over reduces the preferential income, which is then
+    taxed on top of the ordinary taxable income. Charitable limits are percentages of that AGI (IRC 170(b)): cash gifts
+    60%, DAF 60% if cash or 30% if appreciated securities, and the two together at most 60%. A gift over its limit is
+    still made; the deduction is capped and the excess carries forward.
 
     Social Security for ``year`` comes from ``ssincome.csv``; its taxable part (IRS combined-income formula, which
     depends on the conversion) is included in AGI.
@@ -255,7 +263,14 @@ def tax_planner(
         raise ValueError(f"Error loading tax data: {exc}") from exc
 
     ss_benefits = _ss_benefits(year)
-    other_income = deferred_dist + wages + cg_income_st + interest_income + preferential   # AGI items besides SS and the conversion
+    ordinary_wo_ss = deferred_dist + wages + cg_income_st + interest_income   # ordinary, before Social Security and the conversion
+    other_income = ordinary_wo_ss + preferential                              # all AGI items besides SS and the conversion
+
+    if daf_type not in _CONTRIBUTION_LIMITS:
+        raise ValueError(f"Unsupported DAF contribution type {daf_type!r}")
+    cash_pct = _CONTRIBUTION_LIMITS["cash"][0]
+    daf_pct = _CONTRIBUTION_LIMITS[daf_type][0]
+    std_deduction = float(stddectdf["deduction"].iloc[0]) if not stddectdf.empty else 0.0
 
     def _taxable_ss(conv: float) -> float:
         """IRS combined-income formula (Pub. 915); combined income counts tax-exempt dividends."""
@@ -264,8 +279,26 @@ def tax_planner(
         from strategy import calculate_ss_taxable_amount
         return calculate_ss_taxable_amount(ss_benefits, other_income + conv + tax_exempt_dividends, filing_status)
 
-    # Taxable Social Security depends on the conversion, and the auto-sized conversion depends on how much room
-    # taxable Social Security leaves, so iterate. Averaging old and new guesses makes the oscillation die out fast.
+    def _deductions(agi_value: float) -> dict[str, float]:
+        """Charitable limits and the deduction taken at this AGI (itemize only when it beats the standard deduction)."""
+        base = max(0.0, agi_value)
+        cash_cap = cash_pct * base
+        cash_ded = min(max(0.0, cash_contributions), cash_cap)
+        daf_cap = max(0.0, min(daf_pct * base, cash_cap - cash_ded))      # cash + DAF together stay within 60%
+        daf_gift = daf_cap if maxdaf == "Y" else max(0.0, daf1)
+        daf_ded = min(daf_gift, daf_cap)
+        itemized = daf_ded + cash_ded + max(0.0, other_itemized)
+        return {"daf_gift": daf_gift, "daf_cap": daf_cap, "cash_ded": cash_ded, "itemized": itemized,
+                "deduction": max(std_deduction, itemized)}
+
+    def _taxable_split(ordinary_gross: float, preferential_gross: float, deduction: float) -> tuple[float, float]:
+        """(ordinary taxable, preferential taxable): the deduction absorbs ordinary income first, then what is left over
+        reduces the preferential income."""
+        ordinary_gross = max(0.0, ordinary_gross)
+        return max(0.0, ordinary_gross - deduction), max(0.0, preferential_gross - max(0.0, deduction - ordinary_gross))
+
+    # Taxable Social Security, the auto-sized conversion and the AGI-based deduction all depend on each other, so iterate.
+    # Averaging old and new guesses makes oscillation die out fast.
     atm_cap: float | None = None
     try:
         atm_lower, atm_deduction = getlower_atm_amount_n_deduction(None, atmdf)
@@ -274,24 +307,14 @@ def tax_planner(
     except Exception:
         pass
 
-    taxable_ss = _taxable_ss(roth_amount) if roth_amount > 0 else 0.0
+    conv_est = roth_amount if roth_amount > 0 else 0.0
+    taxable_ss = _taxable_ss(conv_est)
     for _ in range(100):
         warnings: list[str] = []
 
-        # Pass 1: preliminary DAF/AGI using only the known income.
-        try:
-            calc_daf = calc_daf_value(
-                deferred_dist + wages + cg_income_st + taxable_ss + roth_amount, interest_income, daf1, maxdaf,
-                contribution_type=daf_type,  # type: ignore[arg-type]
-                stddectdf=cast(pd.DataFrame, stddectdf),
-            )
-        except Exception:
-            calc_daf = 0
-
-        try:
-            taxable_ord = calc_agi(deferred_dist + wages + cg_income_st + taxable_ss, interest_income, stddectdf, calc_daf)
-        except Exception as exc:
-            raise ValueError(f"AGI error: {exc}") from exc
+        # Base ordinary taxable income (before the conversion), with the deduction as it stands once converted.
+        d = _deductions(other_income + taxable_ss + conv_est)
+        taxable_ord, _pref = _taxable_split(ordinary_wo_ss + taxable_ss, preferential, d["deduction"])
 
         try:
             result = calculate_taxable_income(taxable_ord, taxratedf)
@@ -333,33 +356,34 @@ def tax_planner(
             conversions, conversion_tax = 0, 0
 
         new_ss = _taxable_ss(conversions)
-        if abs(new_ss - taxable_ss) < 0.01:
+        if abs(new_ss - taxable_ss) < 0.01 and abs(conversions - conv_est) < 0.01:
             break
         taxable_ss = (taxable_ss + new_ss) / 2
+        conv_est = (conv_est + conversions) / 2
     taxable_ss = _taxable_ss(conversions)
-
-    # Pass 2: recompute DAF and AGI with the conversions included.
-    try:
-        calc_daf = calc_daf_value(
-            deferred_dist + wages + cg_income_st + taxable_ss + conversions, interest_income, daf1, maxdaf,
-            contribution_type=daf_type,  # type: ignore[arg-type]
-            stddectdf=cast(pd.DataFrame, stddectdf),
-        )
-    except Exception:
-        pass  # keep the pass-1 value
-
-    try:
-        if conversions >= 0:
-            taxable_ord = calc_agi(deferred_dist + wages + cg_income_st + taxable_ss + conversions, interest_income, stddectdf, calc_daf)
-            result = calculate_taxable_income(taxable_ord, taxratedf)
-            taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
-    except Exception:
-        pass
 
     # Real AGI: every income source before deductions, including the Roth conversion and long-term gains.
     # MAGI = AGI + tax-exempt dividends. Non-taxable Social Security is not added back. IRMAA uses MAGI.
     agi = other_income + conversions + taxable_ss
     magi = agi + tax_exempt_dividends
+
+    # Final taxable income, with the deduction at the final AGI.
+    d = _deductions(agi)
+    calc_daf = d["daf_gift"]
+    taxable_ord, pref_taxable = _taxable_split(ordinary_wo_ss + taxable_ss + conversions, preferential, d["deduction"])
+    result = calculate_taxable_income(taxable_ord, taxratedf)
+    taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
+    itemizing = d["itemized"] > std_deduction
+
+    if d["daf_gift"] > d["daf_cap"] + 0.5:
+        warnings.append(f"DAF contribution of {d['daf_gift']:,.0f} exceeds the AGI limit of {d['daf_cap']:,.0f}; "
+                        "the excess carries forward for up to 5 years.")
+    if cash_contributions > d["cash_ded"] + 0.5:
+        warnings.append(f"Cash contributions of {cash_contributions:,.0f} exceed the 60% AGI limit of {d['cash_ded']:,.0f}; "
+                        "the excess carries forward for up to 5 years.")
+    if 0 < d["itemized"] < std_deduction:
+        warnings.append(f"Itemized deductions of {d['itemized']:,.0f} are below the standard deduction of "
+                        f"{std_deduction:,.0f}, so the standard deduction is used.")
 
     try:
         irmaa_fees = _irmaa_surcharge(magi, irmaadf, people)
@@ -368,8 +392,8 @@ def tax_planner(
 
     cg_tax = 0
     try:
-        if preferential != 0:
-            cg_tax = calculate_cap_gains(taxable_ord, cgdf, preferential)
+        if pref_taxable != 0:
+            cg_tax = calculate_cap_gains(taxable_ord, cgdf, pref_taxable)
     except Exception:
         pass
 
@@ -408,7 +432,8 @@ def tax_planner(
         ordinary.append(_metric("AGI", agi))
         ordinary.append(_metric("MAGI", magi))
     if taxable_ord + conversions > 0:
-        ordinary.append(_metric("Taxable Ordinary Income", taxable_ord))   # after the standard deduction / DAF
+        ordinary.append(_metric("Taxable Ordinary Income", taxable_ord))   # after the deduction
+        ordinary.append(_metric("Itemized Deductions" if itemizing else "Standard Deduction", d["deduction"]))
     if interest > 0:
         ordinary.append(_metric("Interest", interest))
     if ordinary_dividends > 0:
@@ -452,6 +477,8 @@ def tax_planner(
         taxes.append(_metric("Quarterly State", q_st))
     if calc_daf > 0:
         taxes.append(_metric("DAF", calc_daf))
+    if cash_contributions > 0:
+        taxes.append(_metric("Cash Contributions", cash_contributions))
     if cg_tax > 0:
         taxes.append(_metric("LT Cap Gains Tax", cg_tax))
     if niit > 0:
@@ -477,7 +504,7 @@ def tax_planner(
     else:
         roth = [_metric("Roth Balance", roth_value)]
 
-    new_cash = cash_value - state_tax - cg_tax - niit - taxable_income + pd_tax_amount
+    new_cash = cash_value - state_tax - cg_tax - niit - taxable_income + pd_tax_amount - max(0.0, cash_contributions)
     new_brok = taxable_value - calc_daf + deferred_dist
     cash: list[dict] = []
     if new_cash != cash_value:

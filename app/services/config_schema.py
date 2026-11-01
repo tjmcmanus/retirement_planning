@@ -200,6 +200,24 @@ SECTIONS: list[dict[str, Any]] = [
                 show_if=NOT_SINGLE),
             num("income.wage_inflation_rate", "Wage Inflation Rate", 0, 10, 0.1, suffix="%"),
         ]},
+        {"title": "Retirement contributions (pre-retirement)", "fields": [
+            num("income.contribution_401k_percent", "401k Contribution (% of wages)", 0, 100, 0.5, suffix="%",
+                help="Pre-tax (Traditional) 401k deferral as a percent of wages."),
+            num("income.contribution_roth_percent", "Roth Contribution (% of wages)", 0, 100, 0.5, suffix="%",
+                help="After-tax Roth contribution as a percent of wages."),
+            num("income.contribution_brokerage_percent", "Brokerage Contribution (% of wages)", 0, 100, 0.5, suffix="%",
+                help="Taxable brokerage savings as a percent of wages."),
+            num("income.employer_match_percent", "Employer Match (% of wages)", 0, 25, 0.5, suffix="%",
+                help="Employer matches your 401k/Roth deferral dollar-for-dollar up to this percent of wages. "
+                     "The match always goes in pre-tax (Traditional)."),
+            boolean("income.contribution_auto_split", "Auto-split Roth vs Traditional by tax rate (accumulation years)",
+                    help="Accumulation years only: send the deferral to Traditional when today's marginal rate is "
+                         "higher than your expected retirement rate, and to Roth when it is lower. Off keeps the "
+                         "percentages above. Prep-for-retirement years always use this rate comparison."),
+            num("income.expected_retirement_tax_rate", "Expected Retirement Marginal Rate", 0, 37, 1, suffix="%",
+                integer=True,
+                help="Your expected federal marginal rate in retirement (many retirees land in 12-22%)."),
+        ]},
         {"title": "Other income sources (today's dollars)", "fields": [
             num("income.pension_annual", "Pension / Annuity ($/yr)", 0, 500000, 1000, integer=True, prefix="$"),
             num("income.interest_annual", "Interest Income ($/yr)", 0, 200000, 500, integer=True, prefix="$"),

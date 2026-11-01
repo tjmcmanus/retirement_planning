@@ -690,6 +690,8 @@ class TaxPlannerBody(_Strict):
     tax_exempt_dividends: float = Field(default=0, ge=0, le=1e10)
     ordinary_dividends: float = Field(default=0, ge=0, le=1e10)
     qualified_dividends: float = Field(default=0, ge=0, le=1e10)
+    cash_contributions: float = Field(default=0, ge=0, le=1e10)
+    other_itemized: float = Field(default=0, ge=0, le=1e10)
 
 
 class MultiYearBody(_Strict):

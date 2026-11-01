@@ -51,6 +51,13 @@ DEFAULT_CONFIG = {
         "contribution_401k_percent": 10.0,
         "contribution_roth_percent": 5.0,
         "contribution_brokerage_percent": 5.0,
+        # Rate-aware Roth vs Traditional split. Stage 1: when enabled, the 401k + Roth
+        # deferral goes Traditional if today's marginal rate > expected retirement rate,
+        # Roth if lower; equal rates keep the percentages above. Stage 2 always applies
+        # the rate comparison to the 401k deferral (Roth if today's rate < retirement rate).
+        "contribution_auto_split": False,
+        "expected_retirement_tax_rate": 22.0,   # expected marginal rate in retirement (%)
+        "employer_match_percent": 0.0,          # % of wages matched 100% by employer (always pre-tax)
         # Other income sources (annual amounts in today's dollars, inflated at expense_inflation_rate)
         "pension_annual": 0,           # combined annual pension / annuity
         "rental_annual": 0,            # net annual rental income

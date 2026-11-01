@@ -55,7 +55,7 @@ function advancedPage() {
     // Form state. Defaults are the Streamlit page's defaults.
     // `target` is the Max Conversion Rate dropdown: "rate:<pct>" or "irmaa:<limit>"; payload() splits it into API fields.
     planner: { wages: 0, trad_dist: 0, interest: 0, ltcg: 0, stcg: 0, year, maxdaf: "N",
-               charitable: 0, target: "rate:24", daf_type: "securities", roth_amount: 0, prepaid: 0, tax_exempt_dividends: 0, ordinary_dividends: 0, qualified_dividends: 0 },
+               charitable: 0, target: "rate:24", daf_type: "securities", roth_amount: 0, prepaid: 0, tax_exempt_dividends: 0, ordinary_dividends: 0, qualified_dividends: 0, cash_contributions: 0, other_itemized: 0 },
     multi: { start_year: year, filing_status: "married_filing_jointly", income: 150000, cg_lt: 0,
              conversion: 0, qbi: 0, loss_cf: 0, window: 5 },
     qbi: { qbi_income: 100000, total_taxable_income: 200000, filing_status: "married_filing_jointly",

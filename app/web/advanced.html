@@ -58,8 +58,8 @@
           <label class="fld">Max Donor Advised Fund
             <select name="maxdaf" x-model="planner.maxdaf"><option value="N">N</option><option value="Y">Y</option></select>
           </label>
-          <label class="fld">Charitable Contrib
-            <input type="number" name="charitable" step="any" x-model.number="planner.charitable" :disabled="planner.maxdaf === 'Y'">
+          <label class="fld">DAF Contribution
+            <input type="number" name="charitable" min="0" step="any" x-model.number="planner.charitable" :disabled="planner.maxdaf === 'Y'">
           </label>
           <label class="fld">Max Conversion Rate
             <select name="headroom_pct" x-model="planner.target">
@@ -86,10 +86,13 @@
           </p>
         </div>
         <div class="grid5">
+          <label class="fld">Cash Charitable Contributions <input type="number" name="cash_contributions" min="0" step="any" x-model.number="planner.cash_contributions"></label>
+          <label class="fld">Other Itemized Deductions <input type="number" name="other_itemized" min="0" step="any" x-model.number="planner.other_itemized"></label>
           <label class="fld">Roth Conversion Amount <input type="number" name="roth_amount" step="any" x-model.number="planner.roth_amount"></label>
           <label class="fld">Estimated prepaid Fed taxes <input type="number" name="prepaid" step="any" x-model.number="planner.prepaid"></label>
         </div>
         <p class="muted small">Account balances below come from your latest net worth snapshot.
+          Itemized deductions (DAF + cash gifts + other, e.g. mortgage interest, state and local taxes up to the cap) are used only when they beat the standard deduction.
           Leave Roth Conversion Amount at 0 to fill the bracket up to the Max Conversion Rate automatically.
           An IRMAA limit fills conversions until gross income (including long-term gains) reaches that Medicare surcharge tier.</p>
         <button type="button" class="primary" id="run-planner" @click="run('planner')" :disabled="!!busy.planner">Project this year's changes</button>

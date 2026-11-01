@@ -253,6 +253,28 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
             daf=balances.daf
         )
     
+    def _get_split_settings(self) -> tuple[bool, float, float]:
+        """
+        Get rate-aware contribution split settings from config.
+        
+        Returns:
+            (auto_split enabled, employer match as fraction of wages,
+             expected retirement marginal rate as a fraction)
+        """
+        try:
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+            
+            auto = config_mgr.get("income", "contribution_auto_split", False) is True
+            match = float(config_mgr.get("income", "employer_match_percent", 0.0)) / 100.0
+            retire_rate = float(
+                config_mgr.get("income", "expected_retirement_tax_rate", 22.0)
+            ) / 100.0
+        except Exception:
+            return False, 0.0, 0.22
+        
+        return auto, max(0.0, min(1.0, match)), max(0.0, min(1.0, retire_rate))
+    
     def _validate_dependencies(self) -> None:
         """
         Validate that required dependencies are injected.

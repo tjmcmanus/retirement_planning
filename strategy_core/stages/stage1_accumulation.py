@@ -156,19 +156,33 @@ class Stage1Accumulation(BaseLifeStageStrategy):
         # Set wages
         strategy.wages = wages
         
+        std_deduction = self.tax_calculator.calculate_standard_deduction(
+            filing_status, year, age_primary, age_spouse
+        )
+        
         # Calculate contribution amounts from config rates
         contribution_rates = self._get_contribution_rates()
+        auto_split, match_pct, retirement_rate = self._get_split_settings()
+        split_note = None
+        if auto_split:
+            contribution_rates, split_note = self._apply_rate_aware_split(
+                contribution_rates, wages, std_deduction,
+                filing_status, year, retirement_rate
+            )
         contribution_401k = wages * contribution_rates['traditional']
         contribution_roth = wages * contribution_rates['roth']
         contribution_brokerage = wages * contribution_rates['brokerage']
         
+        # Employer match: matched dollar-for-dollar on the employee's deferral
+        # (Traditional + Roth) up to match_pct of wages. The match always goes
+        # in pre-tax, so it grows the Traditional balance but is not wages.
+        employer_match = wages * min(
+            contribution_rates['traditional'] + contribution_rates['roth'],
+            match_pct
+        )
+        
         # Calculate AGI (wages minus pre-tax 401k contribution)
         agi_before_conversion = wages - contribution_401k
-        
-        # Calculate taxes
-        std_deduction = self.tax_calculator.calculate_standard_deduction(
-            filing_status, year, age_primary, age_spouse
-        )
         
         taxable_income = max(0, agi_before_conversion - std_deduction)
         federal_tax, max_rate, upper_bracket = self.tax_calculator.calculate_federal_tax(
@@ -194,6 +208,30 @@ class Stage1Accumulation(BaseLifeStageStrategy):
             agi=agi_before_conversion,
             bracket=max_rate
         )
+        
+        if split_note:
+            self._log_decision(
+                strategy,
+                'contribution_decisions',
+                'Roth vs Traditional Split',
+                split_note,
+                'Traditional wins when today\'s marginal rate exceeds the expected '
+                'retirement rate; Roth wins when it is lower; equal rates are '
+                'equivalent so the configured split is kept.',
+                trad_401k=contribution_401k,
+                roth=contribution_roth,
+                retirement_rate=retirement_rate
+            )
+        if employer_match > 0:
+            self._log_decision(
+                strategy,
+                'contribution_decisions',
+                'Employer Match',
+                f'${employer_match:,.0f} added pre-tax to Traditional',
+                'Employer match always goes in pre-tax, regardless of the '
+                'Roth/Traditional choice for your own deferral.',
+                employer_match=employer_match
+            )
         
         # Consider Roth conversions during accumulation
         roth_conversion = 0.0
@@ -240,7 +278,7 @@ class Stage1Accumulation(BaseLifeStageStrategy):
         
         # Update balances after contributions and conversions
         strategy.traditional_balance = (
-            balances.traditional + contribution_401k - roth_conversion
+            balances.traditional + contribution_401k + employer_match - roth_conversion
         )
         strategy.roth_balance = balances.roth + contribution_roth + roth_conversion
         strategy.taxable_balance = balances.taxable + contribution_brokerage
@@ -296,6 +334,49 @@ class Stage1Accumulation(BaseLifeStageStrategy):
             'roth': roth_pct,
             'brokerage': brok_pct
         }
+    
+    def _apply_rate_aware_split(
+        self,
+        rates: dict[str, float],
+        wages: float,
+        std_deduction: float,
+        filing_status: str,
+        year: int,
+        retirement_rate: float
+    ) -> tuple[dict[str, float], Optional[str]]:
+        """
+        Re-split the employee deferral (Traditional + Roth) by comparing
+        today's marginal rate with the expected retirement rate.
+        
+        Today's rate is measured on wages less the standard deduction, i.e. the
+        rate on the dollars being deferred. Brokerage is left unchanged.
+        
+        Returns:
+            (new rates, explanation) - explanation is None when the configured
+            split is kept (no deferral, or rates are equal).
+        """
+        deferral = rates['traditional'] + rates['roth']
+        if deferral <= 0 or wages <= 0:
+            return rates, None
+        
+        _, current_rate, _ = self.tax_calculator.calculate_federal_tax(
+            max(0.0, wages - std_deduction), filing_status, year
+        )
+        
+        if abs(current_rate - retirement_rate) < 1e-9:
+            return rates, None
+        
+        if current_rate > retirement_rate:
+            trad, roth, choice = deferral, 0.0, 'Traditional'
+        else:
+            trad, roth, choice = 0.0, deferral, 'Roth'
+        
+        new_rates = {**rates, 'traditional': trad, 'roth': roth}
+        note = (
+            f'{choice}: current rate {current_rate:.0%} vs '
+            f'expected retirement rate {retirement_rate:.0%}'
+        )
+        return new_rates, note
     
     def _calculate_fica_tax(self, wages: float) -> float:
         """

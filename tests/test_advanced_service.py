@@ -83,7 +83,7 @@ def test_planner_all_income_types_prepaid_and_balances(adv):
     out, c = _planner(adv, roth_amount=10_000, prepaid=1_000, interest=500, ltcg=5_000, stcg=1_000, trad_dist=2_000)
     assert c["Ordinary Income"]["Taxable Ordinary Income"]["value"] == 79_300
     assert c["Ordinary Income"]["AGI"]["value"] == 118_500          # incl. 5k long-term gains
-    assert [m for m in c["Ordinary Income"]] == ["AGI", "MAGI", "Taxable Ordinary Income", "Interest", "ST Cap Gains", "LT Cap Gains"]
+    assert [m for m in c["Ordinary Income"]] == ["AGI", "MAGI", "Taxable Ordinary Income", "Standard Deduction", "Interest", "ST Cap Gains", "LT Cap Gains"]
     assert c["Ordinary Income"]["LT Cap Gains"]["group"] == "Special Income"
     assert all(m["group"] is None for k, m in c["Ordinary Income"].items() if k != "LT Cap Gains")
     assert c["Taxes Owed"]["Income Tax"]["value"] == 8_020          # 9,020 tax + 0 cap gains (0% bracket) - 1,000 prepaid
@@ -266,6 +266,83 @@ def test_planner_dividend_types_in_agi_and_magi(adv):
     assert oi["AGI"]["value"] == 113_000                    # 100k + 10k + 1k + 2k; the muni dividends stay out
     assert oi["MAGI"]["value"] == 116_000                   # ...and come back for MAGI
     assert oi["Taxable Ordinary Income"]["value"] == 76_800  # 110k + 1k ordinary - 34.2k standard deduction
+
+
+# ── Deductions: standard vs itemized, preferential income, charitable limits ─────────────
+
+def test_planner_unused_standard_deduction_reduces_preferential_income(adv):
+    # 10,000 wages + 100,000 LTCG: the 34,200 deduction absorbs the wages, the other 24,200 reduces the gain.
+    _, c = _planner(adv, wages=10_000, ltcg=100_000, roth_amount=1)
+    assert c["Ordinary Income"]["AGI"]["value"] == pytest.approx(110_001)
+    assert "Taxable Ordinary Income" not in c["Ordinary Income"] or c["Ordinary Income"]["Taxable Ordinary Income"]["value"] == 0
+    # taxable gain 75,800 - 0 ordinary = under the 98,900 0% threshold -> no capital gains tax at all
+    assert "LT Cap Gains Tax" not in c["Taxes Owed"]
+
+
+def test_planner_deduction_with_enough_ordinary_income_does_not_touch_gains(adv):
+    _, c = _planner(adv, wages=100_000, ltcg=50_000, roth_amount=1)
+    assert c["Ordinary Income"]["Taxable Ordinary Income"]["value"] == pytest.approx(65_801)   # 100,001 - 34,200
+    assert c["Taxes Owed"]["LT Cap Gains Tax"]["value"] == 2_535                      # floor(15% * (65,801 + 50,000 - 98,900))
+
+
+def test_planner_daf_limit_is_a_percentage_of_full_agi_including_gains(adv):
+    _, c = _planner(adv, wages=100_000, ltcg=100_000, maxdaf="Y", roth_amount=1)
+    assert c["Taxes Owed"]["DAF"]["value"] == pytest.approx(0.30 * 200_001)                    # not 30% of wages only
+    _, cash = _planner(adv, wages=100_000, ltcg=100_000, maxdaf="Y", daf_type="cash", roth_amount=1)
+    assert cash["Taxes Owed"]["DAF"]["value"] == pytest.approx(0.60 * 200_001)
+
+
+def test_planner_custom_daf_within_limit_on_full_agi_is_accepted(adv):
+    out, c = _planner(adv, wages=100_000, ltcg=100_000, charitable=50_000, roth_amount=1)      # 30% of ~200k = 60k
+    assert c["Taxes Owed"]["DAF"]["value"] == 50_000
+    assert not [w for w in out["warnings"] if "exceeds" in w]
+    assert c["Ordinary Income"]["Itemized Deductions"]["value"] == 50_000
+
+
+def test_planner_daf_over_the_limit_is_capped_with_a_carryforward_warning(adv):
+    out, c = _planner(adv, wages=200_000, charitable=80_000, roth_amount=1)                    # 30% of 200,001 = 60,000
+    assert c["Taxes Owed"]["DAF"]["value"] == 80_000                                           # the gift is still made
+    assert any("carries forward" in w and "DAF" in w for w in out["warnings"])
+    assert c["Ordinary Income"]["Itemized Deductions"]["value"] == pytest.approx(60_000.3, abs=0.5)   # ...but the deduction is capped
+
+
+def test_planner_cash_contributions_are_editable_with_a_max_daf(adv):
+    # max DAF of securities (30%) plus cash gifts, together within 60% of AGI
+    _, c = _planner(adv, wages=200_000, maxdaf="Y", cash_contributions=20_000, roth_amount=1)
+    assert c["Taxes Owed"]["Cash Contributions"]["value"] == 20_000
+    assert c["Taxes Owed"]["DAF"]["value"] == pytest.approx(0.30 * 200_001)
+    assert c["Ordinary Income"]["Itemized Deductions"]["value"] == pytest.approx(0.30 * 200_001 + 20_000)
+
+
+def test_planner_cash_gifts_and_cash_daf_share_the_60_percent_limit(adv):
+    out, c = _planner(adv, wages=100_000, maxdaf="Y", daf_type="cash", cash_contributions=30_000, roth_amount=1)
+    # AGI 100,001: 60% = 60,001 total; the cash gifts use 30,000 so the DAF is limited to the remaining ~30,001
+    assert c["Taxes Owed"]["DAF"]["value"] == pytest.approx(0.60 * 100_001 - 30_000)
+    assert c["Ordinary Income"]["Itemized Deductions"]["value"] == pytest.approx(0.60 * 100_001)
+
+
+def test_planner_other_itemized_deductions_only_count_when_they_beat_the_standard_deduction(adv):
+    out, small = _planner(adv, wages=100_000, other_itemized=20_000, roth_amount=1)
+    assert small["Ordinary Income"]["Standard Deduction"]["value"] == 34_200
+    assert any("below the standard deduction" in w for w in out["warnings"])
+    _, big = _planner(adv, wages=100_000, other_itemized=40_000, roth_amount=1)
+    assert big["Ordinary Income"]["Itemized Deductions"]["value"] == 40_000
+    assert big["Ordinary Income"]["Taxable Ordinary Income"]["value"] == pytest.approx(60_001)
+
+
+def test_planner_itemized_total_combines_other_cash_and_daf(adv):
+    _, c = _planner(adv, wages=200_000, charitable=10_000, cash_contributions=5_000, other_itemized=30_000, roth_amount=1)
+    assert c["Ordinary Income"]["Itemized Deductions"]["value"] == 45_000
+    assert c["Ordinary Income"]["Taxable Ordinary Income"]["value"] == pytest.approx(155_001)
+
+
+def test_planner_cash_contributions_reduce_cash_balance(adv):
+    _, none = _planner(adv, wages=200_000, roth_amount=1)
+    _, gift = _planner(adv, wages=200_000, cash_contributions=10_000, other_itemized=40_000, roth_amount=1)
+    taxes_none = none["Taxes Owed"]["Income Tax"]["value"]
+    taxes_gift = gift["Taxes Owed"]["Income Tax"]["value"]
+    assert gift["Cash & Broker"]["New Cash"]["value"] == pytest.approx(
+        none["Cash & Broker"]["New Cash"]["value"] + (taxes_none - taxes_gift) - 10_000)
 
 
 def test_planner_niit_is_3_8_percent_of_the_lesser_of_nii_and_agi_over_threshold(adv):
