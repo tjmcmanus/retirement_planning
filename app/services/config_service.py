@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import threading
 import zipfile
 from datetime import datetime
@@ -147,6 +148,95 @@ def reset_config() -> dict[str, Any]:
         mgr.reset_to_defaults()
         warnings = _persist(mgr, set())
         return {"config": mgr.config, "derived": {}, "warnings": warnings}
+
+
+MAX_IMPORT_BYTES = 50 * 1024 * 1024  # config + portfolio CSV + estate JSON are small; refuse anything absurd
+
+# Companion files restored from a bundle (same set export_bundle writes).
+_BUNDLE_DATA_FILES = ("portfolio_data_truth.csv", "estate_planning_data.json")
+
+
+def _parse_config_text(raw: bytes) -> str:
+    """Decode a config file and drop the leading ``//`` comment lines the export adds."""
+    text = raw.decode("utf-8-sig")
+    return "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("//"))
+
+
+def _backup_file(name: str) -> None:
+    """Copy an existing data file to ``.backups/`` before it is overwritten."""
+    if os.path.exists(name):
+        os.makedirs(".backups", exist_ok=True)
+        stem, ext = os.path.splitext(name)
+        shutil.copy2(name, os.path.join(".backups", f"{stem}_{datetime.now():%Y%m%d_%H%M%S}{ext}"))
+
+
+def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
+    """Restore a config ``.zip`` bundle (or a legacy ``.json``) like the Streamlit import.
+
+    The config is parsed and merged with the defaults before anything is written, so a bad
+    file changes nothing. The previous config / portfolio CSV / estate JSON are backed up.
+    Returns ``{"config", "restored", "warnings"}``; raises ``ValueError`` for an unusable file.
+    """
+    if not data:
+        raise ValueError("The file is empty")
+    if len(data) > MAX_IMPORT_BYTES:
+        raise ValueError("The file is too large")
+
+    extras: dict[str, bytes] = {}
+    if filename.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                # Match by basename so bundles made on Windows or in a subfolder still import.
+                names = {n.replace("\\", "/").split("/")[-1].lower(): n for n in zf.namelist() if not n.endswith("/")}
+                if "retirement_config.json" not in names:
+                    raise ValueError("The ZIP bundle does not contain retirement_config.json")
+                for member in [names["retirement_config.json"]] + [names[n] for n in _BUNDLE_DATA_FILES if n in names]:
+                    if zf.getinfo(member).file_size > MAX_IMPORT_BYTES:
+                        raise ValueError(f"{member} is too large")
+                config_raw = zf.read(names["retirement_config.json"])
+                for n in _BUNDLE_DATA_FILES:
+                    if n in names:
+                        content = zf.read(names[n])
+                        if content:
+                            extras[n] = content
+        except zipfile.BadZipFile as exc:
+            raise ValueError("The file is not a valid ZIP archive") from exc
+    elif filename.lower().endswith(".json"):
+        config_raw = data
+    else:
+        raise ValueError("Choose a .zip bundle or a .json configuration file")
+
+    try:
+        config_text = _parse_config_text(config_raw)
+        parsed = json.loads(config_text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read the configuration JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("The configuration JSON must be an object of sections")
+
+    with _lock:
+        mgr = ConfigManager()
+        if not mgr.import_config(config_text):  # merges with DEFAULT_CONFIG so newer settings get defaults
+            raise ValueError("Could not import the configuration JSON")
+
+        restored = ["retirement_config.json"]
+        warnings: list[str] = []
+        for name, content in extras.items():
+            _backup_file(name)
+            with open(name, "wb") as fh:
+                fh.write(content)
+            restored.append(name)
+        if "portfolio_data_truth.csv" in extras:
+            try:
+                from portfolio_db import migrate_from_csv
+                rows = migrate_from_csv("portfolio_data_truth.csv")
+                restored.append(f"portfolio.db re-populated ({rows} rows)")
+            except Exception as exc:  # CSV is restored; the DB can be rebuilt from it
+                logger.exception("portfolio.db update after import failed")
+                warnings.append(f"portfolio_data_truth.csv was restored but portfolio.db was not updated: {exc}")
+
+        warnings += _persist(mgr, {"social_security", "personal_info"})
+        return {"config": mgr.config, "restored": restored, "warnings": warnings}
 
 
 def export_bundle() -> tuple[str, bytes]:

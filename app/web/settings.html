@@ -164,11 +164,14 @@
           <span class="muted" x-text="dirtyPaths.length ? dirtyPaths.length + ' unsaved change(s)' : 'All changes saved'"></span>
           <span class="spacer"></span>
           <a class="btn" href="/api/config/export" download>Export bundle (.zip)</a>
+          <label class="btn-like">Import bundle (.zip / .json)
+            <input type="file" accept=".zip,.json,application/zip,application/json" @change="importFile($event)" :disabled="saving" hidden>
+          </label>
           <button type="button" id="reset" class="danger" :disabled="saving" @click="resetDefaults()">Reset to defaults</button>
         </div>
         <p class="muted small">
           Not on this page yet (still in the Streamlit app): long-term-care and HSA analyzers, Medicare and Social Security guides,
-          the Social Security optimizer, and configuration import.
+          and the Social Security optimizer.
           Portfolio holdings editing is on the <a href="/portfolio#holdings">Portfolio → Holdings</a> tab.
         </p>
       </div>

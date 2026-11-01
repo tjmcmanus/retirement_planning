@@ -760,3 +760,74 @@ def test_monte_carlo_export_csv_endpoint(client):
     assert r.status_code == 200
     assert r.headers["content-type"] == "text/csv; charset=utf-8"
     assert "MONTE CARLO SIMULATION REPORT" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Settings: import bundle
+# ---------------------------------------------------------------------------
+
+def _bundle(files):
+    import io, zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def _post_import(client, name, data):
+    return client.post(f"/api/config/import?filename={name}", content=data,
+                       headers={"Content-Type": "application/octet-stream"})
+
+
+def test_import_roundtrips_an_exported_bundle(client, tmp_path):
+    (tmp_path / "portfolio_data_truth.csv").write_text("a,b\n1,2\n")
+    (tmp_path / "estate_planning_data.json").write_text('{"k": 1}')
+    _put(client, {"financial_assumptions": {"expected_rate_of_return": 9.5}})
+    bundle = client.get("/api/config/export").content
+
+    client.post("/api/config/reset")
+    (tmp_path / "portfolio_data_truth.csv").write_text("changed\n")
+    r = _post_import(client, "retirement_config_x.zip", bundle)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["config"]["financial_assumptions"]["expected_rate_of_return"] == 9.5
+    assert {"retirement_config.json", "portfolio_data_truth.csv", "estate_planning_data.json"} <= set(body["restored"])
+    assert (tmp_path / "portfolio_data_truth.csv").read_text() == "a,b\n1,2\n"
+    assert (tmp_path / "estate_planning_data.json").read_text() == '{"k": 1}'
+    # the CSV that was replaced was backed up first
+    assert any(b.read_text() == "changed\n" for b in (tmp_path / ".backups").glob("portfolio_data_truth_*.csv"))
+    # persisted: a fresh read sees the imported value
+    assert client.get("/api/config").json()["financial_assumptions"]["expected_rate_of_return"] == 9.5
+
+
+def test_import_old_config_gets_defaults_for_new_keys(client):
+    old = json.loads((REPO / "retirement_config.json.example").read_text())
+    old.get("income", {}).pop("contribution_auto_split", None)
+    old.get("income", {}).pop("employer_match_percent", None)
+    r = _post_import(client, "old.json", ("// Primary person: A\n" + json.dumps(old)).encode())
+    assert r.status_code == 200, r.text
+    income = r.json()["config"]["income"]
+    assert income["contribution_auto_split"] is False and income["employer_match_percent"] == 0.0
+
+
+@pytest.mark.parametrize("name,data,fragment", [
+    ("x.zip", b"not a zip", "valid ZIP"),
+    ("x.zip", None, "retirement_config.json"),
+    ("x.json", b"{broken", "Could not read"),
+    ("x.json", b"[1, 2]", "object of sections"),
+    ("x.txt", b"{}", ".zip bundle or a .json"),
+    ("x.json", b"", "empty"),
+])
+def test_import_rejects_bad_files_and_changes_nothing(client, tmp_path, name, data, fragment):
+    if data is None:
+        data = _bundle({"other.txt": "hi"})
+    before = (tmp_path / "retirement_config.json").read_text()
+    r = _post_import(client, name, data)
+    assert r.status_code == 422 and fragment in r.json()["detail"]["message"]
+    assert (tmp_path / "retirement_config.json").read_text() == before
+
+
+def test_import_ui_is_wired(client):
+    assert "importFile" in client.get("/settings").text
+    assert "/api/config/import" in client.get("/static/settings.js").text

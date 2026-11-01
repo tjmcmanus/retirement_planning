@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -56,6 +56,20 @@ def reset_config() -> dict[str, Any]:
         return config_service.reset_config()
     except OSError as exc:
         logger.exception("Config reset failed")
+        raise HTTPException(status_code=500, detail={"message": str(exc), "errors": []}) from exc
+
+
+@router.post("/config/import")
+async def import_config(request: Request, filename: str = Query(min_length=1, max_length=255)) -> dict[str, Any]:
+    """Restore a ``.zip`` bundle or legacy ``.json``. The raw file bytes are the request body
+    (no multipart dependency). Returns ``{"config", "restored", "warnings"}``; 422 for an unusable file."""
+    data = await request.body()
+    try:
+        return await run_in_threadpool(config_service.import_bundle, filename, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"message": str(exc), "errors": []}) from exc
+    except OSError as exc:
+        logger.exception("Config import failed")
         raise HTTPException(status_code=500, detail={"message": str(exc), "errors": []}) from exc
 
 

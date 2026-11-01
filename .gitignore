@@ -188,6 +188,7 @@ portfolio_data_truth_*.csv
 portfolio_data_truth.csv
 data/benchmark_cache.db
 data/performance_history.db
+data/scenarios/*
 .gitignore
 data/rebalancing_cache.db
 .backups/income_rates_20260414_174923.csv

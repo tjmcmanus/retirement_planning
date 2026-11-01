@@ -321,6 +321,37 @@ function settings() {
       this.message = null;
     },
 
+    async importFile(ev) {
+      const input = ev.target;
+      const file = input.files && input.files[0];
+      input.value = "";  // allow re-selecting the same file
+      if (!file) return;
+      if (!/\.(zip|json)$/i.test(file.name)) {
+        this.message = { kind: "error", text: "Choose a .zip bundle or a .json configuration file." };
+        return;
+      }
+      if (!confirm(`Import "${file.name}"? This replaces your current settings (and the portfolio data and estate plan if the bundle contains them). The current files are backed up first.`)) return;
+      this.saving = true;
+      this.message = null;
+      try {
+        const res = await this.fetchJSON(`/api/config/import?filename=${encodeURIComponent(file.name)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: await file.arrayBuffer(),
+        });
+        this.applyConfig(res.config);
+        const warn = (res.warnings || []).length ? " Warnings: " + res.warnings.join("; ") : "";
+        this.message = {
+          kind: warn ? "warn" : "ok",
+          text: "Imported: " + res.restored.join(", ") + "." + warn,
+        };
+      } catch (e) {
+        this.message = { kind: "error", text: "Import failed: " + e.message };
+      } finally {
+        this.saving = false;
+      }
+    },
+
     async resetDefaults() {
       if (!confirm("Reset ALL settings to the built-in defaults? The current file is backed up first, but this replaces every value.")) return;
       this.saving = true;
