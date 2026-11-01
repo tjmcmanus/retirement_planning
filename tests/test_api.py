@@ -582,7 +582,7 @@ def test_advanced_tax_planner_roundtrip(adv_client):
     r = adv_client.post("/api/advanced/tax-planner", json=PLANNER_BODY)
     assert r.status_code == 200, r.text
     cols = {c["title"]: {m["label"]: m["value"] for m in c["metrics"]} for c in r.json()["columns"]}
-    assert cols["Ordinary Income"]["AGI"] == 75_800 and cols["Taxes Owed"]["Income Tax"] == 8_600
+    assert cols["Ordinary Income"]["Taxable Ordinary Income"] == 75_800 and cols["Taxes Owed"]["Income Tax"] == 8_600
 
 
 def test_advanced_tax_planner_unknown_year_is_422(adv_client):
@@ -591,7 +591,7 @@ def test_advanced_tax_planner_unknown_year_is_422(adv_client):
 
 
 @pytest.mark.parametrize("path,body", [
-    ("tax-planner", {**PLANNER_BODY, "medicare": 3}),
+    ("tax-planner", {**PLANNER_BODY, "medicare": 2}),                # removed field: derived from the config
     ("tax-planner", {**PLANNER_BODY, "headroom_pct": 25}),
     ("tax-planner", {**PLANNER_BODY, "daf_type": "gold"}),
     ("tax-planner", {**PLANNER_BODY, "surprise": 1}),

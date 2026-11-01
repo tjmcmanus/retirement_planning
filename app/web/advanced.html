@@ -45,13 +45,13 @@
           <label class="fld">Short Term Cap Gains <input type="number" name="stcg" step="any" x-model.number="planner.stcg"></label>
         </div>
         <div class="grid5">
-          <label class="fld">Medicare Eligible
-            <select name="medicare" x-model.number="planner.medicare">
-              <template x-for="m in [0,1,2]" :key="m"><option :value="m" :selected="m === planner.medicare" x-text="m"></option></template>
-            </select>
-          </label>
+          <label class="fld">Ordinary Dividends <input type="number" name="ordinary_dividends" min="0" step="any" x-model.number="planner.ordinary_dividends"></label>
+          <label class="fld">Qualified Dividends <input type="number" name="qualified_dividends" min="0" step="any" x-model.number="planner.qualified_dividends"></label>
+          <label class="fld">Tax-Exempt Dividends (muni funds) <input type="number" name="tax_exempt_dividends" min="0" step="any" x-model.number="planner.tax_exempt_dividends"></label>
+        </div>
+        <div class="grid5">
           <label class="fld">Tax Year
-            <select name="year" x-model.number="planner.year">
+            <select name="year" x-model.number="planner.year" @change="$nextTick(() => { if (planner.target.startsWith('irmaa:') && !irmaaLimits().includes(Number(planner.target.slice(6)))) planner.target = 'rate:24'; })">
               <template x-for="y in (meta ? meta.planner_years : [])" :key="y"><option :value="y" :selected="y === planner.year" x-text="y"></option></template>
             </select>
           </label>
@@ -62,8 +62,15 @@
             <input type="number" name="charitable" step="any" x-model.number="planner.charitable" :disabled="planner.maxdaf === 'Y'">
           </label>
           <label class="fld">Max Conversion Rate
-            <select name="headroom_pct" x-model.number="planner.headroom_pct">
-              <template x-for="r in (meta ? meta.headroom_rates : [])" :key="r"><option :value="r" :selected="r === planner.headroom_pct" x-text="r + '%'"></option></template>
+            <select name="headroom_pct" x-model="planner.target">
+              <optgroup label="Tax bracket">
+                <template x-for="r in (meta ? meta.headroom_rates : [])" :key="'r' + r"><option :value="'rate:' + r" x-text="r + '%'"></option></template>
+              </optgroup>
+              <template x-if="irmaaLimits().length">
+                <optgroup label="IRMAA limit (MAGI)">
+                  <template x-for="(l, i) in irmaaLimits()" :key="'i' + l"><option :value="'irmaa:' + l" x-text="'IRMAA tier ' + (i + 1) + ' limit: ' + fmt0(l)"></option></template>
+                </optgroup>
+              </template>
             </select>
           </label>
         </div>
@@ -83,7 +90,8 @@
           <label class="fld">Estimated prepaid Fed taxes <input type="number" name="prepaid" step="any" x-model.number="planner.prepaid"></label>
         </div>
         <p class="muted small">Account balances below come from your latest net worth snapshot.
-          Leave Roth Conversion Amount at 0 to fill the bracket up to the Max Conversion Rate automatically.</p>
+          Leave Roth Conversion Amount at 0 to fill the bracket up to the Max Conversion Rate automatically.
+          An IRMAA limit fills conversions until gross income (including long-term gains) reaches that Medicare surcharge tier.</p>
         <button type="button" class="primary" id="run-planner" @click="run('planner')" :disabled="!!busy.planner">Project this year's changes</button>
         <span class="muted" x-show="!!busy.planner">Calculating...</span>
       </fieldset>
@@ -96,11 +104,14 @@
             <template x-for="col in res.planner.columns" :key="col.title">
               <div class="rescol">
                 <h3 x-text="col.title"></h3>
-                <template x-for="m in col.metrics" :key="m.label">
-                  <div class="kpi" :data-metric="m.label">
-                    <div class="kpi-label" x-text="m.label"></div>
-                    <div class="kpi-value small-value" x-text="fmtMetric(m)"></div>
-                    <div class="kpi-delta" :class="m.delta > 0 ? 'up' : 'down'" x-show="m.delta != null" x-text="fmtDelta(m.delta)"></div>
+                <template x-for="(m, i) in col.metrics" :key="m.label">
+                  <div>
+                    <h4 class="kpi-group" x-show="m.group && (i === 0 || col.metrics[i - 1].group !== m.group)" x-text="m.group"></h4>
+                    <div class="kpi" :data-metric="m.label">
+                      <div class="kpi-label" x-text="m.label"></div>
+                      <div class="kpi-value small-value" x-text="fmtMetric(m)"></div>
+                      <div class="kpi-delta" :class="m.delta > 0 ? 'up' : 'down'" x-show="m.delta != null" x-text="fmtDelta(m.delta)"></div>
+                    </div>
                   </div>
                 </template>
               </div>

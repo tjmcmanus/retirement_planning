@@ -53,8 +53,9 @@ function advancedPage() {
     busy: {}, err: {}, res: {},   // keyed by tool name; read with !! because keys appear on first use
 
     // Form state. Defaults are the Streamlit page's defaults.
-    planner: { wages: 0, trad_dist: 0, interest: 0, ltcg: 0, stcg: 0, medicare: 0, year, maxdaf: "N",
-               charitable: 0, headroom_pct: 24, daf_type: "securities", roth_amount: 0, prepaid: 0 },
+    // `target` is the Max Conversion Rate dropdown: "rate:<pct>" or "irmaa:<limit>"; payload() splits it into API fields.
+    planner: { wages: 0, trad_dist: 0, interest: 0, ltcg: 0, stcg: 0, year, maxdaf: "N",
+               charitable: 0, target: "rate:24", daf_type: "securities", roth_amount: 0, prepaid: 0, tax_exempt_dividends: 0, ordinary_dividends: 0, qualified_dividends: 0 },
     multi: { start_year: year, filing_status: "married_filing_jointly", income: 150000, cg_lt: 0,
              conversion: 0, qbi: 0, loss_cf: 0, window: 5 },
     qbi: { qbi_income: 100000, total_taxable_income: 200000, filing_status: "married_filing_jointly",
@@ -81,6 +82,8 @@ function advancedPage() {
     },
 
     yearRange(n) { return Array.from({ length: n }, (_, i) => new Date().getFullYear() + i); },
+
+    irmaaLimits() { return (this.meta && this.meta.irmaa_limits[this.planner.year]) || []; },
 
     // ── formatting ────────────────────────────────────────────
     fmt0: usd0,
@@ -112,6 +115,13 @@ function advancedPage() {
     payload(tool) {
       const f = this[tool];
       switch (tool) {
+        case "planner": {
+          const { target, ...rest } = f;
+          const [kind, val] = target.split(":");
+          return kind === "irmaa"
+            ? { ...rest, headroom_pct: 24, irmaa_limit: Number(val) }
+            : { ...rest, headroom_pct: Number(val) };
+        }
         case "betr":
           return { ...f, current_rate: f.current_rate / 100, future_rate: f.future_rate / 100, annual_return: f.annual_return / 100 };
         case "nua":

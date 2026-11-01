@@ -391,13 +391,7 @@ class Stage6RMD(BaseLifeStageStrategy):
         )
         
         # Deduct state tax from cash balance
-        new_balances = PortfolioBalances(
-            cash=new_balances.cash - state_tax,
-            taxable=new_balances.taxable,
-            traditional=new_balances.traditional,
-            roth=new_balances.roth,
-            daf=new_balances.daf
-        )
+        new_balances = self._deduct_tax_from_balances(new_balances, state_tax, "State Tax", year)
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
         
         # If DAF contribution made (or carryforward available), recalculate federal tax

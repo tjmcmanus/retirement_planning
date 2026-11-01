@@ -679,7 +679,6 @@ class TaxPlannerBody(_Strict):
     interest: float = Field(default=0, ge=-1e10, le=1e10)
     ltcg: float = Field(default=0, ge=-1e10, le=1e10)
     stcg: float = Field(default=0, ge=-1e10, le=1e10)
-    medicare: Literal[0, 1, 2] = 0
     year: int = Field(ge=2000, le=2100)
     maxdaf: Literal["N", "Y"] = "N"
     charitable: float = Field(default=0, ge=-1e10, le=1e10)
@@ -687,6 +686,10 @@ class TaxPlannerBody(_Strict):
     daf_type: Literal["securities", "cash"] = "securities"
     roth_amount: float = Field(default=0, ge=-1e10, le=1e10)
     prepaid: float = Field(default=0, ge=-1e10, le=1e10)
+    irmaa_limit: float | None = Field(default=None, gt=0, le=1e10)
+    tax_exempt_dividends: float = Field(default=0, ge=0, le=1e10)
+    ordinary_dividends: float = Field(default=0, ge=0, le=1e10)
+    qualified_dividends: float = Field(default=0, ge=0, le=1e10)
 
 
 class MultiYearBody(_Strict):

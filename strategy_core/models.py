@@ -68,14 +68,20 @@ class PortfolioBalances:
         return asdict(self)
 
     def __post_init__(self) -> None:
-        """Validate required balances are non-negative."""
+        """Validate required balances are non-negative, allowing tiny floating-point rounding."""
         for field_name in ['cash', 'taxable', 'traditional', 'roth', 'daf']:
             value = getattr(self, field_name)
+            if -1e-5 < value < 0:
+                setattr(self, field_name, 0.0)
+                value = 0.0
             if value < 0:
                 raise ValueError(f"{field_name} balance cannot be negative: {value}")
         # Per-person fields are allowed to be None (not yet populated) or non-negative.
         for field_name in ['traditional_person1', 'traditional_person2']:
             value = getattr(self, field_name)
+            if value is not None and -1e-5 < value < 0:
+                setattr(self, field_name, 0.0)
+                value = 0.0
             if value is not None and value < 0:
                 raise ValueError(f"{field_name} balance cannot be negative: {value}")
 

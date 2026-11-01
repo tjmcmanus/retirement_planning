@@ -222,13 +222,7 @@ class Stage1Accumulation(BaseLifeStageStrategy):
         )
 
         # Deduct state tax from cash balance
-        balances = PortfolioBalances(
-            cash=balances.cash - state_tax,
-            taxable=balances.taxable,
-            traditional=balances.traditional,
-            roth=balances.roth,
-            daf=balances.daf
-        )
+        balances = self._deduct_tax_from_balances(balances, state_tax, "State Tax", year)
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
         
         # Update strategy with calculated values

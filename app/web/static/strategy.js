@@ -748,7 +748,18 @@ function strategyPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ changes })
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          let errDetail = `HTTP ${r.status}`;
+          try {
+            const errJson = await r.json();
+            if (errJson.detail) {
+              if (typeof errJson.detail === "string") errDetail = errJson.detail;
+              else if (errJson.detail.message) errDetail = errJson.detail.message;
+              else if (Array.isArray(errJson.detail)) errDetail = errJson.detail.map(d => d.msg || d.message).join(", ");
+            }
+          } catch (_) {}
+          throw new Error(errDetail);
+        }
         this.strategyAppliedMsg = `✅ '${v.name}' applied! Reloading plan…`;
         setTimeout(async () => {
           await this.load();

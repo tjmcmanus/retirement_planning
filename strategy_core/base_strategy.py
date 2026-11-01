@@ -209,6 +209,49 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
             Total taxes
         """
         return federal_tax + state_tax + fica_tax + ltcg_tax
+
+    def _deduct_tax_from_balances(
+        self,
+        balances: PortfolioBalances,
+        tax_amount: float,
+        tax_name: str = "State Tax",
+        year: int = 0
+    ) -> PortfolioBalances:
+        """Deduct tax from cash, pulling shortfall from Taxable, Traditional, or Roth if cash is insufficient."""
+        if tax_amount <= 0:
+            return balances
+
+        cash_after = balances.cash - tax_amount
+        if cash_after >= 0:
+            return PortfolioBalances(
+                cash=cash_after,
+                taxable=balances.taxable,
+                traditional=balances.traditional,
+                roth=balances.roth,
+                daf=balances.daf
+            )
+
+        # Cash is insufficient — pull shortfall from available liquid accounts
+        shortfall = -cash_after
+        pull_taxable = min(balances.taxable, shortfall)
+        shortfall -= pull_taxable
+        pull_trad = min(balances.traditional, shortfall)
+        shortfall -= pull_trad
+        pull_roth = min(balances.roth, shortfall)
+        shortfall -= pull_roth
+
+        logger.info(
+            f"Year {year}: Insufficient cash for {tax_name} (${tax_amount:,.2f}). "
+            f"Pulled shortfall: Taxable=${pull_taxable:,.2f}, Trad=${pull_trad:,.2f}, Roth=${pull_roth:,.2f}"
+        )
+
+        return PortfolioBalances(
+            cash=0.0,
+            taxable=max(0.0, balances.taxable - pull_taxable),
+            traditional=max(0.0, balances.traditional - pull_trad),
+            roth=max(0.0, balances.roth - pull_roth),
+            daf=balances.daf
+        )
     
     def _validate_dependencies(self) -> None:
         """

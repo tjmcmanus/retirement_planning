@@ -3284,7 +3284,10 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                    "Build cash reserves from wages or after-tax savings instead.",
                    age=age_primary)
         else:
-            distribution = min(cash_deficit, balances.traditional * 0.20)  # Max 20% per year (doubled from 10%)
+            cash_below_zero = max(0.0, -balances.cash)
+            target_buffer_portion = max(0.0, cash_deficit - cash_below_zero)
+            capped_buffer = min(target_buffer_portion, balances.traditional * 0.20)
+            distribution = min(balances.traditional, cash_below_zero + capped_buffer)
             balances = PortfolioBalances(
                 cash=balances.cash + distribution,
                 taxable=balances.taxable,
@@ -3293,18 +3296,22 @@ def replenish_cash_buffer(balances: PortfolioBalances,
                 daf=balances.daf
             )
             transactions['traditional_to_cash'] = distribution
+            cash_deficit = max(0.0, cash_deficit - distribution)
             logger.info(f"  Distributed ${distribution:,.0f} from Traditional to Cash (ordinary income tax)")
             dl.add("cash_replenishment", "Traditional → Cash",
                    f"Distribute ${distribution:,.0f}",
                    "Traditional is the last resort for cash: every dollar withdrawn is taxed as ordinary income. "
-                   "Capped at 20% of Traditional balance to limit tax impact in a single year.",
+                   "Capped at 20% of Traditional balance for buffer replenishment.",
                    distributed=f"${distribution:,.0f}",
                    traditional_balance=f"${balances.traditional:,.0f}",
                    remaining_deficit=f"${cash_deficit:,.0f}")
 
     # Step 4: Emergency Roth if still needed (after Traditional exhausted)
     if cash_deficit > 0 and balances.roth > 0:
-        distribution = min(cash_deficit, balances.roth * 0.10)  # Max 10% additional (doubled from 5%)
+        cash_below_zero = max(0.0, -balances.cash)
+        target_buffer_portion = max(0.0, cash_deficit - cash_below_zero)
+        capped_buffer = min(target_buffer_portion, balances.roth * 0.10)
+        distribution = min(balances.roth, cash_below_zero + capped_buffer)
         balances = PortfolioBalances(
             cash=balances.cash + distribution,
             taxable=balances.taxable,
@@ -3313,14 +3320,36 @@ def replenish_cash_buffer(balances: PortfolioBalances,
             daf=balances.daf
         )
         transactions['roth_to_cash'] += distribution
+        cash_deficit = max(0.0, cash_deficit - distribution)
         logger.warning(f"  EMERGENCY - Additional ${distribution:,.0f} from Roth to Cash (total: ${transactions['roth_to_cash']:,.0f})")
         dl.add("cash_replenishment", "Emergency Roth → Cash",
                f"Emergency distribute ${distribution:,.0f}",
                "EMERGENCY: Traditional balance was insufficient to cover the remaining deficit. "
-               "An additional Roth distribution (capped at 5% of Roth balance) was taken as a last resort.",
+               "An additional Roth distribution was taken as a last resort.",
                distributed=f"${distribution:,.0f}",
                total_roth_to_cash=f"${transactions['roth_to_cash']:,.0f}",
                remaining_deficit=f"${cash_deficit:,.0f}")
+
+    # Step 5: Absolute guarantee against negative cash balance
+    if balances.cash < 0:
+        shortfall = -balances.cash
+        pull_taxable = min(balances.taxable, shortfall)
+        shortfall -= pull_taxable
+        pull_trad = min(balances.traditional, shortfall)
+        shortfall -= pull_trad
+        pull_roth = min(balances.roth, shortfall)
+        shortfall -= pull_roth
+
+        balances = PortfolioBalances(
+            cash=max(0.0, balances.cash + pull_taxable + pull_trad + pull_roth),
+            taxable=max(0.0, balances.taxable - pull_taxable),
+            traditional=max(0.0, balances.traditional - pull_trad),
+            roth=max(0.0, balances.roth - pull_roth),
+            daf=balances.daf
+        )
+        transactions['brokerage_to_cash'] += pull_taxable
+        transactions['traditional_to_cash'] += pull_trad
+        transactions['roth_to_cash'] += pull_roth
 
     transactions['cash_replenishment'] = sum([
         transactions['brokerage_to_cash'],
@@ -3704,8 +3733,10 @@ def rebalance_accounts(balances: PortfolioBalances,
     logger.info(f"  Medical Costs: ${medical_costs:,.2f}")
     logger.info(f"  Total cash outflow: ${total_cash_outflow:,.2f}")
 
+    cash_to_deduct = min(balances.cash, total_cash_outflow)
+    uncovered_outflow = total_cash_outflow - cash_to_deduct
     balances = PortfolioBalances(
-        cash=balances.cash - total_cash_outflow,
+        cash=balances.cash - cash_to_deduct,
         taxable=balances.taxable,
         traditional=balances.traditional,
         roth=balances.roth,
@@ -3717,7 +3748,7 @@ def rebalance_accounts(balances: PortfolioBalances,
     transactions['aca_paid'] = aca_premium
     transactions['medical_paid'] = medical_costs
 
-    logger.info(f"  Cash after deductions: ${balances.cash:,.2f}")
+    logger.info(f"  Cash after deductions: ${balances.cash:,.2f} (uncovered outflow: ${uncovered_outflow:,.2f})")
 
     dl.add("tax_strategy", "Annual Cash Outflow",
            f"Deducted ${total_cash_outflow:,.0f} from cash",
@@ -3737,7 +3768,7 @@ def rebalance_accounts(balances: PortfolioBalances,
     if cash_target_override is not None:
         cash_target = cash_target_override
     
-    cash_deficit = max(0, cash_target - balances.cash)
+    cash_deficit = max(0.0, cash_target - balances.cash) + uncovered_outflow
     
     # Calculate what brokerage would have after covering cash deficit
     brokerage_after_cash = balances.taxable - cash_deficit
@@ -3771,9 +3802,12 @@ def rebalance_accounts(balances: PortfolioBalances,
         if brokerage_can_provide > 0:
             # Transfer available brokerage to cash
             transfer = min(cash_deficit, brokerage_can_provide)
+            to_outflow = min(uncovered_outflow, transfer)
+            uncovered_outflow -= to_outflow
+            to_cash = transfer - to_outflow
             balances = PortfolioBalances(
-                cash=balances.cash + transfer,
-                taxable=balances.taxable - transfer,
+                cash=balances.cash + to_cash,
+                taxable=max(0.0, balances.taxable - transfer),
                 traditional=balances.traditional,
                 roth=balances.roth,
                 daf=balances.daf
@@ -3858,16 +3892,19 @@ def rebalance_accounts(balances: PortfolioBalances,
         # Route remaining cash deficit directly from Traditional (avoiding Brokerage)
         if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.traditional > 0:
             if age_primary >= EARLY_WITHDRAWAL_PENALTY_AGE:
-                distribution = min(cash_deficit, balances.traditional * 0.15)  # Cap at 15%
+                distribution = min(balances.traditional, max(uncovered_outflow, min(cash_deficit, balances.traditional * 0.15 + uncovered_outflow)))
+                to_outflow = min(uncovered_outflow, distribution)
+                uncovered_outflow -= to_outflow
+                to_cash = distribution - to_outflow
                 balances = PortfolioBalances(
-                    cash=balances.cash + distribution,
+                    cash=balances.cash + to_cash,
                     taxable=balances.taxable,
-                    traditional=balances.traditional - distribution,
+                    traditional=max(0.0, balances.traditional - distribution),
                     roth=balances.roth,
                     daf=balances.daf
                 )
                 transactions['traditional_to_cash'] = distribution
-                cash_deficit -= distribution
+                cash_deficit = max(0.0, cash_deficit - distribution)
                 logger.info(f"  Distributed ${distribution:,.0f} directly from Traditional to Cash (optimized routing)")
                 
                 dl.add("cash_replenishment", "Traditional → Cash (Optimized)",
@@ -3882,21 +3919,47 @@ def rebalance_accounts(balances: PortfolioBalances,
         
         # Handle any remaining deficit with Roth if needed
         if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.roth > 0 and age_primary >= 59.5:
-            distribution = min(cash_deficit, balances.roth * 0.10)
+            distribution = min(balances.roth, max(uncovered_outflow, min(cash_deficit, balances.roth * 0.10 + uncovered_outflow)))
+            to_outflow = min(uncovered_outflow, distribution)
+            uncovered_outflow -= to_outflow
+            to_cash = distribution - to_outflow
             balances = PortfolioBalances(
-                cash=balances.cash + distribution,
+                cash=balances.cash + to_cash,
                 taxable=balances.taxable,
                 traditional=balances.traditional,
-                roth=balances.roth - distribution,
+                roth=max(0.0, balances.roth - distribution),
                 daf=balances.daf
             )
             transactions['roth_to_cash'] = distribution
+            cash_deficit = max(0.0, cash_deficit - distribution)
             logger.info(f"  Distributed ${distribution:,.0f} from Roth to Cash")
             
             dl.add("cash_replenishment", "Roth → Cash",
                    f"Distribute ${distribution:,.0f}",
                    "Roth used to cover remaining cash deficit after Traditional.",
                    distributed=f"${distribution:,.0f}")
+
+        # Final safety check against negative cash balance or remaining uncovered outflow
+        shortfall = max(0.0, -balances.cash) + uncovered_outflow
+        if shortfall > 0:
+            pull_taxable = min(balances.taxable, shortfall)
+            shortfall -= pull_taxable
+            pull_trad = min(balances.traditional, shortfall)
+            shortfall -= pull_trad
+            pull_roth = min(balances.roth, shortfall)
+            shortfall -= pull_roth
+
+            balances = PortfolioBalances(
+                cash=max(0.0, balances.cash - uncovered_outflow + pull_taxable + pull_trad + pull_roth),
+                taxable=max(0.0, balances.taxable - pull_taxable),
+                traditional=max(0.0, balances.traditional - pull_trad),
+                roth=max(0.0, balances.roth - pull_roth),
+                daf=balances.daf
+            )
+            transactions['brokerage_to_cash'] += pull_taxable
+            transactions['traditional_to_cash'] += pull_trad
+            transactions['roth_to_cash'] += pull_roth
+            uncovered_outflow = 0.0
         
         transactions['cash_replenishment'] = (transactions['brokerage_to_cash'] +
                                              transactions['traditional_to_cash'] +

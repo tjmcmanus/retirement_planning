@@ -40,7 +40,6 @@ from calculations import (
     calc_roth_conversions_tax,
     calculate_atm,
     calculate_cap_gains,
-    calculate_irmma_penalty,
     calculate_taxable_income,
     get_std_deduction_by_year,
     getlower_atm_amount_n_deduction,
@@ -52,6 +51,7 @@ from load_data import (
     get_income_tax_brackets,
     get_medicare_costs,
     get_std_deduction,
+    load_ssi_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,11 +115,64 @@ def _planner_years() -> list[int]:
     return [int(y) for y in sorted(df["year"].unique().tolist()) if y >= MIN_PLANNER_YEAR]
 
 
+def _ss_benefits(year: int) -> float:
+    """Annual Social Security benefits for the tax year, summed over everyone in the ssincome.csv schedule."""
+    df = load_ssi_data()
+    return float(df.loc[df["year"] == year, "monthly_benefit"].sum()) * 12
+
+
+IRMAA_LOOKBACK_YEARS = 2   # Medicare premiums in year N are priced off the MAGI of year N-2
+
+
+def _irmaa_pricing_year(tax_year: int) -> int:
+    """The year whose Medicare premiums this tax year's MAGI sets (tax year + 2, capped at the last year in the table)."""
+    target = tax_year + IRMAA_LOOKBACK_YEARS
+    return min(target, int(pd.read_csv("irmaa.csv")["year"].max()))
+
+
+def _irmaa_limits(tax_year: int) -> list[float]:
+    """Upper MAGI limit of every IRMAA tier that has a higher tier above it (the top tier has no real limit),
+    from the table of the year this tax year's MAGI will be priced in."""
+    uppers = sorted(float(u) for u in get_medicare_costs(_irmaa_pricing_year(tax_year))["upper"])
+    return uppers[:-1]
+
+
+def _irmaa_surcharge(magi: float, irmaadf: pd.DataFrame, people: int) -> float:
+    """Annual IRMAA surcharge: what the MAGI's tier costs above the base (lowest) tier, Part B plus the Part D
+    adjustment, for each person on Medicare. Zero in the lowest tier."""
+    if people <= 0 or irmaadf.empty:
+        return 0.0
+    df = irmaadf.sort_values("lower")
+    base_b = float(df["part_b_monthly"].iloc[0])
+    tier = df[(df["lower"] <= magi) & (magi <= df["upper"])]
+    row = tier.iloc[0] if not tier.empty else df.iloc[-1]
+    monthly = (float(row["part_b_monthly"]) - base_b) + float(row["part_d_irmaa_monthly"])
+    return max(0.0, monthly) * 12 * people
+
+
+def _people_on_medicare(year: int) -> int:
+    """How many registered people are on Medicare in ``year``: birth year + their Medicare start age <= year."""
+    from config import get_config_manager
+
+    cfg = get_config_manager()
+    people = ["person1"] if cfg.get("personal_info", "is_single_person", False) else ["person1", "person2"]
+    return sum(
+        1 for person in people
+        if cfg.birth_year(person) + int(cfg.get("healthcare", f"{person}_medicare_start_age", 65)) <= year
+    )
+
+
+def _irmaa_relevant_years(years: list[int]) -> set[int]:
+    """Tax years whose MAGI will set someone's Medicare premiums (someone is on Medicare two years later)."""
+    return {y for y in years if _people_on_medicare(y + IRMAA_LOOKBACK_YEARS) > 0}
+
+
 def meta() -> dict[str, Any]:
     from config import get_config_manager
 
     this_year = dt.date.today().year
     years = _planner_years()
+    irmaa_years = _irmaa_relevant_years(years)
     return {
         "current_year": this_year,
         "planner_years": years,
@@ -127,6 +180,7 @@ def meta() -> dict[str, Any]:
         "filing_status": get_config_manager().get_filing_status(),
         "filing_statuses": FILING_STATUSES,
         "headroom_rates": HEADROOM_RATES,
+        "irmaa_limits": {str(y): (_irmaa_limits(y) if y in irmaa_years else []) for y in years},
         "sepp_methods": list(SEPP_METHODS),
         "balances": _balances(),
     }
@@ -136,8 +190,11 @@ def meta() -> dict[str, Any]:
 # Tax Planner (port of the inline logic in the page)
 # ---------------------------------------------------------------------------
 
-def _metric(label: str, value: float, kind: str = "money", delta: float | None = None) -> dict[str, Any]:
-    return {"label": label, "value": value, "kind": kind, "delta": delta}
+def _metric(
+    label: str, value: float, kind: str = "money", delta: float | None = None, group: str | None = None,
+) -> dict[str, Any]:
+    """``group`` is an optional sub-heading; the page prints it above the first metric of each run of equal groups."""
+    return {"label": label, "value": value, "kind": kind, "delta": delta, "group": group}
 
 
 def tax_planner(
@@ -147,7 +204,6 @@ def tax_planner(
     interest: float,
     ltcg: float,
     stcg: float,
-    medicare: int,
     year: int,
     maxdaf: str,
     charitable: float,
@@ -156,12 +212,33 @@ def tax_planner(
     roth_amount: float,
     prepaid: float,
     balances: dict[str, float] | None = None,
+    irmaa_limit: float | None = None,
+    tax_exempt_dividends: float = 0.0,
+    ordinary_dividends: float = 0.0,
+    qualified_dividends: float = 0.0,
 ) -> dict[str, Any]:
-    """Single-year projection. ``balances`` overrides the net worth lookup (used by tests)."""
+    """Single-year projection. ``balances`` overrides the net worth lookup (used by tests).
+
+    ``irmaa_limit`` replaces the Max Conversion Rate target: when roth_amount is 0, conversions fill up to
+    that IRMAA tier limit instead of a tax bracket. IRMAA is based on MAGI, so it is measured on gross income
+    (before the standard deduction) including long-term gains and tax-exempt dividends.
+
+    Income types: interest and ``ordinary_dividends`` are ordinary income. ``ltcg`` and ``qualified_dividends`` are in
+    AGI but taxed at the preferential capital-gains rates, stacked on top of ordinary income. ``tax_exempt_dividends``
+    (e.g. municipal bond fund dividends) are not part of AGI or taxable income, but are added back to get MAGI, which is
+    what IRMAA is based on, and count toward the Social Security combined income.
+
+    Social Security for ``year`` comes from ``ssincome.csv``; its taxable part (IRS combined-income formula, which
+    depends on the conversion) is included in AGI.
+    """
     from config import get_config_manager
 
     deferred_dist, cg_income_lt, cg_income_st = trad_dist, ltcg, stcg
-    daf1, people, pd_tax_amount = charitable, medicare, prepaid
+    interest_income = interest + ordinary_dividends            # ordinary, whatever the source
+    preferential = cg_income_lt + qualified_dividends          # taxed at the capital-gains rates
+    daf1, pd_tax_amount = charitable, prepaid
+    irmaa_year = _irmaa_pricing_year(year)          # this year's MAGI sets the premiums of this year (tax year + 2)
+    people = _people_on_medicare(year + IRMAA_LOOKBACK_YEARS)
     headroom_rate = headroom_pct / 100
     bal = balances if balances is not None else _balances()
     cash_value, trad_value = bal["cash"], bal["traditional"]
@@ -171,64 +248,100 @@ def tax_planner(
         filing_status = get_config_manager().get_filing_status()
         taxratedf = cast(pd.DataFrame, get_income_tax_brackets(year))
         cgdf = cast(pd.DataFrame, get_cap_gains_brackets(year))
-        irmaadf = get_medicare_costs(year)
+        irmaadf = get_medicare_costs(irmaa_year)
         stddectdf = get_std_deduction(year, filing_status)
         atmdf = get_atm_costs(year)
     except Exception as exc:
         raise ValueError(f"Error loading tax data: {exc}") from exc
 
-    # Pass 1: preliminary DAF/AGI using only the known income.
-    try:
-        calc_daf = calc_daf_value(
-            deferred_dist + wages + cg_income_st + roth_amount, interest, daf1, maxdaf,
-            contribution_type=daf_type,  # type: ignore[arg-type]
-            stddectdf=cast(pd.DataFrame, stddectdf),
-        )
-    except Exception:
-        calc_daf = 0
+    ss_benefits = _ss_benefits(year)
+    other_income = deferred_dist + wages + cg_income_st + interest_income + preferential   # AGI items besides SS and the conversion
 
-    try:
-        agi = calc_agi(deferred_dist + wages + cg_income_st, interest, stddectdf, calc_daf)
-    except Exception as exc:
-        raise ValueError(f"AGI error: {exc}") from exc
+    def _taxable_ss(conv: float) -> float:
+        """IRS combined-income formula (Pub. 915); combined income counts tax-exempt dividends."""
+        if ss_benefits <= 0:
+            return 0.0
+        from strategy import calculate_ss_taxable_amount
+        return calculate_ss_taxable_amount(ss_benefits, other_income + conv + tax_exempt_dividends, filing_status)
 
-    try:
-        result = calculate_taxable_income(agi, taxratedf)
-        taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
-    except Exception as exc:
-        raise ValueError(f"Taxable income error: {exc}") from exc
-
-    try:
-        headroom_max = getUpperIncomeRate(headroom_rate, taxratedf)
-    except Exception:
-        headroom_max = 0
-
-    warnings: list[str] = []
-    if maxrate > headroom_rate:
-        warnings.append("Current tax rate exceeds target conversion rate")
-
+    # Taxable Social Security depends on the conversion, and the auto-sized conversion depends on how much room
+    # taxable Social Security leaves, so iterate. Averaging old and new guesses makes the oscillation die out fast.
+    atm_cap: float | None = None
     try:
         atm_lower, atm_deduction = getlower_atm_amount_n_deduction(None, atmdf)
         get_std_deduction_by_year(year)
-        if uppermax >= (atm_lower + atm_deduction):
-            uppermax = atm_lower + atm_deduction
+        atm_cap = atm_lower + atm_deduction
     except Exception:
         pass
 
-    try:
-        if roth_amount > 0:
-            conversions = roth_amount
-            conversion_tax = calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, agi, headroom_max, conversions)
-        else:
-            conversions, conversion_tax = calc_roth_conversions(maxrate, headroom_rate, uppermax, agi, headroom_max, 0)
-    except Exception as exc:
-        warnings.append(f"Roth conversion error: {exc}")
-        conversions, conversion_tax = 0, 0
+    taxable_ss = _taxable_ss(roth_amount) if roth_amount > 0 else 0.0
+    for _ in range(100):
+        warnings: list[str] = []
+
+        # Pass 1: preliminary DAF/AGI using only the known income.
+        try:
+            calc_daf = calc_daf_value(
+                deferred_dist + wages + cg_income_st + taxable_ss + roth_amount, interest_income, daf1, maxdaf,
+                contribution_type=daf_type,  # type: ignore[arg-type]
+                stddectdf=cast(pd.DataFrame, stddectdf),
+            )
+        except Exception:
+            calc_daf = 0
+
+        try:
+            taxable_ord = calc_agi(deferred_dist + wages + cg_income_st + taxable_ss, interest_income, stddectdf, calc_daf)
+        except Exception as exc:
+            raise ValueError(f"AGI error: {exc}") from exc
+
+        try:
+            result = calculate_taxable_income(taxable_ord, taxratedf)
+            taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
+        except Exception as exc:
+            raise ValueError(f"Taxable income error: {exc}") from exc
+
+        try:
+            headroom_max = getUpperIncomeRate(headroom_rate, taxratedf)
+        except Exception:
+            headroom_max = 0
+
+        if irmaa_limit is not None:
+            if float(irmaa_limit) not in _irmaa_limits(year):
+                raise ValueError(f"{irmaa_limit:,.0f} is not an IRMAA tier limit for {year}")
+            if other_income + taxable_ss + tax_exempt_dividends + roth_amount > irmaa_limit:
+                warnings.append("Current income already exceeds the target IRMAA limit")
+        elif maxrate > headroom_rate:
+            warnings.append("Current tax rate exceeds target conversion rate")
+
+        if atm_cap is not None and uppermax >= atm_cap:
+            uppermax = atm_cap
+
+        try:
+            if irmaa_limit is not None and roth_amount <= 0:
+                current_magi = other_income + taxable_ss + tax_exempt_dividends
+                conversions = max(0.0, float(irmaa_limit) - current_magi)
+                conversion_tax = (
+                    calculate_taxable_income(taxable_ord + conversions, taxratedf).total_tax
+                    - calculate_taxable_income(taxable_ord, taxratedf).total_tax
+                )
+            elif roth_amount > 0:
+                conversions = roth_amount
+                conversion_tax = calc_roth_conversions_tax(maxrate, headroom_rate, uppermax, taxable_ord, headroom_max, conversions)
+            else:
+                conversions, conversion_tax = calc_roth_conversions(maxrate, headroom_rate, uppermax, taxable_ord, headroom_max, 0)
+        except Exception as exc:
+            warnings.append(f"Roth conversion error: {exc}")
+            conversions, conversion_tax = 0, 0
+
+        new_ss = _taxable_ss(conversions)
+        if abs(new_ss - taxable_ss) < 0.01:
+            break
+        taxable_ss = (taxable_ss + new_ss) / 2
+    taxable_ss = _taxable_ss(conversions)
 
     # Pass 2: recompute DAF and AGI with the conversions included.
     try:
         calc_daf = calc_daf_value(
-            deferred_dist + wages + cg_income_st + conversions, interest, daf1, maxdaf,
+            deferred_dist + wages + cg_income_st + taxable_ss + conversions, interest_income, daf1, maxdaf,
             contribution_type=daf_type,  # type: ignore[arg-type]
             stddectdf=cast(pd.DataFrame, stddectdf),
         )
@@ -237,53 +350,87 @@ def tax_planner(
 
     try:
         if conversions >= 0:
-            agi = calc_agi(deferred_dist + wages + cg_income_st + conversions, interest, stddectdf, calc_daf)
-            result = calculate_taxable_income(agi, taxratedf)
+            taxable_ord = calc_agi(deferred_dist + wages + cg_income_st + taxable_ss + conversions, interest_income, stddectdf, calc_daf)
+            result = calculate_taxable_income(taxable_ord, taxratedf)
             taxable_income, maxrate, uppermax = result.total_tax, result.max_rate, result.upper_max
     except Exception:
         pass
 
+    # Real AGI: every income source before deductions, including the Roth conversion and long-term gains.
+    # MAGI = AGI + tax-exempt dividends. Non-taxable Social Security is not added back. IRMAA uses MAGI.
+    agi = other_income + conversions + taxable_ss
+    magi = agi + tax_exempt_dividends
+
     try:
-        irmaa_fees = calculate_irmma_penalty(agi, irmaadf, people)
+        irmaa_fees = _irmaa_surcharge(magi, irmaadf, people)
     except Exception:
         irmaa_fees = 0
 
     cg_tax = 0
     try:
-        if cg_income_lt != 0:
-            cg_tax = calculate_cap_gains(agi, cgdf, cg_income_lt)
+        if preferential != 0:
+            cg_tax = calculate_cap_gains(taxable_ord, cgdf, preferential)
     except Exception:
         pass
 
     atm_tax = 0
     try:
-        atm_tax, _ = calculate_atm(agi, cg_income_lt, atmdf)
+        atm_tax, _ = calculate_atm(taxable_ord, preferential, atmdf)
         if taxable_income > atm_tax:
             atm_tax = 0
     except Exception:
         pass
 
+    # Net investment income tax (IRC 1411): 3.8% of the lesser of net investment income and AGI over the threshold.
+    # NII = interest, dividends (ordinary and qualified), and gains; not wages, IRA distributions, conversions, Social
+    # Security or tax-exempt income. Its "MAGI" is AGI, so tax-exempt dividends are NOT added back here (unlike IRMAA).
+    nii = max(0.0, interest_income + preferential + cg_income_st)
+
+    def _niit(agi_value: float) -> float:
+        from strategy import calculate_niit
+        try:
+            return calculate_niit(nii, max(0.0, agi_value), filing_status)[0]
+        except ValueError:
+            return 0.0
+
+    niit = _niit(agi)
+    conversion_tax += niit - _niit(agi - conversions)    # a conversion can push AGI over the threshold
+
     irmaa_headroom = 0
     try:
-        irmaa_headroom = calculate_irmma_penalty(uppermax, irmaadf, people)
+        irmaa_headroom = _irmaa_surcharge(uppermax, irmaadf, people)
     except Exception:
         pass
 
     # --- Output columns, with the page's show/hide rules -------------------
     ordinary: list[dict] = []
-    if agi + conversions > 0:
+    if agi != 0:
         ordinary.append(_metric("AGI", agi))
+        ordinary.append(_metric("MAGI", magi))
+    if taxable_ord + conversions > 0:
+        ordinary.append(_metric("Taxable Ordinary Income", taxable_ord))   # after the standard deduction / DAF
     if interest > 0:
         ordinary.append(_metric("Interest", interest))
+    if ordinary_dividends > 0:
+        ordinary.append(_metric("Ordinary Dividends", ordinary_dividends))
     if cg_income_st > 0:
         ordinary.append(_metric("ST Cap Gains", cg_income_st))
+    if ss_benefits > 0:
+        ordinary.append(_metric("Social Security Benefits", ss_benefits, group="Social Security"))
+        ordinary.append(_metric("Taxable Social Security", taxable_ss, group="Social Security"))
+        ordinary.append(_metric("Non-Taxable Social Security", ss_benefits - taxable_ss, group="Social Security"))
+    # Special income: taxed at preferential rates (or otherwise not ordinary income), stacked on top of ordinary income.
     if cg_income_lt != 0:
-        ordinary.append(_metric("LT Cap Gains", cg_income_lt))
+        ordinary.append(_metric("LT Cap Gains", cg_income_lt, group="Special Income"))
+    if qualified_dividends > 0:
+        ordinary.append(_metric("Qualified Dividends", qualified_dividends, group="Special Income"))
+    if tax_exempt_dividends > 0:
+        ordinary.append(_metric("Tax-Exempt Dividends", tax_exempt_dividends, group="Special Income"))
 
-    state_tax = (wages + cg_income_lt + cg_income_st + interest) * STATE_TAX_RATE
-    q_fed = (taxable_income + cg_tax - pd_tax_amount) / 4
+    state_tax = (wages + preferential + cg_income_st + interest_income) * STATE_TAX_RATE
+    q_fed = (taxable_income + cg_tax + niit - pd_tax_amount) / 4
     q_st = state_tax / 4
-    total_taxes = taxable_income + cg_tax + irmaa_fees + state_tax
+    total_taxes = taxable_income + cg_tax + niit + irmaa_fees + state_tax
     eff_rate = (total_taxes / agi * 100) if agi > 0 else 0.0
 
     taxes: list[dict] = [
@@ -292,7 +439,7 @@ def tax_planner(
     ]
     try:
         bracket_row = taxratedf[(taxratedf["rate"] - maxrate).abs() < 1e-9]
-        drop_by = agi - float(bracket_row["lower"].iloc[0])
+        drop_by = taxable_ord - float(bracket_row["lower"].iloc[0])
         if drop_by > 0 and maxrate > 0:
             taxes.append(_metric("Reduce AGI to drop bracket", drop_by, "money0"))
     except Exception:
@@ -307,10 +454,12 @@ def tax_planner(
         taxes.append(_metric("DAF", calc_daf))
     if cg_tax > 0:
         taxes.append(_metric("LT Cap Gains Tax", cg_tax))
+    if niit > 0:
+        taxes.append(_metric("Net Investment Income Tax", niit))
     if irmaa_fees > 0:
-        taxes.append(_metric("Medicare Surcharge", irmaa_fees))
+        taxes.append(_metric(f"IRMAA Surcharge in {year + IRMAA_LOOKBACK_YEARS}", irmaa_fees))
     if irmaa_headroom > 0 and conversions > 0:
-        taxes.append(_metric("Medicare w/ Conversion", irmaa_headroom))
+        taxes.append(_metric(f"IRMAA w/ Conversion in {year + IRMAA_LOOKBACK_YEARS}", irmaa_headroom))
     if atm_tax > taxable_income:
         taxes.append(_metric("Additional ATM Taxes", atm_tax - taxable_income))
 
@@ -328,7 +477,7 @@ def tax_planner(
     else:
         roth = [_metric("Roth Balance", roth_value)]
 
-    new_cash = cash_value - state_tax - cg_tax - taxable_income + pd_tax_amount
+    new_cash = cash_value - state_tax - cg_tax - niit - taxable_income + pd_tax_amount
     new_brok = taxable_value - calc_daf + deferred_dist
     cash: list[dict] = []
     if new_cash != cash_value:
