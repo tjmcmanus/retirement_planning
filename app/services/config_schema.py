@@ -253,6 +253,33 @@ SECTIONS: list[dict[str, Any]] = [
     {"id": "healthcare", "label": "Healthcare", "groups": _per_person(_healthcare)},
     {"id": "social_security", "label": "Social Security", "groups": _per_person(_social_security)},
     {"id": "tax", "label": "Tax Strategy", "groups": [
+        {"title": "Strategy Selectors", "fields": [
+            select("tax_strategy.withdrawal_sequence", "Withdrawal Account Sequence", [
+                ["taxable_deferred_free", "Taxable, Tax-Deferred, Tax-Free (Standard)"],
+                ["pro_rata", "Pro-Rata (Proportional across all accounts)"],
+                ["taxable_free_deferred", "Taxable, Tax-Free, Tax-Deferred"],
+                ["deferred_taxable_free", "Tax-Deferred, Taxable, Tax-Free"],
+                ["deferred_free_taxable", "Tax-Deferred, Tax-Free, Taxable"],
+                ["free_deferred_taxable", "Tax-Free, Tax-Deferred, Taxable"],
+                ["free_taxable_deferred", "Tax-Free, Taxable, Tax-Deferred"],
+            ], help="Priority order of accounts from which living expenses and cash buffer deficits are sourced."),
+            select("tax_strategy.roth_conversion_target", "Roth Conversion Fill Target", [
+                ["none", "No Conversions (0%)"],
+                ["fill_0", "Roth Conversions to fill 0% Brkt"],
+                ["fill_10", "Roth Conversions to fill 10% Brkt"],
+                ["fill_12", "Roth Conversions to fill 12% Brkt"],
+                ["irmaa_1", "Roth Conversions below IRMAA Brkt 1"],
+                ["fill_22", "Roth Conversions to fill 22% Brkt"],
+                ["irmaa_2", "Roth Conversions below IRMAA Brkt 2"],
+                ["irmaa_3", "Roth Conversions below IRMAA Brkt 3"],
+                ["irmaa_4", "Roth Conversions below IRMAA Brkt 4"],
+                ["fill_24", "Roth Conversions to fill 24% Brkt"],
+                ["fill_32", "Roth Conversions to fill 32% Brkt"],
+                ["irmaa_5", "Roth Conversions below IRMAA Brkt 5"],
+                ["fill_35", "Roth Conversions to fill 35% Brkt"],
+                ["max", "Maximum Roth Conversion"],
+            ], help="Target tax bracket ceiling or IRMAA threshold up to which Traditional IRA/401(k) balances are converted to Roth."),
+        ]},
         {"title": "Roth conversions", "fields": [
             num("tax_strategy.max_roth_conversion_tax_rate", "Global Maximum Tax Rate for Conversions (legacy)", 0, 37, integer=True,
                 suffix="%", help="Used if stage-specific rates are not configured."),

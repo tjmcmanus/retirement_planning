@@ -493,6 +493,101 @@ class BrokerageTransactionLog:
     total_ltcg: float = 0.0
 
 
+class WithdrawalSequence(str, Enum):
+    """Supported portfolio withdrawal sequencing orders."""
+    TAXABLE_DEFERRED_FREE = "taxable_deferred_free"  # Taxable -> Tax-Deferred -> Tax-Free
+    PRO_RATA = "pro_rata"  # Proportional across all accounts
+    TAXABLE_FREE_DEFERRED = "taxable_free_deferred"  # Taxable -> Tax-Free -> Tax-Deferred
+    DEFERRED_TAXABLE_FREE = "deferred_taxable_free"  # Tax-Deferred -> Taxable -> Tax-Free
+    DEFERRED_FREE_TAXABLE = "deferred_free_taxable"  # Tax-Deferred -> Tax-Free -> Taxable
+    FREE_DEFERRED_TAXABLE = "free_deferred_taxable"  # Tax-Free -> Tax-Deferred -> Taxable
+    FREE_TAXABLE_DEFERRED = "free_taxable_deferred"  # Tax-Free -> Taxable -> Tax-Deferred
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            self.TAXABLE_DEFERRED_FREE: "Taxable, Tax-Deferred, Tax-Free",
+            self.PRO_RATA: "Pro-Rata",
+            self.TAXABLE_FREE_DEFERRED: "Taxable, Tax-Free, Tax-Deferred",
+            self.DEFERRED_TAXABLE_FREE: "Tax-Deferred, Taxable, Tax-Free",
+            self.DEFERRED_FREE_TAXABLE: "Tax-Deferred, Tax-Free, Taxable",
+            self.FREE_DEFERRED_TAXABLE: "Tax-Free, Tax-Deferred, Taxable",
+            self.FREE_TAXABLE_DEFERRED: "Tax-Free, Taxable, Tax-Deferred",
+        }
+        return names.get(self, self.value)
+
+    @property
+    def account_order(self) -> Optional[List[str]]:
+        orders = {
+            self.TAXABLE_DEFERRED_FREE: ['taxable', 'traditional', 'roth'],
+            self.PRO_RATA: None,  # Proportional
+            self.TAXABLE_FREE_DEFERRED: ['taxable', 'roth', 'traditional'],
+            self.DEFERRED_TAXABLE_FREE: ['traditional', 'taxable', 'roth'],
+            self.DEFERRED_FREE_TAXABLE: ['traditional', 'roth', 'taxable'],
+            self.FREE_DEFERRED_TAXABLE: ['roth', 'traditional', 'taxable'],
+            self.FREE_TAXABLE_DEFERRED: ['roth', 'taxable', 'traditional'],
+        }
+        return orders.get(self, ['taxable', 'traditional', 'roth'])
+
+
+class RothConversionTarget(str, Enum):
+    """Supported Roth conversion fill level targets."""
+    NONE = "none"
+    FILL_0 = "fill_0"
+    FILL_10 = "fill_10"
+    FILL_12 = "fill_12"
+    IRMAA_1 = "irmaa_1"
+    FILL_22 = "fill_22"
+    IRMAA_2 = "irmaa_2"
+    IRMAA_3 = "irmaa_3"
+    IRMAA_4 = "irmaa_4"
+    FILL_24 = "fill_24"
+    FILL_32 = "fill_32"
+    IRMAA_5 = "irmaa_5"
+    FILL_35 = "fill_35"
+    MAX = "max"
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            self.NONE: "No Conversions",
+            self.FILL_0: "Roth Conversions to fill 0% Brkt",
+            self.FILL_10: "Roth Conversions to fill 10% Brkt",
+            self.FILL_12: "Roth Conversions to fill 12% Brkt",
+            self.IRMAA_1: "Roth Conversions below IRMAA Brkt 1",
+            self.FILL_22: "Roth Conversions to fill 22% Brkt",
+            self.IRMAA_2: "Roth Conversions below IRMAA Brkt 2",
+            self.IRMAA_3: "Roth Conversions below IRMAA Brkt 3",
+            self.IRMAA_4: "Roth Conversions below IRMAA Brkt 4",
+            self.FILL_24: "Roth Conversions to fill 24% Brkt",
+            self.FILL_32: "Roth Conversions to fill 32% Brkt",
+            self.IRMAA_5: "Roth Conversions below IRMAA Brkt 5",
+            self.FILL_35: "Roth Conversions to fill 35% Brkt",
+            self.MAX: "Maximum Roth Conversion",
+        }
+        return names.get(self, self.value)
+
+    @property
+    def max_tax_rate(self) -> int:
+        rates = {
+            self.NONE: 0,
+            self.FILL_0: 0,
+            self.FILL_10: 10,
+            self.FILL_12: 12,
+            self.IRMAA_1: 12,
+            self.FILL_22: 22,
+            self.IRMAA_2: 22,
+            self.IRMAA_3: 22,
+            self.IRMAA_4: 24,
+            self.FILL_24: 24,
+            self.FILL_32: 32,
+            self.IRMAA_5: 32,
+            self.FILL_35: 35,
+            self.MAX: 37,
+        }
+        return rates.get(self, 24)
+
+
 class ScenarioType(Enum):
     """Enumeration of scenario types for planning"""
     BASE = "base"

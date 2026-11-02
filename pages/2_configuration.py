@@ -3946,6 +3946,62 @@ with tab5:
     st.header("Tax Strategy")
     st.markdown("Configure Roth conversion and tax planning parameters.")
     
+    st.subheader("Strategy Selectors")
+    st.caption("Configure independent withdrawal sequencing and Roth conversion fill targets for the household plan.")
+
+    strat_col1, strat_col2 = st.columns(2)
+    with strat_col1:
+        seq_options = [
+            ("taxable_deferred_free", "Taxable, Tax-Deferred, Tax-Free (Standard)"),
+            ("pro_rata", "Pro-Rata (Proportional across all accounts)"),
+            ("taxable_free_deferred", "Taxable, Tax-Free, Tax-Deferred"),
+            ("deferred_taxable_free", "Tax-Deferred, Taxable, Tax-Free"),
+            ("deferred_free_taxable", "Tax-Deferred, Tax-Free, Taxable"),
+            ("free_deferred_taxable", "Tax-Free, Tax-Deferred, Taxable"),
+            ("free_taxable_deferred", "Tax-Free, Taxable, Tax-Deferred"),
+        ]
+        curr_seq = config_mgr.get("tax_strategy", "withdrawal_sequence", "taxable_deferred_free")
+        seq_keys = [o[0] for o in seq_options]
+        seq_idx = seq_keys.index(curr_seq) if curr_seq in seq_keys else 0
+        withdrawal_sequence = st.selectbox(
+            "Account Withdrawal Order",
+            options=seq_keys,
+            format_func=lambda k: dict(seq_options).get(k, k),
+            index=seq_idx,
+            key="cfg_withdrawal_sequence",
+            help="Priority order of accounts from which living expenses and cash buffer deficits are sourced."
+        )
+
+    with strat_col2:
+        roth_options = [
+            ("none", "No Conversions (0%)"),
+            ("fill_0", "Roth Conversions to fill 0% Brkt"),
+            ("fill_10", "Roth Conversions to fill 10% Brkt"),
+            ("fill_12", "Roth Conversions to fill 12% Brkt"),
+            ("irmaa_1", "Roth Conversions below IRMAA Brkt 1"),
+            ("fill_22", "Roth Conversions to fill 22% Brkt"),
+            ("irmaa_2", "Roth Conversions below IRMAA Brkt 2"),
+            ("irmaa_3", "Roth Conversions below IRMAA Brkt 3"),
+            ("irmaa_4", "Roth Conversions below IRMAA Brkt 4 (Optimal)"),
+            ("fill_24", "Roth Conversions to fill 24% Brkt"),
+            ("fill_32", "Roth Conversions to fill 32% Brkt"),
+            ("irmaa_5", "Roth Conversions below IRMAA Brkt 5"),
+            ("fill_35", "Roth Conversions to fill 35% Brkt"),
+            ("max", "Maximum Roth Conversion"),
+        ]
+        curr_roth = config_mgr.get("tax_strategy", "roth_conversion_target", "fill_24")
+        roth_keys = [o[0] for o in roth_options]
+        roth_idx = roth_keys.index(curr_roth) if curr_roth in roth_keys else 9
+        roth_conversion_target = st.selectbox(
+            "Roth Conversion Fill Target",
+            options=roth_keys,
+            format_func=lambda k: dict(roth_options).get(k, k),
+            index=roth_idx,
+            key="cfg_roth_conversion_target",
+            help="Target tax bracket ceiling or IRMAA threshold up to which Traditional balances are converted to Roth."
+        )
+
+    st.markdown("---")
     st.subheader("Roth Conversions")
     st.info("ℹ️ Roth conversions are now automatically optimized using the BETR (Better Efficient Tax Rate) algorithm based on your maximum tax rate preferences per life stage.")
 
@@ -5637,6 +5693,10 @@ with tab10:
             })
 
             config_mgr.update_section("tax_strategy", {
+                "withdrawal_sequence": st.session_state.get("cfg_withdrawal_sequence",
+                    config_mgr.get("tax_strategy", "withdrawal_sequence", "taxable_deferred_free")),
+                "roth_conversion_target": st.session_state.get("cfg_roth_conversion_target",
+                    config_mgr.get("tax_strategy", "roth_conversion_target", "fill_24")),
                 "max_roth_conversion_tax_rate": st.session_state.get("max_roth_conversion_tax_rate",
                     config_mgr.get("tax_strategy", "max_roth_conversion_tax_rate", 12)),
                 "stage_1_max_conversion_rate": st.session_state.get("stage_1_conversion_rate",

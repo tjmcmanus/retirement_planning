@@ -104,6 +104,8 @@
     "person2_conditions": []
   },
   "tax_strategy": {
+    "withdrawal_sequence": "taxable_deferred_free",
+    "roth_conversion_target": "fill_24",
     "max_roth_conversion_tax_rate": 24,
     "stage_1_max_conversion_rate": 32,
     "stage_2_max_conversion_rate": 32,

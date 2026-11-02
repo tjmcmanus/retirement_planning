@@ -320,7 +320,7 @@ class TestBaseLifeStageStrategy:
         assert shortfall == 45000  # 80k + 10k + 5k - 50k
     
     def test_determine_withdrawal_sequence(self):
-        """Test withdrawal sequence"""
+        """Test default withdrawal sequence (Taxable -> Traditional -> Roth)"""
         strategy = MockLifeStageStrategy()
         balances = PortfolioBalances(
             cash=30000,
@@ -335,6 +335,77 @@ class TestBaseLifeStageStrategy:
         assert withdrawals['taxable'] == 20000
         assert withdrawals['traditional'] == 0
         assert withdrawals['roth'] == 0
+
+    def test_determine_withdrawal_sequence_pro_rata(self):
+        """Test Pro-Rata withdrawal sequence"""
+        from strategy_core.models import WithdrawalSequence
+        strategy = MockLifeStageStrategy()
+        balances = PortfolioBalances(
+            cash=10000,
+            taxable=200000,      # 20% of 1M non-cash
+            traditional=500000,  # 50% of 1M non-cash
+            roth=300000          # 30% of 1M non-cash
+        )
+        # Shortfall = $110,000 -> $10,000 from cash, $100,000 proportionally from non-cash
+        withdrawals = strategy._determine_withdrawal_sequence(
+            110000, balances, sequence_order=WithdrawalSequence.PRO_RATA
+        )
+        
+        assert withdrawals['cash'] == 10000
+        assert withdrawals['taxable'] == 20000      # 20% of 100k
+        assert withdrawals['traditional'] == 50000  # 50% of 100k
+        assert withdrawals['roth'] == 30000         # 30% of 100k
+
+    def test_determine_withdrawal_sequence_tax_deferred_first(self):
+        """Test Tax-Deferred -> Taxable -> Tax-Free sequence"""
+        from strategy_core.models import WithdrawalSequence
+        strategy = MockLifeStageStrategy()
+        balances = PortfolioBalances(
+            cash=10000,
+            taxable=200000,
+            traditional=50000,
+            roth=300000
+        )
+        # Shortfall = $80,000 -> $10k Cash, $50k Traditional (exhausted), $20k Taxable
+        withdrawals = strategy._determine_withdrawal_sequence(
+            80000, balances, sequence_order=WithdrawalSequence.DEFERRED_TAXABLE_FREE
+        )
+        
+        assert withdrawals['cash'] == 10000
+        assert withdrawals['traditional'] == 50000
+        assert withdrawals['taxable'] == 20000
+        assert withdrawals['roth'] == 0
+
+    def test_determine_withdrawal_sequence_tax_free_first(self):
+        """Test Tax-Free -> Taxable -> Tax-Deferred sequence"""
+        from strategy_core.models import WithdrawalSequence
+        strategy = MockLifeStageStrategy()
+        balances = PortfolioBalances(
+            cash=10000,
+            taxable=200000,
+            traditional=500000,
+            roth=40000
+        )
+        # Shortfall = $70,000 -> $10k Cash, $40k Roth (exhausted), $20k Taxable
+        withdrawals = strategy._determine_withdrawal_sequence(
+            70000, balances, sequence_order=WithdrawalSequence.FREE_TAXABLE_DEFERRED
+        )
+        
+        assert withdrawals['cash'] == 10000
+        assert withdrawals['roth'] == 40000
+        assert withdrawals['taxable'] == 20000
+        assert withdrawals['traditional'] == 0
+
+    def test_enums_and_display_properties(self):
+        """Test WithdrawalSequence and RothConversionTarget enums and helper properties"""
+        from strategy_core.models import WithdrawalSequence, RothConversionTarget
+        assert WithdrawalSequence.PRO_RATA.display_name == "Pro-Rata"
+        assert WithdrawalSequence.TAXABLE_DEFERRED_FREE.account_order == ['taxable', 'traditional', 'roth']
+        assert WithdrawalSequence.PRO_RATA.account_order is None
+
+        assert RothConversionTarget.FILL_24.max_tax_rate == 24
+        assert RothConversionTarget.FILL_22.display_name == "Roth Conversions to fill 22% Brkt"
+        assert RothConversionTarget.NONE.max_tax_rate == 0
 
 
 class TestYearlyStrategy:

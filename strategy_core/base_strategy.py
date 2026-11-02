@@ -6,11 +6,11 @@ for all life stage strategies, reducing code duplication.
 """
 
 import logging
-from typing import Any, Optional, Dict, Tuple
+from typing import Any, Optional, Dict, Tuple, Union, List
 from abc import abstractmethod
 
 from .interfaces import ILifeStageStrategy, ITaxCalculator, IAccountManager, IDecisionLogger
-from .models import PortfolioBalances, YearlyStrategy, DecisionLog
+from .models import PortfolioBalances, YearlyStrategy, DecisionLog, WithdrawalSequence, RothConversionTarget
 
 logger = logging.getLogger(__name__)
 
@@ -572,18 +572,27 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
         self,
         shortfall: float,
         balances: PortfolioBalances,
+        sequence_order: Optional[Union[str, WithdrawalSequence, List[str]]] = None,
         prefer_roth: bool = False
     ) -> Dict[str, float]:
         """
         Determine optimal withdrawal sequence to cover shortfall.
         
-        Default sequence: Cash -> Taxable -> Traditional -> Roth
-        Can be overridden by subclasses for stage-specific logic.
+        Supports configurable withdrawal sequence:
+        - "pro_rata": Draw cash first, then proportionally across all non-cash accounts
+        - "taxable_deferred_free": Taxable -> Traditional -> Roth
+        - "taxable_free_deferred": Taxable -> Roth -> Traditional
+        - "deferred_taxable_free": Traditional -> Taxable -> Roth
+        - "deferred_free_taxable": Traditional -> Roth -> Taxable
+        - "free_deferred_taxable": Roth -> Traditional -> Taxable
+        - "free_taxable_deferred": Roth -> Taxable -> Traditional
+        - Custom list of account names, e.g. ['taxable', 'roth', 'traditional']
         
         Args:
             shortfall: Amount needed
             balances: Current balances
-            prefer_roth: If True, prefer Roth over Traditional
+            sequence_order: Optional withdrawal sequence enum, identifier string, or list of accounts
+            prefer_roth: If True (and sequence_order is None), prefer Roth over Traditional
             
         Returns:
             Dict mapping account type to withdrawal amount
@@ -595,41 +604,99 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
             'roth': 0.0
         }
         
+        if shortfall <= 0:
+            return withdrawals
+
         remaining = shortfall
         
         # 1. Cash first (no tax impact)
-        if remaining > 0 and balances.cash > 0:
+        if balances.cash > 0:
             cash_withdrawal = min(remaining, balances.cash)
             withdrawals['cash'] = cash_withdrawal
             remaining -= cash_withdrawal
-        
-        # 2. Taxable brokerage (capital gains tax)
-        if remaining > 0 and balances.taxable > 0:
-            taxable_withdrawal = min(remaining, balances.taxable)
-            withdrawals['taxable'] = taxable_withdrawal
-            remaining -= taxable_withdrawal
-        
-        # 3. Traditional or Roth (depending on preference)
-        if remaining > 0:
-            if prefer_roth and balances.roth > 0:
-                roth_withdrawal = min(remaining, balances.roth)
-                withdrawals['roth'] = roth_withdrawal
-                remaining -= roth_withdrawal
-            elif balances.traditional > 0:
-                trad_withdrawal = min(remaining, balances.traditional)
-                withdrawals['traditional'] = trad_withdrawal
-                remaining -= trad_withdrawal
-        
-        # 4. Final fallback
-        if remaining > 0:
-            if balances.roth > 0:
-                roth_withdrawal = min(remaining, balances.roth)
-                withdrawals['roth'] = roth_withdrawal
-                remaining -= roth_withdrawal
-            elif balances.traditional > 0:
-                trad_withdrawal = min(remaining, balances.traditional)
-                withdrawals['traditional'] = trad_withdrawal
-                remaining -= trad_withdrawal
+
+        if remaining <= 0:
+            return withdrawals
+
+        # Determine sequence if not explicitly provided
+        if sequence_order is None:
+            try:
+                from config import get_config_manager
+                cfg = get_config_manager()
+                sequence_order = cfg.get("tax_strategy", "withdrawal_sequence", None)
+            except Exception:
+                sequence_order = None
+
+        if sequence_order is None:
+            if prefer_roth:
+                sequence_order = WithdrawalSequence.TAXABLE_FREE_DEFERRED
+            else:
+                sequence_order = WithdrawalSequence.TAXABLE_DEFERRED_FREE
+
+        # Handle Pro-Rata withdrawal
+        is_pro_rata = False
+        if isinstance(sequence_order, WithdrawalSequence) and sequence_order == WithdrawalSequence.PRO_RATA:
+            is_pro_rata = True
+        elif isinstance(sequence_order, str) and sequence_order.lower().replace("-", "_") == "pro_rata":
+            is_pro_rata = True
+
+        if is_pro_rata:
+            tot_non_cash = max(0.0, balances.taxable) + max(0.0, balances.traditional) + max(0.0, balances.roth)
+            if tot_non_cash > 0:
+                fraction = min(1.0, remaining / tot_non_cash)
+                taxable_pull = max(0.0, balances.taxable) * fraction
+                trad_pull = max(0.0, balances.traditional) * fraction
+                roth_pull = max(0.0, balances.roth) * fraction
+
+                withdrawals['taxable'] += taxable_pull
+                withdrawals['traditional'] += trad_pull
+                withdrawals['roth'] += roth_pull
+                remaining = max(0.0, remaining - (taxable_pull + trad_pull + roth_pull))
+        else:
+            # Parse order list
+            if isinstance(sequence_order, WithdrawalSequence):
+                order_list = sequence_order.account_order or ['taxable', 'traditional', 'roth']
+            elif isinstance(sequence_order, list):
+                order_list = [str(x).lower() for x in sequence_order]
+            elif isinstance(sequence_order, str):
+                s_key = sequence_order.lower().replace("-", "_")
+                order_map = {
+                    "taxable_deferred_free": ['taxable', 'traditional', 'roth'],
+                    "taxable_free_deferred": ['taxable', 'roth', 'traditional'],
+                    "deferred_taxable_free": ['traditional', 'taxable', 'roth'],
+                    "deferred_free_taxable": ['traditional', 'roth', 'taxable'],
+                    "free_deferred_taxable": ['roth', 'traditional', 'taxable'],
+                    "free_taxable_deferred": ['roth', 'taxable', 'traditional'],
+                }
+                order_list = order_map.get(s_key, ['taxable', 'traditional', 'roth'])
+            else:
+                order_list = ['taxable', 'traditional', 'roth']
+
+            avail = {
+                'taxable': max(0.0, balances.taxable),
+                'traditional': max(0.0, balances.traditional),
+                'roth': max(0.0, balances.roth),
+            }
+
+            for acct in order_list:
+                if remaining <= 0:
+                    break
+                if acct in avail and avail[acct] > 0:
+                    pull = min(remaining, avail[acct])
+                    withdrawals[acct] += pull
+                    avail[acct] -= pull
+                    remaining -= pull
+
+            # Fallback across any remaining account with balance
+            if remaining > 0:
+                for acct in ['taxable', 'traditional', 'roth']:
+                    if remaining <= 0:
+                        break
+                    if avail.get(acct, 0.0) > 0:
+                        pull = min(remaining, avail[acct])
+                        withdrawals[acct] += pull
+                        avail[acct] -= pull
+                        remaining -= pull
         
         if remaining > 0.01:  # Small tolerance for rounding
             logger.warning(
