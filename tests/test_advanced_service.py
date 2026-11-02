@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-TABLES = ("income_rates", "cap_gains", "standard", "irmaa", "atm", "ira_limits", "qbi_limits", "ssincome")
+TABLES = ("income_rates", "cap_gains", "standard", "irmaa", "atm", "ira_limits", "qbi_limits")
 BAL = {"cash": 100_000.0, "traditional": 500_000.0, "roth": 200_000.0, "taxable": 300_000.0}
 
 PLANNER = dict(wages=100_000, trad_dist=0, interest=0, ltcg=0, stcg=0, year=2026, maxdaf="N",

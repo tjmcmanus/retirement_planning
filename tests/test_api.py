@@ -445,8 +445,10 @@ def test_strategy_decisions_endpoint_returns_reasons_and_strategy_stays_plain_js
 def tax_client(client, tmp_path):
     """The shared client with copies of the real reference tables in its working directory."""
     for name in ("standard.csv", "income_rates.csv", "cap_gains.csv", "ira_limits.csv", "irmaa.csv",
-                 "rmd.csv", "ssincome.csv", "atm.csv"):
+                 "rmd.csv", "atm.csv"):
         shutil.copy(REPO / name, tmp_path / name)
+    # ssincome.csv is generated (not tracked in git), so provide a small schedule
+    (tmp_path / "ssincome.csv").write_text("year,age,person,monthly_benefit\n2026,60,Alex,0.0\n2026,59,Jamie,0.0\n")
     return client
 
 
