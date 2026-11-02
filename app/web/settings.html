@@ -117,7 +117,12 @@
                                   <td>
                                     <template x-if="c.type === 'bool'"><input type="checkbox" x-model="row[c.key]"></template>
                                     <template x-if="c.type === 'number'"><input type="number" :min="c.min" :max="c.max" :step="c.step || 1" x-model.number="row[c.key]"></template>
-                                    <template x-if="c.type === 'text'"><input type="text" :maxlength="c.max_len" x-model="row[c.key]"></template>
+                                    <template x-if="c.type === 'text' && !c.choices"><input type="text" :maxlength="c.max_len" x-model="row[c.key]"></template>
+                                    <template x-if="c.type === 'select' || c.choices">
+                                      <select x-model="row[c.key]">
+                                        <template x-for="o in cellOptions(c, row)" :key="o"><option :value="o" x-text="o"></option></template>
+                                      </select>
+                                    </template>
                                     <template x-if="c.type === 'date'"><input type="date" x-model="row[c.key]"></template>
                                   </td>
                                 </template>

@@ -114,6 +114,14 @@ def _persist(mgr: ConfigManager, touched: set[str]) -> list[str]:
         warning = _regenerate_ssi_schedule(mgr)
         if warning:
             warnings.append(warning)
+    if "portfolio_accounts" in touched:  # like the Streamlit "Save Accounts" button
+        try:
+            from portfolio_db import DB_PATH, db_update_account_metadata
+            db_update_account_metadata(mgr.get_section("portfolio_accounts").get("accounts", []),
+                                       db_path=Path(DB_PATH).resolve())
+        except Exception as exc:  # the config is already saved
+            logger.exception("Updating holdings from the account table failed")
+            warnings.append(f"Accounts were saved but existing holdings were not updated: {exc}")
     return warnings
 
 
@@ -336,8 +344,9 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
         if _PORTFOLIO_CSV in extras:
             try:
                 from portfolio_db import DB_PATH, replace_from_csv
-                _backup_file(str(DB_PATH))
-                rows = replace_from_csv(_PORTFOLIO_CSV, db_path=DB_PATH)
+                db_path = Path(DB_PATH).resolve()  # connections are cached per path string
+                _backup_file(str(db_path))
+                rows = replace_from_csv(_PORTFOLIO_CSV, db_path=db_path)
                 restored.append(f"portfolio.db replaced ({rows} rows)")
             except Exception as exc:  # CSV is restored; the DB can be rebuilt from it
                 logger.exception("portfolio.db update after import failed")

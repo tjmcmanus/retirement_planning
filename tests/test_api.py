@@ -254,6 +254,49 @@ def test_surviving_spouse_requires_details(client):
     assert ok.status_code == 200
 
 
+def test_account_mapping_table_saves_and_updates_holdings(client, tmp_path):
+    from portfolio_db import db_upsert
+    import pandas as pd
+    db_upsert(db_path=tmp_path / "portfolio.db", rows=pd.DataFrame([{"month": 3, "year": 2026, "account_name": "Schwab-1234", "account_type": "Brokerage",
+                             "owner": "Joint", "symbol": "VTI", "name": "", "sector": "", "qty": 1,
+                             "purchase_price": 1, "end_of_month_price": 1, "purchase_date": ""}]))
+    schema = client.get("/api/config/schema").json()
+    fields = [f for sec in schema["sections"] for g in sec["groups"] for f in g["fields"]]
+    assert any(f.get("path") == "portfolio_accounts.accounts" for f in fields)
+
+    rows = [{"account_name": "Schwab-1234", "account_type": "Roth", "owner": "Pat"}]
+    r = _put(client, {"portfolio_accounts": {"accounts": rows}})
+    assert r.status_code == 200 and r.json()["warnings"] == []
+    assert client.get("/api/config").json()["portfolio_accounts"]["accounts"] == rows
+    # the sync looks accounts up through get_account_config -> the saved table
+    from components.schwab_data_transformer import get_account_config
+    import config
+    config.reload_config()
+    assert get_account_config("Schwab-1234") == {"account_type": "Roth", "owner": "Pat"}
+    assert get_account_config("Unmapped") == {"account_type": "Brokerage", "owner": "Joint"}
+    import sqlite3
+    conn = sqlite3.connect(tmp_path / "portfolio.db")
+    assert conn.execute("SELECT account_type, owner FROM holdings").fetchall() == [("Roth", "Pat")]
+    conn.close()
+
+
+@pytest.mark.parametrize("rows,fragment", [
+    ([{"account_name": "A", "account_type": "Crypto", "owner": "Joint"}], "Must be one of"),
+    ([{"account_name": "", "account_type": "Roth", "owner": "Joint"}], "required"),
+    ([{"account_name": "A", "account_type": "Roth", "owner": "J"}, {"account_name": "A", "account_type": "Roth", "owner": "J"}],
+     "only once"),
+])
+def test_account_mapping_table_validation(client, rows, fragment):
+    r = _put(client, {"portfolio_accounts": {"accounts": rows}})
+    assert r.status_code == 422 and fragment in r.text
+
+
+def test_account_types_match_portfolio_entry():
+    from app.services.config_schema import ACCOUNT_TYPES
+    from portfolio_data_entry import VALID_ACCOUNT_TYPES
+    assert ACCOUNT_TYPES == VALID_ACCOUNT_TYPES
+
+
 def test_table_values_round_trip(client):
     kids = [{"name": "Sam", "birth_date": "2012-04-01", "special_needs": False}]
     props = [{"property_name": "Cabin", "address": "1 Lake Rd", "purchase_price": 250000}]
@@ -844,7 +887,7 @@ def _read_db(path, table):
 def test_import_replaces_portfolio_db_instead_of_merging(client, tmp_path):
     from portfolio_db import migrate_from_csv
     (tmp_path / "portfolio_data_truth.csv").write_text(_holdings_csv("OLD1", "OLD2"))
-    migrate_from_csv("portfolio_data_truth.csv")
+    migrate_from_csv("portfolio_data_truth.csv", db_path=(tmp_path / "portfolio.db"))
     assert _symbols_in_db(tmp_path) == {"OLD1", "OLD2"}
 
     bundle = _bundle({"retirement_config.json": (REPO / "retirement_config.json.example").read_text(),

@@ -60,6 +60,10 @@ def computed(cid, show_if=None):
     return {"type": "computed", "id": cid, "show_if": show_if or []}
 
 
+# Mirrors portfolio_data_entry.VALID_ACCOUNT_TYPES (tests keep the two in step).
+ACCOUNT_TYPES = ["Checking", "Savings", "Brokerage", "Traditional", "Roth"]
+
+
 def table(path, label, columns, required, *, help="", show_if=None):
     return {"type": "table", "path": path, "label": label, "columns": columns, "required": required,
             "help": help, "show_if": show_if or []}
@@ -364,6 +368,19 @@ SECTIONS: list[dict[str, Any]] = [
                 show_if=_TREND_ON),
         ]},
     ]},
+    {"id": "accounts", "label": "Accounts", "groups": [
+        {"title": "Account mapping", "fields": [
+            table("portfolio_accounts.accounts", "Your Accounts", [
+                {"key": "account_name", "label": "Account Name", "type": "text", "max_len": 100},
+                {"key": "account_type", "label": "Account Type", "type": "select", "options": ACCOUNT_TYPES},
+                {"key": "owner", "label": "Owner", "type": "text", "max_len": 60, "choices": "owners"},
+            ], ["account_name", "account_type", "owner"],
+                help="Brokerage syncs (Connections) look each account up here by name to set its type and owner; "
+                     "an account that is not listed is stored as Brokerage / Joint. Names must match what the sync "
+                     "produces: the SnapTrade account name, or Schwab-<last 4 digits> for Schwab. Saving also "
+                     "updates the type and owner of holdings already in the portfolio."),
+        ]},
+    ]},
     {"id": "real_estate", "label": "Real Estate", "groups": [
         {"title": "Properties", "fields": [
             table("real_estate.properties", "Properties", [
@@ -539,6 +556,10 @@ def validate_merged(merged: dict[str, Any]) -> list[dict[str, str]]:
             errors.append({"path": "personal_info.decedent_person", "message": "Required when planning for a surviving spouse"})
         if not _valid_date(pi.get("date_of_death")):
             errors.append({"path": "personal_info.date_of_death", "message": "Required when planning for a surviving spouse"})
+
+    names = [str(a.get("account_name", "")).strip() for a in merged.get("portfolio_accounts", {}).get("accounts", []) or []]
+    if len(names) != len(set(names)):
+        errors.append({"path": "portfolio_accounts.accounts", "message": "Each account name may appear only once"})
 
     cg = merged.get("charitable_giving", {})
     if cg.get("charitable_giving_end_age", 0) < cg.get("charitable_giving_start_age", 0):

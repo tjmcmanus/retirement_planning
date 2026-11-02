@@ -16,7 +16,8 @@ function validDate(s) {
 // Defaults for new table rows (the Streamlit editors use the same ones).
 function newRow(spec) {
   const year = new Date().getFullYear();
-  const byKey = { frequency_years: 10, start_year: year, end_year: year + 30, amount: 0, purchase_price: 0, year: year + 1 };
+  const byKey = { frequency_years: 10, start_year: year, end_year: year + 30, amount: 0, purchase_price: 0, year: year + 1,
+                  account_type: "Brokerage", owner: "Joint" };
   const row = {};
   for (const c of spec.columns) {
     row[c.key] = c.key in byKey ? byKey[c.key] : c.type === "bool" ? false : c.type === "number" ? 0 : "";
@@ -125,6 +126,17 @@ function settings() {
     toggleMulti(path, value) {
       const cur = this.form[path];
       this.form[path] = cur.includes(value) ? cur.filter((x) => x !== value) : [...cur, value];
+    },
+    // Options for a select cell in a table row. The row's current value is always offered so a saved
+    // value that is no longer in the list (e.g. a renamed person) is not silently changed.
+    cellOptions(c, row) {
+      let opts = c.options || [];
+      if (c.choices === "owners") {
+        opts = ["Joint", this.name(1)];
+        if (!this.form["personal_info.is_single_person"]) opts.push(this.name(2));
+      }
+      const cur = row[c.key];
+      return cur && !opts.includes(cur) ? [...opts, cur] : opts;
     },
     addRow(f) { this.form[f.path].push(newRow(f)); },
     removeRow(f, i) { this.form[f.path].splice(i, 1); },
