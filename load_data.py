@@ -319,6 +319,10 @@ def get_month_account_values(month, year) -> tuple[pd.DataFrame, int, int]:
    return account_values, effective_month, effective_year
 
 def load_ssi_data():
+   # ssincome.csv is generated from the config (ssi_calculator) and not tracked in git,
+   # so a fresh install has none until the first config save: treat that as no benefits.
+   if not os.path.exists('ssincome.csv'):
+      return pd.DataFrame(columns=['year', 'age', 'person', 'monthly_benefit'])
    ssi_data =pd.read_csv('ssincome.csv')
    return  ssi_data
 

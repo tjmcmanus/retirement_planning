@@ -137,7 +137,6 @@ def test_data_files() -> Tuple[bool, str]:
         "standard.csv",
         "irmaa.csv",
         "rmd.csv",
-        "ssincome.csv",
     ]
     
     missing = [f for f in required_data if not os.path.exists(f)]
