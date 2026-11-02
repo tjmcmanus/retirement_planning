@@ -110,10 +110,10 @@ All planning assumptions live here. Changes are written to `retirement_config.js
 - **Save All Changes** — persist the current form state to `retirement_config.json`
 - **Reset to Defaults** — restore the shipped defaults
 - **Reload from File** — discard in-memory changes and reload from disk
-- **Export Configuration** — download a `.zip` backup bundle: settings, portfolio holdings, estate plan, transaction and performance history, and saved scenarios
+- **Export Configuration** — download a `.zip` backup bundle: settings, portfolio holdings, estate plan, transaction and performance history, saved scenarios, and `.env`
 - **Import Configuration** — restore a bundle (or an old `.json` file). The file is fully validated before anything changes, current files are copied to `.backups/` first, and the portfolio holdings are *replaced* by the bundle's, not merged
 
-**Moving to another machine:** export on the old machine, start the app on the new one, and import the `.zip` (Settings → Advanced, or the web Settings page). Brokerage logins (`data/credentials.db`) are deliberately not included — reconnect them on the new machine. Market-data caches are not included; they rebuild themselves.
+**Moving to another machine:** export on the old machine, start the app on the new one, and import the `.zip` (Settings → Advanced, or the web Settings page). The bundle includes your `.env` (SnapTrade/Schwab keys and `ENCRYPTION_KEY`) **in plain text** — keep the ZIP private. Import does not apply it: copy `.env` out of the ZIP into the app folder (next to `compose.yaml`) on the new machine before starting it. Saved brokerage logins (`data/credentials.db`) are not included — reconnect them on the new machine. Market-data caches are not included; they rebuild themselves.
 
 ---
 

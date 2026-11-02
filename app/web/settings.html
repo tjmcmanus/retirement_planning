@@ -168,12 +168,17 @@
           <button type="button" id="discard" :disabled="saving || !dirtyPaths.length" @click="discard()">Discard changes</button>
           <span class="muted" x-text="dirtyPaths.length ? dirtyPaths.length + ' unsaved change(s)' : 'All changes saved'"></span>
           <span class="spacer"></span>
-          <a class="btn" href="/api/config/export" download>Export bundle (.zip)</a>
+          <a class="btn" href="/api/config/export" download
+             title="Includes your .env (API keys and encryption key) in plain text. Keep the file private.">Export bundle (.zip)</a>
           <label class="btn-like">Import bundle (.zip / .json)
             <input type="file" accept=".zip,.json,application/zip,application/json" @change="importFile($event)" :disabled="saving" hidden>
           </label>
           <button type="button" id="reset" class="danger" :disabled="saving" @click="resetDefaults()">Reset to defaults</button>
         </div>
+        <p class="muted small">
+          The exported bundle includes your <code>.env</code> (API keys and encryption key) in plain text &mdash; keep it private.
+          Importing does not apply it: copy <code>.env</code> out of the ZIP into the app folder on the new machine.
+        </p>
         <p class="muted small">
           Not on this page yet (still in the Streamlit app): long-term-care and HSA analyzers, Medicare and Social Security guides,
           and the Social Security optimizer.

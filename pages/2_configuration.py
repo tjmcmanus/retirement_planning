@@ -5897,8 +5897,9 @@ with tab10:
         # the bundle holds config, portfolio CSV, estate plan, transactions/performance databases and scenarios.
         st.caption(
             "A bundle (.zip) contains your settings, portfolio holdings, estate plan, transaction history, "
-            "performance history and saved scenarios — everything needed to restore this install or move it "
-            "to another machine. Brokerage logins are not included; reconnect them on the new machine."
+            "performance history, saved scenarios and your `.env` (API keys and encryption key, in plain text) — "
+            "everything needed to restore this install or move it to another machine. Keep the file private. "
+            "Saved brokerage logins are not included; reconnect them on the new machine."
         )
         if st.button("📤 Export Configuration", width='stretch'):
             try:

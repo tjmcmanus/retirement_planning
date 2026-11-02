@@ -170,8 +170,11 @@ MAX_IMPORT_BYTES = 50 * 1024 * 1024  # config + portfolio CSV + estate JSON are 
 #   plain files   : bundle name -> path restored to
 #   SQLite files  : bundle name -> (path restored to, table that must exist)
 #   scenarios     : scenarios/<id>.json -> data/scenarios/<id>.json
-# Not bundled on purpose: data/credentials.db (brokerage secrets, encrypted with the machine's
-# ENCRYPTION_KEY) and the re-downloadable caches. Re-link brokerage accounts on the new machine.
+# Also exported: ``.env`` (API keys and ENCRYPTION_KEY, in plain text). It is never applied on import:
+# the running app was started with its own .env, and a container cannot rewrite the host's file.
+# Copy it out of the ZIP onto the new machine before starting the app there.
+# Not bundled on purpose: data/credentials.db (brokerage logins, encrypted with ENCRYPTION_KEY) and
+# the re-downloadable caches. Re-link brokerage accounts on the new machine.
 _PORTFOLIO_CSV = "portfolio_data_truth.csv"
 _ESTATE_JSON = "estate_planning_data.json"
 _BUNDLE_DATA_FILES = (_PORTFOLIO_CSV, _ESTATE_JSON)
@@ -180,6 +183,14 @@ _BUNDLE_DB_FILES = {
     "performance_history.db": ("data/performance_history.db", "portfolio_snapshots"),
 }
 _SCENARIO_DIR = "data/scenarios"
+_ENV_FILE = ".env"
+# The variables .env.example documents. In the container there is no .env file (compose passes
+# them as environment variables), so the export rebuilds the file from these.
+_ENV_KEYS = (
+    "SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "ENCRYPTION_KEY", "SNAPTRADE_USER_ID",
+    "SNAPTRADE_USER_SECRET", "SNAPTRADE_ENV", "SCHWAB_APP_KEY", "SCHWAB_APP_SECRET",
+    "SCHWAB_CALLBACK_URL", "SCHWAB_REFRESH_TOKEN",
+)
 _SCENARIO_NAME = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
 _REQUIRED_HOLDINGS_COLUMNS = {"month", "year", "account_name", "symbol", "qty"}
 
@@ -188,6 +199,24 @@ def _parse_config_text(raw: bytes) -> str:
     """Decode a config file and drop the leading ``//`` comment lines the export adds."""
     text = raw.decode("utf-8-sig")
     return "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("//"))
+
+
+def _env_file_bytes() -> bytes:
+    """The ``.env`` to export: the file itself when one exists (source checkout), otherwise one
+    rebuilt from the process environment (container). Empty when there is nothing to export."""
+    if os.path.isfile(_ENV_FILE):
+        with open(_ENV_FILE, "rb") as fh:
+            return fh.read()
+    lines = []
+    for key in _ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            if re.search(r"[\s#\"'\\$]", value):
+                value = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            lines.append(f"{key}={value}")
+    if not lines:
+        return b""
+    return ("# Rebuilt from the environment of the exporting app.\n" + "\n".join(lines) + "\n").encode("utf-8")
 
 
 def _snapshot_db(src: str, dst: str) -> None:
@@ -269,6 +298,7 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
     if len(data) > MAX_IMPORT_BYTES:
         raise ValueError("The file is too large")
 
+    has_env = False
     extras: dict[str, bytes] = {}                 # plain files by bundle name
     dbs: dict[str, bytes] = {}                    # SQLite files by bundle name
     scenarios: dict[str, bytes] = {}              # scenario file name -> content
@@ -293,6 +323,7 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
                 for n in _BUNDLE_DB_FILES:
                     if n in names and (content := read(names[n])):
                         dbs[n] = content
+                has_env = _ENV_FILE in names
                 for m, n in members.items():
                     parts = m.split("/")
                     if len(parts) >= 2 and parts[-2].lower() == "scenarios" and parts[-1].lower().endswith(".json"):
@@ -363,6 +394,9 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
         if scenarios:
             restored.append(f"{len(scenarios)} scenario(s)")
 
+        if has_env:
+            warnings.append(".env in the bundle was not applied. To use it on this machine, copy it from the ZIP "
+                            "to the app folder (next to compose.yaml) and restart the app.")
         warnings += _persist(mgr, {"social_security", "personal_info"})
         return {"config": mgr.config, "restored": restored, "warnings": warnings}
 
@@ -371,7 +405,8 @@ def export_bundle() -> tuple[str, bytes]:
     """ZIP with everything needed to rebuild this install on another machine.
 
     retirement_config.json, portfolio CSV, estate planning JSON, the transaction / performance
-    SQLite databases (consistent snapshots) and saved scenarios. See ``import_bundle``.
+    SQLite databases (consistent snapshots), saved scenarios and ``.env``. See ``import_bundle``.
+    The ZIP therefore contains secrets in plain text; treat it like the ``.env`` itself.
     """
     mgr = ConfigManager()
     pi = mgr.config.get("personal_info", {})
@@ -394,6 +429,9 @@ def export_bundle() -> tuple[str, bytes]:
         if os.path.isdir(_SCENARIO_DIR):
             for sc in sorted(Path(_SCENARIO_DIR).glob("*.json")):
                 zf.write(sc, f"scenarios/{sc.name}")
+        env = _env_file_bytes()
+        if env:
+            zf.writestr(_ENV_FILE, env)
     return f"retirement_config_{datetime.now():%Y%m%d_%H%M%S}.zip", buf.getvalue()
 
 

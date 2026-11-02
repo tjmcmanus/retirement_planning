@@ -340,10 +340,44 @@ def test_export_bundle_contents(client, tmp_path):
     assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
     assert "attachment" in r.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
-        assert set(zf.namelist()) == {"retirement_config.json", "portfolio_data_truth.csv"}
+        assert {"retirement_config.json", "portfolio_data_truth.csv"} <= set(zf.namelist())
         raw = zf.read("retirement_config.json").decode()
     assert raw.startswith("// Primary person:")
     json.loads("\n".join(ln for ln in raw.splitlines() if not ln.startswith("//")))  # still importable
+
+
+def test_export_includes_env_file_when_present(client, tmp_path):
+    import io, zipfile
+    (tmp_path / ".env").write_text("ENCRYPTION_KEY=abc\nSNAPTRADE_CLIENT_ID=xyz\n")
+    with zipfile.ZipFile(io.BytesIO(client.get("/api/config/export").content)) as zf:
+        assert zf.read(".env").decode() == "ENCRYPTION_KEY=abc\nSNAPTRADE_CLIENT_ID=xyz\n"
+
+
+def test_export_rebuilds_env_from_environment_in_container(client, monkeypatch):
+    import io, zipfile
+    from app.services import config_service
+    for k in config_service._ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    with zipfile.ZipFile(io.BytesIO(client.get("/api/config/export").content)) as zf:
+        assert ".env" not in zf.namelist()                      # nothing to export -> no empty file
+    monkeypatch.setenv("ENCRYPTION_KEY", "k=")
+    monkeypatch.setenv("SCHWAB_APP_SECRET", 'has space "q" #x')
+    monkeypatch.setenv("UNRELATED_SECRET", "nope")
+    with zipfile.ZipFile(io.BytesIO(client.get("/api/config/export").content)) as zf:
+        lines = zf.read(".env").decode().splitlines()
+    assert "ENCRYPTION_KEY=k=" in lines
+    assert 'SCHWAB_APP_SECRET="has space \\"q\\" #x"' in lines
+    assert not any("UNRELATED" in ln for ln in lines)
+
+
+def test_import_never_applies_env_but_tells_the_user(client, tmp_path):
+    (tmp_path / ".env").write_text("ENCRYPTION_KEY=mine\n")
+    bundle = _bundle({"retirement_config.json": (REPO / "retirement_config.json.example").read_text(),
+                      ".env": "ENCRYPTION_KEY=theirs\n"})
+    r = _post_import(client, "b.zip", bundle)
+    assert r.status_code == 200, r.text
+    assert (tmp_path / ".env").read_text() == "ENCRYPTION_KEY=mine\n"
+    assert any(".env" in w and "not applied" in w for w in r.json()["warnings"])
 
 
 def test_settings_page_served_and_local_only(client):
@@ -910,7 +944,7 @@ def test_bundle_carries_databases_and_scenarios_to_another_machine(client, tmp_p
     with zipfile.ZipFile(io.BytesIO(bundle)) as zf:
         names = set(zf.namelist())
     assert {"transactions.db", "performance_history.db", "scenarios/abc.json"} <= names
-    assert "credentials.db" not in names                       # brokerage secrets never leave the machine
+    assert "credentials.db" not in names                       # saved brokerage logins stay behind (.env is exported)
 
     # "new machine": a fresh working directory
     new_machine = tmp_path / "new"
