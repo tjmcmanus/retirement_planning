@@ -106,8 +106,8 @@ def test_withdrawal_engine():
     
     engine = WithdrawalStrategyEngine()
     
-    # Verify all 6 stages are loaded
-    assert len(engine.stages) == 6, "Should have 6 life stages"
+    # Verify all 7 stages are loaded
+    assert len(engine.stages) == 7, "Should have 7 life stages"
     
     # Test stage determination
     stage = engine.determine_stage(60, 58, 2026, has_wages=False, has_ss=False)

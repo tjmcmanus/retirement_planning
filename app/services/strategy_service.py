@@ -15,6 +15,7 @@ import calendar
 import datetime as dt
 import math
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -22,9 +23,6 @@ import pandas as pd
 
 from config import get_config_manager, reload_config
 from strategy import build_withdrawal_strategy_display
-
-# The engine and the shared headless config manager are process-wide state.
-_lock = threading.Lock()
 
 END_YEAR_DEFAULT = 2050
 
@@ -55,17 +53,34 @@ def df_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Internal: build strategy DataFrame (cached per process run with _lock)
+# Internal: build strategy DataFrame (cached per process run)
 # ---------------------------------------------------------------------------
 
+_strategy_cache: dict[tuple[int | None, int], tuple[float, pd.DataFrame, pd.DataFrame, dict]] = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 300.0
+
+
+def clear_strategy_cache() -> None:
+    with _cache_lock:
+        _strategy_cache.clear()
+
+
 def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Return (strategy_df, balances_df, cfg_snapshot). Caller holds _lock."""
+    """Return (strategy_df, balances_df, cfg_snapshot) with thread-safe caching."""
+    now = time.monotonic()
+    key = (start_year, end_year)
+    with _cache_lock:
+        hit = _strategy_cache.get(key)
+        if hit is not None and (now - hit[0] < _CACHE_TTL):
+            return hit[1].copy(), hit[2].copy(), dict(hit[3])
+
     reload_config()
     cfg = get_config_manager()
-    start_year = start_year or dt.date.today().year
+    effective_start = start_year or dt.date.today().year
     rate = float(cfg.get("financial_assumptions", "expected_rate_of_return", 6) or 6) / 100
     strategy_df, balances_df = build_withdrawal_strategy_display(
-        start_year=start_year,
+        start_year=effective_start,
         end_year=end_year,
         growth_rate=1 + rate,
         expense_inflation_rate=float(
@@ -80,7 +95,7 @@ def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame
         ss_claiming_age=int(cfg.get("social_security", "person1_ssi_age", 70) or 70),
     )
     cfg_snap = {
-        "start_year": start_year,
+        "start_year": effective_start,
         "end_year": end_year,
         "rate": rate,
         "person1_name": cfg.get("personal_info", "person1_name", "Person1"),
@@ -91,7 +106,9 @@ def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame
         "person2_retirement_age": int(cfg.get("personal_info", "person2_retirement_age", 62) or 62),
         "annual_expenses": float(cfg.get("financial_assumptions", "expected_annual_expenses", 120_000) or 120_000),
     }
-    return strategy_df, balances_df, cfg_snap
+    with _cache_lock:
+        _strategy_cache[key] = (now, strategy_df, balances_df, cfg_snap)
+    return strategy_df.copy(), balances_df.copy(), dict(cfg_snap)
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +135,7 @@ def withdrawal_strategy(
     start_year: int | None = None,
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
-    with _lock:
-        strategy_df, balances_df, cfg = _build_strategy(start_year, end_year)
+    strategy_df, balances_df, cfg = _build_strategy(start_year, end_year)
     # The decision log holds objects, not table data; it is served by decision_log() instead.
     strategy_df = strategy_df.drop(columns=[DECISION_LOG_COL], errors="ignore")
     return {
@@ -138,8 +154,7 @@ def decision_log(
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
     """The reasons the engine recorded for one year, grouped by category."""
-    with _lock:
-        strategy_df, _, _ = _build_strategy(start_year, end_year)
+    strategy_df, _, _ = _build_strategy(start_year, end_year)
     rows = strategy_df[strategy_df["Year"] == year]
     if rows.empty:
         raise ValueError(f"Year {year} is outside the strategy range")
@@ -191,8 +206,7 @@ def timeline_events(
     start_year: int | None = None,
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
-    with _lock:
-        strategy_df, _, cfg = _build_strategy(start_year, end_year)
+    strategy_df, _, cfg = _build_strategy(start_year, end_year)
 
     p1_name = cfg["person1_name"]
     p2_name = cfg["person2_name"]
@@ -270,8 +284,7 @@ def money_flow(
     start_year: int | None = None,
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
-    with _lock:
-        strategy_df, _, _ = _build_strategy(start_year, end_year)
+    strategy_df, _, _ = _build_strategy(start_year, end_year)
 
     rows = strategy_df[strategy_df["Year"] == year]
     if rows.empty:
@@ -361,8 +374,7 @@ def monthly_plan(
     start_year: int | None = None,
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
-    with _lock:
-        strategy_df, _, cfg = _build_strategy(start_year, end_year)
+    strategy_df, _, cfg = _build_strategy(start_year, end_year)
 
     rows = strategy_df[strategy_df["Year"] == year]
     if rows.empty:
@@ -511,8 +523,7 @@ def tax_analytics(
     start_year: int | None = None,
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
-    with _lock:
-        strategy_df, balances_df, cfg = _build_strategy(start_year, end_year)
+    strategy_df, balances_df, cfg = _build_strategy(start_year, end_year)
 
     def col(name: str) -> "pd.Series":
         return strategy_df[name] if name in strategy_df.columns else pd.Series(0.0, index=strategy_df.index)
@@ -601,8 +612,7 @@ def income_expense(
     start_year: int | None = None,
     end_year: int = END_YEAR_DEFAULT,
 ) -> dict[str, Any]:
-    with _lock:
-        strategy_df, _, _ = _build_strategy(start_year, end_year)
+    strategy_df, _, _ = _build_strategy(start_year, end_year)
 
     def col(name: str) -> "pd.Series":
         return strategy_df[name] if name in strategy_df.columns else pd.Series(0.0, index=strategy_df.index)

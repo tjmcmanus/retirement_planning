@@ -2797,33 +2797,15 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
 
     withdrawal_strategies = _calc_metrics(withdrawal_strats_raw)
     roth_strategies = _calc_metrics(roth_strats_raw)
-    all_strategies = withdrawal_strategies + roth_strategies
+    # Active selections in configuration
+    active_seq_id = plan_withdrawal_id
+    active_roth_id = active_plan_roth_id
 
-    # Session State Setup
-    seq_session_key = f"tax_strat_seq_sel_{phase}"
-    roth_session_key = f"tax_strat_roth_sel_{phase}"
-    tab_filter_key = f"tax_strat_tab_filter_{phase}"
     view_mode_key = f"tax_strategy_view_mode_{phase}"
-
-    if seq_session_key not in st.session_state:
-        # Default to plan sequence or taxable_deferred_free
-        def_seq_idx = next((i for i, s in enumerate(withdrawal_strategies) if s["used_in_plan"]), 1)
-        st.session_state[seq_session_key] = def_seq_idx
-
-    if roth_session_key not in st.session_state:
-        # Default to roth_fill_22 or plan roth target
-        def_roth_idx = next((i for i, s in enumerate(roth_strategies) if s["id"] == "roth_fill_22"), 4)
-        st.session_state[roth_session_key] = def_roth_idx
-
-    if tab_filter_key not in st.session_state:
-        st.session_state[tab_filter_key] = "All Strategies"
-
     if view_mode_key not in st.session_state:
         st.session_state[view_mode_key] = "What if"
 
-    # -----------------------------------------------------------------------
-    # Interactive Top Controls & Header
-    # -----------------------------------------------------------------------
+    # Header and Top Controls
     ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2.5, 2, 2.5])
     with ctrl_col1:
         st.markdown(
@@ -2841,6 +2823,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
         )
         if vmode != st.session_state[view_mode_key]:
             st.session_state[view_mode_key] = vmode
+            st.rerun()
     with ctrl_col3:
         note_text = "Values shown in <strong>today's dollars</strong>." if st.session_state[view_mode_key] == "What if" else "Differences shown <strong>relative to plan baseline</strong>."
         st.markdown(
@@ -2848,126 +2831,42 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
             unsafe_allow_html=True
         )
 
-    # -----------------------------------------------------------------------
-    # Dual Dedicated Selectors (Withdrawal Sequencing & Roth Conversion Target)
-    # -----------------------------------------------------------------------
-    sel_box_col1, sel_box_col2 = st.columns(2)
-    with sel_box_col1:
-        st.markdown("**1. Account Withdrawal Sequencing** *(Image 1)*")
-        seq_names = [s["name"] for s in withdrawal_strategies]
-        current_seq_idx = min(st.session_state[seq_session_key], len(withdrawal_strategies) - 1)
-        new_seq_idx = st.selectbox(
-            "Select Account Withdrawal Sequence:",
-            options=range(len(withdrawal_strategies)),
-            format_func=lambda i: f"{seq_names[i]} {' (Used in Plan)' if withdrawal_strategies[i]['used_in_plan'] else ''}",
-            index=current_seq_idx,
-            key=f"selectbox_seq_{phase}",
-            label_visibility="collapsed"
-        )
-        if new_seq_idx != st.session_state[seq_session_key]:
-            st.session_state[seq_session_key] = new_seq_idx
-
-    with sel_box_col2:
-        st.markdown("**2. Roth Conversion Fill Level** *(Image 2)*")
-        roth_names = [s["name"] for s in roth_strategies]
-        current_roth_idx = min(st.session_state[roth_session_key], len(roth_strategies) - 1)
-        new_roth_idx = st.selectbox(
-            "Select Roth Conversion Fill Target:",
-            options=range(len(roth_strategies)),
-            format_func=lambda i: f"{roth_names[i]} {' (Used in Plan)' if roth_strategies[i]['used_in_plan'] else (' ☆ Optimal' if roth_strategies[i]['starred'] else '')}",
-            index=current_roth_idx,
-            key=f"selectbox_roth_{phase}",
-            label_visibility="collapsed"
-        )
-        if new_roth_idx != st.session_state[roth_session_key]:
-            st.session_state[roth_session_key] = new_roth_idx
-
-    selected_seq = withdrawal_strategies[st.session_state[seq_session_key]]
-    selected_roth = roth_strategies[st.session_state[roth_session_key]]
-
-    # Category Tab Filter
-    cat_tab_col, _ = st.columns([3, 1])
-    with cat_tab_col:
-        filter_options = ["All Strategies", "Withdrawal Order (7)", "Roth Conversion Fill Levels (13)"]
-        curr_tab = st.session_state[tab_filter_key]
-        tab_idx = filter_options.index(curr_tab) if curr_tab in filter_options else 0
-        selected_filter = st.radio(
-            "Table Filter",
-            options=filter_options,
-            index=tab_idx,
-            horizontal=True,
-            key=f"tab_filter_radio_{phase}",
-            label_visibility="collapsed"
-        )
-        if selected_filter != st.session_state[tab_filter_key]:
-            st.session_state[tab_filter_key] = selected_filter
-
-    # Determine which list to render in table based on filter
-    if selected_filter == "Withdrawal Order (7)":
-        display_groups = [("Withdrawal Order Strategies", withdrawal_strategies, selected_seq["id"])]
-    elif selected_filter == "Roth Conversion Fill Levels (13)":
-        display_groups = [("Roth Conversion Strategies", roth_strategies, selected_roth["id"])]
-    else:
-        display_groups = [
-            ("📁 Withdrawal Order Strategies (Account Sequencing)", withdrawal_strategies, selected_seq["id"]),
-            ("🔄 Roth Conversion Fill Levels (Tax Bracket & IRMAA Ceilings)", roth_strategies, selected_roth["id"]),
-        ]
-
-    # -----------------------------------------------------------------------
-    # Render High-Fidelity Table
-    # -----------------------------------------------------------------------
-    plan_taxes = plan_total_taxes
-    best_legacy_val = max(s["total_legacy"] for s in all_strategies)
     is_compared = (st.session_state.get(view_mode_key, "What if") == "Compared to")
+    plan_taxes = plan_total_taxes
 
-    rows_html = []
-    for grp_title, grp_items, active_id in display_groups:
-        if len(display_groups) > 1:
-            rows_html.append(f"""
-            <tr style="background:#f1f5f9; border-top:2px solid #cbd5e1; border-bottom:1px solid #cbd5e1;">
-                <td colspan="6" style="padding:6px 12px; font-size:11.5px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.04em;">
-                    {grp_title}
-                </td>
-            </tr>
-            """)
-        for idx, s in enumerate(grp_items):
-            is_viewing = (s["id"] == active_id)
-            is_plan = s["used_in_plan"]
-            is_top_legacy = (s["total_legacy"] == best_legacy_val or s["total_legacy"] >= 31_800_000)
+    # Helper function to generate table HTML
+    def _build_strategy_table_html(strategies_list, active_id_val):
+        rows_html = []
+        best_legacy = max(s["total_legacy"] for s in strategies_list)
+        for idx, s in enumerate(strategies_list):
+            is_active = (s["id"] == active_id_val)
+            is_top_legacy = (s["total_legacy"] == best_legacy)
             is_tax_saving = (s["total_taxes"] < plan_taxes)
 
-            # Badges
             badges_html = ""
-            if is_plan:
+            if is_active:
                 badges_html += '<span style="background:#2b4c7e;color:#ffffff;font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;margin-left:8px;">⚑ Used in Plan</span>'
-            if is_viewing:
-                badges_html += '<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;margin-left:8px;">✓ Viewing Now</span>'
             if s["starred"]:
                 badges_html += ' <span style="background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:8px;">☆ Optimal</span>'
 
-            # Row Background & Borders
-            row_bg = "#f0f7ff" if is_viewing else ("#ffffff" if idx % 2 == 0 else "#fafbfc")
-            border_left = "border-left: 3.5px solid #3b82f6;" if is_viewing else "border-left: 3.5px solid transparent;"
-            radio_bullet = "🔘" if is_viewing else "⚪"
+            row_bg = "#f0f7ff" if is_active else ("#ffffff" if idx % 2 == 0 else "#fafbfc")
+            border_left = "border-left: 3.5px solid #2b4c7e;" if is_active else "border-left: 3.5px solid transparent;"
+            radio_bullet = "🔘" if is_active else "⚪"
 
             if not is_compared:
-                # WHAT IF MODE (Totals)
-                tax_style = "background-color:#fef08a; font-weight:700; color:#111827;" if is_plan else ("background-color:#ecfdf5; color:#065f46; font-weight:600;" if is_tax_saving else "color:#1f2937;")
+                tax_style = "background-color:#fef08a; font-weight:700; color:#111827;" if is_active else ("background-color:#ecfdf5; color:#065f46; font-weight:600;" if is_tax_saving else "color:#1f2937;")
                 income_style = "background-color:#ecfdf5; color:#065f46; font-weight:600;" if (s["total_income"] > plan_total_income) else "color:#1f2937;"
-                
-                if is_top_legacy:
-                    legacy_html = f'<span style="background-color:#d1fae5; color:#065f46; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">${s["total_legacy"]:,.0f}</span>'
-                else:
-                    legacy_html = f'${s["total_legacy"]:,.0f}'
+                legacy_html = f'<span style="background-color:#d1fae5; color:#065f46; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">${s["total_legacy"]:,.0f}</span>' if is_top_legacy else f'${s["total_legacy"]:,.0f}'
 
                 col_rate_html = f"{s['avg_tax_rate']:.2f}%"
                 col_tax_html = f"${s['total_taxes']:,.0f}"
                 col_inc_html = f"${s['total_income']:,.0f}"
                 col_rmd_html = f"${s['first_year_rmd']:,.0f}"
+                rate_style = ""
+                rmd_style = ""
             else:
-                # COMPARED TO MODE (Deltas vs Plan)
                 r_diff = s["rate_diff"]
-                if is_plan:
+                if is_active:
                     col_rate_html = "0.00% (Baseline)"
                     rate_style = "color:#374151;"
                 elif r_diff < 0:
@@ -2981,7 +2880,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
                     rate_style = "color:#374151;"
 
                 t_diff = s["tax_diff"]
-                if is_plan:
+                if is_active:
                     col_tax_html = "$0 (Baseline)"
                     tax_style = "background-color:#fef08a; font-weight:700; color:#111827;"
                 elif t_diff < 0:
@@ -2995,7 +2894,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
                     tax_style = "color:#1f2937;"
 
                 i_diff = s["income_diff"]
-                if is_plan:
+                if is_active:
                     col_inc_html = "$0"
                     income_style = "color:#374151;"
                 elif i_diff > 0:
@@ -3009,7 +2908,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
                     income_style = "color:#1f2937;"
 
                 l_diff = s["legacy_diff"]
-                if is_plan:
+                if is_active:
                     legacy_html = "$0"
                 elif l_diff > 0:
                     legacy_html = f'<span style="background-color:#d1fae5; color:#065f46; font-weight:700; border-radius:4px; padding:2px 6px; display:inline-block;">+${l_diff:,.0f}</span>'
@@ -3019,7 +2918,7 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
                     legacy_html = "$0"
 
                 rmd_d = s["rmd_diff"]
-                if is_plan:
+                if is_active:
                     col_rmd_html = "$0"
                     rmd_style = "color:#374151;"
                 elif rmd_d < 0:
@@ -3032,78 +2931,52 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
                     col_rmd_html = "$0"
                     rmd_style = "color:#4b5563;"
 
-            if not is_compared:
-                rows_html.append(f"""
-                <tr style="background:{row_bg}; {border_left}">
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:left; border-bottom:1px solid #e5e7eb;">
-                        <span style="margin-right:6px; font-size:12px;">{radio_bullet}</span>
-                        <span style="font-weight:{'600' if is_viewing else '400'}; color:#1f2328;">{s['name']}</span>
-                        {badges_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#374151;">
-                        {col_rate_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {tax_style}">
-                        {col_tax_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {income_style}">
-                        {col_inc_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#1f2937;">
-                        {legacy_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#4b5563; font-weight:600;">
-                        {col_rmd_html}
-                    </td>
-                </tr>
-                """)
-            else:
-                rows_html.append(f"""
-                <tr style="background:{row_bg}; {border_left}">
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:left; border-bottom:1px solid #e5e7eb;">
-                        <span style="margin-right:6px; font-size:12px;">{radio_bullet}</span>
-                        <span style="font-weight:{'600' if is_viewing else '400'}; color:#1f2328;">{s['name']}</span>
-                        {badges_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {rate_style}">
-                        {col_rate_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {tax_style}">
-                        {col_tax_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {income_style}">
-                        {col_inc_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#1f2937;">
-                        {legacy_html}
-                    </td>
-                    <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {rmd_style}">
-                        {col_rmd_html}
-                    </td>
-                </tr>
-                """)
+            rows_html.append(f"""
+            <tr style="background:{row_bg}; {border_left}">
+                <td style="padding:8px 12px; font-size:12.5px; text-align:left; border-bottom:1px solid #e5e7eb;">
+                    <span style="margin-right:6px; font-size:12px;">{radio_bullet}</span>
+                    <span style="font-weight:{'600' if is_active else '400'}; color:#1f2328;">{s['name']}</span>
+                    {badges_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {rate_style}">
+                    {col_rate_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {tax_style}">
+                    {col_tax_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {income_style}">
+                    {col_inc_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; color:#1f2937;">
+                    {legacy_html}
+                </td>
+                <td style="padding:8px 12px; font-size:12.5px; text-align:right; border-bottom:1px solid #e5e7eb; {rmd_style}">
+                    {col_rmd_html}
+                </td>
+            </tr>
+            """)
 
-    th_headers = """
-    <tr>
-      <th class="l">Strategy</th>
-      <th>Avg. Tax Rate</th>
-      <th>Total Taxes</th>
-      <th>Total Net Income</th>
-      <th>Total Net Legacy</th>
-      <th>Anticipated 1st Yr RMD</th>
-    </tr>
-    """ if not is_compared else """
-    <tr>
-      <th class="l">Strategy</th>
-      <th>Tax Rate Diff</th>
-      <th>Tax Savings / Drag</th>
-      <th>Total Net Income Diff</th>
-      <th>Total Net Legacy Diff</th>
-      <th>1st Yr RMD Reduction</th>
-    </tr>
-    """
+        th_headers = """
+        <tr>
+          <th class="l">Strategy</th>
+          <th>Avg. Tax Rate</th>
+          <th>Total Taxes</th>
+          <th>Total Net Income</th>
+          <th>Total Net Legacy</th>
+          <th>Anticipated 1st Yr RMD</th>
+        </tr>
+        """ if not is_compared else """
+        <tr>
+          <th class="l">Strategy</th>
+          <th>Tax Rate Diff</th>
+          <th>Tax Savings / Drag</th>
+          <th>Total Net Income Diff</th>
+          <th>Total Net Legacy Diff</th>
+          <th>1st Yr RMD Reduction</th>
+        </tr>
+        """
 
-    full_table_component = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   body {{ margin:0; padding:0; background:transparent; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
   table {{ width:100%; border-collapse:collapse; margin-top:2px; }}
@@ -3121,84 +2994,89 @@ def render_tax_strategy_comparison(strategy_df: pd.DataFrame, phase: str) -> Non
 </table>
 </body></html>"""
 
-    total_rows = sum(len(g[1]) for g in display_groups) + (len(display_groups) if len(display_groups) > 1 else 0)
-    table_height = total_rows * 38 + 52
-    components.html(full_table_component, height=table_height, scrolling=False)
-
     # -----------------------------------------------------------------------
-    # Summary Insight Cards for Combined Cross-Strategy Selection
+    # SELECTOR 1: Select a Withdrawal Strategy (Account Sequencing & Routing)
     # -----------------------------------------------------------------------
-    st.markdown("---")
-    st.markdown(
-        f"#### 📊 Projected Outcome: **{selected_seq['name']}** + **{selected_roth['name']}**"
-    )
+    st.markdown("### 📁 1. Select a Withdrawal Strategy")
+    st.caption("Priority order of accounts from which living expenses and cash buffer deficits are sourced.")
 
-    # Calculate combined effect
-    combined_tax_diff = selected_seq["tax_diff"] + selected_roth["tax_diff"]
-    combined_inc_diff = selected_seq["income_diff"] + selected_roth["income_diff"]
-    combined_leg_diff = selected_seq["legacy_diff"] + selected_roth["legacy_diff"]
-    combined_rmd_reduct = min(1.0, selected_seq["rmd_diff"] / baseline_first_year_rmd if baseline_first_year_rmd > 0 else 0 + selected_roth["rmd_diff"] / baseline_first_year_rmd if baseline_first_year_rmd > 0 else 0)
-    
-    combined_total_taxes = max(0.0, plan_total_taxes + combined_tax_diff)
-    combined_total_income = max(0.0, plan_total_income + combined_inc_diff)
-    combined_total_legacy = max(0.0, plan_total_legacy + combined_leg_diff)
-    combined_first_rmd = max(0.0, baseline_first_year_rmd + selected_seq["rmd_diff"] + selected_roth["rmd_diff"])
+    seq_table_html = _build_strategy_table_html(withdrawal_strategies, active_seq_id)
+    components.html(seq_table_html, height=len(withdrawal_strategies) * 38 + 52, scrolling=False)
 
-    sc1, sc2, sc3, sc4 = st.columns(4)
-
-    tax_save_amt = plan_total_taxes - combined_total_taxes
-    tax_save_str = f"Save ${tax_save_amt:,.0f}" if tax_save_amt > 0 else (f"+${abs(tax_save_amt):,.0f}" if tax_save_amt < 0 else "Baseline")
-    
-    income_delta = combined_total_income - plan_total_income
-    income_delta_str = f"+${income_delta:,.0f}" if income_delta > 0 else (f"-${abs(income_delta):,.0f}" if income_delta < 0 else "Baseline")
-
-    legacy_delta = combined_total_legacy - plan_total_legacy
-    legacy_delta_str = f"+${legacy_delta:,.0f}" if legacy_delta > 0 else (f"-${abs(legacy_delta):,.0f}" if legacy_delta < 0 else "Baseline")
-
-    rmd_delta = baseline_first_year_rmd - combined_first_rmd
-    rmd_delta_str = f"-${rmd_delta:,.0f} lower" if rmd_delta > 0 else ("Baseline" if rmd_delta == 0 else f"+${abs(rmd_delta):,.0f}")
-
-    sc1.metric("Total Lifetime Taxes", f"${combined_total_taxes:,.0f}", delta=tax_save_str if tax_save_amt != 0 else None, delta_color="inverse")
-    sc2.metric("Total Net Income", f"${combined_total_income:,.0f}", delta=income_delta_str if income_delta != 0 else None)
-    sc3.metric("Total Net Legacy", f"${combined_total_legacy:,.0f}", delta=legacy_delta_str if legacy_delta != 0 else None)
-    sc4.metric("Anticipated 1st Yr RMD", f"${combined_first_rmd:,.0f}", delta=rmd_delta_str if rmd_delta != 0 else None, delta_color="inverse")
-
-    if tax_save_amt > 0:
-        st.success(
-            f"💡 Combining **{selected_seq['name']}** with **{selected_roth['name']}** reduces lifetime taxes by **${tax_save_amt:,.0f}** "
-            f"and lowers your Anticipated First Year RMD from **${baseline_first_year_rmd:,.0f}** to **${combined_first_rmd:,.0f}**."
+    seq_col1, seq_col2 = st.columns([2, 1])
+    with seq_col1:
+        seq_names = [s["name"] for s in withdrawal_strategies]
+        current_seq_idx = next((i for i, s in enumerate(withdrawal_strategies) if s["id"] == active_seq_id), 1)
+        chosen_seq_idx = st.selectbox(
+            "Change Withdrawal Strategy:",
+            options=range(len(withdrawal_strategies)),
+            format_func=lambda i: f"{seq_names[i]} {'(Active in Plan)' if withdrawal_strategies[i]['id'] == active_seq_id else ''}",
+            index=current_seq_idx,
+            key=f"active_seq_select_{phase}"
         )
-    elif tax_save_amt < 0:
-        st.info(
-            f"ℹ️ Combining **{selected_seq['name']}** with **{selected_roth['name']}** results in **${abs(tax_save_amt):,.0f}** higher lifetime taxes "
-            f"relative to the current plan baseline, with an Anticipated First Year RMD of **${combined_first_rmd:,.0f}**."
-        )
-
-    # -----------------------------------------------------------------------
-    # One-Click "Apply Strategy to Plan" Action
-    # -----------------------------------------------------------------------
-    btn_col1, btn_col2 = st.columns([1.2, 2])
-    with btn_col1:
-        if st.button("⚡ Apply Selected Dual Strategy to Plan", type="primary", key=f"apply_strat_btn_{phase}", use_container_width=True):
+        chosen_seq = withdrawal_strategies[chosen_seq_idx]
+        if chosen_seq["id"] != active_seq_id:
             _cfg = _gcfg()
-            target_seq_id = selected_seq["id"]
-            target_roth_id = selected_roth["id"]
-            target_rate = selected_roth["target_rate"]
+            _cfg.set("tax_strategy", "withdrawal_sequence", chosen_seq["id"])
+            _cfg.save_config()
+            st.success(f"✅ Active withdrawal strategy updated to **{chosen_seq['name']}**!")
+            st.rerun()
 
-            _cfg.set("tax_strategy", "withdrawal_sequence", target_seq_id)
-            _cfg.set("tax_strategy", "roth_conversion_target", target_roth_id)
+    st.markdown("---")
+
+    # -----------------------------------------------------------------------
+    # SELECTOR 2: Select a Roth Conversion Strategy (Fill Levels & Ceilings)
+    # -----------------------------------------------------------------------
+    st.markdown("### 🔄 2. Select a Roth Conversion Strategy")
+    st.caption("Target tax bracket ceiling or IRMAA threshold up to which Traditional balances are converted to Roth.")
+
+    roth_table_html = _build_strategy_table_html(roth_strategies, active_roth_id)
+    components.html(roth_table_html, height=len(roth_strategies) * 38 + 52, scrolling=False)
+
+    roth_col1, roth_col2 = st.columns([2, 1])
+    with roth_col1:
+        roth_names = [s["name"] for s in roth_strategies]
+        current_roth_idx = next((i for i, s in enumerate(roth_strategies) if s["id"] == active_roth_id), 4)
+        chosen_roth_idx = st.selectbox(
+            "Change Roth Conversion Strategy:",
+            options=range(len(roth_strategies)),
+            format_func=lambda i: f"{roth_names[i]} {'(Active in Plan)' if roth_strategies[i]['id'] == active_roth_id else (' ☆ Optimal' if roth_strategies[i]['starred'] else '')}",
+            index=current_roth_idx,
+            key=f"active_roth_select_{phase}"
+        )
+        chosen_roth = roth_strategies[chosen_roth_idx]
+        if chosen_roth["id"] != active_roth_id:
+            _cfg = _gcfg()
+            target_rate = chosen_roth["target_rate"]
+            _cfg.set("tax_strategy", "roth_conversion_target", chosen_roth["id"])
             _cfg.set("tax_strategy", "max_roth_conversion_tax_rate", target_rate)
+            _cfg.set("tax_strategy", "stage_1_max_conversion_rate", target_rate)
+            _cfg.set("tax_strategy", "stage_2_max_conversion_rate", target_rate)
             _cfg.set("tax_strategy", "stage_3_max_conversion_rate", target_rate)
             _cfg.set("tax_strategy", "stage_4_max_conversion_rate", target_rate)
             _cfg.set("tax_strategy", "stage_5_max_conversion_rate", target_rate)
             _cfg.set("tax_strategy", "stage_6_max_conversion_rate", min(target_rate, 24))
-
-            st.success(f"✅ Applied '{selected_seq['name']}' + '{selected_roth['name']}' (Bracket Ceiling: {target_rate}%) to your plan!")
+            _cfg.save_config()
+            st.session_state["CONV_TAX_RATE"] = str(target_rate)
+            st.success(f"✅ Active Roth conversion target updated to **{chosen_roth['name']}** (Ceiling: {target_rate}%)!")
             st.rerun()
-    with btn_col2:
-        st.caption(
-            "Clicking **Apply Selected Dual Strategy to Plan** updates both your account withdrawal priority and your conversion bracket ceilings, recalibrating all life stages."
-        )
+
+    # -----------------------------------------------------------------------
+    # Combined Summary & Active Status
+    # -----------------------------------------------------------------------
+    active_seq_obj = next((s for s in withdrawal_strategies if s["id"] == active_seq_id), withdrawal_strategies[1])
+    active_roth_obj = next((s for s in roth_strategies if s["id"] == active_roth_id), roth_strategies[4])
+
+    st.markdown("---")
+    st.markdown(
+        f"#### 🎯 Current Plan Pairing: **{active_seq_obj['name']}** + **{active_roth_obj['name']}**"
+    )
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Total Lifetime Taxes", f"${plan_total_taxes:,.0f}")
+    sc2.metric("Total Net Income", f"${plan_total_income:,.0f}")
+    sc3.metric("Total Net Legacy", f"${plan_total_legacy:,.0f}")
+    sc4.metric("Anticipated 1st Yr RMD", f"${baseline_first_year_rmd:,.0f}")
 
     st.caption(
         "ℹ️ *Anticipated 1st Year RMD* = Required Minimum Distribution in your first mandatory distribution year (age 73/75), calculated on projected Traditional balances after strategy distributions and Roth conversions. "

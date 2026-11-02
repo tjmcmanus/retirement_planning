@@ -37,8 +37,16 @@ function strategyPage() {
       { id: "incexp",               label: "📊 Income & Expenses" },
     ],
 
-    selectedTaxStrategyIdx: 11, // Default viewing "Roth Conversions to fill 22% Brkt"
-    taxStrategyViewMode: "what_if", // "what_if" or "compared_to"
+    selectedWithdrawalStrategyIdx: 1, // Default viewing "Taxable, Tax-Deferred, Tax-Free"
+    selectedRothStrategyIdx: 4,       // Default viewing "Roth Conversions to fill 22% Brkt"
+    taxStrategyViewMode: "what_if",   // "what_if" or "compared_to"
+    applyingWithdrawalStrategy: false,
+    withdrawalStrategyAppliedMsg: "",
+    applyingRothStrategy: false,
+    rothStrategyAppliedMsg: "",
+
+    // Backward-compat aliases
+    selectedTaxStrategyIdx: 11,
     applyingStrategy: false,
     strategyAppliedMsg: "",
 
@@ -92,6 +100,15 @@ function strategyPage() {
         this.monthlyYears = years;
         this.flowYear = years[0];
         this.monthlyYear = years[0];
+
+        // Initialize active selections from configuration
+        const wStrats = this.getWithdrawalStrategies();
+        const activeWIdx = wStrats.findIndex(s => s.used_in_plan);
+        if (activeWIdx >= 0) this.selectedWithdrawalStrategyIdx = activeWIdx;
+
+        const rStrats = this.getRothStrategies();
+        const activeRIdx = rStrats.findIndex(s => s.used_in_plan);
+        if (activeRIdx >= 0) this.selectedRothStrategyIdx = activeRIdx;
 
         this.err = null;
       } catch (e) {
@@ -654,23 +671,15 @@ function strategyPage() {
       return Math.round((trad * Math.pow(1.06, 10)) / 26.5);
     },
 
-    getTaxStrategies() {
+    // ── 1. Withdrawal Sequencing Strategies ────────────────────────
+    getWithdrawalStrategies() {
       const baseTax = this.baselinePlanTaxes;
       const baseInc = this.baselinePlanIncome;
       const baseLeg = this.baselinePlanLegacy;
       const baseRmd = this.baselineFirstYearRmd;
       const baseRate = (baseTax / (baseInc + baseTax)) * 100 || 18.87;
 
-      const configuredRate = this.config?.tax_strategy?.max_roth_conversion_tax_rate ?? 24;
-      let activePlanId = "taxable_deferred_free";
-      if (configuredRate === 0) activePlanId = "roth_fill_0";
-      else if (configuredRate <= 10) activePlanId = "roth_fill_10";
-      else if (configuredRate <= 12) activePlanId = "roth_fill_12";
-      else if (configuredRate <= 22) activePlanId = "roth_fill_22";
-      else if (configuredRate <= 24) activePlanId = "roth_fill_24";
-      else if (configuredRate <= 32) activePlanId = "roth_fill_32";
-      else if (configuredRate <= 35) activePlanId = "roth_fill_35";
-      else if (configuredRate >= 37) activePlanId = "roth_max";
+      const configuredSeq = this.config?.tax_strategy?.withdrawal_sequence ?? "taxable_deferred_free";
 
       const raw = [
         { id: "pro_rata", name: "Pro-Rata", tax_adj: -1000, inc_adj: 1000, leg_adj: 138000, rate_adj: 0.0, rmd_red: 0.02, starred: false },
@@ -680,19 +689,6 @@ function strategyPage() {
         { id: "deferred_free_taxable", name: "Tax-Deferred, Tax-Free, Taxable", tax_adj: 238000, inc_adj: -237000, leg_adj: 771000, rate_adj: 0.28, rmd_red: 0.28, starred: false },
         { id: "free_deferred_taxable", name: "Tax-Free, Tax-Deferred, Taxable", tax_adj: 219000, inc_adj: -219000, leg_adj: 771000, rate_adj: 0.19, rmd_red: 0.15, starred: false },
         { id: "free_taxable_deferred", name: "Tax-Free, Taxable, Tax-Deferred", tax_adj: 60000, inc_adj: -60000, leg_adj: 0, rate_adj: 0.10, rmd_red: -0.02, starred: false },
-        { id: "roth_fill_0", name: "Roth Conversions to fill 0% Brkt", tax_adj: 0, inc_adj: 0, leg_adj: 0, rate_adj: 0.0, rmd_red: 0.0, starred: false },
-        { id: "roth_fill_10", name: "Roth Conversions to fill 10% Brkt", tax_adj: -8000, inc_adj: 8000, leg_adj: 5000, rate_adj: -0.02, rmd_red: 0.08, starred: false },
-        { id: "roth_fill_12", name: "Roth Conversions to fill 12% Brkt", tax_adj: -97000, inc_adj: 98000, leg_adj: 69000, rate_adj: -0.35, rmd_red: 0.22, starred: false },
-        { id: "roth_irmaa_1", name: "Roth Conversions below IRMAA Brkt 1", tax_adj: -20000, inc_adj: 20000, leg_adj: 13000, rate_adj: -0.07, rmd_red: 0.15, starred: false },
-        { id: "roth_fill_22", name: "Roth Conversions to fill 22% Brkt", tax_adj: -411000, inc_adj: 411000, leg_adj: 304000, rate_adj: -1.95, rmd_red: 0.72, starred: false },
-        { id: "roth_irmaa_2", name: "Roth Conversions below IRMAA Brkt 2", tax_adj: -167000, inc_adj: 167000, leg_adj: 114000, rate_adj: -0.65, rmd_red: 0.35, starred: false },
-        { id: "roth_irmaa_3", name: "Roth Conversions below IRMAA Brkt 3", tax_adj: -397000, inc_adj: 398000, leg_adj: 285000, rate_adj: -1.87, rmd_red: 0.68, starred: false },
-        { id: "roth_irmaa_4", name: "Roth Conversions below IRMAA Brkt 4", tax_adj: -493000, inc_adj: 493000, leg_adj: 359000, rate_adj: -2.44, rmd_red: 0.85, starred: true },
-        { id: "roth_fill_24", name: "Roth Conversions to fill 24% Brkt", tax_adj: -470000, inc_adj: 471000, leg_adj: 477000, rate_adj: -2.77, rmd_red: 0.82, starred: false },
-        { id: "roth_fill_32", name: "Roth Conversions to fill 32% Brkt", tax_adj: -384000, inc_adj: 384000, leg_adj: 498000, rate_adj: -2.48, rmd_red: 0.95, starred: false },
-        { id: "roth_irmaa_5", name: "Roth Conversions below IRMAA Brkt 5", tax_adj: -421000, inc_adj: 421000, leg_adj: 496000, rate_adj: -2.56, rmd_red: 0.92, starred: false },
-        { id: "roth_fill_35", name: "Roth Conversions to fill 35% Brkt", tax_adj: -371000, inc_adj: 372000, leg_adj: 506000, rate_adj: -2.41, rmd_red: 0.98, starred: false },
-        { id: "roth_max", name: "Maximum Roth Conversion", tax_adj: -350000, inc_adj: 350000, leg_adj: 515000, rate_adj: -2.30, rmd_red: 1.0, starred: false },
       ];
 
       return raw.map(r => {
@@ -705,7 +701,7 @@ function strategyPage() {
         return {
           id: r.id,
           name: r.name,
-          used_in_plan: (r.id === activePlanId),
+          used_in_plan: (r.id === configuredSeq),
           starred: r.starred,
           avg_tax_rate: avg_tax_rate,
           total_taxes: total_taxes,
@@ -722,31 +718,26 @@ function strategyPage() {
       });
     },
 
-    get viewingTaxStrategy() {
-      const list = this.getTaxStrategies();
-      return list[this.selectedTaxStrategyIdx] || list[0];
+    get viewingWithdrawalStrategy() {
+      const list = this.getWithdrawalStrategies();
+      return list[this.selectedWithdrawalStrategyIdx] || list[0];
     },
 
-    async applySelectedTaxStrategy() {
-      const v = this.viewingTaxStrategy;
-      if (!v) return;
-      this.applyingStrategy = true;
-      this.strategyAppliedMsg = "Updating configuration and recalculating plan…";
+    get activeWithdrawalStrategy() {
+      const list = this.getWithdrawalStrategies();
+      return list.find(s => s.used_in_plan) || list[1];
+    },
 
-      const rateMap = {
-        "roth_fill_0": 0, "roth_fill_10": 10, "roth_fill_12": 12, "roth_irmaa_1": 12,
-        "roth_fill_22": 22, "roth_irmaa_2": 22, "roth_irmaa_3": 22, "roth_irmaa_4": 24,
-        "roth_fill_24": 24, "roth_fill_32": 32, "roth_irmaa_5": 32, "roth_fill_35": 35, "roth_max": 37
-      };
-      const targetRate = rateMap[v.id] ?? 22;
+    async applySelectedWithdrawalStrategy() {
+      const v = this.viewingWithdrawalStrategy;
+      if (!v) return;
+      this.applyingWithdrawalStrategy = true;
+      this.withdrawalStrategyAppliedMsg = "Updating withdrawal sequence…";
 
       try {
         const changes = {
           tax_strategy: {
-            max_roth_conversion_tax_rate: targetRate,
-            stage_3_max_conversion_rate: targetRate,
-            stage_4_max_conversion_rate: targetRate,
-            stage_5_max_conversion_rate: targetRate,
+            withdrawal_sequence: v.id,
           }
         };
         const r = await fetch("/api/config", {
@@ -766,17 +757,163 @@ function strategyPage() {
           } catch (_) {}
           throw new Error(errDetail);
         }
-        this.strategyAppliedMsg = `✅ '${v.name}' applied! Reloading plan…`;
+        this.withdrawalStrategyAppliedMsg = `✅ '${v.name}' applied! Reloading plan…`;
         setTimeout(async () => {
           await this.load();
-          this.strategyAppliedMsg = `✅ Plan active with ${targetRate}% conversion ceiling.`;
-          setTimeout(() => { this.strategyAppliedMsg = ""; }, 5000);
+          this.withdrawalStrategyAppliedMsg = `✅ Active withdrawal sequence: ${v.name}`;
+          setTimeout(() => { this.withdrawalStrategyAppliedMsg = ""; }, 5000);
         }, 800);
       } catch (err) {
-        this.strategyAppliedMsg = "❌ Failed to update configuration: " + err.message;
+        this.withdrawalStrategyAppliedMsg = "❌ Failed to update configuration: " + err.message;
       } finally {
-        this.applyingStrategy = false;
+        this.applyingWithdrawalStrategy = false;
       }
+    },
+
+    // ── 2. Roth Conversion Strategies ──────────────────────────────
+    getRothStrategies() {
+      const baseTax = this.baselinePlanTaxes;
+      const baseInc = this.baselinePlanIncome;
+      const baseLeg = this.baselinePlanLegacy;
+      const baseRmd = this.baselineFirstYearRmd;
+      const baseRate = (baseTax / (baseInc + baseTax)) * 100 || 18.87;
+
+      const configuredTarget = this.config?.tax_strategy?.roth_conversion_target ?? "fill_12";
+      const configuredRate = this.config?.tax_strategy?.max_roth_conversion_tax_rate ?? 12;
+
+      let activePlanId = "roth_fill_12";
+      if (configuredTarget === "none" || configuredTarget === "fill_0" || configuredRate === 0) activePlanId = "roth_fill_0";
+      else if (configuredTarget === "fill_10" || (configuredRate === 10 && !configuredTarget.startsWith("irmaa"))) activePlanId = "roth_fill_10";
+      else if (configuredTarget === "fill_12" || (configuredRate === 12 && !configuredTarget.startsWith("irmaa"))) activePlanId = "roth_fill_12";
+      else if (configuredTarget === "irmaa_1") activePlanId = "roth_irmaa_1";
+      else if (configuredTarget === "fill_22" || (configuredRate === 22 && !configuredTarget.startsWith("irmaa"))) activePlanId = "roth_fill_22";
+      else if (configuredTarget === "irmaa_2") activePlanId = "roth_irmaa_2";
+      else if (configuredTarget === "irmaa_3") activePlanId = "roth_irmaa_3";
+      else if (configuredTarget === "irmaa_4") activePlanId = "roth_irmaa_4";
+      else if (configuredTarget === "fill_24" || (configuredRate === 24 && !configuredTarget.startsWith("irmaa"))) activePlanId = "roth_fill_24";
+      else if (configuredTarget === "fill_32" || (configuredRate === 32 && !configuredTarget.startsWith("irmaa"))) activePlanId = "roth_fill_32";
+      else if (configuredTarget === "irmaa_5") activePlanId = "roth_irmaa_5";
+      else if (configuredTarget === "fill_35" || configuredRate === 35) activePlanId = "roth_fill_35";
+      else if (configuredTarget === "max" || configuredRate >= 37) activePlanId = "roth_max";
+
+      const raw = [
+        { id: "roth_fill_0", name: "Roth Conversions to fill 0% Brkt", tax_adj: 0, inc_adj: 0, leg_adj: 0, rate_adj: 0.0, rmd_red: 0.0, target_rate: 0, target_id: "fill_0", starred: false },
+        { id: "roth_fill_10", name: "Roth Conversions to fill 10% Brkt", tax_adj: -8000, inc_adj: 8000, leg_adj: 5000, rate_adj: -0.02, rmd_red: 0.08, target_rate: 10, target_id: "fill_10", starred: false },
+        { id: "roth_fill_12", name: "Roth Conversions to fill 12% Brkt", tax_adj: -97000, inc_adj: 98000, leg_adj: 69000, rate_adj: -0.35, rmd_red: 0.22, target_rate: 12, target_id: "fill_12", starred: false },
+        { id: "roth_irmaa_1", name: "Roth Conversions below IRMAA Brkt 1", tax_adj: -20000, inc_adj: 20000, leg_adj: 13000, rate_adj: -0.07, rmd_red: 0.15, target_rate: 12, target_id: "irmaa_1", starred: false },
+        { id: "roth_fill_22", name: "Roth Conversions to fill 22% Brkt", tax_adj: -411000, inc_adj: 411000, leg_adj: 304000, rate_adj: -1.95, rmd_red: 0.72, target_rate: 22, target_id: "fill_22", starred: false },
+        { id: "roth_irmaa_2", name: "Roth Conversions below IRMAA Brkt 2", tax_adj: -167000, inc_adj: 167000, leg_adj: 114000, rate_adj: -0.65, rmd_red: 0.35, target_rate: 22, target_id: "irmaa_2", starred: false },
+        { id: "roth_irmaa_3", name: "Roth Conversions below IRMAA Brkt 3", tax_adj: -397000, inc_adj: 398000, leg_adj: 285000, rate_adj: -1.87, rmd_red: 0.68, target_rate: 22, target_id: "irmaa_3", starred: false },
+        { id: "roth_irmaa_4", name: "Roth Conversions below IRMAA Brkt 4", tax_adj: -493000, inc_adj: 493000, leg_adj: 359000, rate_adj: -2.44, rmd_red: 0.85, target_rate: 24, target_id: "irmaa_4", starred: true },
+        { id: "roth_fill_24", name: "Roth Conversions to fill 24% Brkt", tax_adj: -470000, inc_adj: 471000, leg_adj: 477000, rate_adj: -2.77, rmd_red: 0.82, target_rate: 24, target_id: "fill_24", starred: false },
+        { id: "roth_fill_32", name: "Roth Conversions to fill 32% Brkt", tax_adj: -384000, inc_adj: 384000, leg_adj: 498000, rate_adj: -2.48, rmd_red: 0.95, target_rate: 32, target_id: "fill_32", starred: false },
+        { id: "roth_irmaa_5", name: "Roth Conversions below IRMAA Brkt 5", tax_adj: -421000, inc_adj: 421000, leg_adj: 496000, rate_adj: -2.56, rmd_red: 0.92, target_rate: 32, target_id: "irmaa_5", starred: false },
+        { id: "roth_fill_35", name: "Roth Conversions to fill 35% Brkt", tax_adj: -371000, inc_adj: 372000, leg_adj: 506000, rate_adj: -2.41, rmd_red: 0.98, target_rate: 35, target_id: "fill_35", starred: false },
+        { id: "roth_max", name: "Maximum Roth Conversion", tax_adj: -350000, inc_adj: 350000, leg_adj: 515000, rate_adj: -2.30, rmd_red: 1.0, target_rate: 37, target_id: "max", starred: false },
+      ];
+
+      return raw.map(r => {
+        const avg_tax_rate = Math.max(0, baseRate + r.rate_adj);
+        const total_taxes = Math.max(0, baseTax + r.tax_adj);
+        const total_income = Math.max(0, baseInc + r.inc_adj);
+        const total_legacy = Math.max(0, baseLeg + r.leg_adj);
+        const first_year_rmd = Math.max(0, Math.round(baseRmd * (1.0 - r.rmd_red)));
+
+        return {
+          id: r.id,
+          target_id: r.target_id,
+          target_rate: r.target_rate,
+          name: r.name,
+          used_in_plan: (r.id === activePlanId),
+          starred: r.starred,
+          avg_tax_rate: avg_tax_rate,
+          total_taxes: total_taxes,
+          total_income: total_income,
+          total_legacy: total_legacy,
+          first_year_rmd: first_year_rmd,
+          tax_savings_vs_plan: -r.tax_adj,
+          rate_diff: r.rate_adj,
+          tax_diff: r.tax_adj,
+          income_diff: r.inc_adj,
+          legacy_diff: r.leg_adj,
+          rmd_diff: first_year_rmd - baseRmd,
+        };
+      });
+    },
+
+    get viewingRothStrategy() {
+      const list = this.getRothStrategies();
+      return list[this.selectedRothStrategyIdx] || list[0];
+    },
+
+    get activeRothStrategy() {
+      const list = this.getRothStrategies();
+      return list.find(s => s.used_in_plan) || list[2];
+    },
+
+    async applySelectedRothStrategy() {
+      const v = this.viewingRothStrategy;
+      if (!v) return;
+      this.applyingRothStrategy = true;
+      this.rothStrategyAppliedMsg = "Updating Roth conversion target…";
+
+      const targetRate = v.target_rate ?? 22;
+      const targetId = v.target_id ?? "fill_22";
+
+      try {
+        const changes = {
+          tax_strategy: {
+            roth_conversion_target: targetId,
+            max_roth_conversion_tax_rate: targetRate,
+            stage_1_max_conversion_rate: targetRate,
+            stage_2_max_conversion_rate: targetRate,
+            stage_3_max_conversion_rate: targetRate,
+            stage_4_max_conversion_rate: targetRate,
+            stage_5_max_conversion_rate: targetRate,
+            stage_6_max_conversion_rate: Math.min(targetRate, 24)
+          }
+        };
+        const r = await fetch("/api/config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ changes })
+        });
+        if (!r.ok) {
+          let errDetail = `HTTP ${r.status}`;
+          try {
+            const errJson = await r.json();
+            if (errJson.detail) {
+              if (typeof errJson.detail === "string") errDetail = errJson.detail;
+              else if (errJson.detail.message) errDetail = errJson.detail.message;
+              else if (Array.isArray(errJson.detail)) errDetail = errJson.detail.map(d => d.msg || d.message).join(", ");
+            }
+          } catch (_) {}
+          throw new Error(errDetail);
+        }
+        this.rothStrategyAppliedMsg = `✅ '${v.name}' applied! Reloading plan…`;
+        setTimeout(async () => {
+          await this.load();
+          this.rothStrategyAppliedMsg = `✅ Plan active with ${targetRate}% conversion ceiling.`;
+          setTimeout(() => { this.rothStrategyAppliedMsg = ""; }, 5000);
+        }, 800);
+      } catch (err) {
+        this.rothStrategyAppliedMsg = "❌ Failed to update configuration: " + err.message;
+      } finally {
+        this.applyingRothStrategy = false;
+      }
+    },
+
+    // ── Backward-compatibility getters ────────────────────────────
+    getTaxStrategies() {
+      return [...this.getWithdrawalStrategies(), ...this.getRothStrategies()];
+    },
+
+    get viewingTaxStrategy() {
+      return this.viewingRothStrategy;
+    },
+
+    async applySelectedTaxStrategy() {
+      return this.applySelectedRothStrategy();
     },
 
     // ── Income & Expenses ─────────────────────────────────────────
