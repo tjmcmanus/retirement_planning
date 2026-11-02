@@ -177,7 +177,8 @@
         </div>
         <p class="muted small">
           The exported bundle includes your <code>.env</code> (API keys and encryption key) in plain text &mdash; keep it private.
-          Importing does not apply it: copy <code>.env</code> out of the ZIP into the app folder on the new machine.
+          Importing a bundle restores <code>.env</code> too (the old one is backed up); restart the app with
+          <code>./start.sh restart</code> for it to take effect.
         </p>
         <p class="muted small">
           Not on this page yet (still in the Streamlit app): long-term-care and HSA analyzers, Medicare and Social Security guides,

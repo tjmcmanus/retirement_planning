@@ -23,6 +23,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM First start: create .env from the template (git-ignored; holds secrets)
+if not exist ".env" if exist ".env.example" (
+    copy ".env.example" ".env" >nul
+    echo Created .env from .env.example - replace the placeholder values
+)
+
 for /f "tokens=*" %%i in ('python --version') do set PYTHON_VERSION=%%i
 echo [32m✓[0m Python found: %PYTHON_VERSION%
 echo.

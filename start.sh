@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start the containerized Retirement Planning app with Podman (macOS / Linux).
-# Usage: ./start.sh [up|down|logs|rebuild]
+# Usage: ./start.sh [up|down|logs|rebuild|restart]
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -15,6 +15,14 @@ export PODMAN_COMPOSE_PROVIDER=podman-compose
 export PODMAN_COMPOSE_WARNING_LOGS=false
 command -v podman-compose >/dev/null 2>&1 || { echo "Error: podman-compose not found (pip/brew install podman-compose)." >&2; exit 1; }
 
+# First start: create .env from the template. It is git-ignored and holds secrets, so it is never checked in.
+if [ ! -f .env ]; then
+    cp .env.example .env
+    chmod 600 .env
+    echo "Created .env from .env.example. Replace the placeholder values (or import a backup bundle" >&2
+    echo "that contains your .env) and run ./start.sh again for them to take effect." >&2
+fi
+
 # macOS/Windows run containers inside a VM; start it if needed.
 if [ "$(uname -s)" = "Darwin" ] || [ -n "${PODMAN_FORCE_MACHINE:-}" ]; then
     if ! podman info >/dev/null 2>&1; then
@@ -24,16 +32,13 @@ if [ "$(uname -s)" = "Darwin" ] || [ -n "${PODMAN_FORCE_MACHINE:-}" ]; then
 fi
 
 case "$CMD" in
-    up|rebuild)
-        if [ ! -f .env ]; then
-            echo "Error: .env not found. Copy .env.example to .env and set ENCRYPTION_KEY." >&2
-            exit 1
-        fi
+    up|rebuild|restart)
         if [ "$CMD" = "rebuild" ]; then
             podman compose build --no-cache
         fi
         # --force-recreate on rebuild so a new image replaces the running container
-        if [ "$CMD" = "rebuild" ]; then FORCE="--force-recreate"; else FORCE=""; fi
+        # restart = recreate the containers without rebuilding: picks up a changed .env
+        if [ "$CMD" = "rebuild" ] || [ "$CMD" = "restart" ]; then FORCE="--force-recreate"; else FORCE=""; fi
         podman compose up -d --build $FORCE
         echo -n "Waiting for the apps to become healthy"
         for _ in $(seq 1 60); do
@@ -52,5 +57,5 @@ case "$CMD" in
         ;;
     down)  podman compose down ;;
     logs)  podman compose logs -f ;;
-    *)     echo "Usage: $0 [up|down|logs|rebuild]" >&2; exit 2 ;;
+    *)     echo "Usage: $0 [up|down|logs|rebuild|restart]" >&2; exit 2 ;;
 esac

@@ -5899,7 +5899,7 @@ with tab10:
             "A bundle (.zip) contains your settings, portfolio holdings, estate plan, transaction history, "
             "performance history, saved scenarios and your `.env` (API keys and encryption key, in plain text) — "
             "everything needed to restore this install or move it to another machine. Keep the file private. "
-            "Saved brokerage logins are not included; reconnect them on the new machine."
+            "Import restores `.env` too (restart the app afterwards). Saved brokerage logins are not included."
         )
         if st.button("📤 Export Configuration", width='stretch'):
             try:
@@ -5927,7 +5927,7 @@ with tab10:
         if uploaded_file is not None:
             st.warning(
                 "Importing replaces your current settings and, if the bundle contains them, your portfolio "
-                "holdings, estate plan, transaction/performance history and same-named scenarios. "
+                "holdings, estate plan, `.env`, transaction/performance history and same-named scenarios. "
                 "The current files are backed up to `.backups/` first."
             )
             # Explicit button: a file_uploader keeps its file across reruns, so importing on upload

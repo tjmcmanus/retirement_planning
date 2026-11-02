@@ -1,5 +1,5 @@
 # Run with:  ./start.sh      (or: podman compose up -d --build)
-# Requires a .env file (see .env.example). Data persists in the retirement_data volume.
+# Needs a .env file (./start.sh creates it from .env.example when missing). Data persists in the retirement_data volume.
 name: retirement-planning
 
 services:
@@ -15,6 +15,9 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - retirement_data:/data
+      # The host's .env, so Settings -> Import/Export can read and replace it. Compose only reads
+      # .env when the container is created, so an imported .env takes effect after ./start.sh.
+      - ./.env:/data/.env
     restart: unless-stopped
     tmpfs:
       - /tmp
@@ -37,6 +40,9 @@ services:
       - "127.0.0.1:8501:8501"
     volumes:
       - retirement_data:/data
+      # The host's .env, so Settings -> Import/Export can read and replace it. Compose only reads
+      # .env when the container is created, so an imported .env takes effect after ./start.sh.
+      - ./.env:/data/.env
     restart: unless-stopped
     tmpfs:
       - /tmp

@@ -20,6 +20,14 @@ fi
 echo "✓ Python 3 found: $(python3 --version)"
 echo ""
 
+# First start: create .env from the template (git-ignored; holds secrets)
+if [ ! -f .env ] && [ -f .env.example ]; then
+    cp .env.example .env
+    chmod 600 .env
+    echo "✓ Created .env from .env.example - replace the placeholder values"
+    echo ""
+fi
+
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."

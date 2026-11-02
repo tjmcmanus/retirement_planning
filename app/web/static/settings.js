@@ -342,7 +342,7 @@ function settings() {
         this.message = { kind: "error", text: "Choose a .zip bundle or a .json configuration file." };
         return;
       }
-      if (!confirm(`Import "${file.name}"? This replaces your current settings (and the portfolio data and estate plan if the bundle contains them). The current files are backed up first.`)) return;
+      if (!confirm(`Import "${file.name}"? This replaces your current settings (and the portfolio data, estate plan and .env if the bundle contains them). The current files are backed up first.`)) return;
       this.saving = true;
       this.message = null;
       try {

@@ -170,9 +170,9 @@ MAX_IMPORT_BYTES = 50 * 1024 * 1024  # config + portfolio CSV + estate JSON are 
 #   plain files   : bundle name -> path restored to
 #   SQLite files  : bundle name -> (path restored to, table that must exist)
 #   scenarios     : scenarios/<id>.json -> data/scenarios/<id>.json
-# Also exported: ``.env`` (API keys and ENCRYPTION_KEY, in plain text). It is never applied on import:
-# the running app was started with its own .env, and a container cannot rewrite the host's file.
-# Copy it out of the ZIP onto the new machine before starting the app there.
+# ``.env`` (API keys and ENCRYPTION_KEY, in plain text) is exported, and restored on import to ./.env
+# (compose bind-mounts the host's .env at /data/.env). Processes only read it at start-up, so an
+# imported .env takes effect after ``./start.sh restart``.
 # Not bundled on purpose: data/credentials.db (brokerage logins, encrypted with ENCRYPTION_KEY) and
 # the re-downloadable caches. Re-link brokerage accounts on the new machine.
 _PORTFOLIO_CSV = "portfolio_data_truth.csv"
@@ -269,6 +269,26 @@ def _validate_holdings_csv(content: bytes) -> None:
         raise ValueError(f"{_PORTFOLIO_CSV} is missing column(s): {', '.join(sorted(missing))}")
 
 
+def _restore_env(content: bytes) -> str:
+    """Write ``.env`` from a bundle. Returns a warning to show, or '' when it was applied.
+
+    In place, not replace-by-rename: in the container ``.env`` is a bind-mounted file, which cannot be
+    renamed over. The previous file is backed up first (it holds secrets, like the new one).
+    """
+    if not any(re.match(r"\s*[A-Za-z_][A-Za-z0-9_]*\s*=", ln) for ln in content.decode("utf-8-sig").splitlines()):
+        return ".env in the bundle has no settings in it, so your current .env was left alone."
+    try:
+        _backup_file(_ENV_FILE)
+        fd = os.open(_ENV_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+    except OSError as exc:
+        logger.exception(".env restore failed")
+        return (f".env could not be written ({exc}). Copy it out of the bundle into the app folder "
+                "(next to compose.yaml) yourself.")
+    return ""
+
+
 def _write_atomic(path: str, content: bytes) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".importing"
@@ -298,7 +318,7 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
     if len(data) > MAX_IMPORT_BYTES:
         raise ValueError("The file is too large")
 
-    has_env = False
+    env_content: bytes | None = None
     extras: dict[str, bytes] = {}                 # plain files by bundle name
     dbs: dict[str, bytes] = {}                    # SQLite files by bundle name
     scenarios: dict[str, bytes] = {}              # scenario file name -> content
@@ -323,7 +343,8 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
                 for n in _BUNDLE_DB_FILES:
                     if n in names and (content := read(names[n])):
                         dbs[n] = content
-                has_env = _ENV_FILE in names
+                if _ENV_FILE in names:
+                    env_content = read(names[_ENV_FILE])
                 for m, n in members.items():
                     parts = m.split("/")
                     if len(parts) >= 2 and parts[-2].lower() == "scenarios" and parts[-1].lower().endswith(".json"):
@@ -361,6 +382,14 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"scenarios/{n} is not valid JSON: {exc}") from exc
 
+    if env_content is not None:
+        if len(env_content) > 64 * 1024 or b"\0" in env_content:
+            raise ValueError(".env in the bundle is not a text file")
+        try:
+            env_content.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f".env in the bundle is not valid UTF-8: {exc}") from exc
+
     with _lock:
         mgr = ConfigManager()
         if not mgr.import_config(config_text):  # merges with DEFAULT_CONFIG so newer settings get defaults
@@ -394,9 +423,13 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
         if scenarios:
             restored.append(f"{len(scenarios)} scenario(s)")
 
-        if has_env:
-            warnings.append(".env in the bundle was not applied. To use it on this machine, copy it from the ZIP "
-                            "to the app folder (next to compose.yaml) and restart the app.")
+        if env_content is not None:
+            problem = _restore_env(env_content)
+            if problem:
+                warnings.append(problem)
+            else:
+                restored.append(".env")
+                warnings.append("Restart the app (./start.sh restart) for the imported .env to take effect.")
         warnings += _persist(mgr, {"social_security", "personal_info"})
         return {"config": mgr.config, "restored": restored, "warnings": warnings}
 

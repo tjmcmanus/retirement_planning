@@ -370,14 +370,61 @@ def test_export_rebuilds_env_from_environment_in_container(client, monkeypatch):
     assert not any("UNRELATED" in ln for ln in lines)
 
 
-def test_import_never_applies_env_but_tells_the_user(client, tmp_path):
+def _env_bundle(env):
+    files = {"retirement_config.json": (REPO / "retirement_config.json.example").read_text()}
+    if env is not None:
+        files[".env"] = env
+    return _bundle(files)
+
+
+def test_import_restores_env_and_backs_up_the_old_one(client, tmp_path):
     (tmp_path / ".env").write_text("ENCRYPTION_KEY=mine\n")
-    bundle = _bundle({"retirement_config.json": (REPO / "retirement_config.json.example").read_text(),
-                      ".env": "ENCRYPTION_KEY=theirs\n"})
-    r = _post_import(client, "b.zip", bundle)
+    r = _post_import(client, "b.zip", _env_bundle("ENCRYPTION_KEY=theirs\n"))
     assert r.status_code == 200, r.text
-    assert (tmp_path / ".env").read_text() == "ENCRYPTION_KEY=mine\n"
-    assert any(".env" in w and "not applied" in w for w in r.json()["warnings"])
+    assert (tmp_path / ".env").read_text() == "ENCRYPTION_KEY=theirs\n"
+    assert ".env" in r.json()["restored"]
+    assert any("Restart" in w for w in r.json()["warnings"])
+    assert [b.read_text() for b in (tmp_path / ".backups").glob(".env_*")] == ["ENCRYPTION_KEY=mine\n"]
+
+
+def test_import_creates_env_when_missing(client, tmp_path):
+    assert not (tmp_path / ".env").exists()
+    assert _post_import(client, "b.zip", _env_bundle("A=1\n")).status_code == 200
+    assert (tmp_path / ".env").read_text() == "A=1\n"
+    assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600     # new secrets file: owner-only
+
+
+def test_import_writes_env_in_place_so_a_bind_mounted_file_keeps_its_inode(client, tmp_path):
+    (tmp_path / ".env").write_text("A=1\n")
+    inode = (tmp_path / ".env").stat().st_ino        # a compose bind mount pins the inode; rename would fail with EBUSY
+    assert _post_import(client, "b.zip", _env_bundle("A=2\n")).status_code == 200
+    assert (tmp_path / ".env").stat().st_ino == inode
+
+
+@pytest.mark.parametrize("content", ["", "# only a comment\n\n"])
+def test_import_ignores_an_env_without_settings(client, tmp_path, content):
+    (tmp_path / ".env").write_text("A=1\n")
+    r = _post_import(client, "b.zip", _env_bundle(content))
+    assert r.status_code == 200
+    assert (tmp_path / ".env").read_text() == "A=1\n" and ".env" not in r.json()["restored"]
+
+
+def test_import_rejects_a_binary_env_before_writing_anything(client, tmp_path):
+    (tmp_path / ".env").write_text("A=1\n")
+    r = _post_import(client, "b.zip", _env_bundle(b"\xff\xfe\x00bad"))
+    assert r.status_code == 422 and ".env" in r.json()["detail"]["message"]
+    assert (tmp_path / ".env").read_text() == "A=1\n"
+
+
+def test_export_then_import_round_trips_env(client, tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("ENCRYPTION_KEY=abc\nSNAPTRADE_ENV=production\n")
+    bundle = client.get("/api/config/export").content
+    new_machine = tmp_path / "new"
+    new_machine.mkdir()
+    shutil.copy(REPO / "retirement_config.json.example", new_machine / "retirement_config.json")
+    monkeypatch.chdir(new_machine)
+    assert _post_import(client, "b.zip", bundle).status_code == 200
+    assert (new_machine / ".env").read_text() == "ENCRYPTION_KEY=abc\nSNAPTRADE_ENV=production\n"
 
 
 def test_settings_page_served_and_local_only(client):
