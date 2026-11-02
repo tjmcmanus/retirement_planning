@@ -3786,10 +3786,78 @@ def rebalance_accounts(balances: PortfolioBalances,
     brokerage_after_cash = balances.taxable - cash_deficit
     brokerage_deficit_after_cash = max(0, brokerage_target - brokerage_after_cash)
     
-    # Tax-efficient routing decision:
-    # If Brokerage can cover cash AND maintain buffer: use normal flow (Brokerage→Cash, then Trad→Brokerage)
-    # If Brokerage cannot maintain buffer after cash: route Traditional directly to Cash for the shortfall
-    if cash_deficit > 0 and brokerage_deficit_after_cash > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
+    # Check configured withdrawal sequence
+    cfg_mgr = get_config_manager()
+    configured_seq = cfg_mgr.get("tax_strategy", "withdrawal_sequence", "taxable_deferred_free")
+    is_trad_first = (configured_seq in ("deferred_taxable_free", "deferred_free_taxable"))
+    is_roth_first = (configured_seq in ("free_deferred_taxable", "free_taxable_deferred"))
+    is_pro_rata = (configured_seq == "pro_rata")
+
+    # Routing decision:
+    if is_trad_first:
+        dl.add("cash_replenishment", "Routing Decision: Tax-Deferred First",
+               "Traditional → Cash direct routing selected",
+               f"Strategy '{configured_seq}' selected in configuration. Sourcing living expenses and cash deficits "
+               f"directly from Traditional IRA/401(k) before tapping Taxable Brokerage or Roth.",
+               cash_deficit=f"${cash_deficit:,.0f}",
+               traditional_balance=f"${balances.traditional:,.0f}",
+               configured_sequence=configured_seq)
+        logger.info(f"Year {year}: Tax-Deferred First routing - Traditional is primary cash source")
+
+        balances, cash_txns, cash_dl = replenish_cash_buffer(
+            balances, expenses, age_primary, year,
+            cash_target_override=cash_target_override,
+            brokerage_account=brokerage_account
+        )
+        transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
+        transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
+        transactions['roth_to_cash'] = cash_txns['roth_to_cash']
+        transactions['cash_replenishment'] = cash_txns['cash_replenishment']
+        transactions['brokerage_ltcg'] = cash_txns.get('brokerage_ltcg', 0.0)
+        dl.cash_replenishment.extend(cash_dl.cash_replenishment)
+
+    elif is_roth_first:
+        dl.add("cash_replenishment", "Routing Decision: Tax-Free First",
+               "Roth → Cash direct routing selected",
+               f"Strategy '{configured_seq}' selected in configuration. Sourcing cash deficits directly from Roth accounts first.",
+               cash_deficit=f"${cash_deficit:,.0f}",
+               roth_balance=f"${balances.roth:,.0f}",
+               configured_sequence=configured_seq)
+        logger.info(f"Year {year}: Tax-Free First routing - Roth is primary cash source")
+
+        balances, cash_txns, cash_dl = replenish_cash_buffer(
+            balances, expenses, age_primary, year,
+            cash_target_override=cash_target_override,
+            brokerage_account=brokerage_account
+        )
+        transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
+        transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
+        transactions['roth_to_cash'] = cash_txns['roth_to_cash']
+        transactions['cash_replenishment'] = cash_txns['cash_replenishment']
+        transactions['brokerage_ltcg'] = cash_txns.get('brokerage_ltcg', 0.0)
+        dl.cash_replenishment.extend(cash_dl.cash_replenishment)
+
+    elif is_pro_rata:
+        dl.add("cash_replenishment", "Routing Decision: Pro-Rata",
+               "Proportional multi-account draw selected",
+               "Pro-Rata strategy selected in configuration. Sourcing cash deficits proportionally across all accounts.",
+               cash_deficit=f"${cash_deficit:,.0f}",
+               configured_sequence=configured_seq)
+        logger.info(f"Year {year}: Pro-Rata routing - proportional account draws")
+
+        balances, cash_txns, cash_dl = replenish_cash_buffer(
+            balances, expenses, age_primary, year,
+            cash_target_override=cash_target_override,
+            brokerage_account=brokerage_account
+        )
+        transactions['brokerage_to_cash'] = cash_txns['brokerage_to_cash']
+        transactions['traditional_to_cash'] = cash_txns['traditional_to_cash']
+        transactions['roth_to_cash'] = cash_txns['roth_to_cash']
+        transactions['cash_replenishment'] = cash_txns['cash_replenishment']
+        transactions['brokerage_ltcg'] = cash_txns.get('brokerage_ltcg', 0.0)
+        dl.cash_replenishment.extend(cash_dl.cash_replenishment)
+
+    elif cash_deficit > 0 and brokerage_deficit_after_cash > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
         # Brokerage can't cover both - use optimized routing
         dl.add("cash_replenishment", "Routing Decision: Optimised",
                "Traditional → Cash direct routing selected",
@@ -3802,17 +3870,10 @@ def rebalance_accounts(balances: PortfolioBalances,
                brokerage_after_cash=f"${brokerage_after_cash:,.0f}",
                brokerage_deficit_after_cash=f"${brokerage_deficit_after_cash:,.0f}")
         logger.info(f"Year {year}: Optimized routing - Brokerage insufficient for both cash and buffer")
-        logger.info(f"  Cash deficit: ${cash_deficit:,.0f}")
-        logger.info(f"  Brokerage balance: ${balances.taxable:,.0f}")
-        logger.info(f"  Brokerage after cash transfer: ${brokerage_after_cash:,.0f}")
-        logger.info(f"  Brokerage target: ${brokerage_target:,.0f}")
-        logger.info(f"  Brokerage deficit after cash: ${brokerage_deficit_after_cash:,.0f}")
         
         # Route what Brokerage CAN provide to Cash (maintaining its buffer)
         brokerage_can_provide = max(0, balances.taxable - brokerage_target)
-        
         if brokerage_can_provide > 0:
-            # Transfer available brokerage to cash
             transfer = min(cash_deficit, brokerage_can_provide)
             to_outflow = min(uncovered_outflow, transfer)
             uncovered_outflow -= to_outflow
@@ -3825,111 +3886,26 @@ def rebalance_accounts(balances: PortfolioBalances,
                 daf=balances.daf
             )
             transactions['brokerage_to_cash'] = transfer
-            
-            # Calculate LTCG from brokerage withdrawal using smart selection if available
-            if brokerage_account is not None and transfer > 0:
-                try:
-                    # Try smart selection first if available
-                    if (_smart_selection.available
-                            and _smart_selection.should_use(portfolio_df, 'Brokerage')):
-                        basis_returned, ltcg_realized, plan = _smart_selection.withdraw(
-                            amount=transfer,
-                            brokerage_account=brokerage_account,
-                            portfolio_df=portfolio_df,
-                            year=year,
-                            target_allocation=target_allocation or _smart_selection.default_allocation,
-                            current_agi=current_agi,
-                            filing_status=filing_status,
-                            recent_sales=recent_sales or [],
-                        )
-                        transactions['brokerage_ltcg'] = ltcg_realized
-
-                        if plan:
-                            logger.info(f"  Smart selection used for ${transfer:,.0f} withdrawal:")
-                            logger.info(f"    Securities: {len(plan.securities)}")
-                            logger.info(f"    Basis: ${basis_returned:,.0f}, LTCG: ${ltcg_realized:,.0f}")
-                            logger.info(f"    Tax impact: ${plan.estimated_tax:,.0f}")
-                            logger.info(f"    Drift improvement: {plan.drift_improvement:+.2f}%")
-
-                            if _smart_selection.format_summary is not None:
-                                dl.add("brokerage_withdrawal", "Smart Security Selection",
-                                       f"Withdrew ${transfer:,.0f} using intelligent selection",
-                                       _smart_selection.format_summary(plan))
-                        else:
-                            logger.info(f"  FIFO fallback used: ${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
-                            dl.add("brokerage_replenishment", "Brokerage Withdrawal: FIFO (smart fallback)",
-                                   f"FIFO used for ${transfer:,.0f} withdrawal",
-                                   "Smart selection ran but returned no liquidation plan; "
-                                   "fell back to FIFO cost-lot ordering.",
-                                   transferred=f"${transfer:,.0f}",
-                                   basis_returned=f"${basis_returned:,.0f}",
-                                   ltcg_realized=f"${ltcg_realized:,.0f}")
-                    else:
-                        # Fallback to FIFO
-                        basis_returned, ltcg_realized = brokerage_account.withdraw_fifo(transfer, year)
-                        transactions['brokerage_ltcg'] = ltcg_realized
-                        logger.info(f"  FIFO withdrawal: ${transfer:,.0f} from Brokerage to Cash: "
-                                   f"${basis_returned:,.0f} basis, ${ltcg_realized:,.0f} LTCG")
-                        dl.add("brokerage_replenishment", "Brokerage Withdrawal: FIFO",
-                               f"FIFO used for ${transfer:,.0f} withdrawal",
-                               "Smart selection not available or not applicable; "
-                               "using FIFO cost-lot ordering.",
-                               transferred=f"${transfer:,.0f}",
-                               basis_returned=f"${basis_returned:,.0f}",
-                               ltcg_realized=f"${ltcg_realized:,.0f}")
-                except Exception as e:
-                    logger.warning(f"  Error in withdrawal: {e}, using estimated LTCG")
-                    transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
-                    logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash "
-                               f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG)")
-            else:
-                transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
-                logger.info(f"  Transferred ${transfer:,.0f} from Brokerage to Cash "
-                           f"(estimated ${transactions['brokerage_ltcg']:,.0f} LTCG)")
-            
+            transactions['brokerage_ltcg'] = transfer * BROKERAGE_LTCG_RATIO
             cash_deficit -= transfer
-            
-            dl.add("cash_replenishment", "Brokerage → Cash (Partial)",
-                   f"Transfer ${transfer:,.0f}",
-                   f"Brokerage provided what it could while maintaining its buffer target. "
-                   f"${transfer - transactions['brokerage_ltcg']:,.0f} is tax-free basis return, "
-                   f"${transactions['brokerage_ltcg']:,.0f} is LTCG. "
-                   "Remaining cash deficit will be sourced directly from Traditional to avoid "
-                   "double taxation (ordinary income on Trad→Broker, then LTCG on Broker→Cash).",
-                   transferred=f"${transfer:,.0f}",
-                   basis_returned=f"${transfer - transactions['brokerage_ltcg']:,.0f}",
-                   ltcg_realized=f"${transactions['brokerage_ltcg']:,.0f}",
-                   remaining_deficit=f"${cash_deficit:,.0f}")
         
-        # Route remaining cash deficit directly from Traditional (avoiding Brokerage)
-        if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.traditional > 0:
-            if age_primary >= EARLY_WITHDRAWAL_PENALTY_AGE:
-                distribution = min(balances.traditional, max(uncovered_outflow, min(cash_deficit, balances.traditional * 0.15 + uncovered_outflow)))
-                to_outflow = min(uncovered_outflow, distribution)
-                uncovered_outflow -= to_outflow
-                to_cash = distribution - to_outflow
-                balances = PortfolioBalances(
-                    cash=balances.cash + to_cash,
-                    taxable=balances.taxable,
-                    traditional=max(0.0, balances.traditional - distribution),
-                    roth=balances.roth,
-                    daf=balances.daf
-                )
-                transactions['traditional_to_cash'] = distribution
-                cash_deficit = max(0.0, cash_deficit - distribution)
-                logger.info(f"  Distributed ${distribution:,.0f} directly from Traditional to Cash (optimized routing)")
-                
-                dl.add("cash_replenishment", "Traditional → Cash (Optimized)",
-                       f"Distribute ${distribution:,.0f}",
-                       "TAX OPTIMIZATION: Routing Traditional directly to Cash instead of through Brokerage. "
-                       "This avoids double taxation: we pay ordinary income tax once on the Traditional withdrawal, "
-                       "rather than paying ordinary income on Trad→Broker PLUS LTCG when those funds later move Broker→Cash. "
-                       "This saves approximately 15-20% in LTCG on 40% of the amount.",
-                       distributed=f"${distribution:,.0f}",
-                       tax_savings_strategy="Direct routing avoids LTCG on replenishment",
-                       remaining_deficit=f"${cash_deficit:,.0f}")
-        
-        # Handle any remaining deficit with Roth if needed
+        # Route remaining cash deficit directly from Traditional
+        if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.traditional > 0 and age_primary >= EARLY_WITHDRAWAL_PENALTY_AGE:
+            distribution = min(balances.traditional, max(uncovered_outflow, min(cash_deficit, balances.traditional * 0.15 + uncovered_outflow)))
+            to_outflow = min(uncovered_outflow, distribution)
+            uncovered_outflow -= to_outflow
+            to_cash = distribution - to_outflow
+            balances = PortfolioBalances(
+                cash=balances.cash + to_cash,
+                taxable=balances.taxable,
+                traditional=max(0.0, balances.traditional - distribution),
+                roth=balances.roth,
+                daf=balances.daf
+            )
+            transactions['traditional_to_cash'] = distribution
+            cash_deficit = max(0.0, cash_deficit - distribution)
+
+        # Handle any remaining deficit with Roth
         if cash_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT and balances.roth > 0 and age_primary >= 59.5:
             distribution = min(balances.roth, max(uncovered_outflow, min(cash_deficit, balances.roth * 0.10 + uncovered_outflow)))
             to_outflow = min(uncovered_outflow, distribution)
@@ -3944,58 +3920,13 @@ def rebalance_accounts(balances: PortfolioBalances,
             )
             transactions['roth_to_cash'] = distribution
             cash_deficit = max(0.0, cash_deficit - distribution)
-            logger.info(f"  Distributed ${distribution:,.0f} from Roth to Cash")
-            
-            dl.add("cash_replenishment", "Roth → Cash",
-                   f"Distribute ${distribution:,.0f}",
-                   "Roth used to cover remaining cash deficit after Traditional.",
-                   distributed=f"${distribution:,.0f}")
 
-        # Final safety check against negative cash balance or remaining uncovered outflow
-        shortfall = max(0.0, -balances.cash) + uncovered_outflow
-        if shortfall > 0:
-            pull_taxable = min(balances.taxable, shortfall)
-            shortfall -= pull_taxable
-            pull_trad = min(balances.traditional, shortfall)
-            shortfall -= pull_trad
-            pull_roth = min(balances.roth, shortfall)
-            shortfall -= pull_roth
-
-            balances = PortfolioBalances(
-                cash=max(0.0, balances.cash - uncovered_outflow + pull_taxable + pull_trad + pull_roth),
-                taxable=max(0.0, balances.taxable - pull_taxable),
-                traditional=max(0.0, balances.traditional - pull_trad),
-                roth=max(0.0, balances.roth - pull_roth),
-                daf=balances.daf
-            )
-            transactions['brokerage_to_cash'] += pull_taxable
-            transactions['traditional_to_cash'] += pull_trad
-            transactions['roth_to_cash'] += pull_roth
-            uncovered_outflow = 0.0
-        
         transactions['cash_replenishment'] = (transactions['brokerage_to_cash'] +
                                              transactions['traditional_to_cash'] +
                                              transactions['roth_to_cash'])
-        
-        # After handling cash needs with optimized routing, check if brokerage still needs replenishment
-        # This handles the case where brokerage was already below target before this year
-        current_brokerage_deficit = max(0, brokerage_target - balances.taxable)
-        if current_brokerage_deficit > _BUFFER_REPLENISHMENT_MIN_DEFICIT:
-            logger.info(f"Year {year}: Brokerage still below target after optimized routing, replenishing...")
-            balances, brokerage_txns, brok_dl = replenish_brokerage_buffer(
-                balances, expenses, age_primary, year, brokerage_account
-            )
-            transactions['traditional_to_brokerage'] = brokerage_txns['traditional_to_brokerage']
-            transactions['brokerage_replenishment'] = brokerage_txns['brokerage_replenishment']
-            dl.brokerage_replenishment.extend(brok_dl.brokerage_replenishment)
-        else:
-            # Brokerage maintained its buffer through optimized routing
-            transactions['traditional_to_brokerage'] = 0.0
-            transactions['brokerage_replenishment'] = 0.0
-        
     else:
-        # Normal flow - Brokerage can handle it
-        dl.add("cash_replenishment", "Routing Decision: Normal",
+        # Standard Taxable-First flow
+        dl.add("cash_replenishment", "Routing Decision: Normal (Taxable First)",
                "Normal flow selected — Brokerage → Cash, then Traditional → Brokerage",
                "Brokerage has sufficient funds to cover the cash deficit and maintain its buffer "
                "target. Using the standard priority order: Brokerage first (lower tax cost), "
@@ -4006,7 +3937,6 @@ def rebalance_accounts(balances: PortfolioBalances,
                brokerage_target=f"${brokerage_target:,.0f}")
         logger.info(f"Year {year}: Normal routing - Brokerage sufficient for cash and buffer")
         
-        # Step 2a: Replenish cash buffer (after expenses paid)
         balances, cash_txns, cash_dl = replenish_cash_buffer(
             balances, expenses, age_primary, year,
             cash_target_override=cash_target_override,
@@ -4019,7 +3949,6 @@ def rebalance_accounts(balances: PortfolioBalances,
         transactions['brokerage_ltcg'] = cash_txns.get('brokerage_ltcg', 0.0)
         dl.cash_replenishment.extend(cash_dl.cash_replenishment)
 
-        # Step 2b: Replenish brokerage buffer
         balances, brokerage_txns, brok_dl = replenish_brokerage_buffer(
             balances, expenses, age_primary, year, brokerage_account
         )
