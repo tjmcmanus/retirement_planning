@@ -217,6 +217,33 @@ def test_csv_backup():
 
 
 # ---------------------------------------------------------------------------
+# Test: replace_from_csv
+# ---------------------------------------------------------------------------
+def test_replace_from_csv():
+    print("\n[9b] replace_from_csv")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Path(tmpdir) / "test.db"
+        csv_path = Path(tmpdir) / "portfolio_data_truth.csv"
+        original_csv = pdb.CSV_BACKUP_PATH
+        pdb.CSV_BACKUP_PATH = Path(tmpdir) / "backup.csv"
+        try:
+            pdb.db_upsert(_sample_rows(), db_path=db)             # 3 rows already present
+            _sample_rows().head(1).to_csv(csv_path, index=False)  # restore a 1-row backup
+            n = pdb.replace_from_csv(str(csv_path), db_path=db)
+            total = len(pdb.db_load_all(db_path=db))
+            check("replace keeps only the CSV rows", n == 1 and total == 1, f"n={n} total={total}")
+            check("CSV backup regenerated from the DB", len(pd.read_csv(pdb.CSV_BACKUP_PATH)) == 1)
+            try:
+                pdb.replace_from_csv(str(Path(tmpdir) / "missing.csv"), db_path=db)
+                check("missing CSV raises", False)
+            except FileNotFoundError:
+                check("missing CSV raises", True)
+            check("failed replace leaves data intact", len(pdb.db_load_all(db_path=db)) == 1)
+        finally:
+            pdb.CSV_BACKUP_PATH = original_csv
+
+
+# ---------------------------------------------------------------------------
 # Test: migrate_from_csv
 # ---------------------------------------------------------------------------
 def test_migrate_from_csv():
@@ -280,6 +307,7 @@ if __name__ == "__main__":
             pdb.CSV_BACKUP_PATH = original_csv
 
     test_csv_backup()
+    test_replace_from_csv()
     test_migrate_from_csv()
 
     print("\n" + "=" * 60)

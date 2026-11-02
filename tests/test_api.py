@@ -783,7 +783,9 @@ def _post_import(client, name, data):
 
 
 def test_import_roundtrips_an_exported_bundle(client, tmp_path):
-    (tmp_path / "portfolio_data_truth.csv").write_text("a,b\n1,2\n")
+    good_csv = ("month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,end_of_month_price,purchase_date\n"
+                "3,2026,Acct,Taxable,Pat,VTI,Vanguard,ETF,10,100,110,2020-01-01\n")
+    (tmp_path / "portfolio_data_truth.csv").write_text(good_csv)
     (tmp_path / "estate_planning_data.json").write_text('{"k": 1}')
     _put(client, {"financial_assumptions": {"expected_rate_of_return": 9.5}})
     bundle = client.get("/api/config/export").content
@@ -795,12 +797,118 @@ def test_import_roundtrips_an_exported_bundle(client, tmp_path):
     body = r.json()
     assert body["config"]["financial_assumptions"]["expected_rate_of_return"] == 9.5
     assert {"retirement_config.json", "portfolio_data_truth.csv", "estate_planning_data.json"} <= set(body["restored"])
-    assert (tmp_path / "portfolio_data_truth.csv").read_text() == "a,b\n1,2\n"
+    # the CSV is regenerated from portfolio.db (the source of truth), so compare content, not bytes
+    import pandas as pd
+    restored = pd.read_csv(tmp_path / "portfolio_data_truth.csv")
+    assert restored["symbol"].tolist() == ["VTI"] and restored["qty"].tolist() == [10]
     assert (tmp_path / "estate_planning_data.json").read_text() == '{"k": 1}'
     # the CSV that was replaced was backed up first
     assert any(b.read_text() == "changed\n" for b in (tmp_path / ".backups").glob("portfolio_data_truth_*.csv"))
     # persisted: a fresh read sees the imported value
     assert client.get("/api/config").json()["financial_assumptions"]["expected_rate_of_return"] == 9.5
+
+
+def _holdings_csv(*symbols):
+    head = "month,year,account_name,account_type,owner,symbol,name,sector,qty,purchase_price,end_of_month_price,purchase_date\n"
+    return head + "".join(f"3,2026,Acct,Taxable,Pat,{s},{s},ETF,10,100,110,2020-01-01\n" for s in symbols)
+
+
+def _symbols_in_db(tmp_path):
+    import sqlite3
+    conn = sqlite3.connect(tmp_path / "portfolio.db")
+    try:
+        return {r[0] for r in conn.execute("SELECT symbol FROM holdings")}
+    finally:
+        conn.close()
+
+
+def _make_db(path, table, value):
+    import sqlite3
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute(f"CREATE TABLE {table} (v TEXT)")
+    conn.execute(f"INSERT INTO {table} VALUES (?)", (value,))
+    conn.commit()
+    conn.close()
+
+
+def _read_db(path, table):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    try:
+        return [r[0] for r in conn.execute(f"SELECT v FROM {table}")]
+    finally:
+        conn.close()
+
+
+def test_import_replaces_portfolio_db_instead_of_merging(client, tmp_path):
+    from portfolio_db import migrate_from_csv
+    (tmp_path / "portfolio_data_truth.csv").write_text(_holdings_csv("OLD1", "OLD2"))
+    migrate_from_csv("portfolio_data_truth.csv")
+    assert _symbols_in_db(tmp_path) == {"OLD1", "OLD2"}
+
+    bundle = _bundle({"retirement_config.json": (REPO / "retirement_config.json.example").read_text(),
+                      "portfolio_data_truth.csv": _holdings_csv("NEW")})
+    r = _post_import(client, "b.zip", bundle)
+    assert r.status_code == 200, r.text
+    assert _symbols_in_db(tmp_path) == {"NEW"}
+    assert (tmp_path / "portfolio_data_truth.csv").read_text().count("\n") == 2   # header + one row
+    assert list((tmp_path / ".backups").glob("portfolio_*.db"))                      # old database kept
+
+
+def test_bundle_carries_databases_and_scenarios_to_another_machine(client, tmp_path, monkeypatch):
+    import io, zipfile
+    _make_db(tmp_path / "data" / "transactions.db", "transactions", "tx-A")
+    _make_db(tmp_path / "data" / "performance_history.db", "portfolio_snapshots", "snap-A")
+    (tmp_path / "data" / "scenarios").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "scenarios" / "abc.json").write_text('{"name": "Base"}')
+    (tmp_path / "data" / "credentials.db").write_bytes(b"secret")
+    bundle = client.get("/api/config/export").content
+    with zipfile.ZipFile(io.BytesIO(bundle)) as zf:
+        names = set(zf.namelist())
+    assert {"transactions.db", "performance_history.db", "scenarios/abc.json"} <= names
+    assert "credentials.db" not in names                       # brokerage secrets never leave the machine
+
+    # "new machine": a fresh working directory
+    new_machine = tmp_path / "new"
+    new_machine.mkdir()
+    shutil.copy(REPO / "retirement_config.json.example", new_machine / "retirement_config.json")
+    monkeypatch.chdir(new_machine)
+    r = _post_import(client, "b.zip", bundle)
+    assert r.status_code == 200, r.text
+    assert _read_db(new_machine / "data" / "transactions.db", "transactions") == ["tx-A"]
+    assert _read_db(new_machine / "data" / "performance_history.db", "portfolio_snapshots") == ["snap-A"]
+    assert (new_machine / "data" / "scenarios" / "abc.json").read_text() == '{"name": "Base"}'
+
+
+def test_import_replaces_database_and_backs_up_the_old_one(client, tmp_path):
+    _make_db(tmp_path / "data" / "transactions.db", "transactions", "mine")
+    src = tmp_path / "src.db"
+    _make_db(src, "transactions", "theirs")
+    bundle = _bundle({"retirement_config.json": (REPO / "retirement_config.json.example").read_text(),
+                      "transactions.db": src.read_bytes()})
+    assert _post_import(client, "b.zip", bundle).status_code == 200
+    assert _read_db(tmp_path / "data" / "transactions.db", "transactions") == ["theirs"]
+    backups = list((tmp_path / ".backups").glob("transactions_*.db"))
+    assert backups and _read_db(backups[0], "transactions") == ["mine"]
+
+
+@pytest.mark.parametrize("extra,fragment", [
+    ({"portfolio_data_truth.csv": "a,b\n1,2\n"}, "missing column"),
+    ({"estate_planning_data.json": "{nope"}, "not valid JSON"),
+    ({"transactions.db": b"not sqlite"}, "not a valid"),
+    ({"scenarios/bad.json": "{nope"}, "not valid JSON"),
+    ({"scenarios/..%2Fx.json": "{}"}, "Unsafe"),
+])
+def test_bad_companion_file_aborts_import_before_anything_is_written(client, tmp_path, extra, fragment):
+    (tmp_path / "estate_planning_data.json").write_text('{"keep": true}')
+    before = (tmp_path / "retirement_config.json").read_text()
+    files = {"retirement_config.json": (REPO / "retirement_config.json.example").read_text(), **extra}
+    r = _post_import(client, "b.zip", _bundle(files))
+    assert r.status_code == 422 and fragment in r.json()["detail"]["message"]
+    assert (tmp_path / "retirement_config.json").read_text() == before
+    assert (tmp_path / "estate_planning_data.json").read_text() == '{"keep": true}'
+    assert not (tmp_path / "data").exists()
 
 
 def test_import_old_config_gets_defaults_for_new_keys(client):

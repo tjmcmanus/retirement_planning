@@ -462,6 +462,52 @@ def migrate_from_csv(
     return n
 
 
+def replace_from_csv(
+    csv_path: str = str(CSV_BACKUP_PATH),
+    db_path: Path = DB_PATH,
+) -> int:
+    """
+    Restore: make portfolio.db contain exactly the rows in *csv_path*.
+
+    Unlike :func:`migrate_from_csv` (an additive upsert), rows already in the DB
+    that are not in the CSV are removed, in a single transaction. Without this a
+    restore onto a machine that already has data would silently keep the old
+    rows, and the next DB write would regenerate the CSV from that mixture.
+
+    Returns:
+        Number of rows now in the table.
+    """
+    csv = Path(csv_path)
+    if not csv.exists():
+        raise FileNotFoundError(f"CSV not found: {csv}")
+
+    df = pd.read_csv(csv)
+    present = [c for c in HOLDINGS_COLUMNS if c in df.columns]
+    if df.empty:
+        rows: list[tuple] = []
+    else:
+        df = _normalise(df[present].copy())[HOLDINGS_COLUMNS]
+        rows = list(df.astype(object).where(df.notna(), None).itertuples(index=False, name=None))
+
+    conn = get_db_connection(db_path)
+    try:
+        conn.execute("DELETE FROM holdings")
+        conn.executemany(
+            f"INSERT OR REPLACE INTO holdings ({_HOLDINGS_SELECT}) "
+            f"VALUES ({', '.join(['?'] * len(HOLDINGS_COLUMNS))})",
+            rows,
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        logger.error(f"replace_from_csv failed: {exc}")
+        raise
+
+    logger.info(f"replace_from_csv: portfolio.db now holds {len(rows)} rows from {csv}")
+    _write_csv_backup(db_path)
+    return len(rows)
+
+
 # ==============================================================================
 # Internal helpers
 # ==============================================================================

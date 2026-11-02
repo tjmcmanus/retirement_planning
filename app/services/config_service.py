@@ -16,11 +16,17 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
+import sqlite3
+import tempfile
 import threading
 import zipfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 import app_cache
 import ssi_calculator
@@ -152,8 +158,22 @@ def reset_config() -> dict[str, Any]:
 
 MAX_IMPORT_BYTES = 50 * 1024 * 1024  # config + portfolio CSV + estate JSON are small; refuse anything absurd
 
-# Companion files restored from a bundle (same set export_bundle writes).
-_BUNDLE_DATA_FILES = ("portfolio_data_truth.csv", "estate_planning_data.json")
+# What a bundle carries besides retirement_config.json (same set export_bundle writes).
+#   plain files   : bundle name -> path restored to
+#   SQLite files  : bundle name -> (path restored to, table that must exist)
+#   scenarios     : scenarios/<id>.json -> data/scenarios/<id>.json
+# Not bundled on purpose: data/credentials.db (brokerage secrets, encrypted with the machine's
+# ENCRYPTION_KEY) and the re-downloadable caches. Re-link brokerage accounts on the new machine.
+_PORTFOLIO_CSV = "portfolio_data_truth.csv"
+_ESTATE_JSON = "estate_planning_data.json"
+_BUNDLE_DATA_FILES = (_PORTFOLIO_CSV, _ESTATE_JSON)
+_BUNDLE_DB_FILES = {
+    "transactions.db": ("data/transactions.db", "transactions"),
+    "performance_history.db": ("data/performance_history.db", "portfolio_snapshots"),
+}
+_SCENARIO_DIR = "data/scenarios"
+_SCENARIO_NAME = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
+_REQUIRED_HOLDINGS_COLUMNS = {"month", "year", "account_name", "symbol", "qty"}
 
 
 def _parse_config_text(raw: bytes) -> str:
@@ -162,19 +182,78 @@ def _parse_config_text(raw: bytes) -> str:
     return "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("//"))
 
 
+def _snapshot_db(src: str, dst: str) -> None:
+    """Consistent copy of a live SQLite file (safe while it is in WAL mode / being written)."""
+    src_conn, dst_conn = sqlite3.connect(src), sqlite3.connect(dst)
+    try:
+        src_conn.backup(dst_conn)
+    finally:
+        dst_conn.close()
+        src_conn.close()
+
+
 def _backup_file(name: str) -> None:
     """Copy an existing data file to ``.backups/`` before it is overwritten."""
-    if os.path.exists(name):
-        os.makedirs(".backups", exist_ok=True)
-        stem, ext = os.path.splitext(name)
-        shutil.copy2(name, os.path.join(".backups", f"{stem}_{datetime.now():%Y%m%d_%H%M%S}{ext}"))
+    if not os.path.exists(name):
+        return
+    os.makedirs(".backups", exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(name))
+    dst = os.path.join(".backups", f"{stem}_{datetime.now():%Y%m%d_%H%M%S}{ext}")
+    if ext == ".db":
+        _snapshot_db(name, dst)
+    else:
+        shutil.copy2(name, dst)
+
+
+def _validate_sqlite(content: bytes, label: str, required_table: str) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "check.db")
+        with open(path, "wb") as fh:
+            fh.write(content)
+        conn = sqlite3.connect(path)
+        try:
+            ok = conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        except sqlite3.DatabaseError as exc:
+            raise ValueError(f"{label} is not a valid SQLite database") from exc
+        finally:
+            conn.close()
+    if not ok or required_table not in tables:
+        raise ValueError(f"{label} is not a valid {required_table} database")
+
+
+def _validate_holdings_csv(content: bytes) -> None:
+    try:
+        df = pd.read_csv(io.BytesIO(content))
+    except Exception as exc:
+        raise ValueError(f"{_PORTFOLIO_CSV} could not be read: {exc}") from exc
+    missing = _REQUIRED_HOLDINGS_COLUMNS - set(df.columns)
+    if missing:
+        raise ValueError(f"{_PORTFOLIO_CSV} is missing column(s): {', '.join(sorted(missing))}")
+
+
+def _write_atomic(path: str, content: bytes) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".importing"
+    with open(tmp, "wb") as fh:
+        fh.write(content)
+    os.replace(tmp, path)
+
+
+def _install_db(path: str, content: bytes) -> None:
+    for suffix in ("-wal", "-shm"):  # stale journal files of the replaced database must not be applied to the new one
+        if os.path.exists(path + suffix):
+            os.remove(path + suffix)
+    _write_atomic(path, content)
 
 
 def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
-    """Restore a config ``.zip`` bundle (or a legacy ``.json``) like the Streamlit import.
+    """Restore a config ``.zip`` bundle (or a legacy ``.json``) onto this machine.
 
-    The config is parsed and merged with the defaults before anything is written, so a bad
-    file changes nothing. The previous config / portfolio CSV / estate JSON are backed up.
+    Everything in the file is read and validated before anything is written, so a bad file
+    changes nothing. Existing files are backed up to ``.backups/`` first (portfolio.db too).
+    The portfolio table is *replaced* by the bundle's CSV (not merged), SQLite files are swapped
+    in whole, scenarios are added/overwritten by id.
     Returns ``{"config", "restored", "warnings"}``; raises ``ValueError`` for an unusable file.
     """
     if not data:
@@ -182,23 +261,36 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
     if len(data) > MAX_IMPORT_BYTES:
         raise ValueError("The file is too large")
 
-    extras: dict[str, bytes] = {}
+    extras: dict[str, bytes] = {}                 # plain files by bundle name
+    dbs: dict[str, bytes] = {}                    # SQLite files by bundle name
+    scenarios: dict[str, bytes] = {}              # scenario file name -> content
     if filename.lower().endswith(".zip"):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as zf:
                 # Match by basename so bundles made on Windows or in a subfolder still import.
-                names = {n.replace("\\", "/").split("/")[-1].lower(): n for n in zf.namelist() if not n.endswith("/")}
+                members = {n.replace("\\", "/"): n for n in zf.namelist() if not n.endswith("/")}
+                names = {m.split("/")[-1].lower(): n for m, n in members.items()}
                 if "retirement_config.json" not in names:
                     raise ValueError("The ZIP bundle does not contain retirement_config.json")
-                for member in [names["retirement_config.json"]] + [names[n] for n in _BUNDLE_DATA_FILES if n in names]:
+
+                def read(member: str) -> bytes:
                     if zf.getinfo(member).file_size > MAX_IMPORT_BYTES:
                         raise ValueError(f"{member} is too large")
-                config_raw = zf.read(names["retirement_config.json"])
+                    return zf.read(member)
+
+                config_raw = read(names["retirement_config.json"])
                 for n in _BUNDLE_DATA_FILES:
-                    if n in names:
-                        content = zf.read(names[n])
-                        if content:
-                            extras[n] = content
+                    if n in names and (content := read(names[n])):
+                        extras[n] = content
+                for n in _BUNDLE_DB_FILES:
+                    if n in names and (content := read(names[n])):
+                        dbs[n] = content
+                for m, n in members.items():
+                    parts = m.split("/")
+                    if len(parts) >= 2 and parts[-2].lower() == "scenarios" and parts[-1].lower().endswith(".json"):
+                        if not _SCENARIO_NAME.match(parts[-1]):
+                            raise ValueError(f"Unsafe scenario file name: {parts[-1]}")
+                        scenarios[parts[-1]] = read(n)
         except zipfile.BadZipFile as exc:
             raise ValueError("The file is not a valid ZIP archive") from exc
     elif filename.lower().endswith(".json"):
@@ -214,6 +306,22 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("The configuration JSON must be an object of sections")
 
+    # Validate every companion file now, so a bad one aborts before anything is overwritten.
+    if _PORTFOLIO_CSV in extras:
+        _validate_holdings_csv(extras[_PORTFOLIO_CSV])
+    if _ESTATE_JSON in extras:
+        try:
+            json.loads(extras[_ESTATE_JSON].decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{_ESTATE_JSON} is not valid JSON: {exc}") from exc
+    for n, content in dbs.items():
+        _validate_sqlite(content, n, _BUNDLE_DB_FILES[n][1])
+    for n, content in scenarios.items():
+        try:
+            json.loads(content.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"scenarios/{n} is not valid JSON: {exc}") from exc
+
     with _lock:
         mgr = ConfigManager()
         if not mgr.import_config(config_text):  # merges with DEFAULT_CONFIG so newer settings get defaults
@@ -223,36 +331,60 @@ def import_bundle(filename: str, data: bytes) -> dict[str, Any]:
         warnings: list[str] = []
         for name, content in extras.items():
             _backup_file(name)
-            with open(name, "wb") as fh:
-                fh.write(content)
+            _write_atomic(name, content)
             restored.append(name)
-        if "portfolio_data_truth.csv" in extras:
+        if _PORTFOLIO_CSV in extras:
             try:
-                from portfolio_db import migrate_from_csv
-                rows = migrate_from_csv("portfolio_data_truth.csv")
-                restored.append(f"portfolio.db re-populated ({rows} rows)")
+                from portfolio_db import DB_PATH, replace_from_csv
+                _backup_file(str(DB_PATH))
+                rows = replace_from_csv(_PORTFOLIO_CSV, db_path=DB_PATH)
+                restored.append(f"portfolio.db replaced ({rows} rows)")
             except Exception as exc:  # CSV is restored; the DB can be rebuilt from it
                 logger.exception("portfolio.db update after import failed")
-                warnings.append(f"portfolio_data_truth.csv was restored but portfolio.db was not updated: {exc}")
+                warnings.append(f"{_PORTFOLIO_CSV} was restored but portfolio.db was not updated: {exc}")
+        for name, content in dbs.items():
+            dest = _BUNDLE_DB_FILES[name][0]
+            _backup_file(dest)
+            _install_db(dest, content)
+            restored.append(dest)
+        for name, content in scenarios.items():
+            dest = os.path.join(_SCENARIO_DIR, name)
+            _backup_file(dest)
+            _write_atomic(dest, content)
+        if scenarios:
+            restored.append(f"{len(scenarios)} scenario(s)")
 
         warnings += _persist(mgr, {"social_security", "personal_info"})
         return {"config": mgr.config, "restored": restored, "warnings": warnings}
 
 
 def export_bundle() -> tuple[str, bytes]:
-    """ZIP with config JSON, portfolio CSV and estate planning JSON, like the Streamlit export."""
+    """ZIP with everything needed to rebuild this install on another machine.
+
+    retirement_config.json, portfolio CSV, estate planning JSON, the transaction / performance
+    SQLite databases (consistent snapshots) and saved scenarios. See ``import_bundle``.
+    """
     mgr = ConfigManager()
     pi = mgr.config.get("personal_info", {})
     header = f"// Primary person: {pi.get('person1_name', 'Person 1')}\n// Spouse: {pi.get('person2_name', 'Person 2')}\n"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("retirement_config.json", (header + json.dumps(mgr.config, indent=2)).encode("utf-8"))
-        for name in ("portfolio_data_truth.csv", "estate_planning_data.json"):
+        for name in _BUNDLE_DATA_FILES:
             if os.path.exists(name):
                 with open(name, "rb") as fh:
                     content = fh.read()
                 if content:
                     zf.writestr(name, content)
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, (path, _table) in _BUNDLE_DB_FILES.items():
+                if os.path.exists(path):
+                    snap = os.path.join(tmp, name)
+                    _snapshot_db(path, snap)
+                    zf.write(snap, name)
+        if os.path.isdir(_SCENARIO_DIR):
+            for sc in sorted(Path(_SCENARIO_DIR).glob("*.json")):
+                zf.write(sc, f"scenarios/{sc.name}")
     return f"retirement_config_{datetime.now():%Y%m%d_%H%M%S}.zip", buf.getvalue()
 
 

@@ -10,8 +10,6 @@ import json
 import pandas as pd
 import os
 import shutil
-import zipfile
-import io
 from config import get_config_manager, reload_config, retirement_date_to_age_and_year, default_retirement_date
 from components.navbar import navbar
 from portfolio import build_portfolio_display
@@ -28,7 +26,8 @@ from portfolio_data_entry import (
     get_valid_account_owners,
     VALID_SECTORS,
 )
-from portfolio_db import db_load_all, db_update_account_metadata, migrate_from_csv as _migrate_from_csv
+from portfolio_db import db_load_all, db_update_account_metadata
+from app.services import config_service as _config_service
 from ssi_calculator import generate_ssi_schedule_from_config, export_ssi_schedule_to_csv
 from ltc_hsa_export import (
     export_ltc_analysis_to_csv, export_ltc_analysis_to_json, export_ltc_analysis_to_markdown,
@@ -41,6 +40,21 @@ navbar("⚙️ Settings")
 
 # Initialize configuration manager
 config_mgr = get_config_manager()
+
+
+def _clear_page_widget_state() -> None:
+    """Keyed widgets keep their old value across reruns, so without this the next
+    "Save All Changes" would write the stale widget values back over the file.
+    Drop this page's widget keys so every widget re-reads the reloaded config."""
+    import re as _re
+    from pathlib import Path as _Path
+    _src = _Path(__file__).read_text(encoding="utf-8")
+    _widget_keys = set(_re.findall(r'key\s*=\s*"([^"]+)"', _src))
+    _widget_prefixes = ("p1_cond_", "p2_cond_", "del_re_")  # f-string keys
+    for _k in list(st.session_state.keys()):
+        if _k in _widget_keys or _k.startswith(_widget_prefixes):
+            del st.session_state[_k]
+
 
 
 def sync_config_to_session_state():
@@ -5872,163 +5886,67 @@ with tab10:
         
         if st.button("♻️ Reload from File", width='stretch'):
             reload_config()
-            # Keyed widgets keep their old value across reruns, so without this the next
-            # "Save All Changes" would write the stale widget values back over the file.
-            # Drop this page's widget keys so every widget re-reads the reloaded config.
-            import re as _re
-            from pathlib import Path as _Path
-            _src = _Path(__file__).read_text(encoding="utf-8")
-            _widget_keys = set(_re.findall(r'key\s*=\s*"([^"]+)"', _src))
-            _widget_prefixes = ("p1_cond_", "p2_cond_", "del_re_")  # f-string keys
-            for _k in list(st.session_state.keys()):
-                if _k in _widget_keys or _k.startswith(_widget_prefixes):
-                    del st.session_state[_k]
+            _clear_page_widget_state()
             st.success("Configuration reloaded from file. Please refresh the page.")
             st.rerun()
     
     with col2:
         st.subheader("Export/Import")
         
-        # Export configuration — bundles config JSON + portfolio CSV + estate planning JSON into one ZIP
+        # Export / import share one implementation with the web Settings page (app/services/config_service.py):
+        # the bundle holds config, portfolio CSV, estate plan, transactions/performance databases and scenarios.
+        st.caption(
+            "A bundle (.zip) contains your settings, portfolio holdings, estate plan, transaction history, "
+            "performance history and saved scenarios — everything needed to restore this install or move it "
+            "to another machine. Brokerage logins are not included; reconnect them on the new machine."
+        )
         if st.button("📤 Export Configuration", width='stretch'):
             try:
-                # Resolve person names for the header comment
-                _p1_name = config_mgr.get("personal_info", "person1_name", "Person 1")
-                _p2_name = config_mgr.get("personal_info", "person2_name", "Person 2")
-                _header_comment = (
-                    f"// Primary person: {_p1_name}\n"
-                    f"// Spouse: {_p2_name}\n"
-                )
-
-                # Build annotated config JSON (comment prepended, valid JSON block follows)
-                _config_dict = json.loads(config_mgr.export_config())
-                _config_json_bytes = (
-                    _header_comment + json.dumps(_config_dict, indent=2)
-                ).encode("utf-8")
-
-                # Read portfolio CSV
-                _portfolio_bytes = b""
-                if os.path.exists("portfolio_data_truth.csv"):
-                    with open("portfolio_data_truth.csv", "rb") as _pf:
-                        _portfolio_bytes = _pf.read()
-
-                # Read estate planning JSON
-                _estate_bytes = b""
-                if os.path.exists("estate_planning_data.json"):
-                    with open("estate_planning_data.json", "rb") as _ef:
-                        _estate_bytes = _ef.read()
-
-                # Pack everything into an in-memory ZIP
-                _zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(_zip_buffer, "w", zipfile.ZIP_DEFLATED) as _zf:
-                    _zf.writestr("retirement_config.json", _config_json_bytes)
-                    if _portfolio_bytes:
-                        _zf.writestr("portfolio_data_truth.csv", _portfolio_bytes)
-                    if _estate_bytes:
-                        _zf.writestr("estate_planning_data.json", _estate_bytes)
-                _zip_buffer.seek(0)
-
-                _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _zip_name, _zip_bytes = _config_service.export_bundle()
                 st.download_button(
                     label="⬇️ Download Configuration Bundle (.zip)",
-                    data=_zip_buffer.getvalue(),
-                    file_name=f"retirement_config_{_ts}.zip",
+                    data=_zip_bytes,
+                    file_name=_zip_name,
                     mime="application/zip",
                     width='stretch'
                 )
             except Exception as _ex:
                 st.error(f"❌ Error building export bundle: {_ex}")
-        
-        # Import configuration — accepts new ZIP bundle or legacy JSON file
+
         st.markdown("**Import Configuration**")
+        _last_import = st.session_state.pop("_import_result", None)
+        if _last_import:
+            st.success("✅ Imported: " + ", ".join(_last_import["restored"]))
+            for _w in _last_import["warnings"]:
+                st.warning(f"⚠️ {_w}")
         uploaded_file = st.file_uploader(
             "Choose a configuration file (.zip bundle or legacy .json)",
             type=["zip", "json"],
         )
         if uploaded_file is not None:
-            try:
-                _fname = uploaded_file.name.lower()
-                if _fname.endswith(".zip"):
-                    # ── New bundled ZIP format ──────────────────────────────
-                    _zip_data = io.BytesIO(uploaded_file.read())
-                    with zipfile.ZipFile(_zip_data, "r") as _zf:
-                        _names = _zf.namelist()
-                        
-                        # Debug: Show what files are in the ZIP
-                        st.info(f"📦 Files found in ZIP: {', '.join(_names)}")
-                        
-                        # Normalize file names (strip paths, lowercase for comparison)
-                        # Handle both forward slashes (Mac/Linux) and backslashes (Windows)
-                        _name_map = {}
-                        for name in _names:
-                            # Get basename by splitting on both / and \
-                            basename = name.replace('\\', '/').split('/')[-1]
-                            _name_map[basename.lower()] = name
-
-                        # Import retirement_config.json (strip leading comment lines)
-                        if "retirement_config.json" in _name_map:
-                            _actual_name = _name_map["retirement_config.json"]
-                            _raw = _zf.read(_actual_name).decode("utf-8")
-                            # Strip any leading // comment lines before parsing JSON
-                            _json_lines = [
-                                ln for ln in _raw.splitlines()
-                                if not ln.strip().startswith("//")
-                            ]
-                            _config_str = "\n".join(_json_lines)
-                            if not config_mgr.import_config(_config_str):
-                                st.error("❌ Error parsing retirement_config.json from bundle.")
-                                st.stop()
-                        else:
-                            st.error("❌ ZIP bundle does not contain retirement_config.json.")
-                            st.stop()
-
-                        # Restore portfolio CSV then re-populate portfolio.db
-                        if "portfolio_data_truth.csv" in _name_map:
-                            _actual_csv = _name_map["portfolio_data_truth.csv"]
-                            _csv_bytes = _zf.read(_actual_csv)
-                            with open("portfolio_data_truth.csv", "wb") as _out:
-                                _out.write(_csv_bytes)
-                            st.success("✅ portfolio_data_truth.csv restored.")
-                            try:
-                                _n = _migrate_from_csv("portfolio_data_truth.csv")
-                                st.success(f"✅ portfolio.db re-populated ({_n} rows).")
-                            except Exception as _db_err:
-                                st.warning(f"⚠️ CSV restored but portfolio.db update failed: {_db_err}")
-
-                        # Restore estate planning JSON
-                        if "estate_planning_data.json" in _name_map:
-                            _actual_ep = _name_map["estate_planning_data.json"]
-                            _ep_bytes = _zf.read(_actual_ep)
-                            with open("estate_planning_data.json", "wb") as _out:
-                                _out.write(_ep_bytes)
-                            st.success("✅ estate_planning_data.json restored.")
-
-                    if config_mgr.save_config():
-                        st.success("✅ Configuration bundle imported successfully! Please refresh the page.")
-                        st.rerun()
-                    else:
-                        st.error("❌ Error saving imported configuration.")
-
+            st.warning(
+                "Importing replaces your current settings and, if the bundle contains them, your portfolio "
+                "holdings, estate plan, transaction/performance history and same-named scenarios. "
+                "The current files are backed up to `.backups/` first."
+            )
+            # Explicit button: a file_uploader keeps its file across reruns, so importing on upload
+            # would re-import on every rerun.
+            if st.button("♻️ Import and Replace Current Data", type="primary", width='stretch'):
+                try:
+                    _result = _config_service.import_bundle(uploaded_file.name, uploaded_file.getvalue())
+                except ValueError as _ve:
+                    st.error(f"❌ {_ve}")
+                except Exception as _ex:
+                    st.error(f"❌ Import failed: {_ex}")
                 else:
-                    # ── Legacy plain-JSON format ────────────────────────────
-                    _raw = uploaded_file.read().decode("utf-8")
-                    # Strip any leading // comment lines before parsing JSON
-                    _json_lines = [
-                        ln for ln in _raw.splitlines()
-                        if not ln.strip().startswith("//")
-                    ]
-                    config_json = "\n".join(_json_lines)
-                    if config_mgr.import_config(config_json):
-                        if config_mgr.save_config():
-                            st.success("✅ Configuration imported successfully! Please refresh the page.")
-                            st.rerun()
-                        else:
-                            st.error("❌ Error saving imported configuration.")
-                    else:
-                        st.error("❌ Error importing configuration. Please check the file format.")
-            except Exception as e:
-                st.error(f"❌ Error reading file: {e}")
-    
+                    reload_config()
+                    _clear_page_widget_state()
+                    st.cache_data.clear()
+                    app_cache.clear_all()
+                    st.session_state.pop("portfolio_df", None)
+                    st.session_state["_import_result"] = _result
+                    st.rerun()
+
     # Display current configuration
     st.subheader("Current Configuration")
     with st.expander("View Raw Configuration", expanded=False):

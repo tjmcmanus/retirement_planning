@@ -110,7 +110,10 @@ All planning assumptions live here. Changes are written to `retirement_config.js
 - **Save All Changes** — persist the current form state to `retirement_config.json`
 - **Reset to Defaults** — restore the shipped defaults
 - **Reload from File** — discard in-memory changes and reload from disk
-- **Export Configuration** — download a JSON file
+- **Export Configuration** — download a `.zip` backup bundle: settings, portfolio holdings, estate plan, transaction and performance history, and saved scenarios
+- **Import Configuration** — restore a bundle (or an old `.json` file). The file is fully validated before anything changes, current files are copied to `.backups/` first, and the portfolio holdings are *replaced* by the bundle's, not merged
+
+**Moving to another machine:** export on the old machine, start the app on the new one, and import the `.zip` (Settings → Advanced, or the web Settings page). Brokerage logins (`data/credentials.db`) are deliberately not included — reconnect them on the new machine. Market-data caches are not included; they rebuild themselves.
 
 ---
 
