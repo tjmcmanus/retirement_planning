@@ -178,8 +178,14 @@ function strategyPage() {
                     "RMD","Expenses","Healthcare Cost","DAF Contribution","Federal Tax","State Tax",
                     "AGI","Total Portfolio"];
       const cols = show.filter(c => s.columns.includes(c));
+      // "Traditional Distribution" is everything taken out of Traditional for spending
+      // and for the pre-fund (Trad→Brokerage), so the column matches the taxed amount.
+      const rows = s.strategy.map(r => ({
+        ...r,
+        "Trad→\nCash": (r["Trad→\nCash"] || 0) + (r["Trad→\nBrok"] || 0),
+      }));
       const table = new Tabulator(el, {
-        data: s.strategy, layout: "fitDataStretch", height: 380, frozenColumns: 1,
+        data: rows, layout: "fitDataStretch", height: 380, frozenColumns: 1,
         headerWordWrap: true,
         columns: cols.map(c => ({
           title: COLUMN_TITLES[c] || c.replace(/\n/g, " "), field: c,

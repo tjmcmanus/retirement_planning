@@ -579,9 +579,6 @@ with tab4:
     daf_ann     = char.get("daf_annual_contribution", 0)
     daf_start   = char.get("daf_contribution_start_year", "")
     daf_end     = char.get("daf_contribution_end_year", "")
-    daf_prefund = char.get("daf_trad_prefund_enabled", False)
-    daf_pf_amt  = char.get("daf_trad_prefund_amount", 0)
-    daf_pf_yr   = char.get("daf_trad_prefund_start_year", "")
 
     # ------------------------------------------------------------------
     # Pre-build conditional HTML snippets (avoids nested f-strings and
@@ -644,10 +641,6 @@ with tab4:
         )
     else:
         _daf_rows_html = "<tr><td>DAF</td><td>Not configured</td></tr>"
-
-    _daf_prefund_row_html = (
-        f"<tr><td>DAF Traditional Prefund</td><td><strong>{_fmt(daf_pf_amt)}</strong> starting {daf_pf_yr}</td></tr>"
-    ) if daf_prefund else ""
 
     report_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -804,7 +797,6 @@ footer {{ margin-top: 36px; padding-top: 12px; border-top: 1px solid #e5e7eb;
     <tr><td>Giving Window</td><td>Age {char_start} – {char_end}</td></tr>
     <tr><td>Charitable Inflation Rate</td><td>{char_inf}% / yr</td></tr>
     {_daf_rows_html}
-    {_daf_prefund_row_html}
   </tbody>
 </table>
 

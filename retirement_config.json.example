@@ -124,11 +124,7 @@
     "daf_initial_contribution": 0,
     "daf_annual_contribution": 0,
     "daf_contribution_start_age": 65,
-    "daf_contribution_end_age": 75,
-    "daf_trad_prefund_enabled": false,
-    "daf_trad_prefund_amount": 0,
-    "daf_trad_prefund_start_year": 2027,
-    "daf_trad_prefund_end_year": 2027
+    "daf_contribution_end_age": 75
   },
   "rebalancing_preferences": {
     "cash_symbol": "MF:CASH",

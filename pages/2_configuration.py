@@ -4413,111 +4413,6 @@ accumulation years, early retirement, or as part of your estate plan.
             else:
                 daf_annual_contribution = config_mgr.get("charitable_giving", "daf_annual_contribution", 0)
         
-    # ── Traditional → Brokerage Pre-fund for DAF ──────────────────────────────
-    if has_daf:
-        st.markdown("---")
-        st.subheader("🏦 Traditional → Brokerage Pre-Fund for DAF")
-        st.markdown(
-            "Early in retirement, while in a low income tax bracket and before Medicare/IRMAA "
-            "thresholds apply, you can take a **large Traditional (IRA/401k) distribution to Brokerage** "
-            "to build up the cash that will later fund your DAF contributions. "
-            "This is separate from Roth conversions — the distributed amount is taxed as ordinary income "
-            "and deposited into your Brokerage account."
-        )
-
-        daf_trad_prefund_enabled = st.checkbox(
-            "Enable Traditional → Brokerage pre-fund distributions for DAF",
-            value=config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False),
-            key="daf_trad_prefund_enabled",
-            help=(
-                "When enabled, the strategy will take additional Traditional distributions to "
-                "Brokerage each year in the specified age window, in addition to any Roth conversions. "
-                "This pre-builds the Brokerage balance needed to fund upcoming DAF contributions."
-            ),
-        )
-
-        # Compute defaults: retirement year + 1 through retirement year + 1
-        _p1_ret_yr_default = int(config_mgr.get("personal_info", "person1_retirement_year",
-                                                  datetime.now().year + 1))
-        _pf_start_yr_default = int(config_mgr.get(
-            "charitable_giving", "daf_trad_prefund_start_year", _p1_ret_yr_default + 1))
-        _pf_end_yr_default = int(config_mgr.get(
-            "charitable_giving", "daf_trad_prefund_end_year", _p1_ret_yr_default + 2))
-
-        # Initialize with saved defaults regardless of checkbox state
-        daf_trad_prefund_amount     = config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0)
-        daf_trad_prefund_start_year = _pf_start_yr_default
-        daf_trad_prefund_end_year   = _pf_end_yr_default
-
-        if daf_trad_prefund_enabled:
-            _pf_col1, _pf_col2, _pf_col3 = st.columns(3)
-
-            with _pf_col1:
-                daf_trad_prefund_amount = st.number_input(
-                    "Annual Distribution Amount ($)",
-                    min_value=0,
-                    max_value=5_000_000,
-                    value=config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0),
-                    step=5_000,
-                    key="daf_trad_prefund_amount",
-                    help=(
-                        "Amount to distribute from Traditional to Brokerage each year "
-                        "during the pre-fund window (start year through end year, inclusive). "
-                        "Roth conversions are suppressed in these years."
-                    ),
-                )
-
-            with _pf_col2:
-                daf_trad_prefund_start_year = st.number_input(
-                    "Start Year",
-                    min_value=datetime.now().year,
-                    max_value=datetime.now().year + 50,
-                    value=_pf_start_yr_default,
-                    step=1,
-                    key="daf_trad_prefund_start_year",
-                    help="First calendar year to distribute Traditional → Brokerage for DAF pre-funding.",
-                )
-
-            with _pf_col3:
-                daf_trad_prefund_end_year = st.number_input(
-                    "End Year",
-                    min_value=datetime.now().year,
-                    max_value=datetime.now().year + 50,
-                    value=_pf_end_yr_default,
-                    step=1,
-                    key="daf_trad_prefund_end_year",
-                    help=(
-                        "Last calendar year to distribute (inclusive). "
-                        "Stop before Medicare starts (typically the year you turn 65) "
-                        "to avoid IRMAA surcharges."
-                    ),
-                )
-
-            _pf_years = max(0, daf_trad_prefund_end_year - daf_trad_prefund_start_year + 1)
-
-            if daf_trad_prefund_amount > 0 and _pf_years > 0:
-                if daf_trad_prefund_end_year < daf_trad_prefund_start_year:
-                    st.error("⛔ **End Year must be ≥ Start Year.**")
-                else:
-                    _pf_total = daf_trad_prefund_amount * _pf_years
-                    st.info(
-                        f"📊 **Pre-fund summary**: ${daf_trad_prefund_amount:,.0f}/yr × "
-                        f"{_pf_years} yr(s) "
-                        f"({daf_trad_prefund_start_year}–{daf_trad_prefund_end_year}) = "
-                        f"**${_pf_total:,.0f} total** transferred from Traditional → Brokerage. "
-                        f"These years will have no Roth conversion. "
-                        f"The distribution is taxed as ordinary income."
-                    )
-                    # Medicare IRMAA warning: income from the distribution year shows up 2 yrs
-                    # later in IRMAA lookback; warn if end year is late enough to matter.
-                    _medicare_year = _p1_ret_yr_default + max(0, 65 - person1_retirement_age)
-                    if daf_trad_prefund_end_year >= _medicare_year:
-                        st.warning(
-                            f"⚠️ Distributions in {_medicare_year} or later may affect IRMAA "
-                            f"surcharges (Medicare Part B premium uses a 2-year income lookback). "
-                            f"Consider ending pre-fund distributions by {_medicare_year - 1}."
-                        )
-
 
     # ── Charitable Giving Summary (rendered into placeholder above the config inputs) ──
     if annual_charitable_giving > 0 or (has_daf and daf_initial_contribution > 0) or (has_daf and daf_annual_contribution > 0):
@@ -5801,14 +5696,6 @@ with tab10:
                     config_mgr.get("charitable_giving", "daf_contribution_start_year", _p1_by + 65)),
                 "daf_contribution_end_year": st.session_state.get("daf_contribution_end_year",
                     config_mgr.get("charitable_giving", "daf_contribution_end_year", _p1_by + 75)),
-                "daf_trad_prefund_enabled": st.session_state.get("daf_trad_prefund_enabled",
-                    config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False)),
-                "daf_trad_prefund_amount": st.session_state.get("daf_trad_prefund_amount",
-                    config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0)),
-                "daf_trad_prefund_start_year": st.session_state.get("daf_trad_prefund_start_year",
-                    config_mgr.get("charitable_giving", "daf_trad_prefund_start_year", datetime.now().year + 1)),
-                "daf_trad_prefund_end_year": st.session_state.get("daf_trad_prefund_end_year",
-                    config_mgr.get("charitable_giving", "daf_trad_prefund_end_year", datetime.now().year + 2)),
             })
             
             # Save bucket strategy configuration

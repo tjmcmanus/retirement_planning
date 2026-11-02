@@ -164,6 +164,7 @@ def decision_log(
         "stage": str(row.get("Stage", "")),
         "summary": {
             "trad_to_cash": amount("Trad→\nCash"),
+            "trad_to_brok": amount("Trad→\nBrok"),
             "trad_to_roth": amount("Trad→\nRoth"),
             "brok_to_cash": amount("Brok→\nCash"),
             "daf_contribution": amount("DAF Contribution"),
@@ -523,7 +524,7 @@ def tax_analytics(
     state = col("State Tax").sum()
     irmaa = col("IRMAA Penalty").sum()
     payroll = col("Wages→\nPayroll").sum()
-    total_income = (col("Wages") + col("SS Benefits") + col("Trad→\nCash") +
+    total_income = (col("Wages") + col("SS Benefits") + col("Trad→\nCash") + col("Trad→\nBrok") +
                     col("Roth→\nCash") + col("Brok→\nCash")).sum()
     total_taxes = fed + state + irmaa + payroll
     avg_eff_rate = (total_taxes / total_income * 100) if total_income > 0 else 0.0
@@ -545,7 +546,7 @@ def tax_analytics(
             # Per-year income series (for stacked bar)
             "wages":           _val(row, "Wages"),
             "ss_benefits":     _val(row, "SS Benefits"),
-            "trad_cash":       _val(row, "Trad→\nCash"),
+            "trad_cash":       _val(row, "Trad→\nCash") + _val(row, "Trad→\nBrok"),
             "roth_cash":       _val(row, "Roth→\nCash"),
             "brok_cash":       _val(row, "Brok→\nCash"),
             "rmd":             _val(row, "RMD"),
@@ -555,7 +556,7 @@ def tax_analytics(
     income_sources = {
         "Wages":                   float(col("Wages").sum()),
         "Social Security":         float(col("SS Benefits").sum()),
-        "Traditional Withdrawals": float(col("Trad→\nCash").sum()),
+        "Traditional Withdrawals": float((col("Trad→\nCash") + col("Trad→\nBrok")).sum()),
         "Roth Conversions":        float(col("Trad→\nRoth").sum()),
         "Roth Withdrawals":        float(col("Roth→\nCash").sum()),
         "Brokerage Withdrawals":   float(col("Brok→\nCash").sum()),
@@ -611,7 +612,7 @@ def income_expense(
         "years": years,
         "wages":        [_jsonable(v) for v in col("Wages").tolist()],
         "ss_benefits":  [_jsonable(v) for v in col("SS Benefits").tolist()],
-        "trad_cash":    [_jsonable(v) for v in col("Trad→\nCash").tolist()],
+        "trad_cash":    [_jsonable(v) for v in (col("Trad→\nCash") + col("Trad→\nBrok")).tolist()],
         "roth_cash":    [_jsonable(v) for v in col("Roth→\nCash").tolist()],
         "brok_cash":    [_jsonable(v) for v in col("Brok→\nCash").tolist()],
         "rmd":          [_jsonable(v) for v in col("RMD").tolist()],

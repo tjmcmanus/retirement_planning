@@ -244,6 +244,16 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 spending_withdrawal=_jan_spending_withdrawal,
             )
 
+        # ── Traditional → Brokerage pre-fund (Direct Indexing seed) ────────
+        # When the schedule has an amount for this year, move it to Brokerage
+        # (zero-gain lot) and suppress the Roth conversion below.
+        balances, _prefund_amount = self._apply_trad_prefund(
+            strategy, year, age_primary, balances,
+            anticipated_needs['total_traditional_need'],
+            _jan_spending_withdrawal,
+            brokerage_account,
+        )
+
         # ── PHASE 2: ROTH CONVERSIONS ─────────────────────────────────────
         # After spending is funded, calculate Roth conversion based on remaining bracket space
         # Use config max_conversion_rate and IRMAA thresholds (Stage 4 specific)
@@ -253,17 +263,20 @@ class Stage4Medicare(BaseLifeStageStrategy):
         )
         
         # Calculate optimal Roth conversion using BETR with IRMAA constraints
-        roth_conversion, optimal_amount = self._calculate_irmaa_aware_roth_conversion(
-            strategy,
-            available_for_conversion,
-            anticipated_needs,
-            irmaa_headroom,
-            max_conversion_rate,
-            age_primary,
-            balances.taxable,
-            growth_rate,
-            year
-        )
+        if _prefund_amount > 0:
+            roth_conversion, optimal_amount = 0.0, 0.0
+        else:
+            roth_conversion, optimal_amount = self._calculate_irmaa_aware_roth_conversion(
+                strategy,
+                available_for_conversion,
+                anticipated_needs,
+                irmaa_headroom,
+                max_conversion_rate,
+                age_primary,
+                balances.taxable,
+                growth_rate,
+                year
+            )
         
         if roth_conversion > 0:
             self._log_decision(
@@ -368,6 +381,8 @@ class Stage4Medicare(BaseLifeStageStrategy):
             brokerage_account
         )
         
+        self._merge_prefund_transactions(transactions, _prefund_amount)
+
         # ── PHASE 1 RECORDED: merge January Traditional→Cash into transaction log ──
         # _execute_rebalancing only knows about transfers it made; add the pre-funded
         # spending withdrawal so the year-by-year report shows the correct amount.

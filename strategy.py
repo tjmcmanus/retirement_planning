@@ -1278,8 +1278,19 @@ def optimize_rmd_lookback(strategies: list,
     avg_rmd_excess = total_rmd_excess / rmd_count
     logger.info(f"Average RMD excess: ${avg_rmd_excess:,.0f} across {rmd_count} years")
     
+    # Years with a Traditional → Brokerage pre-fund get no Roth conversion: the
+    # distribution already fills the bracket and the stage deliberately sets it to 0.
+    try:
+        prefund_years = {
+            int(row.get("year", 0))
+            for row in get_config_manager().get("tax_strategy", "trad_prefund_schedule", []) or []
+            if float(row.get("amount", 0) or 0) > 0
+        }
+    except Exception:
+        prefund_years = set()
+
     # Step 3: Identify pre-RMD years for optimization
-    pre_rmd_years = [s for s in strategies if s.stage in [
+    pre_rmd_years = [s for s in strategies if s.year not in prefund_years and s.stage in [
         "Stage 2: Prep for Retirement",
         "Stage 3: Early Retirement",
         "Stage 4: Medicare",
@@ -1303,7 +1314,8 @@ def optimize_rmd_lookback(strategies: list,
     years_adjusted = 0
     
     for year_strategy in strategies:
-        if year_strategy.stage in ["Stage 2: Prep for Retirement",
+        if year_strategy.year not in prefund_years and year_strategy.stage in [
+                                   "Stage 2: Prep for Retirement",
                                    "Stage 3: Early Retirement",
                                    "Stage 4: Medicare",
                                    "Stage 5: Social Security"]:

@@ -260,6 +260,23 @@ class Stage6RMD(BaseLifeStageStrategy):
         
 
         
+        # ── Traditional → Brokerage pre-fund (Direct Indexing seed) ────────
+        # Scheduled distribution this year: moved to Brokerage with a zero-gain lot.
+        # It is ordinary income, so the Roth conversion is suppressed and the
+        # preliminary AGI/tax are rebuilt with the distribution in place of the conversion.
+        balances_with_ss, _prefund_amount = self._apply_trad_prefund(
+            strategy, year, age_primary, balances_with_ss,
+            rmd_amount, _jan_spending_withdrawal, brokerage_account,
+        )
+        if _prefund_amount > 0:
+            total_income = total_income - roth_conversion + _prefund_amount
+            roth_conversion = 0.0
+            agi = total_income
+            federal_tax, cg_tax = self._calculate_taxes(
+                agi - std_deduction, ltcg_harvested, year, filing_status
+            )
+            total_tax = federal_tax + cg_tax
+
         # Calculate DAF contribution (before rebalancing)
         daf_contribution, daf_tax_excess = self._calculate_daf_contribution(
             age_primary, age_spouse, std_deduction, agi, year, filing_status,
@@ -339,6 +356,8 @@ class Stage6RMD(BaseLifeStageStrategy):
             total_tax, healthcare_costs, brokerage_account
         )
         
+        self._merge_prefund_transactions(transactions, _prefund_amount)
+
         # ── PHASE 1 RECORDED: merge January Traditional→Cash into transaction log ──
         # _execute_rebalancing only knows about transfers it made; add the pre-funded
         # spending withdrawal so the year-by-year report shows the correct amount.

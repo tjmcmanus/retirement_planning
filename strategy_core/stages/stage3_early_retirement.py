@@ -269,11 +269,12 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             self._log_decision(
                 strategy,
                 'roth_conversion',
-                'Roth Conversion Suppressed (DAF Pre-Fund Year)',
-                'No conversion — DAF Trad→Brok pre-fund active',
+                'Roth Conversion Suppressed (Direct Indexing Pre-Fund Year)',
+                'No conversion — Trad→Brok pre-fund active',
                 f'A Traditional → Brokerage pre-fund of ${daf_trad_prefund:,.0f} is executing this year '
-                f'to build Brokerage liquidity for upcoming DAF contributions. The distribution itself '
-                f'fills the available tax bracket, so no additional Roth conversion is performed.',
+                f'to seed Direct Indexing (tax-loss harvesting against Brokerage gains). The distribution '
+                f'is ordinary income, so no Roth conversion is performed; the DAF contribution offsets '
+                f'taxable income this year.',
                 daf_trad_prefund=daf_trad_prefund,
             )
 
@@ -1223,98 +1224,6 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         
         return total_tax
     
-    def _calculate_daf_trad_prefund(
-        self,
-        strategy: YearlyStrategy,
-        age_primary: int,
-        year: int,
-        traditional_balance: float,
-        already_reserved: float,
-    ) -> float:
-        """
-        Return the Traditional → Brokerage distribution amount for pre-funding.
-
-        Two independent sources are added together:
-          • DAF window: ``charitable_giving.daf_trad_prefund_*`` fires in every
-            calendar year within [start_year, end_year] inclusive.
-          • Year schedule: ``tax_strategy.trad_prefund_schedule`` is a list of
-            ``{"year", "amount"}`` rows (e.g. to seed a Direct Indexing portfolio).
-            It does not require a DAF or the window toggle.
-        Year-based configuration removes all age/stage inference — what you set
-        in the UI is exactly what executes, no conversion needed.
-
-        Args:
-            strategy:            YearlyStrategy to log to
-            age_primary:         Primary person's age (informational only)
-            year:                Current calendar year
-            traditional_balance: Current Traditional IRA / 401k balance
-            already_reserved:    Amount already earmarked for normal buffer needs
-
-        Returns:
-            Pre-fund distribution amount (0 if not applicable this year)
-        """
-        try:
-            from config import get_config_manager
-            config_mgr = get_config_manager()
-
-            enabled = bool(config_mgr.get("charitable_giving", "daf_trad_prefund_enabled", False))
-            start_year = int(config_mgr.get("charitable_giving", "daf_trad_prefund_start_year", 9999))
-            end_year   = int(config_mgr.get("charitable_giving", "daf_trad_prefund_end_year",   0))
-
-            window_amount = 0.0
-            if enabled and start_year <= year <= end_year:
-                window_amount = max(0.0, float(config_mgr.get("charitable_giving", "daf_trad_prefund_amount", 0)))
-
-            schedule_amount = 0.0
-            for row in config_mgr.get("tax_strategy", "trad_prefund_schedule", []) or []:
-                if int(row.get("year", 0)) == year:
-                    schedule_amount += max(0.0, float(row.get("amount", 0) or 0))
-
-            prefund_amount = window_amount + schedule_amount
-            if prefund_amount <= 0:
-                return 0.0
-
-            # Cap to Traditional balance available after normal buffer needs
-            available = max(0.0, traditional_balance - already_reserved)
-            actual_amount = min(prefund_amount, available)
-
-            if actual_amount <= 0:
-                logger.info(
-                    f"Year {year}: DAF pre-fund skipped — insufficient Traditional balance "
-                    f"(available=${available:,.0f} after ${already_reserved:,.0f} reserved)"
-                )
-                return 0.0
-
-            logger.info(
-                f"Year {year}: Trad→Brok pre-fund: ${actual_amount:,.0f} "
-                f"(DAF window ${window_amount:,.0f}, scheduled ${schedule_amount:,.0f}, age {age_primary})"
-            )
-            sources = []
-            if window_amount > 0:
-                sources.append(f'DAF pre-fund window {start_year}–{end_year} (${window_amount:,.0f})')
-            if schedule_amount > 0:
-                sources.append(f'your pre-fund schedule for {year} (${schedule_amount:,.0f}, e.g. Direct Indexing seed)')
-            self._log_decision(
-                strategy,
-                'tax_strategy',
-                'Traditional → Brokerage Pre-Fund',
-                f'Distribute ${actual_amount:,.0f} from Traditional → Brokerage',
-                f'Pre-funding Brokerage with a Traditional distribution in {year} from '
-                f'{" and ".join(sources)}, so Brokerage has the cash for DAF contributions '
-                f'and/or a Direct Indexing seed. '
-                f'Roth conversion is suppressed this year; the distribution is taxed '
-                f'as ordinary income.',
-                year=year,
-                prefund_amount=actual_amount,
-                window_amount=window_amount,
-                schedule_amount=schedule_amount,
-            )
-            return actual_amount
-
-        except Exception as e:
-            logger.warning(f"DAF trad prefund calculation failed: {e}")
-            return 0.0
-
     def _calculate_daf_optimization(
         self,
         strategy: YearlyStrategy,

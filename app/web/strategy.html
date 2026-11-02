@@ -242,7 +242,7 @@
             <div class="why">
               <p class="muted small" x-text="decisions.data.year + ' — ' + decisions.data.stage"></p>
               <div class="metrics">
-                <div class="metric-card"><div class="label">Traditional Distribution</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_cash)"></div></div>
+                <div class="metric-card"><div class="label">Traditional Distribution</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_cash + decisions.data.summary.trad_to_brok)"></div></div>
                 <div class="metric-card"><div class="label">Roth Conversion</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_roth)"></div></div>
                 <div class="metric-card"><div class="label">Brokerage → Cash</div><div class="value" x-text="fmt$(decisions.data.summary.brok_to_cash)"></div></div>
                 <div class="metric-card"><div class="label">DAF</div><div class="value" x-text="fmt$(decisions.data.summary.daf_contribution)"></div></div>

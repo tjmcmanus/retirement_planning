@@ -144,8 +144,6 @@ _TREND_ON = _BUCKET_ON + [["bucket_strategy.market_trend_adjustment.enabled", "t
 _DECLINE_ON = [["expenses.entertainment_expenses.retirement_decline_enabled", "truthy", None]]
 _SURVIVING = NOT_SINGLE + [["personal_info.surviving_spouse_mode", "truthy", None]]
 _DAF_ON = [["charitable_giving.has_daf", "truthy", None]]
-_PREFUND_ON = _DAF_ON + [["charitable_giving.daf_trad_prefund_enabled", "truthy", None]]
-
 SECTIONS: list[dict[str, Any]] = [
     {"id": "personal", "label": "Personal Info", "groups": [
         {"title": "Planning mode", "fields": [
@@ -279,8 +277,8 @@ SECTIONS: list[dict[str, Any]] = [
                  "int": True},
             ], ["year", "amount"],
                 help="Move $X from Traditional to Brokerage in a given year, e.g. to seed a Direct Indexing portfolio. "
-                     "Taxed as ordinary income; Roth conversion is skipped that year. Applies in Stage 3 (early "
-                     "retirement) years only, and adds to any DAF pre-fund window below."),
+                     "Taxed as ordinary income; Roth conversion is skipped that year. Applies in any stage "
+                     "(1 through 7). Pair it with a DAF gift that year to offset the income."),
         ]},
     ]},
     {"id": "charitable", "label": "Charitable Giving", "groups": [
@@ -311,19 +309,6 @@ SECTIONS: list[dict[str, Any]] = [
                 integer=True, show_if=_DAF_ON,
                 help="Last tax year to make a DAF contribution (inclusive). Stop before QCDs become more efficient."),
             computed("daf_bundle_suggestion", show_if=_DAF_ON),
-        ]},
-        {"title": "Traditional → Brokerage pre-fund for DAF", "fields": [
-            boolean("charitable_giving.daf_trad_prefund_enabled", "Enable Traditional → Brokerage pre-fund distributions",
-                    show_if=_DAF_ON,
-                    help="Take extra Traditional distributions to Brokerage in a low-bracket window to fund later DAF "
-                         "contributions. Roth conversions are suppressed in those years."),
-            num("charitable_giving.daf_trad_prefund_amount", "Annual Distribution Amount", 0, 5_000_000, 5000,
-                integer=True, prefix="$", show_if=_PREFUND_ON,
-                help="Amount distributed from Traditional to Brokerage each year of the window."),
-            num("charitable_giving.daf_trad_prefund_start_year", "Pre-fund Start Year", 2020, 2100, integer=True,
-                show_if=_PREFUND_ON),
-            num("charitable_giving.daf_trad_prefund_end_year", "Pre-fund End Year", 2020, 2100, integer=True,
-                show_if=_PREFUND_ON, help="Stop before Medicare starts to avoid IRMAA surcharges."),
         ]},
     ]},
     {"id": "rebalancing", "label": "Rebalancing", "groups": [
@@ -571,10 +556,6 @@ def validate_merged(merged: dict[str, Any]) -> list[dict[str, str]]:
     if cg.get("has_daf"):
         if cg.get("daf_contribution_end_year", 0) < cg.get("daf_contribution_start_year", 0):
             errors.append({"path": "charitable_giving.daf_contribution_end_year",
-                           "message": "End year must be at least the start year"})
-        if cg.get("daf_trad_prefund_enabled") and \
-                cg.get("daf_trad_prefund_end_year", 0) < cg.get("daf_trad_prefund_start_year", 0):
-            errors.append({"path": "charitable_giving.daf_trad_prefund_end_year",
                            "message": "End year must be at least the start year"})
     return errors
 

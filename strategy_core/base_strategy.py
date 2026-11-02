@@ -6,7 +6,7 @@ for all life stage strategies, reducing code duplication.
 """
 
 import logging
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Tuple
 from abc import abstractmethod
 
 from .interfaces import ILifeStageStrategy, ITaxCalculator, IAccountManager, IDecisionLogger
@@ -163,6 +163,161 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
                 category, decision, action, reason, **values
             )
     
+    def _calculate_daf_trad_prefund(
+        self,
+        strategy: YearlyStrategy,
+        age_primary: int,
+        year: int,
+        traditional_balance: float,
+        already_reserved: float,
+    ) -> float:
+        """
+        Return the Traditional → Brokerage distribution amount for pre-funding.
+
+        The only source is the year schedule: ``tax_strategy.trad_prefund_schedule``
+        is a list of ``{"year", "amount"}`` rows used to seed a Direct Indexing
+        portfolio. It does not require a DAF. What you set in the UI is exactly
+        what executes.
+
+        Args:
+            strategy:            YearlyStrategy to log to
+            age_primary:         Primary person's age (informational only)
+            year:                Current calendar year
+            traditional_balance: Current Traditional IRA / 401k balance
+            already_reserved:    Amount already earmarked for normal buffer needs
+
+        Returns:
+            Pre-fund distribution amount (0 if not applicable this year)
+        """
+        try:
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+
+            prefund_amount = 0.0
+            for row in config_mgr.get("tax_strategy", "trad_prefund_schedule", []) or []:
+                if int(row.get("year", 0)) == year:
+                    prefund_amount += max(0.0, float(row.get("amount", 0) or 0))
+
+            if prefund_amount <= 0:
+                return 0.0
+
+            # Cap to Traditional balance available after normal buffer needs
+            available = max(0.0, traditional_balance - already_reserved)
+            actual_amount = min(prefund_amount, available)
+
+            if actual_amount <= 0:
+                logger.info(
+                    f"Year {year}: Trad→Brok pre-fund skipped — insufficient Traditional balance "
+                    f"(available=${available:,.0f} after ${already_reserved:,.0f} reserved)"
+                )
+                return 0.0
+
+            logger.info(
+                f"Year {year}: Trad→Brok pre-fund: ${actual_amount:,.0f} "
+                f"(scheduled ${prefund_amount:,.0f}, age {age_primary})"
+            )
+            self._log_decision(
+                strategy,
+                'tax_strategy',
+                'Traditional → Brokerage Pre-Fund',
+                f'Distribute ${actual_amount:,.0f} from Traditional → Brokerage',
+                f'Pre-funding Brokerage with a Traditional distribution in {year} from '
+                f'your pre-fund schedule (${prefund_amount:,.0f}) to seed Direct Indexing. '
+                f'Roth conversion is suppressed this year; the distribution is taxed '
+                f'as ordinary income.',
+                year=year,
+                prefund_amount=actual_amount,
+                schedule_amount=prefund_amount,
+            )
+            return actual_amount
+
+        except Exception as e:
+            logger.warning(f"Trad→Brok pre-fund calculation failed: {e}")
+            return 0.0
+
+    def _apply_trad_prefund(
+        self,
+        strategy: YearlyStrategy,
+        year: int,
+        age_primary: int,
+        balances: PortfolioBalances,
+        already_reserved: float,
+        pending_trad_withdrawal: float,
+        brokerage_account: Any,
+    ) -> Tuple[PortfolioBalances, float]:
+        """
+        Execute the scheduled Traditional → Brokerage pre-fund for ``year``.
+
+        Shared by Stages 1, 2 and 4-7 (Stage 3 has its own inline path). When the schedule
+        has an amount for ``year`` this:
+          * moves the amount Traditional → Brokerage in the returned balances
+            (per-person Traditional split is reduced pro rata),
+          * registers a zero-gain lot so later Brokerage→Cash draws realise $0 LTCG,
+          * logs that the Roth conversion is suppressed.
+
+        The caller must set ``roth_conversion = 0`` and merge the returned amount
+        into ``transactions['traditional_to_brokerage']`` (which feeds AGI).
+
+        Args:
+            pending_trad_withdrawal: Traditional→Cash already planned this year
+                                     but not yet deducted from ``balances``.
+
+        Returns:
+            (new_balances, amount_moved). Amount is 0 when no pre-fund applies.
+        """
+        amount = self._calculate_daf_trad_prefund(
+            strategy, age_primary, year,
+            max(0.0, balances.traditional - pending_trad_withdrawal),
+            already_reserved,
+        )
+        amount = min(amount, balances.traditional)
+        if amount <= 0:
+            return balances, 0.0
+
+        if brokerage_account is not None:
+            brokerage_account.add_transfer(year, amount, "trad_to_brok_zero_gain")
+
+        p1 = p2 = None
+        if (balances.traditional_person1 is not None
+                and balances.traditional_person2 is not None
+                and balances.traditional > 0):
+            share = amount / balances.traditional
+            p1 = balances.traditional_person1 * (1 - share)
+            p2 = balances.traditional_person2 * (1 - share)
+
+        new_balances = PortfolioBalances(
+            cash=balances.cash,
+            taxable=balances.taxable + amount,
+            traditional=balances.traditional - amount,
+            roth=balances.roth,
+            daf=balances.daf,
+            traditional_person1=p1,
+            traditional_person2=p2,
+        )
+        self._log_decision(
+            strategy,
+            'roth_conversion',
+            'Roth Conversion Suppressed (Direct Indexing Pre-Fund Year)',
+            'No conversion — Trad→Brok pre-fund active',
+            f'A Traditional → Brokerage pre-fund of ${amount:,.0f} is executing this year '
+            f'to seed Direct Indexing. The distribution is ordinary income, so no Roth '
+            f'conversion is performed; the DAF contribution offsets taxable income.',
+            daf_trad_prefund=amount,
+        )
+        return new_balances, amount
+
+    @staticmethod
+    def _merge_prefund_transactions(transactions: Dict[str, Any], amount: float) -> None:
+        """Record a pre-fund transfer in the transaction dict (feeds AGI and reports)."""
+        if amount <= 0:
+            return
+        transactions['traditional_to_brokerage'] = (
+            transactions.get('traditional_to_brokerage', 0.0) + amount
+        )
+        transactions['brokerage_replenishment'] = (
+            transactions.get('brokerage_replenishment', 0.0) + amount
+        )
+
     def _calculate_total_income(
         self,
         wages: float = 0.0,

@@ -296,6 +296,22 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         
 
         
+        # ── Traditional → Brokerage pre-fund (Direct Indexing seed) ────────
+        # Scheduled distribution this year: move it to Brokerage (zero-gain lot),
+        # suppress the Roth conversion, and include it in the tax estimate.
+        balances_with_ss, _prefund_amount = self._apply_trad_prefund(
+            strategy, year, age_primary, balances_with_ss,
+            anticipated_needs['traditional_to_cash'] + anticipated_needs['traditional_to_brokerage'],
+            _jan_spending_withdrawal,
+            brokerage_account,
+        )
+        if _prefund_amount > 0:
+            roth_conversion = 0.0
+            preliminary_tax_with_conv = self._calculate_preliminary_tax(
+                taxable_ss, ltcg_harvested, _prefund_amount,
+                std_deduction, year, filing_status
+            )
+
         # Calculate DAF contribution
         daf_contribution, daf_tax_excess = self._calculate_daf_contribution(
             age_primary, age_spouse, std_deduction, taxable_ss, year,
@@ -303,7 +319,8 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         )
         
         # DAF optimization: enhance Roth conversion with DAF tax space
-        daf_enhanced_conversion = self._calculate_daf_enhanced_conversion(
+        # (skipped in a pre-fund year: no Roth conversion is performed)
+        daf_enhanced_conversion = 0.0 if _prefund_amount > 0 else self._calculate_daf_enhanced_conversion(
             daf_contribution, daf_tax_excess, roth_conversion,
             available_for_conversion, irmaa_headroom, aca_info,
             current_income, max_conversion_rate, std_deduction, year
@@ -362,6 +379,8 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             preliminary_tax_with_conv, irmaa_penalty, aca_premium, brokerage_account
         )
         
+        self._merge_prefund_transactions(transactions, _prefund_amount)
+
         # ── PHASE 1 RECORDED: merge January Traditional→Cash into transaction log ──
         # _execute_rebalancing only knows about transfers it made; add the pre-funded
         # spending withdrawal so the year-by-year report shows the correct amount.

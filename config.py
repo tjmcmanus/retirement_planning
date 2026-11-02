@@ -137,7 +137,7 @@ DEFAULT_CONFIG = {
         "stage_6_max_conversion_rate": 24,
         "stage_7_max_conversion_rate": 15,
         # Optional [{"year": 2027, "amount": 200000}, ...]: extra Traditional → Brokerage
-        # distributions (e.g. to seed Direct Indexing). Executed in Stage 3 years.
+        # distributions (e.g. to seed Direct Indexing). Executed in Stages 1-7.
         "trad_prefund_schedule": [],
     },
     "charitable_giving": {
@@ -154,10 +154,6 @@ DEFAULT_CONFIG = {
         # Alex born 1966-06-15 at age 65 → year 2031.  Default: p1_birth_year + 65.
         "daf_contribution_start_year": 2030,
         "daf_contribution_end_year":   2040,
-        "daf_trad_prefund_enabled": False,
-        "daf_trad_prefund_amount": 0,
-        "daf_trad_prefund_start_year": 2027,
-        "daf_trad_prefund_end_year": 2027,
     },
     "rebalancing_preferences": {
         "cash_symbol": "MF:CASH",

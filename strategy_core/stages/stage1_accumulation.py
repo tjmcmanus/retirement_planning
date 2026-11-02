@@ -233,9 +233,17 @@ class Stage1Accumulation(BaseLifeStageStrategy):
                 employer_match=employer_match
             )
         
+        # ── Traditional → Brokerage pre-fund (Direct Indexing seed) ──────────
+        # Scheduled distribution this year: moved to Brokerage with a zero-gain lot
+        # and added to ordinary income. The Roth conversion is suppressed.
+        balances, _prefund_amount = self._apply_trad_prefund(
+            strategy, year, age_primary, balances, 0.0, 0.0,
+            kwargs.get('brokerage_account'),
+        )
+
         # Consider Roth conversions during accumulation
         roth_conversion = 0.0
-        if balances.traditional > 0 and max_rate <= max_conversion_rate:
+        if _prefund_amount <= 0 and balances.traditional > 0 and max_rate <= max_conversion_rate:
             roth_conversion = self._calculate_accumulation_roth_conversion(
                 strategy,
                 balances,
@@ -248,11 +256,18 @@ class Stage1Accumulation(BaseLifeStageStrategy):
                 year
             )
 
+        if _prefund_amount > 0:
+            # The distribution is ordinary income: re-run federal tax including it.
+            taxable_income = max(0, agi_before_conversion + _prefund_amount - std_deduction)
+            federal_tax, _, _ = self.tax_calculator.calculate_federal_tax(
+                taxable_income, filing_status, year
+            )
+
         # State tax on full AGI (wages + Roth conversion).
         # Roth conversion is passed separately so retirement-exempt states (PA, IL, MS)
         # can deduct it before applying the rate — wages always remain taxable.
         state_tax = self.tax_calculator.calculate_state_tax(
-            agi_before_conversion + roth_conversion,
+            agi_before_conversion + roth_conversion + _prefund_amount,
             kwargs.get('state'),
             year,
             filing_status=filing_status,
@@ -265,7 +280,10 @@ class Stage1Accumulation(BaseLifeStageStrategy):
         
         # Update strategy with calculated values
         strategy.expenses = expenses  # Store expenses in strategy
-        strategy.agi = agi_before_conversion + roth_conversion
+        strategy.agi = agi_before_conversion + roth_conversion + _prefund_amount
+        strategy.traditional_to_brokerage = _prefund_amount
+        strategy.brokerage_replenishment = _prefund_amount
+        strategy.traditional_withdrawal = _prefund_amount
         strategy.magi = strategy.agi
         strategy.taxable_income = taxable_income
         strategy.federal_tax = federal_tax

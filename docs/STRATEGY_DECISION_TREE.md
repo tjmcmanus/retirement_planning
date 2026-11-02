@@ -60,16 +60,15 @@ extra Roth conversions in the earlier pre-RMD years.
 [`stage3_early_retirement.py`](../strategy_core/stages/stage3_early_retirement.py). Stages 4 and 5
 follow the same shape.
 
-The **pre-fund amount** is the sum of two sources, capped at Traditional minus reserved buffer needs:
-
-1. **DAF window** — `charitable_giving.daf_trad_prefund_enabled/amount/start_year/end_year`.
-2. **Year schedule** — `tax_strategy.trad_prefund_schedule`, a list of `{year, amount}` rows. It needs
-   no DAF and is the place to seed a Direct Indexing portfolio.
+The **pre-fund amount** comes from `tax_strategy.trad_prefund_schedule`, a list of `{year, amount}` rows,
+capped at Traditional minus reserved buffer needs. It needs no DAF and is the place to seed a Direct Indexing
+portfolio. It is a required Traditional distribution: no Roth conversion that year, and the DAF gift offsets
+the income.
 
 ```mermaid
 flowchart TD
     A["Compute ACA premium and total healthcare cost"] --> B["Estimate Traditional needed for<br/>future buffers (lookahead)"]
-    B --> C{"Pre-fund amount > 0?<br/>(DAF window + year schedule)"}
+    B --> C{"Pre-fund amount > 0?<br/>(year schedule)"}
 
     C -- yes --> P1["PRE-FUND PATH<br/>January plan covers the spending shortfall"]
     P1 --> P2["Move Traditional to Brokerage<br/>as a zero-gain lot"]
@@ -95,7 +94,11 @@ flowchart TD
     T --> U["Apply growth, deduct the annual DAF grant,<br/>record transactions"]
 ```
 
-The pre-fund path is only taken in **Stage 3** years. In a Stage 4+ year the pre-fund settings are ignored.
+Stage 3 has the full pre-fund path above. Stages 1, 2, 4, 5, 6 and 7 run the same schedule through the shared
+helper `BaseLifeStageStrategy._apply_trad_prefund` in
+[`base_strategy.py`](../strategy_core/base_strategy.py): the amount moves Traditional → Brokerage as a
+zero-gain lot, the Roth conversion is set to 0, and the amount is added to `traditional_to_brokerage`
+(which feeds AGI). The rest of each stage's normal flow (rebalancing, DAF, taxes) is unchanged.
 
 ## 4. When a DAF gift happens
 
@@ -158,8 +161,7 @@ flowchart TD
 |---|---|---|
 | `tax_strategy.stage_N_max_conversion_rate` | Settings → Tax Strategy | Bracket ceiling for the Roth conversion in stage N. |
 | `tax_strategy.use_january_bracket_fill_strategy`, `savings_safety_reserve` | Settings → Tax Strategy | January plan and the cash floor for mid-year top-ups. |
-| `tax_strategy.trad_prefund_schedule` | Settings → Tax Strategy → "Traditional → Brokerage pre-fund by year" | `{year, amount}` rows. Moves $amount Traditional → Brokerage in that Stage 3 year (e.g. to seed Direct Indexing). Suppresses that year's Roth conversion. |
-| `charitable_giving.daf_trad_prefund_*` | Settings → Charitable Giving | Same pre-fund path, over a start–end window, to fund DAF gifts. Adds to the schedule. |
+| `tax_strategy.trad_prefund_schedule` | Settings → Tax Strategy → "Traditional → Brokerage pre-fund by year" | `{year, amount}` rows. Moves $amount Traditional → Brokerage in that year, in any stage 1-7 (e.g. to seed Direct Indexing). Suppresses that year's Roth conversion. |
 | `charitable_giving.daf_*` | Settings → Charitable Giving | DAF gift window, initial/bundled amounts. |
 | `financial_assumptions.years_of_expenses_in_cash`, `brokerage_rebalance_trigger_multiplier` | Settings → Financial Assumptions | Cash and brokerage buffer targets used by `rebalance_accounts`. |
 
@@ -169,8 +171,8 @@ flowchart TD
    (the `retirement_data` volume), *not* the copy in the project folder. Editing the project-folder
    file has no effect on the running app. Use Settings in the web app, or the Streamlit
    Configuration page.
-2. The year must be a **Stage 3** year (no wages, no SS, both spouses under 65).
-3. The amount is capped at `Traditional − anticipated buffer needs`; a log line "DAF pre-fund
+2. The year must fall in a stage that runs the pre-fund (Stages 1 through 7, i.e. any year in the plan).
+3. The amount is capped at `Traditional − anticipated buffer needs`; a log line "Trad→Brok pre-fund
    skipped — insufficient Traditional balance" means that cap hit zero.
 4. Open Strategy → Why these numbers? for the year: a "Traditional → Brokerage Pre-Fund" reason
    appears when it fires, and "Roth Conversion Suppressed" follows it.

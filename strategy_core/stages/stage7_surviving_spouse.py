@@ -216,6 +216,23 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             daf=balances.daf
         )
         logger.info(f"Year {year}: Added SS benefits ${ss_benefits:,.2f} to cash")
+
+        # ── Traditional → Brokerage pre-fund (Direct Indexing seed) ────────
+        # Scheduled distribution this year: moved to Brokerage with a zero-gain lot.
+        # It is ordinary income, so the Roth conversion is suppressed and the
+        # preliminary AGI/tax are rebuilt with the distribution in its place.
+        balances_with_ss, _prefund_amount = self._apply_trad_prefund(
+            strategy, year, survivor_age, balances_with_ss,
+            rmd_amount, 0.0, brokerage_account,
+        )
+        if _prefund_amount > 0:
+            total_income = total_income - roth_conversion + _prefund_amount
+            roth_conversion = 0.0
+            agi = total_income
+            federal_tax, cg_tax = self._calculate_taxes(
+                agi - std_deduction, ltcg_harvested, year, filing_status
+            )
+            total_tax = federal_tax + cg_tax
         
         # Calculate DAF contribution
         daf_contribution, daf_tax_excess = self._calculate_daf_contribution(
@@ -247,6 +264,8 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
             total_tax, healthcare_costs, brokerage_account
         )
         
+        self._merge_prefund_transactions(transactions, _prefund_amount)
+
         # Apply RMD (mandatory distribution from Traditional to Brokerage)
         if rmd_amount > 0:
             new_balances = PortfolioBalances(

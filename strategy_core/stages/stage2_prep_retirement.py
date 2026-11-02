@@ -302,6 +302,16 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
 
         logger.info(f"Stage 2 [6/8] Roth conversion=${roth_conversion:,.0f}")
 
+        # ── Traditional → Brokerage pre-fund (Direct Indexing seed) ──────────
+        # Scheduled distribution this year: moved to Brokerage with a zero-gain lot
+        # and added to ordinary income. The Roth conversion is suppressed.
+        balances, _prefund_amount = self._apply_trad_prefund(
+            strategy, year, age_primary, balances, 0.0, 0.0,
+            kwargs.get('brokerage_account'),
+        )
+        if _prefund_amount > 0:
+            roth_conversion = 0.0
+
         # ── DAF initial / bundle contribution (Stage 2 support) ──────────────
         # Short-circuit immediately when has_daf is False so we never import
         # strategy.py or call get_config_manager() unnecessarily (avoids hangs
@@ -343,7 +353,7 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
                 # large Roth conversion doesn't artificially shrink the deductible
                 # amount.  We know roth_conversion at this point because it was
                 # computed in step [5/8] above.
-                _agi_for_limit = agi_before_conversion + roth_conversion
+                _agi_for_limit = agi_before_conversion + roth_conversion + _prefund_amount
                 _daf_30pct_limit = _agi_for_limit * 0.30
                 _available_daf   = daf_contribution + self._daf_carryforward
                 _daf_deductible  = min(_available_daf, _daf_30pct_limit)
@@ -391,7 +401,7 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         # Roth conversion is ordinary income; DAF excess reduces taxable income
         # when itemizing (deduction above standard deduction).
         logger.info("Stage 2 [7/8] computing final federal tax…")
-        full_agi        = agi_before_conversion + roth_conversion
+        full_agi        = agi_before_conversion + roth_conversion + _prefund_amount
         taxable_income  = max(0, full_agi - std_deduction - daf_tax_excess)
         federal_tax, _, _ = self.tax_calculator.calculate_federal_tax(
             taxable_income, filing_status, year
@@ -428,6 +438,9 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         strategy.payroll_tax = fica_tax  # Payroll tax is FICA
         strategy.roth_conversion = roth_conversion
         strategy.conversion_executed = roth_conversion  # For dataframe display
+        strategy.traditional_to_brokerage = _prefund_amount
+        strategy.brokerage_replenishment = _prefund_amount
+        strategy.traditional_withdrawal = _prefund_amount
         strategy.daf_contribution = daf_contribution
         strategy.daf_deductible   = daf_deductible
         
