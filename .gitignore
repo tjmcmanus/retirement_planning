@@ -175,7 +175,8 @@ data/transactions.db
 data/monte_carlo_results.json
 data/generated_reports/*.pdf
 portfolio_data_truth_*.csv
-
+data/*.db-shm
+data/*.db-wal
 # Backup files
 *_backup_*.csv
 *_pre_*.csv
