@@ -205,3 +205,6 @@ ssincome.csv
 
 # IBM Bob temporary files and scratch directory
 .bob/
+.backups/pre_rebuild_20261028_175736/data_volume.tar
+portfolio.db.bak_202610131727
+.backups/strategy.py.backup
