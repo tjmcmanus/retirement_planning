@@ -296,47 +296,66 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
         # Deduct annual charitable grant from DAF (grants paid out each year)
         new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
 
-        # Calculate final AGI and MAGI
+        # ── FINAL TAX CALCULATION VIA AGICalculator ───────────────────────────
+        # Stage 7 uses Single filing status — AGICalculator handles single-filer
+        # brackets and the lower standard deduction automatically.
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage'] + rmd_amount
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
         total_ltcg = ltcg_harvested + brokerage_ltcg
-        
-        agi = (taxable_ss + trad_withdrawal + roth_conversion + total_ltcg)
-        magi = agi
-        
-        # Calculate state tax
-        state_tax = self._calculate_state_tax(
-            agi, year, filing_status, trad_withdrawal, roth_conversion, taxable_ss
+
+        _agi_calc = AGICalculator(tax_calculator=self.tax_calculator)
+        _property_tax = self._get_property_tax_from_config() if hasattr(self, '_get_property_tax_from_config') else 0.0
+        tax_result = _agi_calc.calculate_agi_and_taxes(
+            year=year,
+            filing_status=filing_status,   # "Single" for Stage 7
+            age_primary=survivor_age,
+            age_spouse=0,                  # no spouse
+            traditional_withdrawal=trad_withdrawal,
+            roth_conversion=roth_conversion,
+            brokerage_ltcg=total_ltcg,
+            brokerage_basis=0.0,
+            daf_fmv=daf_contribution,
+            state=state or 'PA',
+            property_tax=_property_tax,
+            daf_carryforward_prior=float(kwargs.get('daf_carryforward_prior', 0.0)),
+            ss_benefits=ss_benefits,
+            taxable_ss=taxable_ss,
         )
-        
-        # Deduct state tax from cash balance
-        new_balances = self._deduct_tax_from_balances(new_balances, state_tax, "State Tax", year)
-        logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
-        
-        # If DAF contribution made, recalculate taxes with increased deduction
+
+        agi        = tax_result['agi_pre_deduction']
+        magi       = agi
+        federal_tax = tax_result['federal_ordinary_tax']
+        cg_tax     = tax_result['ltcg_tax']
+        state_tax  = tax_result['state_tax']
+        total_tax  = tax_result['total_tax']
+        _daf_deductible_s7 = tax_result['daf_deductible_this_year']
+
+        # Credit DAF balance
         if daf_contribution > 0:
             new_balances = PortfolioBalances(
                 cash=new_balances.cash,
                 taxable=new_balances.taxable,
                 traditional=new_balances.traditional,
                 roth=new_balances.roth,
-                daf=new_balances.daf + daf_contribution
+                daf=new_balances.daf + daf_contribution,
             )
-            
-            effective_deduction = std_deduction + daf_tax_excess
-            taxable_income_with_daf = agi - effective_deduction
-            federal_tax, cg_tax = self._calculate_taxes(
-                taxable_income_with_daf, total_ltcg, year, filing_status
+
+        # Deduct state tax from cash balance
+        new_balances = self._deduct_tax_from_balances(new_balances, state_tax, "State Tax", year)
+        logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
+
+        if _daf_deductible_s7 > 0:
+            logger.info(
+                f"Year {year}: Federal tax reduced by DAF deduction "
+                f"(deductible: ${_daf_deductible_s7:,.0f}, "
+                f"carryforward: ${tax_result['daf_carryforward_new']:,.0f})"
             )
-            total_tax = federal_tax + cg_tax
-            
-            logger.info(f"Year {year}: Federal tax reduced by DAF deduction (excess: ${daf_tax_excess:,.0f})")
-            
             self._log_decision(
                 strategy, 'daf_decisions', 'DAF Contribution',
                 f'${daf_contribution:,.0f} contributed to DAF',
-                f'Tax excess: ${daf_tax_excess:,.0f}',
-                daf_contribution=daf_contribution
+                f'Deductible: ${_daf_deductible_s7:,.0f}',
+                daf_contribution=daf_contribution,
+                daf_deductible=_daf_deductible_s7,
             )
         
         # Get cost basis ratios
@@ -365,6 +384,7 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
         strategy.roth_conversion = roth_conversion
         strategy.ltcg_harvested = total_ltcg
         strategy.daf_contribution = daf_contribution
+        strategy.daf_deductible = _daf_deductible_s7
         strategy.expenses = expenses
         strategy.agi = agi
         strategy.magi = magi

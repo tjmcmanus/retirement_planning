@@ -113,7 +113,7 @@ All planning assumptions live here. Changes are written to `retirement_config.js
 - **Export Configuration** — download a `.zip` backup bundle: settings, portfolio holdings, estate plan, transaction and performance history, saved scenarios, and `.env`
 - **Import Configuration** — restore a bundle (or an old `.json` file). The file is fully validated before anything changes, current files are copied to `.backups/` first, and the portfolio holdings are *replaced* by the bundle's, not merged
 
-**Moving to another machine:** export on the old machine, run `./start.sh` on the new one (it creates `.env` from `.env.example` the first time; `.env` is never checked into git), and import the `.zip` (Settings → Advanced, or the web Settings page). The bundle includes your `.env` (SnapTrade/Schwab keys and `ENCRYPTION_KEY`) **in plain text** — keep the ZIP private. Import restores it to the app folder (next to `compose.yaml`) and backs up the previous one; run `./start.sh restart` afterwards, because the apps only read `.env` when they start. Saved brokerage logins (`data/credentials.db`) are not included — reconnect them on the new machine. Market-data caches are not included; they rebuild themselves.
+**Moving to another machine:** export on the old machine, run `./start.sh` (`start.bat` on Windows; see the [Container Setup Guide](user/CONTAINER_SETUP.md)) on the new one (it creates `.env` from `.env.example` the first time; `.env` is never checked into git), and import the `.zip` (Settings → Advanced, or the web Settings page). The bundle includes your `.env` (SnapTrade/Schwab keys and `ENCRYPTION_KEY`) **in plain text** — keep the ZIP private. Import restores it to the app folder (next to `compose.yaml`) and backs up the previous one; run `./start.sh restart` (`start.bat restart` on Windows) afterwards, because the apps only read `.env` when they start. Saved brokerage logins (`data/credentials.db`) are not included — reconnect them on the new machine. Market-data caches are not included; they rebuild themselves.
 
 ---
 
@@ -799,7 +799,8 @@ A slope is classified as up/down/neutral using a **0.05% per week** threshold.
 | Symptom | Fix |
 |---|---|
 | `ModuleNotFoundError` | Run `pip install -r requirements.txt` with the virtual environment active |
-| Port 8501 already in use | `streamlit run planning_app.py --server.port 8502` |
+| Port 8501 already in use | `streamlit run planning_app.py --server.port 8502` (native install). In containers, change the `ports:` mapping in `compose.yaml`. |
+| Container problems (daemon not running, `.env` is a directory, Podman machine) | See [Container Setup → Troubleshooting](user/CONTAINER_SETUP.md#8-troubleshooting) |
 | `python3: command not found` | Install Python 3.9+ from python.org |
 
 ### Data not loading

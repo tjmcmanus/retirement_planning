@@ -1,6 +1,13 @@
 """
 January Bracket-Fill Withdrawal Orchestrator
 
+⚠️  UNCONNECTED SCAFFOLDING — This module is NOT imported by the live engine.
+    It is only used by strategy_core/stages/stage3_bracket_fill.py, which is itself
+    not wired into stages/__init__.py and therefore not called by strategy.py.
+    The live Stage 3 (stage3_early_retirement.py) performs equivalent logic inline
+    using BETR helpers from base_strategy.py.
+    See IMPLEMENTATION_ROADMAP.md → UNCONNECTED SCAFFOLDING for full details.
+
 Implements a simplified, single-decision-point withdrawal strategy:
 1. Assess actual PNC cash balance
 2. Calculate annual spending need (expenses + estimated taxes)

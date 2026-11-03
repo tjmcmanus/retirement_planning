@@ -21,7 +21,8 @@ All calculations run locally. No data leaves your machine. No subscription requi
 
 ## Quick Start
 
-→ **[Quick Start Guide](docs/user/QUICKSTART.md)** — up and running in 10 minutes
+- **[Container Setup Guide](docs/user/CONTAINER_SETUP.md)** — recommended. Run with Docker or Podman on macOS, Linux or Windows. No Python install needed.
+- **[Quick Start Guide](docs/user/QUICKSTART.md)** — native Python install, up and running in 10 minutes
 
 ---
 
@@ -29,7 +30,8 @@ All calculations run locally. No data leaves your machine. No subscription requi
 
 | Guide | What it covers |
 |---|---|
-| [Quick Start](docs/user/QUICKSTART.md) | Installation, first launch, sample data walkthrough |
+| [Container Setup](docs/user/CONTAINER_SETUP.md) | Docker/Podman install, start scripts, data volume, backup, troubleshooting (macOS, Linux, Windows) |
+| [Quick Start](docs/user/QUICKSTART.md) | Native Python installation, first launch, sample data walkthrough |
 | [Full User Guide](docs/USER_GUIDE.md) | Every page and feature explained, including all indicator tables |
 | [Configuration Guide](docs/user/CONFIG_GUIDE.md) | retirement_config.json fields, the Configuration page |
 | [Strategy Guide](docs/user/STRATEGY_README.md) | 7-stage withdrawal engine, BETR integration, sequencing logic |
@@ -76,14 +78,34 @@ All calculations run locally. No data leaves your machine. No subscription requi
 
 | Layer | Technology |
 |---|---|
-| UI | Streamlit (Python) |
+| Primary UI | Streamlit (Python) — port 8501 |
+| Web UI + API | FastAPI (HTML/JS) — port 8000, served via `./start.sh` / `start.bat` (Docker or Podman) |
 | Data processing | Pandas, NumPy |
 | Visualisation | Plotly, Matplotlib |
 | Market data | yfinance |
-| Brokerage sync | SnapTrade API |
+| Brokerage sync | SnapTrade API, Schwab Direct API |
 | Credential security | Cryptography (Fernet / AES-256) |
 | Testing | pytest |
 | Config | JSON, YAML, CSV |
+
+---
+
+## Running in a Container (Podman or Docker)
+
+`./start.sh [up|down|logs|rebuild|restart]` (macOS/Linux) and `start.bat [up|down|logs|rebuild|restart]` (Windows) work with either runtime. They use Podman if installed, otherwise Docker. Force one with `CONTAINER_RUNTIME`:
+
+```bash
+CONTAINER_RUNTIME=docker ./start.sh rebuild        # Windows PowerShell: $env:CONTAINER_RUNTIME="docker"; .\start.ps1 rebuild
+```
+
+The HTML app is at http://localhost:8000 and the Streamlit app at http://localhost:8501. Full instructions for all three operating systems: **[Container Setup Guide](docs/user/CONTAINER_SETUP.md)**.
+
+| Runtime | Requirements |
+|---|---|
+| Podman | `podman` and `podman-compose` (`brew install podman-compose`) |
+| Docker (Docker Desktop, Rancher Desktop, Colima, OrbStack) | `docker` with the `compose` plugin (or `docker-compose`), daemon running |
+
+You can also skip the script: `docker compose up -d --build` or `podman compose up -d --build`. The image is tagged `retirement-planning:local`. Under Podman it shows as `localhost/retirement-planning:local`, which is the name the test docstrings use.
 
 ---
 

@@ -53,7 +53,7 @@ kaleido>=0.2.1
 # Email Scheduling (Phase 4)
 schedule>=1.2.0
 
-# Container tooling (host-side only; used by `podman compose`, not by the app at runtime)
+# Container tooling (host-side only; used by `podman compose` when Podman is the runtime; Docker needs none of this)
 # Exclude from the container image when requirements are split into prod/dev
 podman-compose>=1.0.6
 

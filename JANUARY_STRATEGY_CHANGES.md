@@ -1,5 +1,7 @@
-"""
-JANUARY BRACKET-FILL STRATEGY - CODE CHANGES SUMMARY
+# JANUARY BRACKET-FILL STRATEGY — CODE CHANGES SUMMARY
+
+> **Developer note** — this is an internal code-change log, not a user guide.
+> It records the three fixes applied to the January bracket-fill strategy implementation.
 
 This document outlines all code modifications made to implement the three critical fixes.
 
@@ -245,4 +247,3 @@ Results: 5/5 PASS ✓
   ✓ Large withdrawal scenario (tax calculation)
 
 ═════════════════════════════════════════════════════════════════════════════════
-"""

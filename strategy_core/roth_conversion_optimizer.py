@@ -1,9 +1,14 @@
 """
 Roth Conversion Optimizer
 
+⚠️  UNCONNECTED SCAFFOLDING — This module is NOT used by the live engine.
+    It is only referenced by example scripts under scripts/.
+    Live Roth conversion optimization is performed inline within each stage file.
+    See IMPLEMENTATION_ROADMAP.md → UNCONNECTED SCAFFOLDING for full details.
+
 Optimizes Roth conversion amounts using priority-based strategy:
 1. DAF (Donor Advised Fund) - maximize charitable contribution impact
-2. RMD Lookback - reduce future Required Minimum Distribution burden  
+2. RMD Lookback - reduce future Required Minimum Distribution burden
 3. BETR - Break-Even Tax Rate for pure wealth optimization
 
 Each strategy is evaluated in order, and the best option is selected.

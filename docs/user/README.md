@@ -11,7 +11,8 @@ User-facing guides and walkthroughs live in this folder.
 
 | Guide | Summary |
 |---|---|
-| [QUICKSTART.md](QUICKSTART.md) | Installation, first launch, sample data |
+| [CONTAINER_SETUP.md](CONTAINER_SETUP.md) | Docker/Podman setup for macOS, Linux and Windows |
+| [QUICKSTART.md](QUICKSTART.md) | Native Python installation, first launch, sample data |
 | [../USER_GUIDE.md](../USER_GUIDE.md) | Complete walkthrough — all pages, all indicator tables |
 | [CONFIG_GUIDE.md](CONFIG_GUIDE.md) | Configuration page fields and retirement_config.json |
 | [STRATEGY_README.md](STRATEGY_README.md) | 7-stage withdrawal engine |

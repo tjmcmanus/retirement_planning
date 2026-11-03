@@ -1,2 +1,4 @@
 *.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
 docker-entrypoint.sh text eol=lf

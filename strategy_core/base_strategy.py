@@ -318,6 +318,67 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
             transactions.get('brokerage_replenishment', 0.0) + amount
         )
 
+    def _use_60day_rollover(self) -> bool:
+        """
+        Return True when the 60-day rollover mechanic is enabled in config.
+
+        When True the Roth conversion planner treats cash + brokerage as the
+        combined source for paying withholding tax (instead of brokerage alone).
+        The net economic result is identical: the tax comes from liquid non-IRA
+        assets; the rollover window is the administrative mechanism that makes it
+        work when brokerage alone is insufficient.
+
+        Config key: ``tax_strategy.use_60day_rollover_mechanics`` (bool, default True, matching the Settings page)
+        """
+        try:
+            from config import get_config_manager
+            cfg = get_config_manager()
+            return bool(cfg.get("tax_strategy", "use_60day_rollover_mechanics", True))
+        except Exception:
+            return False
+
+    def _effective_taxable_for_conversion(
+        self,
+        brokerage_balance: float,
+        cash_balance: float,
+        safety_reserve: float = 0.0,
+    ) -> float:
+        """
+        Return the balance that the BETR engine should treat as "taxable account
+        available to pay conversion tax".
+
+        Normal mode  (60-day rollover OFF):
+            Only brokerage counts — tax must be wired from brokerage on the same day
+            as the conversion.
+
+        60-day rollover mode  (60-day rollover ON):
+            Cash + brokerage both count, because the January withdrawal from
+            Traditional includes the withholding amount; the cash is then available
+            to cover that withholding (or be redeposited) within the 60-day window.
+            We subtract the safety reserve so we never drain the emergency buffer.
+
+        Args:
+            brokerage_balance: Current taxable/brokerage account balance.
+            cash_balance:      Current PNC/cash account balance.
+            safety_reserve:    Minimum cash to keep untouched (default 0).
+
+        Returns:
+            Effective balance the BETR call should see as taxable_account_balance.
+        """
+        if self._use_60day_rollover():
+            usable_cash = max(0.0, cash_balance - safety_reserve)
+            return brokerage_balance + usable_cash
+        return brokerage_balance
+
+    def _get_safety_reserve(self) -> float:
+        """Return savings_safety_reserve from config (default $56,000)."""
+        try:
+            from config import get_config_manager
+            cfg = get_config_manager()
+            return float(cfg.get("tax_strategy", "savings_safety_reserve", 56_000) or 0)
+        except Exception:
+            return 56_000.0
+
     def _calculate_total_income(
         self,
         wages: float = 0.0,

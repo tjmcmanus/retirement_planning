@@ -4094,59 +4094,94 @@ with tab5:
     # January Bracket-Fill Strategy Section
     st.markdown("---")
     st.subheader("📅 January Bracket-Fill Strategy")
-    st.info("ℹ️ Alternative withdrawal strategy: Single January decision-point that fills the 12% bracket, minimizes mid-year adjustments, and uses 60-day rollover mechanics for Roth conversions.")
-    
+    st.info(
+        "ℹ️ Single January decision-point withdrawal strategy: funds the full year's "
+        "spending shortfall from Traditional in one transfer, then fills the remaining "
+        "bracket space with a Roth conversion — all sized against the configured "
+        "stage-specific bracket ceiling (Stage 3: 24%, Stage 4: 24%)."
+    )
+
     january_col1, january_col2 = st.columns(2)
-    
+
     with january_col1:
         st.markdown("**Strategy Configuration**")
-        
+
         use_january_strategy = st.checkbox(
             "Enable January Bracket-Fill Strategy",
             value=config_mgr.get("tax_strategy", "use_january_bracket_fill_strategy", False),
-            help="Use January single-withdrawal strategy instead of continuous BETR optimization",
+            help=(
+                "When ON: a single January withdrawal covers the full-year spending shortfall "
+                "from Traditional, then fills remaining bracket space with a Roth conversion. "
+                "When OFF: continuous BETR optimization runs throughout the year."
+            ),
             key="use_january_bracket_fill_strategy"
         )
-        
+
         _default_safety_reserve = round(
-            config_mgr.get("financial_assumptions", "expected_annual_expenses", 133600) / 12 * 5
+            config_mgr.get("financial_assumptions", "expected_annual_expenses", 128300) / 12 * 5
         )
+        _current_reserve = int(config_mgr.get("tax_strategy", "savings_safety_reserve", _default_safety_reserve))
         pnc_safety_reserve = st.number_input(
             "Savings Safety Reserve ($)",
             min_value=0,
-            max_value=500000,
-            value=int(config_mgr.get("tax_strategy", "savings_safety_reserve", _default_safety_reserve)),
-            step=1000,
-            help=f"Minimum PNC Savings balance before mid-year Brokerage supplementation triggers. Default = 5 months expenses (currently ${_default_safety_reserve:,.0f})",
+            max_value=500_000,
+            value=_current_reserve,
+            step=1_000,
+            help=(
+                f"Minimum PNC Savings balance kept untouched. "
+                f"When 60-Day Rollover is ON, only cash above this threshold is available "
+                f"to supplement brokerage as a Roth conversion tax source. "
+                f"Default ≈ 5 months of base expenses (currently ${_default_safety_reserve:,.0f})."
+            ),
             key="savings_safety_reserve"
         )
-    
+
     with january_col2:
         st.markdown("**60-Day Rollover Mechanics**")
-        
+
         use_60day_rollover = st.checkbox(
             "Use 60-Day Rollover for Roth Conversions",
             value=config_mgr.get("tax_strategy", "use_60day_rollover_mechanics", True),
-            help="Withhold conversion taxes from Traditional account, redeposit within 60 days from cash/brokerage",
+            help=(
+                "When ON: the BETR conversion optimizer treats cash (above the Safety Reserve) "
+                "plus brokerage as the combined source available to pay conversion tax. "
+                "This allows Roth conversions to proceed even after brokerage is largely "
+                "exhausted — the January Traditional withdrawal includes the withholding, "
+                "and cash covers it within the 60-day IRS window (IRC §408(d)(3)(B)). "
+                "When OFF: only brokerage balance counts toward the tax-payment check."
+            ),
             key="use_60day_rollover_mechanics"
         )
-        
-        # Withholding rate is derived from the stage-specific max conversion rate
-        # (configured above in Stage-Specific Conversion Rate Limits).
-        # Stage 3 = early retirement (pre-Medicare, pre-SS) — the primary bracket-fill stage.
-        _s3_rate = config_mgr.get("tax_strategy", "stage_3_max_conversion_rate", 12)
-        _s4_rate = config_mgr.get("tax_strategy", "stage_4_max_conversion_rate", 12)
-        st.markdown(
-            f"**Conversion Withholding Rate** is read directly from your "
-            f"Stage-Specific Conversion Rate Limits above — no separate entry needed."
-        )
+
+        # Live status: show whether the rollover is currently adding conversion capacity
+        _cash_now = config_mgr.get("financial_assumptions", "expected_annual_expenses", 128300)  # proxy
+        _brokerage_label = "brokerage"
+        _rollover_on = config_mgr.get("tax_strategy", "use_60day_rollover_mechanics", True)
+        _s3_rate = config_mgr.get("tax_strategy", "stage_3_max_conversion_rate", 24)
+        _s4_rate = config_mgr.get("tax_strategy", "stage_4_max_conversion_rate", 24)
+
+        if _rollover_on:
+            st.success(
+                f"✅ **Active** — cash above the ${_current_reserve:,.0f} reserve supplements "
+                f"brokerage as the conversion tax source in Stages 3 & 4."
+            )
+        else:
+            st.warning(
+                "⚠️ **Inactive** — only brokerage counts toward the conversion tax check. "
+                "Conversions stop when brokerage < estimated tax."
+            )
+
         st.caption(
-            f"Stage 3 (Early Retirement): **{_s3_rate}%** &nbsp;·&nbsp; "
-            f"Stage 4 (Medicare): **{_s4_rate}%**  \n"
-            f"To change the withholding rate, update the stage rates above."
+            f"Withholding rate = stage's max conversion rate: "
+            f"Stage 3 **{_s3_rate}%** · Stage 4 **{_s4_rate}%**  \n"
+            f"To change the rate, update Stage-Specific Conversion Rate Limits above."
         )
-    
-    st.caption("💡 **Strategy Tip**: January Bracket-Fill withholds taxes at the stage's max conversion rate. Redeposit the withheld amount to Traditional within 60 days using cash or Brokerage.")
+
+    st.caption(
+        "💡 **Strategy Tip**: With 60-Day Rollover ON, your January Traditional withdrawal "
+        "already includes the conversion tax withholding. The cash from PNC covers the "
+        "withheld amount within the IRS 60-day window — no separate brokerage liquidation needed."
+    )
 
 
     
@@ -5716,7 +5751,7 @@ with tab10:
                 "use_january_bracket_fill_strategy": st.session_state.get("use_january_bracket_fill_strategy",
                     config_mgr.get("tax_strategy", "use_january_bracket_fill_strategy", False)),
                 "savings_safety_reserve": st.session_state.get("savings_safety_reserve",
-                    config_mgr.get("tax_strategy", "savings_safety_reserve", 55667)),
+                    config_mgr.get("tax_strategy", "savings_safety_reserve", 56_000)),
                 "use_60day_rollover_mechanics": st.session_state.get("use_60day_rollover_mechanics",
                     config_mgr.get("tax_strategy", "use_60day_rollover_mechanics", True)),
             })

@@ -1,5 +1,5 @@
 # Retirement Planning App (Streamlit) - container image
-# Build:  podman build -t retirement-planning:local .
+# Build:  podman build -t retirement-planning:local .   (or: docker build ...)
 # The image contains code only. All user data lives on the /data volume.
 FROM python:3.11-slim
 

@@ -1,13 +1,14 @@
 """
-Portfolio Withdrawal Strategy Module - 6 Stages of Life
+Portfolio Withdrawal Strategy Module - 7 Stages of Life
 
-This module implements a comprehensive withdrawal strategy across 6 life stages:
+This module implements a comprehensive withdrawal strategy across 7 life stages:
 1. Accumulation: Employed, earning wages, tax-efficient asset accumulation
 2. Prep for Retirement: Employed, within 10 years of retirement, balance Roth/Traditional/Taxable
 3. Early Retirement: Pre-Medicare, pre-SS, pre-RMD with BETR-optimized Roth conversions
 4. Medicare Stage: IRMAA optimization with BETR-based continued Roth conversions
 5. Social Security Stage: SS benefits + Medicare, pre-RMD optimization with BETR
 6. RMD Stage: Required Minimum Distributions with full retirement income
+7. Surviving Spouse: Single-filer tax planning after spouse death
 
 Key Features:
 - BETR (Break-Even Tax Rate) algorithm for optimal Roth conversion decisions

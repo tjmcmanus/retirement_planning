@@ -10,6 +10,7 @@ A comprehensive retirement and financial planning application with advanced tax 
 ## 🚀 Quick Links
 
 - [Getting Started](getting-started.md) - Installation and setup guide
+- [Container Setup](user/CONTAINER_SETUP.md) - Run with Docker or Podman on macOS, Linux or Windows
 - [Features Overview](features.md) - Complete feature list
 - [User Guides](guides.md) - Step-by-step tutorials
 - [API Reference](api-reference.md) - Technical documentation
@@ -34,12 +35,14 @@ Professional-grade portfolio management with:
 - IRMAA threshold management
 
 ### 📊 Withdrawal Strategy Engine
-6-stage life-cycle strategy with:
-- Pre-retirement accumulation
-- Early retirement optimization
-- Social Security timing
-- RMD management
-- Estate planning integration
+7-stage life-cycle strategy:
+1. **Accumulation** — employed, tax-efficient asset growth
+2. **Pre-Retirement Prep** — Roth/Traditional/Taxable balance optimization
+3. **Early Retirement** — pre-Medicare BETR Roth conversions, ACA management
+4. **Medicare** — IRMAA threshold management with continued Roth conversions
+5. **Social Security** — SS + Medicare coordination, pre-RMD optimization
+6. **RMD** — Required Minimum Distribution management
+7. **Surviving Spouse** — single-filer tax planning
 
 ### 🎲 Monte Carlo Simulation
 - 10,000+ scenario analysis
@@ -59,7 +62,7 @@ Professional-grade portfolio management with:
 - Tax-efficient timing
 - Survivor benefit planning
 
-## 🆕 Recent Updates (March 2026)
+## 🆕 Recent Updates
 
 ### SnapTrade Brokerage Integration ⭐ NEW
 Automatic portfolio synchronization with secure brokerage connections:
@@ -137,11 +140,12 @@ Streamlined interface for individual planning with:
 
 ## 🛠️ Technology Stack
 
-- **Frontend**: Streamlit (Python web framework)
+- **Primary UI**: Streamlit (Python web framework)
+- **Web UI + API**: FastAPI (HTML/JS app served at port 8000)
 - **Data Processing**: Pandas, NumPy
 - **Visualization**: Plotly, Matplotlib
-- **Financial Data**: yfinance, SnapTrade API ⭐ NEW
-- **Security**: Cryptography (Fernet/AES-256) ⭐ NEW
+- **Financial Data**: yfinance, SnapTrade API, Schwab Direct API
+- **Security**: Cryptography (Fernet/AES-256)
 - **Testing**: pytest
 - **Configuration**: YAML, JSON
 
@@ -157,17 +161,11 @@ The application includes several pre-configured scenarios:
 
 This tool is for educational and planning purposes only. It does not constitute financial, tax, or legal advice. Always consult with qualified professionals before making financial decisions.
 
-## 📞 Support & Contributing
+## 📞 Support
 
 - [GitHub Repository](https://github.com/yourusername/retirement_planning)
 - [Issue Tracker](https://github.com/yourusername/retirement_planning/issues)
-- [Contributing Guidelines](CONTRIBUTING.md)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 
-**Version**: March 2026  
-**Last Updated**: {{ site.time | date: '%B %d, %Y' }}
+*Made with Bob*

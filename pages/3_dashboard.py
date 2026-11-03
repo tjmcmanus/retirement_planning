@@ -1078,6 +1078,178 @@ except Exception as _rri_err:
 
 st.markdown("---")
 
+# ---------------------------------------------------------------------------
+# Retirement Strategy Alerts & Status
+# ---------------------------------------------------------------------------
+st.markdown("### 🔔 Retirement Strategy Alerts")
+st.caption("Live status of tax strategy settings and account thresholds — updated each page load from current portfolio and config.")
+
+try:
+    from config import get_config_manager as _get_alert_cfg
+    _acfg = _get_alert_cfg()
+
+    # ── 1. PNC Safety Reserve Alert ─────────────────────────────────────
+    _safety_reserve = float(_acfg.get("tax_strategy", "savings_safety_reserve", 56_000) or 56_000)
+    _cash_bal = float(networth["cash"].iloc[-1]) if not networth.empty and "cash" in networth.columns else 0.0
+    _cash_deficit = _safety_reserve - _cash_bal
+    _cash_above    = _cash_bal - _safety_reserve
+
+    alert_col1, alert_col2 = st.columns(2)
+
+    with alert_col1:
+        st.markdown("#### 🏦 PNC Savings Reserve")
+        _res_c1, _res_c2, _res_c3 = st.columns(3)
+        _res_c1.metric("Current Balance", f"${_cash_bal:,.0f}")
+        _res_c2.metric("Safety Reserve", f"${_safety_reserve:,.0f}")
+        _res_c3.metric(
+            "Buffer Above Reserve",
+            f"${_cash_above:,.0f}" if _cash_above >= 0 else f"-${abs(_cash_above):,.0f}",
+            delta=f"${_cash_above:,.0f}" if _cash_above >= 0 else f"-${abs(_cash_deficit):,.0f}",
+            delta_color="normal" if _cash_above >= 0 else "inverse",
+        )
+
+        if _cash_bal < _safety_reserve:
+            st.error(
+                f"⚠️ **PNC balance is below the safety reserve!** "
+                f"Current: ${_cash_bal:,.0f} · Reserve: ${_safety_reserve:,.0f} · "
+                f"Shortfall: ${_cash_deficit:,.0f}. "
+                f"Consider a Brokerage → Cash transfer before the next withdrawal."
+            )
+        elif _cash_above < _safety_reserve * 0.25:
+            st.warning(
+                f"⚠️ PNC buffer is thin — only ${_cash_above:,.0f} above the "
+                f"${_safety_reserve:,.0f} reserve. "
+                f"Monitor before executing a Roth conversion."
+            )
+        else:
+            st.success(
+                f"✅ PNC balance is healthy — ${_cash_above:,.0f} above the "
+                f"${_safety_reserve:,.0f} reserve."
+            )
+
+    # ── 2. 60-Day Rollover Status ────────────────────────────────────────
+    with alert_col2:
+        st.markdown("#### 🔄 60-Day Rollover Status")
+        _rollover_on = bool(_acfg.get("tax_strategy", "use_60day_rollover_mechanics", True))
+        _s3_rate = int(_acfg.get("tax_strategy", "stage_3_max_conversion_rate", 24))
+        _s4_rate = int(_acfg.get("tax_strategy", "stage_4_max_conversion_rate", 24))
+
+        if _rollover_on:
+            _usable_cash = max(0.0, _cash_above)  # cash above reserve
+            _eff_taxable = float(networth["taxable"].iloc[-1]) if not networth.empty and "taxable" in networth.columns else 0.0
+            _eff_total   = _eff_taxable + _usable_cash
+
+            _roll_c1, _roll_c2, _roll_c3 = st.columns(3)
+            _roll_c1.metric("Brokerage", f"${_eff_taxable:,.0f}")
+            _roll_c2.metric("Usable Cash", f"${_usable_cash:,.0f}")
+            _roll_c3.metric("Effective Tax Pool", f"${_eff_total:,.0f}")
+
+            # Estimate how much conversion the pool can fund at Stage 3 rate
+            _max_conv_s3 = (_eff_total / (_s3_rate / 100)) if _s3_rate > 0 else 0.0
+            _max_conv_s4 = (_eff_total / (_s4_rate / 100)) if _s4_rate > 0 else 0.0
+            st.success(
+                f"✅ **Active** (IRC §408(d)(3)(B))  \n"
+                f"Effective tax pool: **${_eff_total:,.0f}** "
+                f"(${_eff_taxable:,.0f} brokerage + ${_usable_cash:,.0f} usable cash)  \n"
+                f"Can fund conversion up to: **${_max_conv_s3:,.0f}** (Stage 3 @ {_s3_rate}%) · "
+                f"**${_max_conv_s4:,.0f}** (Stage 4 @ {_s4_rate}%)"
+            )
+        else:
+            _brok_bal = float(networth["taxable"].iloc[-1]) if not networth.empty and "taxable" in networth.columns else 0.0
+            _max_conv_brok = (_brok_bal / (_s3_rate / 100)) if _s3_rate > 0 else 0.0
+            st.warning(
+                f"⚠️ **Inactive** — only brokerage (${_brok_bal:,.0f}) counts as the "
+                f"conversion tax source. Max fundable conversion: "
+                f"${_max_conv_brok:,.0f} at {_s3_rate}%.  \n"
+                f"Enable 60-Day Rollover in **⚙️ Settings** to use cash as well."
+            )
+        st.caption(
+            f"Stage 3 withholding rate: {_s3_rate}% · Stage 4: {_s4_rate}%  \n"
+            f"Configure in **⚙️ Settings → January Bracket-Fill Strategy**."
+        )
+
+    # ── 3. DAF Carryforward Projection ──────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🎁 DAF Projection (Next 10 Years)")
+
+    _has_daf     = bool(_acfg.get("charitable_giving", "has_daf", False))
+    _daf_init    = float(_acfg.get("charitable_giving", "daf_initial_contribution", 0) or 0)
+    _daf_annual  = float(_acfg.get("charitable_giving", "daf_annual_contribution", 0) or 0)
+    _daf_start   = int(_acfg.get("charitable_giving", "daf_contribution_start_year", curr_year) or curr_year)
+    _daf_end     = int(_acfg.get("charitable_giving", "daf_contribution_end_year", curr_year) or curr_year)
+    _grant_amt   = float(_acfg.get("charitable_giving", "annual_charitable_giving", 0) or 0)
+    _grant_start_age = int(_acfg.get("charitable_giving", "charitable_giving_start_age", 63) or 63)
+    _grant_infl  = float(_acfg.get("charitable_giving", "charitable_giving_inflation_rate", 2.0) or 2.0) / 100
+    _p1_birth_y  = int((_acfg.get("personal_info", "person1_birth_date", "1966-01-01") or "1966-01-01")[:4])
+    _daf_growth  = 0.06  # Conservative: same as portfolio growth assumption
+
+    if not _has_daf:
+        st.info("ℹ️ No DAF configured. Enable in **⚙️ Settings → Charitable Giving**.")
+    else:
+        # Build a 10-year forward projection
+        import datetime as _dt
+        _proj_start = curr_year
+        _proj_years = list(range(_proj_start, _proj_start + 10))
+
+        # Estimate current DAF balance from networth if available, else use initial contribution
+        # The DAF doesn't appear in a standard account_type but may be in the portfolio
+        _daf_balance_now = _daf_init  # conservative fallback
+        try:
+            if not _portfolio_df.empty and "account_type" in _portfolio_df.columns:
+                _daf_rows = _portfolio_df[_portfolio_df["account_type"] == "DAF"]
+                if not _daf_rows.empty:
+                    _daf_balance_now = float(_daf_rows["market_value"].sum())
+        except Exception:
+            pass
+
+        _daf_rows_proj = []
+        _bal = _daf_balance_now
+        for _yr in _proj_years:
+            _p1_age = _yr - _p1_birth_y
+            # Annual contribution (from config schedule)
+            _contrib = _daf_annual if _daf_start <= _yr <= _daf_end else 0.0
+            # Annual grant (paid from DAF to charities)
+            _grant_yrs_since = max(0, _yr - _proj_start)
+            _grant = _grant_amt * ((1 + _grant_infl) ** _grant_yrs_since) if _p1_age >= _grant_start_age else 0.0
+            # Growth on opening balance before contrib/grant
+            _bal_after_growth = _bal * (1 + _daf_growth)
+            _bal_end = max(0.0, _bal_after_growth + _contrib - _grant)
+            _daf_rows_proj.append({
+                "Year": _yr,
+                "Age": _p1_age,
+                "Opening Balance": _bal,
+                "Contribution": _contrib,
+                "Annual Grant": _grant,
+                "Ending Balance": _bal_end,
+            })
+            _bal = _bal_end
+
+        _daf_df = pd.DataFrame(_daf_rows_proj).set_index("Year")
+
+        # Colour rows where contribution is active
+        _daf_styled = _daf_df.style.format({
+            "Opening Balance": "${:,.0f}",
+            "Contribution":    "${:,.0f}",
+            "Annual Grant":    "${:,.0f}",
+            "Ending Balance":  "${:,.0f}",
+            "Age":             "{:.0f}",
+        }).background_gradient(
+            subset=["Ending Balance"], cmap="YlGn", vmin=0
+        )
+
+        st.dataframe(_daf_styled, use_container_width=True)
+        st.caption(
+            f"Assumes {_daf_growth:.0%}/yr growth on DAF balance · "
+            f"Annual contributions ${_daf_annual:,.0f}/yr from {_daf_start}–{_daf_end} · "
+            f"Grants ${_grant_amt:,.0f}/yr inflating at {_grant_infl * 100:.1f}%/yr starting age {_grant_start_age}. "
+            f"DAF balance shown is approximate — update in **⚙️ Settings → Charitable Giving**."
+        )
+
+except Exception as _alert_err:
+    st.warning(f"⚠️ Could not render strategy alerts: {_alert_err}")
+
+st.markdown("---")
+
 
 
 

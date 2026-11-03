@@ -7,6 +7,8 @@ title: Getting Started
 
 This guide will help you install and configure the Financial Planner application.
 
+> **Easiest route: containers.** To run the app with Docker or Podman on macOS, Linux or Windows, with no Python install, follow the [Container Setup Guide](user/CONTAINER_SETUP.md). The rest of this page covers the native Python install.
+
 ## Quick Start
 
 1. **Clone the repository**

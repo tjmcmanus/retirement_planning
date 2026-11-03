@@ -277,10 +277,17 @@ class Stage6RMD(BaseLifeStageStrategy):
             )
             total_tax = federal_tax + cg_tax
 
-        # Calculate DAF contribution (before rebalancing)
+        # Calculate DAF contribution (before rebalancing).
+        # Use effective taxable (brokerage + usable cash) so the sufficiency check
+        # honours the 60-day rollover setting — consistent with Stages 3, 4, 5.
+        _eff_taxable_daf_s6 = self._effective_taxable_for_conversion(
+            brokerage_balance=balances_with_ss.taxable,
+            cash_balance=balances_with_ss.cash,
+            safety_reserve=self._get_safety_reserve(),
+        )
         daf_contribution, daf_tax_excess = self._calculate_daf_contribution(
             age_primary, age_spouse, std_deduction, agi, year, filing_status,
-            balances_with_ss.taxable
+            _eff_taxable_daf_s6
         )
         
         # Apply spending withdrawal directly so rebalance_accounts sees pre-funded cash
@@ -396,57 +403,67 @@ class Stage6RMD(BaseLifeStageStrategy):
         # Deduct annual charitable grant from DAF (grants paid out each year)
         new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
 
-        # Calculate final AGI and MAGI
+        # ── FINAL TAX CALCULATION VIA AGICalculator ───────────────────────────
+        # RMD is mandatory ordinary income — it counts as a traditional withdrawal
+        # in the tax calculation.  AGICalculator handles deduction, DAF 30% limit,
+        # LTCG stacking, and state tax in a single IRC-compliant pass.
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage'] + rmd_amount
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
         total_ltcg = ltcg_harvested + brokerage_ltcg
-        
-        agi = (taxable_ss + trad_withdrawal + roth_conversion + total_ltcg)
-        magi = agi  # MAGI same as AGI in Stage 6
-        
-        # Calculate state tax
-        state_tax = self._calculate_state_tax(
-            agi, year, filing_status, trad_withdrawal, roth_conversion, taxable_ss, state
+
+        _agi_calc = AGICalculator(tax_calculator=self.tax_calculator)
+        _property_tax = self._get_property_tax_from_config() if hasattr(self, '_get_property_tax_from_config') else 0.0
+        tax_result = _agi_calc.calculate_agi_and_taxes(
+            year=year,
+            filing_status=filing_status,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            traditional_withdrawal=trad_withdrawal,
+            roth_conversion=roth_conversion,
+            brokerage_ltcg=total_ltcg,
+            brokerage_basis=0.0,
+            daf_fmv=daf_contribution,
+            state=state or 'PA',
+            property_tax=_property_tax,
+            daf_carryforward_prior=_daf_carryforward_prior,
+            ss_benefits=ss_benefits,
+            taxable_ss=taxable_ss,
         )
-        
+
+        agi        = tax_result['agi_pre_deduction']
+        magi       = agi
+        federal_tax = tax_result['federal_ordinary_tax']
+        cg_tax     = tax_result['ltcg_tax']
+        state_tax  = tax_result['state_tax']
+        total_tax  = tax_result['total_tax']
+        _daf_deductible_s6 = tax_result['daf_deductible_this_year']
+
+        # Credit DAF balance
+        if daf_contribution > 0:
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=max(0.0, new_balances.taxable - daf_contribution),
+                traditional=new_balances.traditional,
+                roth=new_balances.roth,
+                daf=new_balances.daf + daf_contribution,
+            )
+
         # Deduct state tax from cash balance
         new_balances = self._deduct_tax_from_balances(new_balances, state_tax, "State Tax", year)
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
-        
-        # If DAF contribution made (or carryforward available), recalculate federal tax
-        _daf_deductible_s6 = 0.0
-        if daf_contribution > 0 or _daf_carryforward_prior > 0:
-            if daf_contribution > 0:
-                new_balances = PortfolioBalances(
-                    cash=new_balances.cash,
-                    taxable=max(0.0, new_balances.taxable - daf_contribution),
-                    traditional=new_balances.traditional,
-                    roth=new_balances.roth,
-                    daf=new_balances.daf + daf_contribution
-                )
 
-            # Apply 30% AGI cap + carryforward (IRC §170)
-            _daf_available_s6 = daf_contribution + _daf_carryforward_prior
-            _daf_30pct_s6 = agi * 0.30
-            _daf_deductible_s6 = min(_daf_available_s6, _daf_30pct_s6)
-            _salt_s6 = min(state_tax + (self._get_property_tax() if hasattr(self, '_get_property_tax') else 0.0), 10_000.0)
-            _total_itemised_s6 = _daf_deductible_s6 + _salt_s6
-            daf_tax_excess = max(0.0, _total_itemised_s6 - std_deduction)
-            effective_deduction = std_deduction + daf_tax_excess
-            federal_tax, cg_tax = self._calculate_taxes(
-                agi - effective_deduction, total_ltcg, year, filing_status
+        if _daf_deductible_s6 > 0:
+            logger.info(
+                f"Year {year}: Federal tax reduced by DAF deduction "
+                f"(deductible: ${_daf_deductible_s6:,.0f}, "
+                f"carryforward: ${tax_result['daf_carryforward_new']:,.0f})"
             )
-            total_tax = federal_tax + cg_tax
-
-            logger.info(f"Year {year}: Federal tax reduced by DAF deduction "
-                        f"(deductible: ${_daf_deductible_s6:,.0f}, excess over std: ${daf_tax_excess:,.0f})")
-
             self._log_decision(
                 strategy, 'daf_decisions', 'DAF Contribution',
                 f'${daf_contribution:,.0f} contributed to DAF',
-                f'Tax excess: ${daf_tax_excess:,.0f}',
+                f'Deductible: ${_daf_deductible_s6:,.0f}',
                 daf_contribution=daf_contribution,
-                daf_tax_excess=daf_tax_excess
+                daf_deductible=_daf_deductible_s6,
             )
         
         # Get cost basis ratios
@@ -834,7 +851,7 @@ class Stage6RMD(BaseLifeStageStrategy):
                 next_irmaa_threshold = float('inf')
                 for _, row in irmaa_brackets.iterrows():
                     if row['lower'] <= prior_magi <= row['upper']:
-                        next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] > row['upper']])
+                        next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] >= row['upper']])
                         if not next_brackets.empty:
                             next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                         break

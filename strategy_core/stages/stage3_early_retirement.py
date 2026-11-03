@@ -377,15 +377,20 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
 
             # Step 4: DAF bundling contribution — now that Brokerage is funded by the
             # pre-fund, the bundled DAF contribution can fire in this same year if the
-            # balance is sufficient. Pass the post-prefund brokerage balance so the
-            # sufficiency check inside _calculate_daf_for_year uses the updated amount.
+            # balance is sufficient. Use effective taxable (brokerage + usable cash)
+            # so the sufficiency check honours the 60-day rollover setting.
+            _eff_taxable_daf_pf = self._effective_taxable_for_conversion(
+                brokerage_balance=new_balances.taxable,  # post-prefund brokerage
+                cash_balance=new_balances.cash,
+                safety_reserve=self._get_safety_reserve(),
+            )
             daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
                 strategy,
                 age_primary,
                 age_spouse,
                 std_deduction,
                 state,
-                new_balances.taxable,   # post-prefund brokerage balance
+                _eff_taxable_daf_pf,
                 year,
                 filing_status,
             )
@@ -462,6 +467,13 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
             # Calculate bracket space for conversions (config rate, not just 12%)
             roth_conversion = 0.0
             if available_for_conversion > 0:
+                # When 60-day rollover is enabled, cash (above safety reserve) can fund
+                # the tax withholding, so BETR sees a larger effective taxable balance.
+                _eff_taxable = self._effective_taxable_for_conversion(
+                    brokerage_balance=balances.taxable,
+                    cash_balance=balances.cash,
+                    safety_reserve=self._get_safety_reserve(),
+                )
                 # Use BETR to optimize conversion within the max_conversion_rate bracket
                 roth_conversion = self._calculate_betr_roth_conversion(
                     strategy,
@@ -469,30 +481,47 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                     anticipated_needs,
                     max_conversion_rate,
                     age_primary,
-                    balances.taxable,
+                    _eff_taxable,
                     growth_rate,
                     year
                 )
             
             if roth_conversion > 0:
+                _rollover_note = (
+                    f" [60-day rollover: cash ${balances.cash:,.0f} + brokerage "
+                    f"${balances.taxable:,.0f} = ${_eff_taxable:,.0f} effective tax source]"
+                    if self._use_60day_rollover() and _eff_taxable > balances.taxable
+                    else ""
+                )
                 self._log_decision(
                     strategy,
                     'roth_conversion',
                     'Roth Conversion - After Spending',
                     f'Roth conversion: ${roth_conversion:,.0f} at {max_conversion_rate:.0%}',
                     f'After funding spending with ${_jan_spending_withdrawal:,.0f}, available bracket space '
-                    f'for Roth conversions up to {max_conversion_rate:.0%} bracket is ${roth_conversion:,.0f}.',
+                    f'for Roth conversions up to {max_conversion_rate:.0%} bracket is ${roth_conversion:,.0f}.'
+                    f'{_rollover_note}',
                     roth_conversion=roth_conversion,
+                    sixty_day_rollover_active=self._use_60day_rollover(),
+                    effective_taxable_balance=_eff_taxable,
                 )
 
-            # Calculate DAF contribution and optimization
+            # Calculate DAF contribution and optimization.
+            # When 60-day rollover is ON, cash above the safety reserve supplements
+            # brokerage as the source for the DAF sufficiency check — same logic as
+            # for BETR conversion tax.
+            _eff_taxable_daf = self._effective_taxable_for_conversion(
+                brokerage_balance=balances.taxable,
+                cash_balance=balances.cash,
+                safety_reserve=self._get_safety_reserve(),
+            )
             daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
                 strategy,
                 age_primary,
                 age_spouse,
                 std_deduction,
                 state,
-                balances.taxable,
+                _eff_taxable_daf,
                 year,
                 filing_status
             )

@@ -1,6 +1,12 @@
 """
 60-Day Rollover Rule Handler for Roth Conversions
 
+⚠️  UNCONNECTED SCAFFOLDING — This class is NOT called by the live engine.
+    The live 60-day rollover path uses _use_60day_rollover() and
+    _effective_taxable_for_conversion() in strategy_core/base_strategy.py directly.
+    This class is only referenced by example scripts and january_bracket_fill_strategy.py.
+    See IMPLEMENTATION_ROADMAP.md → UNCONNECTED SCAFFOLDING for full details.
+
 Implements the IRS 60-day rule for Roth conversions with withholding:
 - When converting from Traditional IRA to Roth, if taxes are withheld
 - The withheld amount must be redeposited within 60 days

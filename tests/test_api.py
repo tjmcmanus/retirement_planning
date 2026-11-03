@@ -536,6 +536,33 @@ def test_trad_prefund_schedule_saves_validates_and_drives_engine(client):
     assert calc(None, 61, 2027, 150_000, 100_000) == 50000  # capped by Traditional minus reserved
 
 
+def test_saving_tax_strategy_invalidates_cached_strategy(client, monkeypatch):
+    """Applying a withdrawal/Roth strategy must recompute the plan, not return the cached one."""
+    import pandas as pd
+    from app.services import strategy_service
+
+    seen = []
+
+    def fake_build(**kwargs):
+        from config import get_config_manager
+        seen.append(get_config_manager().get("tax_strategy", "withdrawal_sequence"))
+        df = pd.DataFrame([{"Year": 2027, "Federal Tax": 1.0}])
+        return df, df[["Year"]]
+
+    monkeypatch.setattr(strategy_service, "build_withdrawal_strategy_display", fake_build)
+    strategy_service.clear_strategy_cache()
+
+    client.get("/api/strategy")
+    client.get("/api/strategy")
+    assert len(seen) == 1  # still memoised between unrelated reads
+
+    r = client.put("/api/config", json={"changes": {"tax_strategy": {"withdrawal_sequence": "pro_rata"}}})
+    assert r.status_code == 200
+    client.get("/api/strategy")
+    assert seen == [seen[0], "pro_rata"]  # recomputed with the new setting
+    strategy_service.clear_strategy_cache()
+
+
 def test_strategy_decisions_endpoint_returns_reasons_and_strategy_stays_plain_json(client, monkeypatch):
     import pandas as pd
     from app.services import strategy_service

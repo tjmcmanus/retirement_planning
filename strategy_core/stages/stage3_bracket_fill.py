@@ -1,6 +1,12 @@
 """
 Stage 3 Early Retirement - January Bracket-Fill Implementation
 
+⚠️  UNCONNECTED SCAFFOLDING — This class is NOT in stages/__init__.py and is NOT
+    imported by strategy.py. The live engine uses stage3_early_retirement.py instead.
+    This file depends on withdrawal_orchestrator.py (also unconnected).
+    Only referenced by example scripts under scripts/.
+    See IMPLEMENTATION_ROADMAP.md → UNCONNECTED SCAFFOLDING for full details.
+
 Refactored to use the new simplified bracket-fill withdrawal strategy
 with ACA subsidy optimization as the highest priority.
 """

@@ -84,9 +84,14 @@ class TaxCalculator(ITaxCalculator):
         """
         if taxable_income <= 0:
             return 0.0, 0.0, 0.0
-        
+
+        # Normalise filing_status case to match CSV data (e.g. 'Single' → 'single')
+        _fs = filing_status.lower()
+        if _fs == 'married':
+            _fs = 'married_filing_jointly'
+
         try:
-            brackets = self._get_income_tax_brackets(filing_status, year)
+            brackets = self._get_income_tax_brackets(_fs, year)
         except Exception as e:
             logger.error(f"Error getting tax brackets: {e}")
             raise
@@ -150,9 +155,14 @@ class TaxCalculator(ITaxCalculator):
         """
         if ltcg <= 0:
             return 0.0
-        
+
+        # Normalise filing_status case to match CSV data
+        _fs_cg = filing_status.lower()
+        if _fs_cg == 'married':
+            _fs_cg = 'married_filing_jointly'
+
         try:
-            brackets = self._get_cap_gains_brackets(year, filing_status)
+            brackets = self._get_cap_gains_brackets(year, _fs_cg)
         except Exception as e:
             logger.error(f"Error getting capital gains brackets: {e}")
             raise
@@ -339,8 +349,11 @@ class TaxCalculator(ITaxCalculator):
         Returns:
             Standard deduction amount
         """
-        # Normalize 'married' → 'married_filing_jointly' to match CSV data
-        _fs = 'married_filing_jointly' if filing_status == 'married' else filing_status
+        # Normalize filing status to match CSV data
+        # 'married' → 'married_filing_jointly'; capitalised forms → lowercase
+        _fs = filing_status.lower()
+        if _fs == 'married':
+            _fs = 'married_filing_jointly'
         try:
             deduction_df = self._get_std_deduction(year, _fs)
             # Extract the numeric value from the DataFrame

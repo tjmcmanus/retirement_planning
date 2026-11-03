@@ -2,6 +2,8 @@
 
 Get the application running and loaded with your data in about 10 minutes.
 
+> **Prefer containers?** The [Container Setup Guide](CONTAINER_SETUP.md) runs everything with Docker or Podman on macOS, Linux or Windows, with no Python install. This guide covers the native Python route.
+
 ---
 
 ## 1. Prerequisites

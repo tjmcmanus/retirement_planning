@@ -1,4 +1,4 @@
-# Run with:  ./start.sh      (or: podman compose up -d --build)
+# Run with:  ./start.sh      (or: podman compose up -d --build / docker compose up -d --build)
 # Needs a .env file (./start.sh creates it from .env.example when missing). Data persists in the retirement_data volume.
 name: retirement-planning
 

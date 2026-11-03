@@ -262,6 +262,14 @@ class Stage4Medicare(BaseLifeStageStrategy):
             balances.traditional - anticipated_needs['total_traditional_need'] - _jan_spending_withdrawal
         )
         
+        # When 60-day rollover is enabled, cash (above safety reserve) can fund
+        # the tax withholding, so BETR sees a larger effective taxable balance.
+        _eff_taxable = self._effective_taxable_for_conversion(
+            brokerage_balance=balances.taxable,
+            cash_balance=balances.cash,
+            safety_reserve=self._get_safety_reserve(),
+        )
+
         # Calculate optimal Roth conversion using BETR with IRMAA constraints
         if _prefund_amount > 0:
             roth_conversion, optimal_amount = 0.0, 0.0
@@ -273,12 +281,18 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 irmaa_headroom,
                 max_conversion_rate,
                 age_primary,
-                balances.taxable,
+                _eff_taxable,
                 growth_rate,
                 year
             )
         
         if roth_conversion > 0:
+            _rollover_note = (
+                f" [60-day rollover: cash ${balances.cash:,.0f} + brokerage "
+                f"${balances.taxable:,.0f} = ${_eff_taxable:,.0f} effective tax source]"
+                if self._use_60day_rollover() and _eff_taxable > balances.taxable
+                else ""
+            )
             self._log_decision(
                 strategy,
                 'roth_conversion',
@@ -286,18 +300,27 @@ class Stage4Medicare(BaseLifeStageStrategy):
                 f'Roth conversion: ${roth_conversion:,.0f} at {max_conversion_rate:.0%}',
                 f'After funding spending with ${_jan_spending_withdrawal:,.0f}, available bracket space '
                 f'for Roth conversions up to {max_conversion_rate:.0%} bracket (IRMAA limit: ${irmaa_headroom:,.0f}) '
-                f'is ${roth_conversion:,.0f}.',
+                f'is ${roth_conversion:,.0f}.{_rollover_note}',
                 roth_conversion=roth_conversion,
+                sixty_day_rollover_active=self._use_60day_rollover(),
+                effective_taxable_balance=_eff_taxable,
             )
         
-        # Calculate DAF contribution and optimization
+        # Calculate DAF contribution and optimization.
+        # Use effective taxable (brokerage + usable cash) so the sufficiency
+        # check honours the 60-day rollover setting — same as BETR.
+        _eff_taxable_daf = self._effective_taxable_for_conversion(
+            brokerage_balance=balances.taxable,
+            cash_balance=balances.cash,
+            safety_reserve=self._get_safety_reserve(),
+        )
         daf_contribution, daf_tax_excess = self._calculate_daf_optimization(
             strategy,
             age_primary,
             age_spouse,
             std_deduction,
             state,
-            balances.taxable,
+            _eff_taxable_daf,
             year,
             filing_status
         )
@@ -421,7 +444,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             age_primary=age_primary,
             age_spouse=age_spouse,
             daf_carryforward_prior=_daf_carryforward_prior,
-            property_tax=0.0  # TODO: add to config
+            property_tax=self._get_property_tax_from_config(),
         )
         
         # Deduct DAF contribution from Brokerage (HIFO lot removal) and credit DAF balance
@@ -553,7 +576,7 @@ class Stage4Medicare(BaseLifeStageStrategy):
             for _, row in irmaa_brackets.iterrows():
                 if row['lower'] <= prior_magi <= row['upper']:
                     # Find next bracket
-                    next_brackets = irmaa_brackets[irmaa_brackets['lower'] > row['upper']]
+                    next_brackets = irmaa_brackets[irmaa_brackets['lower'] >= row['upper']]
                     if not next_brackets.empty:
                         next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                     break
@@ -996,6 +1019,18 @@ class Stage4Medicare(BaseLifeStageStrategy):
             logger.error(f"Fallback conversion calculation failed: {e}")
             return 0.0
     
+    def _get_property_tax_from_config(self) -> float:
+        """Read annual property tax from config for SALT calculation."""
+        try:
+            from config import get_config_manager
+            config_mgr = get_config_manager()
+            return float(
+                config_mgr.get("expenses", "living_expenses", {}).get("property_tax", 0)
+            )
+        except Exception:
+            return 0.0
+
+
     def _calculate_daf_optimization(
         self,
         strategy: YearlyStrategy,

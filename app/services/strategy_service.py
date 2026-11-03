@@ -14,13 +14,12 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import math
-import threading
-import time
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+import app_cache
 from config import get_config_manager, reload_config
 from strategy import build_withdrawal_strategy_display
 
@@ -56,25 +55,19 @@ def df_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 # Internal: build strategy DataFrame (cached per process run)
 # ---------------------------------------------------------------------------
 
-_strategy_cache: dict[tuple[int | None, int], tuple[float, pd.DataFrame, pd.DataFrame, dict]] = {}
-_cache_lock = threading.Lock()
 _CACHE_TTL = 300.0
 
 
 def clear_strategy_cache() -> None:
-    with _cache_lock:
-        _strategy_cache.clear()
+    _build_strategy.clear()
 
 
+# Cached through app_cache so that app_cache.clear_all() (called after every config,
+# tax-table and portfolio save) also drops it. A private cache here was never cleared,
+# so changing a tax strategy kept returning the previous plan for up to 5 minutes.
+@app_cache.cache_data(ttl=_CACHE_TTL)
 def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Return (strategy_df, balances_df, cfg_snapshot) with thread-safe caching."""
-    now = time.monotonic()
-    key = (start_year, end_year)
-    with _cache_lock:
-        hit = _strategy_cache.get(key)
-        if hit is not None and (now - hit[0] < _CACHE_TTL):
-            return hit[1].copy(), hit[2].copy(), dict(hit[3])
-
+    """Return (strategy_df, balances_df, cfg_snapshot); results are memoised by app_cache."""
     reload_config()
     cfg = get_config_manager()
     effective_start = start_year or dt.date.today().year
@@ -106,9 +99,7 @@ def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame
         "person2_retirement_age": int(cfg.get("personal_info", "person2_retirement_age", 62) or 62),
         "annual_expenses": float(cfg.get("financial_assumptions", "expected_annual_expenses", 120_000) or 120_000),
     }
-    with _cache_lock:
-        _strategy_cache[key] = (now, strategy_df, balances_df, cfg_snap)
-    return strategy_df.copy(), balances_df.copy(), dict(cfg_snap)
+    return strategy_df, balances_df, cfg_snap
 
 
 # ---------------------------------------------------------------------------

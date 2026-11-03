@@ -208,7 +208,7 @@ Deliverables:
 2. A real Schwab/SnapTrade login was not exercised (needs interactive browser login).
 3. `.env.example` still carries a real-looking `ENCRYPTION_KEY`. The key must be identical to the one that encrypted any existing `credentials.db`.
 4. Scheduler ownership (`DISABLE_SCHEDULER`) is not implemented yet; only one Streamlit container runs, so not needed until the FastAPI service exists.
-5. `start.ps1` for Windows is not written yet.
+5. ~~`start.ps1` for Windows is not written yet.~~ Done: `start.ps1` and `start.bat` exist, and `start.sh`/`start.ps1` auto-detect Podman or Docker. User-facing instructions are in [`user/CONTAINER_SETUP.md`](user/CONTAINER_SETUP.md). The Windows scripts have not been run on a Windows machine.
 6. `./start.sh rebuild` now uses `--force-recreate` (previously it rebuilt the image but kept the old container running).
 7. Tracked files `portfolio.db-shm/-wal/.bak` are committed to git; the working tree shows the WAL files deleted (SQLite checkpointed them). Untrack them rather than restoring.
 8. The `pytest` target in CI installs `podman-compose` via `requirements.txt` (harmless).

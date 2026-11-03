@@ -99,49 +99,56 @@ class AGICalculator:
         pa_rate: float = 0.0307,
         property_tax: float = 0.0,
         daf_carryforward_prior: float = 0.0,
-        tax_calculator=None
+        tax_calculator=None,
+        ss_benefits: float = 0.0,
+        taxable_ss: float = 0.0,
     ) -> Dict:
         """
         Calculate AGI and taxes with correct order.
-        
+
+        Supports pre-SS stages (Stages 3 & 4) and SS/RMD stages (Stages 5, 6, 7).
+        When ss_benefits > 0, pass the pre-computed taxable_ss amount (from
+        calculate_ss_taxable_amount) so that Social Security income is included in
+        gross ordinary income at the correct taxable fraction.
+
         STEP 1: Gross Ordinary Income
-          = Traditional + Roth Conversion
+          = Traditional + Roth Conversion [+ Taxable SS if ss_benefits > 0]
           (NOT including Brokerage basis — basis is return of capital, not income)
-        
+
         STEP 2: Pre-deduction AGI
           = Gross Ordinary + LTCG
           (used for 30% DAF limit calculation)
-        
+
         STEP 3: DAF Deduction
           - DAF FMV available this year
           - 30% AGI limit
           - Use carryforward if available
           - Excess carries forward
-        
+
         STEP 4: Itemized vs. Standard Deduction
           - Itemized = DAF deductible + SALT (capped $10k)
           - Standard = age-adjusted per IRS tables
           - Use max of two
-        
+
         STEP 5: Taxable Ordinary Income
           = Gross Ordinary - Deduction
-        
+
         STEP 6: Federal Ordinary Tax
           - Tax calculator on Taxable Ordinary
           - Max rate and bracket tracking
-        
+
         STEP 7: LTCG Tax
           - LTCG stacks on top of Taxable Ordinary
           - Use LTCG-specific brackets
-        
+
         STEP 8: State Tax
           - On Taxable Ordinary only (PA doesn't tax LTCG)
-        
+
         Args:
             year: Tax year
             filing_status: 'married_filing_jointly', 'single', etc.
             age_primary: Primary taxpayer age
-            age_spouse: Spouse age
+            age_spouse: Spouse age (pass 0 for single / surviving spouse)
             traditional_withdrawal: Traditional IRA/401k withdrawal (before conversions/withholding)
             roth_conversion: Roth conversion amount (ordinary income)
             brokerage_ltcg: Long-term capital gain realized (ONLY the gain, not basis)
@@ -152,7 +159,11 @@ class AGICalculator:
             property_tax: Property tax for SALT calculation
             daf_carryforward_prior: DAF carryforward from prior years (if any)
             tax_calculator: Optional tax calculator (uses self.tax_calculator if not provided)
-        
+            ss_benefits: Annual Social Security benefits (gross, before taxation). Pass 0 for Stages 3/4.
+            taxable_ss: Pre-computed taxable SS amount (from calculate_ss_taxable_amount).
+                        Only used when ss_benefits > 0. If ss_benefits > 0 but taxable_ss = 0,
+                        the fallback of 85% × ss_benefits is used.
+
         Returns:
             Dict with complete AGI and tax breakdown:
               {
@@ -173,28 +184,40 @@ class AGICalculator:
                 'total_tax': float,
                 'max_federal_rate': float,
                 'upper_bracket': float,
+                'taxable_ss': float,       # SS income included in gross_ordinary
               }
         """
         calc = tax_calculator or self.tax_calculator
         if not calc:
             raise ValueError("tax_calculator required but not provided")
-        
+
+        # Resolve taxable SS: use supplied value when SS present; fall back to 85% cap.
+        _taxable_ss = 0.0
+        if ss_benefits > 0:
+            _taxable_ss = taxable_ss if taxable_ss > 0 else ss_benefits * 0.85
+
         logger.debug(
             f"AGI calculation for year {year}: "
             f"trad=${traditional_withdrawal:,.0f}, "
             f"roth=${roth_conversion:,.0f}, "
+            f"ss=${ss_benefits:,.0f} (taxable=${_taxable_ss:,.0f}), "
             f"ltcg=${brokerage_ltcg:,.0f}, "
             f"basis=${brokerage_basis:,.0f}, "
             f"daf=${daf_fmv:,.0f}"
         )
-        
+
         # ─────────────────────────────────────────────────────────────────────────
         # STEP 1: Gross Ordinary Income
         # NOTE: Brokerage BASIS is NOT included. Basis is return of capital (already-taxed money).
         # Only GAINS are taxable income. Basis is used for cash flow but not AGI.
+        # When SS benefits are present, only the taxable fraction enters AGI.
         # ─────────────────────────────────────────────────────────────────────────
-        gross_ordinary = traditional_withdrawal + roth_conversion
-        logger.debug(f"Gross ordinary: {traditional_withdrawal} + {roth_conversion} = {gross_ordinary}")
+        gross_ordinary = traditional_withdrawal + roth_conversion + _taxable_ss
+        logger.debug(
+            f"Gross ordinary: {traditional_withdrawal} + {roth_conversion}"
+            + (f" + {_taxable_ss} (taxable SS)" if _taxable_ss else "")
+            + f" = {gross_ordinary}"
+        )
         
         # ─────────────────────────────────────────────────────────────────────────
         # STEP 2: Pre-deduction AGI (used for 30% DAF limit)
@@ -289,7 +312,7 @@ class AGICalculator:
             year=year,
             filing_status=filing_status,
             retirement_income=traditional_withdrawal,
-            ss_benefits=0.0,  # Stage 3 (pre-SS) use case; override if SS present
+            ss_benefits=_taxable_ss,  # 0 for Stages 3/4; taxable SS for Stages 5/6/7
             roth_conversion=roth_conversion
         )
         logger.debug(f"State tax ({state}): ${state_tax:,.0f}")
@@ -321,4 +344,5 @@ class AGICalculator:
             'total_tax': total_tax,
             'max_federal_rate': max_federal_rate,
             'upper_bracket': upper_bracket,
+            'taxable_ss': _taxable_ss,
         }

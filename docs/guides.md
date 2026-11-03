@@ -162,8 +162,11 @@ Comprehensive step-by-step guides for using the Financial Planner application.
 
 1. **Launch the Application**
    ```bash
+   ./start.sh      # containers (Docker or Podman); Windows: start.bat
+   # or, for a native Python install:
    ./run.sh
    ```
+   See the [Container Setup Guide](user/CONTAINER_SETUP.md).
 
 2. **Configure Personal Information**
    - Navigate to Configuration page

@@ -312,10 +312,16 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
                 std_deduction, year, filing_status
             )
 
-        # Calculate DAF contribution
+        # Calculate DAF contribution — use effective taxable (brokerage + usable cash)
+        # so the sufficiency check honours the 60-day rollover setting.
+        _eff_taxable_daf_s5 = self._effective_taxable_for_conversion(
+            brokerage_balance=balances_with_ss.taxable,
+            cash_balance=balances_with_ss.cash,
+            safety_reserve=self._get_safety_reserve(),
+        )
         daf_contribution, daf_tax_excess = self._calculate_daf_contribution(
             age_primary, age_spouse, std_deduction, taxable_ss, year,
-            filing_status, balances_with_ss.taxable
+            filing_status, _eff_taxable_daf_s5
         )
         
         # DAF optimization: enhance Roth conversion with DAF tax space
@@ -412,64 +418,68 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         # Deduct annual charitable grant from DAF (grants paid out each year)
         new_balances = self._deduct_daf_annual_grant(new_balances, year, start_year)
 
-        # Calculate final AGI and taxes
+        # ── FINAL TAX CALCULATION VIA AGICalculator ───────────────────────────
+        # Recalculate taxable SS using actual (post-rebalancing) income, then
+        # delegate all AGI / deduction / DAF / LTCG / federal / state tax
+        # arithmetic to AGICalculator — the same IRC-compliant path used by
+        # Stages 3 & 4.
         trad_withdrawal = transactions['traditional_to_cash'] + transactions['traditional_to_brokerage']
         brokerage_ltcg = transactions.get('brokerage_ltcg', 0.0)
         total_ltcg = ltcg_harvested + brokerage_ltcg
-        
-        # Recalculate taxable SS with actual income
+
+        # Final taxable SS: re-derive with actual trad + roth + ltcg as combined income
         taxable_ss = self._calculate_ss_taxation(
-            ss_benefits, total_ltcg + roth_conversion + trad_withdrawal, filing_status
+            ss_benefits, trad_withdrawal + roth_conversion + total_ltcg, filing_status
         )
-        
         logger.debug(f"SS taxation (final): ${ss_benefits:,.0f} → ${taxable_ss:,.0f} taxable")
-        
-        # Calculate final taxes
-        total_income = taxable_ss + total_ltcg + roth_conversion + trad_withdrawal
-        agi = total_income
-        magi = agi
-        
-        federal_tax, cg_tax = self._calculate_taxes(
-            agi, std_deduction, total_ltcg, year, filing_status
+
+        _agi_calc = AGICalculator(tax_calculator=self.tax_calculator)
+        _property_tax = self._get_property_tax_from_config() if hasattr(self, '_get_property_tax_from_config') else 0.0
+        tax_result = _agi_calc.calculate_agi_and_taxes(
+            year=year,
+            filing_status=filing_status,
+            age_primary=age_primary,
+            age_spouse=age_spouse,
+            traditional_withdrawal=trad_withdrawal,
+            roth_conversion=roth_conversion,
+            brokerage_ltcg=total_ltcg,
+            brokerage_basis=0.0,
+            daf_fmv=daf_contribution,
+            state=state or 'PA',
+            property_tax=_property_tax,
+            daf_carryforward_prior=_daf_carryforward_prior,
+            ss_benefits=ss_benefits,
+            taxable_ss=taxable_ss,
         )
-        total_tax = federal_tax + cg_tax
-        
-        # Calculate state tax
-        state_tax = self._calculate_state_tax(
-            agi, year, filing_status, trad_withdrawal, roth_conversion, taxable_ss, state
-        )
-        
+
+        agi        = tax_result['agi_pre_deduction']
+        magi       = agi
+        federal_tax = tax_result['federal_ordinary_tax']
+        cg_tax     = tax_result['ltcg_tax']
+        state_tax  = tax_result['state_tax']
+        total_tax  = tax_result['total_tax']
+        _daf_deductible_s5 = tax_result['daf_deductible_this_year']
+
+        # Credit DAF balance now that we have the final contribution amount
+        if daf_contribution > 0:
+            new_balances = PortfolioBalances(
+                cash=new_balances.cash,
+                taxable=new_balances.taxable,
+                traditional=new_balances.traditional,
+                roth=new_balances.roth,
+                daf=new_balances.daf + daf_contribution,
+            )
+
         # Deduct state tax from cash balance
         new_balances = self._deduct_tax_from_balances(new_balances, state_tax, "State Tax", year)
         logger.info(f"Year {year}: Deducted state tax ${state_tax:,.2f} from cash")
-        
-        # If DAF contribution made, recalculate taxes with increased deduction
-        _daf_deductible_s5 = 0.0
-        if daf_contribution > 0 or _daf_carryforward_prior > 0:
-            if daf_contribution > 0:
-                new_balances = PortfolioBalances(
-                    cash=new_balances.cash,
-                    taxable=new_balances.taxable,
-                    traditional=new_balances.traditional,
-                    roth=new_balances.roth,
-                    daf=new_balances.daf + daf_contribution
-                )
 
-            # Apply 30% AGI cap + carryforward (IRC §170)
-            _daf_available_s5 = daf_contribution + _daf_carryforward_prior
-            _daf_30pct_s5 = agi * 0.30
-            _daf_deductible_s5 = min(_daf_available_s5, _daf_30pct_s5)
-            _salt_s5 = min(state_tax + (self._get_property_tax() if hasattr(self, '_get_property_tax') else 0.0), 10_000.0)
-            _total_itemised_s5 = _daf_deductible_s5 + _salt_s5
-            daf_tax_excess = max(0.0, _total_itemised_s5 - std_deduction)
-            effective_deduction = std_deduction + daf_tax_excess
-            federal_tax, cg_tax = self._calculate_taxes(
-                agi, effective_deduction, total_ltcg, year, filing_status
+        if _daf_deductible_s5 > 0:
+            logger.info(
+                f"Year {year}: Federal tax reduced by DAF deduction "
+                f"(deductible: ${_daf_deductible_s5:,.0f}, "
+                f"carryforward: ${tax_result['daf_carryforward_new']:,.0f})"
             )
-            total_tax = federal_tax + cg_tax
-
-            logger.info(f"Year {year}: Federal tax reduced by DAF deduction "
-                        f"(deductible: ${_daf_deductible_s5:,.0f}, excess over std: ${daf_tax_excess:,.0f})")
         
         # Get cost basis ratios
         if brokerage_account:
@@ -645,11 +655,16 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             cg_brackets = pd.DataFrame(get_cap_gains_brackets(year))
             
             preliminary_income = taxable_ss + ltcg + conversion
-            preliminary_taxable_income = preliminary_income - std_deduction
-            
+            # Clamp to zero: SS + LTCG + conversion can be less than the standard
+            # deduction (especially in early SS years or when there is no conversion).
+            # calculate_taxable_income treats negative income as a warning; clamping
+            # here is the correct economic interpretation (zero tax owed).
+            preliminary_taxable_income = max(0.0, preliminary_income - std_deduction)
+            ordinary_income = max(0.0, preliminary_taxable_income - ltcg)
+
             result = calculate_taxable_income(preliminary_taxable_income, tax_brackets)
             federal_tax = result.total_tax
-            cg_tax = calculate_cap_gains(preliminary_taxable_income - ltcg, cg_brackets, ltcg)
+            cg_tax = calculate_cap_gains(ordinary_income, cg_brackets, ltcg)
             
             return federal_tax + cg_tax
         except Exception as e:
@@ -790,7 +805,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
             
             for _, row in irmaa_brackets.iterrows():
                 if row['lower'] <= prior_magi <= row['upper']:
-                    next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] > row['upper']])
+                    next_brackets = pd.DataFrame(irmaa_brackets[irmaa_brackets['lower'] >= row['upper']])
                     if not next_brackets.empty:
                         next_irmaa_threshold = float(next_brackets.iloc[0]['lower'])
                     break
@@ -817,13 +832,21 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
         """Calculate optimal Roth conversion using BETR with constraints."""
         roth_conversion = 0.0
         optimal_amount = 0.0
-        
+
         try:
             from betr_roth_conversion import optimize_conversion_amount, BETRInputs, calculate_betr
             from calculations import get_stage_specific_conversion_rate
-            
+
             stage_max_conversion_rate = get_stage_specific_conversion_rate(self.name)
-            
+
+            # When 60-day rollover is ON, cash above the safety reserve supplements
+            # brokerage as the source for the conversion tax — same logic as Stage 3/4.
+            _eff_taxable_s5 = self._effective_taxable_for_conversion(
+                brokerage_balance=balances.taxable,
+                cash_balance=balances.cash,
+                safety_reserve=self._get_safety_reserve(),
+            )
+
             # Use BETR algorithm
             optimal_amount, betr_results = optimize_conversion_amount(
                 traditional_ira_balance=available_for_conversion,
@@ -831,7 +854,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
                 target_tax_bracket=stage_max_conversion_rate,
                 year=year,
                 pay_from_taxable=True,
-                taxable_account_balance=balances.taxable,
+                taxable_account_balance=_eff_taxable_s5,
                 years_to_withdrawal=(get_rmd_age(year - age_primary) - age_primary) if age_primary > 0 else 10,
                 annual_return=growth_rate - 1.0
             )
@@ -865,7 +888,7 @@ class Stage5SocialSecurity(BaseLifeStageStrategy):
                     conversion_amount=max_safe_conversion,
                     traditional_ira_balance=balances.traditional,
                     pay_from_taxable=True,
-                    taxable_account_balance=balances.taxable,
+                    taxable_account_balance=_eff_taxable_s5,
                     years_to_withdrawal=(get_rmd_age(year - age_primary) - age_primary) if age_primary > 0 else 10,
                     annual_return=growth_rate - 1.0
                 )

@@ -1,6 +1,12 @@
 """
 Advanced Withdrawal Strategy Optimization Module
 
+⚠️  DEAD CODE — This module has zero importers in the live application.
+    It is not used by any page, service, strategy stage, or active test.
+    The optimization logic it describes is handled inline by the live stage
+    files (stage3_early_retirement.py, stage4_medicare.py, etc.).
+    Safe to delete. Kept for reference only.
+
 Implements sophisticated optimization techniques for retirement withdrawal strategies:
 - Multi-year tax planning with look-ahead optimization
 - Dynamic Roth conversion optimization based on future tax projections
