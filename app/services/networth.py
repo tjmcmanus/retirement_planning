@@ -22,7 +22,7 @@ from load_data import (
 
 logger = logging.getLogger(__name__)
 
-NUM_MONTHS = 12
+NUM_MONTHS = 14
 BENCHMARK_ANNUAL_RATE = 0.07
 
 # Same mapping as components/shared.ACCOUNT_TYPE_MAP

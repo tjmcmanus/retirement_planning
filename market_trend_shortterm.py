@@ -24,6 +24,7 @@ analysis by providing the most granular perspective on market momentum.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -169,29 +170,38 @@ def fetch_spy_shortterm_data(days: int) -> Optional[pd.DataFrame]:
         DataFrame with SPY price data, or None if fetch fails
     """
     global _last_fetch_error_shortterm
-    try:
-        # Add 50% buffer to ensure we have enough data for EMA calculation
-        fetch_days = int(days * 1.5)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=fetch_days)
-        
-        logger.debug(f"Fetching SPY short-term data from {start_date.date()} to {end_date.date()}")
-        
-        spy = yf.Ticker(SPY_SYMBOL)
-        df = spy.history(start=start_date, end=end_date, interval="1d")
-        
-        if df.empty:
-            _last_fetch_error_shortterm = "No SPY price data returned from market data provider"
-            logger.error(_last_fetch_error_shortterm)
-            return None
-        
-        logger.debug(f"Fetched {len(df)} days of SPY data for short-term analysis")
-        return df
-        
-    except Exception as e:
-        _last_fetch_error_shortterm = f"Short-term market data fetch failed: {e}"
-        logger.error(_last_fetch_error_shortterm, exc_info=True)
-        return None
+    # Add 50% buffer to ensure we have enough data for EMA calculation
+    fetch_days = int(days * 1.5)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=fetch_days)
+
+    logger.debug(f"Fetching SPY short-term data from {start_date.date()} to {end_date.date()}")
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            spy = yf.Ticker(SPY_SYMBOL)
+            df = spy.history(start=start_date, end=end_date, interval="1d")
+
+            if df.empty:
+                _last_fetch_error_shortterm = "No SPY price data returned from market data provider"
+                logger.error(_last_fetch_error_shortterm)
+                return None
+
+            logger.debug(f"Fetched {len(df)} days of SPY data for short-term analysis")
+            return df
+
+        except Exception as e:
+            if attempt < max_attempts:
+                logger.warning(
+                    f"Short-term market data fetch attempt {attempt}/{max_attempts} failed: {e}. Retrying..."
+                )
+                time.sleep(2 ** (attempt - 1))  # 1s, 2s back-off
+            else:
+                _last_fetch_error_shortterm = f"Short-term market data fetch failed: {e}"
+                logger.error(_last_fetch_error_shortterm, exc_info=True)
+
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -646,8 +646,16 @@ def _build_networth_row(date: pd.Timestamp, summary_df: pd.DataFrame) -> dict:
 
 
 @st.cache_data(ttl=300)
-def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
-    """Build historical net worth DataFrame using get_networth_by_month."""
+def build_historical_networth(num_months: int = 14) -> pd.DataFrame:
+    """Build historical net worth DataFrame using get_networth_by_month.
+
+    When the current calendar month has no holdings in the DB yet (e.g. the
+    SnapTrade sync hasn't run this month), the most recent available month's
+    holdings are re-priced at today's live prices and inserted as a proxy for
+    the current month so the KPI cards and rolling calculations always have an
+    up-to-date "current" value.
+    """
+    from load_data import get_latest_portfolio_month_year
     end_date = pd.Timestamp.today().normalize().replace(day=1)
     start_date = end_date - pd.DateOffset(months=num_months - 1)
     date_range = pd.date_range(start=start_date, end=end_date, freq='MS')
@@ -662,6 +670,20 @@ def build_historical_networth(num_months: int = 12) -> pd.DataFrame:
         except (ValueError, RuntimeError) as e:
             st.warning(f"Could not fetch data for {date.strftime('%m/%Y')}: {e}")
             continue
+
+    # If the current month has no data, re-price the latest available month's
+    # holdings at live prices and stamp them as the current month so the KPI
+    # cards always reflect today's portfolio value.
+    current_month_date = end_date
+    has_current = any(r['date'] == current_month_date for r in networth_rows)
+    if not has_current:
+        try:
+            latest_m, latest_y = get_latest_portfolio_month_year()
+            _, live_summary = get_networth_by_month(latest_m, latest_y)
+            if not live_summary.empty:
+                networth_rows.append(_build_networth_row(current_month_date, live_summary))
+        except Exception:
+            pass  # best-effort; silently omit rather than crash
 
     if networth_rows:
         return (
@@ -751,14 +773,14 @@ def init_page(title: str = "Financial Planner", icon: str = "😊") -> tuple[pd.
     _networth_done_event = st.session_state["_networth_done_event"]
 
     networth = render_networth(
-        num_months=12,
+        num_months=14,
         done_event=_networth_done_event,
         build_fn=build_historical_networth,
     )
     if networth.empty:
-        networth = build_historical_networth(num_months=12)
+        networth = build_historical_networth(num_months=14)
         if not networth.empty:
-            save_networth_cache(networth, 12)
+            save_networth_cache(networth, 14)
             _networth_done_event.set()
 
     # Portfolio background rebuild

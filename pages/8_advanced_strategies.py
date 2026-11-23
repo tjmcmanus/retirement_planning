@@ -192,16 +192,26 @@ with adv_tax_planner_tab:
         except Exception:
             irmaa_fees = 0
 
+        # IRS §1211(b): capital losses can only offset ordinary income up to $3,000/year.
+        # Any excess loss carries forward to the next year.
+        _ANNUAL_LOSS_CAP = -3_000.0
+        if cg_income_lt < _ANNUAL_LOSS_CAP:
+            lt_loss_carryforward = cg_income_lt - _ANNUAL_LOSS_CAP   # negative remainder
+            cg_income_lt_applied = _ANNUAL_LOSS_CAP
+        else:
+            lt_loss_carryforward = 0.0
+            cg_income_lt_applied = cg_income_lt
+
         cg_tax = 0
         try:
-            if cg_income_lt != 0:
-                cg_tax = calculate_cap_gains(agi, cgdf, cg_income_lt)
+            if cg_income_lt_applied != 0:
+                cg_tax = calculate_cap_gains(agi, cgdf, cg_income_lt_applied)
         except Exception:
             pass
 
         atm_tax = 0
         try:
-            atm_tax, _ = calculate_atm(agi, cg_income_lt, atmdf)
+            atm_tax, _ = calculate_atm(agi, cg_income_lt_applied, atmdf)
             if taxable_income > atm_tax:
                 atm_tax = 0
         except Exception:
@@ -219,10 +229,11 @@ with adv_tax_planner_tab:
             if agi + conversions > 0: st.metric("AGI", f"${agi:,.2f}")
             if interest > 0: st.metric("Interest", f"${interest:,.2f}")
             if cg_income_st > 0: st.metric("ST Cap Gains", f"${cg_income_st:,.2f}")
-            if cg_income_lt != 0: st.metric("LT Cap Gains", f"${cg_income_lt:,.2f}")
+            if cg_income_lt_applied != 0: st.metric("LT Cap Gains", f"${cg_income_lt_applied:,.2f}")
+            if lt_loss_carryforward < 0: st.metric("LT Loss Carryforward", f"${lt_loss_carryforward:,.2f}")
         with r5:
             st.markdown("##### Taxes Owed")
-            state_tax = (wages + cg_income_lt + cg_income_st + interest) * 0.03
+            state_tax = (wages + cg_income_lt_applied + cg_income_st + interest) * 0.03
             q_fed = (taxable_income + cg_tax - pd_tax_amount) / 4
             q_st  = state_tax / 4
             _total_taxes = taxable_income + cg_tax + irmaa_fees + state_tax

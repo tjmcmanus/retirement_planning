@@ -348,53 +348,64 @@ class BenchmarkDataProvider:
         start_date: date,
         end_date: date
     ) -> Optional[pd.Series]:
-        """Fetch price data from yfinance."""
+        """Fetch price data from yfinance with retry on transient network errors."""
         try:
             import yfinance as yf
-            
-            # Add buffer to ensure we get all data
-            buffer_start = start_date - timedelta(days=7)
-            buffer_end = end_date + timedelta(days=1)
-            
-            # Download data
-            data = yf.download(
-                ticker,
-                start=buffer_start,
-                end=buffer_end,
-                progress=False
-            )
-            
-            if data.empty:
-                logger.warning(f"No data returned from yfinance for {ticker}")
-                return None
-            
-            # Extract adjusted close
-            if 'Adj Close' in data.columns:
-                prices = data['Adj Close']
-            elif 'Close' in data.columns:
-                prices = data['Close']
-            else:
-                logger.error(f"No price column found for {ticker}")
-                return None
-            
-            # Filter to requested date range
-            prices = prices[
-                (prices.index.date >= start_date) &
-                (prices.index.date <= end_date)
-            ]
-            
-            # Convert index to date
-            prices.index = prices.index.date
-            
-            logger.info(f"Fetched {len(prices)} prices for {ticker}")
-            return prices
-            
+            import time as _time
         except ImportError:
             logger.error("yfinance not installed. Install with: pip install yfinance")
             return None
-        except Exception as e:
-            logger.error(f"Error fetching from yfinance: {e}")
+
+        # Add buffer to ensure we get all data
+        buffer_start = start_date - timedelta(days=7)
+        buffer_end = end_date + timedelta(days=1)
+
+        max_attempts = 3
+        data = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                data = yf.download(
+                    ticker,
+                    start=buffer_start,
+                    end=buffer_end,
+                    progress=False
+                )
+                break  # success
+            except Exception as e:
+                if attempt < max_attempts:
+                    logger.warning(
+                        "yfinance download attempt %d/%d failed for %s: %s. Retrying...",
+                        attempt, max_attempts, ticker, e,
+                    )
+                    _time.sleep(2 ** (attempt - 1))  # 1 s, 2 s back-off
+                else:
+                    logger.error(f"Error fetching from yfinance for {ticker} after {max_attempts} attempts: {e}")
+                    return None
+
+        if data is None or data.empty:
+            logger.warning(f"No data returned from yfinance for {ticker}")
             return None
+
+        # Extract adjusted close
+        if 'Adj Close' in data.columns:
+            prices = data['Adj Close']
+        elif 'Close' in data.columns:
+            prices = data['Close']
+        else:
+            logger.error(f"No price column found for {ticker}")
+            return None
+
+        # Filter to requested date range
+        prices = prices[
+            (prices.index.date >= start_date) &
+            (prices.index.date <= end_date)
+        ]
+
+        # Convert index to date
+        prices.index = prices.index.date
+
+        logger.info(f"Fetched {len(prices)} prices for {ticker}")
+        return prices
     
     def _cache_prices(self, ticker: str, prices: pd.Series):
         """Cache price data."""

@@ -23,7 +23,8 @@ WORKDIR /app
 # constraints.txt pins every package (direct and transitive) to the verified versions,
 # so rebuilds are reproducible instead of pulling newer majors that break the app.
 COPY requirements.txt constraints.txt ./
-RUN grep -vE '^(podman-compose|pytest)' requirements.txt > /tmp/requirements.runtime.txt \
+RUN pip install --upgrade pip \
+    && grep -vE '^(podman-compose|pytest)' requirements.txt > /tmp/requirements.runtime.txt \
     && pip install -c constraints.txt -r /tmp/requirements.runtime.txt \
     && rm /tmp/requirements.runtime.txt
 

@@ -541,8 +541,31 @@ _history_lock = _threading.Lock()
 
 
 def _download_closes(symbols: list[str], **kwargs) -> dict[str, Optional[pd.Series]]:
-    """One batched Yahoo Finance request for every symbol; returns the Close series (None when no data)."""
-    df = yf.download(symbols, group_by='ticker', auto_adjust=True, progress=False, threads=True, **kwargs)
+    """One batched Yahoo Finance request for every symbol; returns the Close series (None when no data).
+
+    Retries up to 3 times with exponential back-off (1 s, 2 s) to handle
+    transient DNS timeouts or null responses from Yahoo Finance.
+    """
+    max_attempts = 3
+    df = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            df = yf.download(symbols, group_by='ticker', auto_adjust=True, progress=False, threads=True, **kwargs)
+            break  # success
+        except Exception as exc:
+            if attempt < max_attempts:
+                logger.warning(
+                    "Yahoo Finance download attempt %d/%d failed: %s. Retrying...",
+                    attempt, max_attempts, exc,
+                )
+                time.sleep(2 ** (attempt - 1))  # 1 s, 2 s back-off
+            else:
+                logger.error("Yahoo Finance download failed after %d attempts: %s", max_attempts, exc, exc_info=True)
+                return {symbol: None for symbol in symbols}
+
+    if df is None or df.empty:
+        return {symbol: None for symbol in symbols}
+
     out: dict[str, Optional[pd.Series]] = {}
     for symbol in symbols:
         try:

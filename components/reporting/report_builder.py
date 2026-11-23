@@ -168,7 +168,7 @@ class ReportBuilder:
         """Get net worth data from shared module."""
         try:
             from components.shared import build_historical_networth
-            networth = build_historical_networth(num_months=12)
+            networth = build_historical_networth(num_months=14)
             return networth
         except Exception as e:
             logger.warning(f"Could not load net worth data: {e}")

@@ -24,6 +24,7 @@ perspective on market cycles and secular trends.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -169,29 +170,38 @@ def fetch_spy_longterm_data(months: int) -> Optional[pd.DataFrame]:
         DataFrame with SPY price data, or None if fetch fails
     """
     global _last_fetch_error_longterm
-    try:
-        # Add 25% buffer to ensure we have enough data for EMA calculation
-        days = int(months * 30 * 1.25)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        
-        logger.debug(f"Fetching SPY long-term data from {start_date.date()} to {end_date.date()}")
-        
-        spy = yf.Ticker(SPY_SYMBOL)
-        df = spy.history(start=start_date, end=end_date)
-        
-        if df.empty:
-            _last_fetch_error_longterm = "No SPY price data returned from market data provider"
-            logger.error(_last_fetch_error_longterm)
-            return None
-        
-        logger.debug(f"Fetched {len(df)} days of SPY data for long-term analysis")
-        return df
-        
-    except Exception as e:
-        _last_fetch_error_longterm = f"Long-term market data fetch failed: {e}"
-        logger.error(_last_fetch_error_longterm, exc_info=True)
-        return None
+    # Add 25% buffer to ensure we have enough data for EMA calculation
+    days = int(months * 30 * 1.25)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+
+    logger.debug(f"Fetching SPY long-term data from {start_date.date()} to {end_date.date()}")
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            spy = yf.Ticker(SPY_SYMBOL)
+            df = spy.history(start=start_date, end=end_date)
+
+            if df.empty:
+                _last_fetch_error_longterm = "No SPY price data returned from market data provider"
+                logger.error(_last_fetch_error_longterm)
+                return None
+
+            logger.debug(f"Fetched {len(df)} days of SPY data for long-term analysis")
+            return df
+
+        except Exception as e:
+            if attempt < max_attempts:
+                logger.warning(
+                    f"Long-term market data fetch attempt {attempt}/{max_attempts} failed: {e}. Retrying..."
+                )
+                time.sleep(2 ** (attempt - 1))  # 1s, 2s back-off
+            else:
+                _last_fetch_error_longterm = f"Long-term market data fetch failed: {e}"
+                logger.error(_last_fetch_error_longterm, exc_info=True)
+
+    return None
 
 
 # ---------------------------------------------------------------------------

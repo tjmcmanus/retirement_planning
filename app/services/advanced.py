@@ -241,8 +241,19 @@ def tax_planner(
     """
     from config import get_config_manager
 
-    deferred_dist, cg_income_lt, cg_income_st = trad_dist, ltcg, stcg
+    deferred_dist, cg_income_st = trad_dist, stcg
     interest_income = interest + ordinary_dividends            # ordinary, whatever the source
+
+    # IRS §1211(b): net capital losses can only offset ordinary income up to $3,000/year.
+    # Any excess carries forward to the next year. Apply the cap before all downstream calcs.
+    _ANNUAL_LOSS_CAP = -3_000.0
+    if ltcg < _ANNUAL_LOSS_CAP:
+        lt_loss_carryforward = ltcg - _ANNUAL_LOSS_CAP   # negative remainder to carry forward
+        cg_income_lt = _ANNUAL_LOSS_CAP
+    else:
+        lt_loss_carryforward = 0.0
+        cg_income_lt = ltcg
+
     preferential = cg_income_lt + qualified_dividends          # taxed at the capital-gains rates
     daf1, pd_tax_amount = charitable, prepaid
     irmaa_year = _irmaa_pricing_year(year)          # this year's MAGI sets the premiums of this year (tax year + 2)
@@ -384,6 +395,9 @@ def tax_planner(
     if 0 < d["itemized"] < std_deduction:
         warnings.append(f"Itemized deductions of {d['itemized']:,.0f} are below the standard deduction of "
                         f"{std_deduction:,.0f}, so the standard deduction is used.")
+    if lt_loss_carryforward < 0:
+        warnings.append(f"Capital loss of {ltcg:,.0f} exceeds the ${abs(int(_ANNUAL_LOSS_CAP)):,}/year IRS limit "
+                        f"(§1211(b)); ${abs(lt_loss_carryforward):,.0f} carries forward to next year.")
 
     try:
         irmaa_fees = _irmaa_surcharge(magi, irmaadf, people)
@@ -447,6 +461,8 @@ def tax_planner(
     # Special income: taxed at preferential rates (or otherwise not ordinary income), stacked on top of ordinary income.
     if cg_income_lt != 0:
         ordinary.append(_metric("LT Cap Gains", cg_income_lt, group="Special Income"))
+    if lt_loss_carryforward < 0:
+        ordinary.append(_metric("LT Loss Carryforward", lt_loss_carryforward, group="Special Income"))
     if qualified_dividends > 0:
         ordinary.append(_metric("Qualified Dividends", qualified_dividends, group="Special Income"))
     if tax_exempt_dividends > 0:
