@@ -9,7 +9,7 @@
   <script defer src="/static/nav.js"></script>
   <script defer src="/vendor/plotly-2.35.2.min.js"></script>
   <script defer src="/vendor/tabulator-6.3.1.min.js"></script>
-  <script defer src="/static/strategy.js?v=20261101b"></script>
+  <script defer src="/static/strategy.js?v=20261127a"></script>
   <script defer src="/vendor/alpine-3.14.9.min.js"></script>
   <style>
     /* ── Tab bar ─────────────────────────────────────────────────── */
@@ -122,6 +122,53 @@
     }
     .why-reason { margin-top: .2rem; }
     .why-values { font-size: .72rem; margin-top: .25rem; word-break: break-word; }
+
+    /* ── 1040 Collapsed Form ─────────────────────────────────────── */
+    .f1040 {
+      border: 1px solid var(--border); border-radius: 6px;
+      overflow: hidden; font-size: .82rem; margin-bottom: 1.25rem;
+    }
+    .f1040-header {
+      background: #1e3a5f; color: #fff;
+      padding: .45rem 1rem; font-size: .78rem; font-weight: 600;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .f1040-header span { opacity: .75; font-weight: 400; font-size: .72rem; }
+    .f1040-section { padding: .5rem 0; border-bottom: 1px solid var(--border); }
+    .f1040-section:last-child { border-bottom: none; }
+    .f1040-section-title {
+      font-size: .7rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .05em; color: var(--muted); padding: .2rem 1rem .35rem;
+    }
+    .f1040-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: .22rem 1rem; gap: .5rem;
+    }
+    .f1040-row .label { color: var(--text); flex: 1; min-width: 0; }
+    .f1040-row .label.indent { padding-left: 1rem; color: var(--muted); font-size: .78rem; }
+    .f1040-row .amount { font-variant-numeric: tabular-nums; text-align: right; min-width: 7rem; }
+    .f1040-row .amount.zero { color: var(--muted); }
+    .f1040-row .amount.deduct { color: #ef4444; }
+    .f1040-row.subtotal {
+      border-top: 1px solid var(--border); margin: .2rem 0 0;
+      padding-top: .3rem; font-weight: 600;
+    }
+    .f1040-row.total {
+      background: #f0f7ff; border-top: 2px solid #3b82d4;
+      font-weight: 700; font-size: .9rem;
+    }
+    .f1040-row.tax-line {
+      background: #fef9ec; font-weight: 600;
+    }
+    .f1040-badge {
+      display: inline-block; font-size: .65rem; font-weight: 600;
+      padding: 1px 5px; border-radius: 3px; margin-left: .4rem; vertical-align: middle;
+    }
+    .badge-taxable  { background: #fee2e2; color: #991b1b; }
+    .badge-exempt   { background: #d1fae5; color: #065f46; }
+    .badge-partial  { background: #fef3c7; color: #92400e; }
+    .badge-ded      { background: #e0e7ff; color: #3730a3; }
+    .f1040-note { padding: .3rem 1rem; font-size: .72rem; color: var(--muted); font-style: italic; }
 
     /* ── Year selector ───────────────────────────────────────────── */
     .year-select-row { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; }
@@ -246,12 +293,284 @@
           <template x-if="decisions.data && !decisions.loading">
             <div class="why">
               <p class="muted small" x-text="decisions.data.year + ' — ' + decisions.data.stage"></p>
-              <div class="metrics">
-                <div class="metric-card"><div class="label">Traditional Distribution</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_cash + decisions.data.summary.trad_to_brok)"></div></div>
-                <div class="metric-card"><div class="label">Roth Conversion</div><div class="value" x-text="fmt$(decisions.data.summary.trad_to_roth)"></div></div>
-                <div class="metric-card"><div class="label">Brokerage → Cash</div><div class="value" x-text="fmt$(decisions.data.summary.brok_to_cash)"></div></div>
-                <div class="metric-card"><div class="label">DAF</div><div class="value" x-text="fmt$(decisions.data.summary.daf_contribution)"></div></div>
+
+              <!-- ── Collapsed 1040 Federal Tax View ─────────────────── -->
+              <div class="f1040">
+                <div class="f1040-header">
+                  <span>Tax Summary — Income, Deductions &amp; Tax</span>
+                  <span x-text="decisions.data.year + ' Tax Year'"></span>
+                </div>
+
+                <!-- SECTION 1: Income -->
+                <div class="f1040-section">
+                  <div class="f1040-section-title">Income</div>
+
+                  <template x-if="decisions.data.summary.wages > 0">
+                    <div class="f1040-row">
+                      <div class="label">Wages &amp; Salary
+                        <span class="f1040-badge badge-taxable">Fully taxable</span>
+                      </div>
+                      <div class="amount" x-text="fmt$(decisions.data.summary.wages)"></div>
+                    </div>
+                  </template>
+
+                  <template x-if="decisions.data.summary.ss_benefits > 0">
+                    <div>
+                      <div class="f1040-row">
+                        <div class="label">Social Security Benefits (gross)
+                          <span class="f1040-badge badge-partial">Up to 85% taxable</span>
+                        </div>
+                        <div class="amount" x-text="fmt$(decisions.data.summary.ss_benefits)"></div>
+                      </div>
+                      <div class="f1040-row">
+                        <div class="label indent">└ Taxable portion (85%)</div>
+                        <div class="amount" x-text="fmt$(decisions.data.summary.ss_benefits * 0.85)"></div>
+                      </div>
+                    </div>
+                  </template>
+
+                  <template x-if="(decisions.data.summary.trad_to_cash + decisions.data.summary.trad_to_brok + decisions.data.summary.rmd) > 0">
+                    <div class="f1040-row">
+                      <div class="label">Traditional IRA / 401(k) Distributions
+                        <span class="f1040-badge badge-taxable">Fully taxable</span>
+                      </div>
+                      <div class="amount" x-text="fmt$(Math.max(decisions.data.summary.trad_to_cash + decisions.data.summary.trad_to_brok, decisions.data.summary.rmd))"></div>
+                    </div>
+                  </template>
+
+                  <template x-if="decisions.data.summary.trad_to_roth > 0">
+                    <div class="f1040-row">
+                      <div class="label">Roth Conversion (Trad → Roth)
+                        <span class="f1040-badge badge-taxable">Fully taxable</span>
+                      </div>
+                      <div class="amount" x-text="fmt$(decisions.data.summary.trad_to_roth)"></div>
+                    </div>
+                  </template>
+
+                  <template x-if="decisions.data.summary.brok_to_cash > 0">
+                    <div class="f1040-row">
+                      <div class="label">Brokerage → Cash
+                        <span class="f1040-badge badge-partial">LTCG rates apply</span>
+                      </div>
+                      <div class="amount" x-text="fmt$(decisions.data.summary.brok_to_cash)"></div>
+                    </div>
+                  </template>
+
+                  <template x-if="decisions.data.summary.ltcg_harvested > 0">
+                    <div class="f1040-row">
+                      <div class="label indent">└ Long-Term Capital Gains harvested</div>
+                      <div class="amount" x-text="fmt$(decisions.data.summary.ltcg_harvested)"></div>
+                    </div>
+                  </template>
+
+                  <template x-if="decisions.data.summary.roth_cash > 0">
+                    <div class="f1040-row">
+                      <div class="label">Roth Withdrawals
+                        <span class="f1040-badge badge-exempt">Tax-free</span>
+                      </div>
+                      <div class="amount zero" x-text="fmt$(decisions.data.summary.roth_cash)"></div>
+                    </div>
+                  </template>
+
+                  <!-- AGI subtotal -->
+                  <div class="f1040-row subtotal total">
+                    <div class="label">Adjusted Gross Income (AGI)</div>
+                    <div class="amount" x-text="fmt$(decisions.data.summary.agi)"></div>
+                  </div>
+                </div>
+
+                <!-- SECTION 2: Deductions (Schedule A when DAF present) -->
+                <div class="f1040-section">
+                  <div class="f1040-section-title">Deductions</div>
+
+                  <!-- No DAF activity — just show standard deduction -->
+                  <template x-if="!decisions.data.summary.has_daf_activity">
+                    <div class="f1040-row">
+                      <div class="label">Standard Deduction
+                        <span class="f1040-badge badge-ded">Std deduction</span>
+                      </div>
+                      <div class="amount deduct" x-text="'−' + fmt$(decisions.data.summary.std_deduction)"></div>
+                    </div>
+                  </template>
+
+                  <!-- DAF activity (new contribution and/or carryforward being consumed) -->
+                  <template x-if="decisions.data.summary.has_daf_activity">
+                    <div>
+                      <!-- Standard deduction reference row -->
+                      <div class="f1040-row">
+                        <div class="label">Standard Deduction <em style="font-size:.72rem;color:var(--muted)">(reference)</em></div>
+                        <div class="amount" x-text="fmt$(decisions.data.summary.std_deduction)"></div>
+                      </div>
+
+                      <!-- Schedule A divider -->
+                      <div class="f1040-section-title" style="margin-top:.4rem;border-top:1px dashed var(--border);padding-top:.45rem">
+                        Schedule A — Itemized Deductions (Charitable Giving)
+                      </div>
+
+                      <!-- New contribution this year (if any) -->
+                      <template x-if="decisions.data.summary.daf_contribution > 0">
+                        <div class="f1040-row">
+                          <div class="label">DAF Contribution (gifted this year)
+                            <span class="f1040-badge badge-ded">Sch A line 12</span>
+                          </div>
+                          <div class="amount" x-text="fmt$(decisions.data.summary.daf_contribution)"></div>
+                        </div>
+                      </template>
+
+                      <!-- Prior carryforward entering this year (if any) -->
+                      <template x-if="decisions.data.summary.daf_cf_prior > 0">
+                        <div class="f1040-row">
+                          <div class="label">+ Prior year carryforward (IRC §170, up to 5 yrs)
+                            <span class="f1040-badge badge-ded">Sch A line 12</span>
+                          </div>
+                          <div class="amount" x-text="fmt$(decisions.data.summary.daf_cf_prior)"></div>
+                        </div>
+                      </template>
+
+                      <!-- Available total -->
+                      <template x-if="decisions.data.summary.daf_contribution > 0 && decisions.data.summary.daf_cf_prior > 0">
+                        <div class="f1040-row">
+                          <div class="label indent">= Total available charitable deduction</div>
+                          <div class="amount" x-text="fmt$(decisions.data.summary.daf_contribution + decisions.data.summary.daf_cf_prior)"></div>
+                        </div>
+                      </template>
+
+                      <!-- 30% AGI limit -->
+                      <div class="f1040-row">
+                        <div class="label indent">30% of AGI limit (IRC §170)</div>
+                        <div class="amount" x-text="fmt$(decisions.data.summary.daf_30pct_limit)"></div>
+                      </div>
+
+                      <!-- Deductible this year -->
+                      <div class="f1040-row">
+                        <div class="label indent" style="font-weight:600">└ Deductible this year</div>
+                        <div class="amount deduct" style="font-weight:600" x-text="'−' + fmt$(decisions.data.summary.daf_deductible)"></div>
+                      </div>
+
+                      <!-- Remaining carryforward leaving this year -->
+                      <template x-if="decisions.data.summary.daf_carryforward_out > 0">
+                        <div class="f1040-row" style="background:#f0f9ff">
+                          <div class="label indent" style="color:#0369a1">└ Remaining carryforward (carries to next year)</div>
+                          <div class="amount" style="color:#0369a1" x-text="fmt$(decisions.data.summary.daf_carryforward_out)"></div>
+                        </div>
+                      </template>
+                      <template x-if="decisions.data.summary.daf_carryforward_out <= 0 && decisions.data.summary.daf_cf_prior > 0">
+                        <div class="f1040-row" style="background:#f0fdf4">
+                          <div class="label indent" style="color:#16a34a">└ Carryforward fully consumed this year</div>
+                          <div class="amount" style="color:#16a34a">$0 remaining</div>
+                        </div>
+                      </template>
+
+                      <!-- SALT breakdown -->
+                      <div class="f1040-row" style="margin-top:.3rem">
+                        <div class="label">State &amp; Local Taxes (SALT)
+                          <span class="f1040-badge badge-ded">Sch A line 5, capped $10k</span>
+                        </div>
+                        <div class="amount deduct" x-text="'−' + fmt$(decisions.data.summary.salt)"></div>
+                      </div>
+                      <div class="f1040-row">
+                        <div class="label indent">└ State income tax</div>
+                        <div class="amount" :class="decisions.data.summary.state_tax === 0 ? 'zero' : ''" x-text="decisions.data.summary.state_tax > 0 ? fmt$(decisions.data.summary.state_tax) : '$0 (no-tax state)'"></div>
+                      </div>
+                      <template x-if="decisions.data.summary.property_tax > 0">
+                        <div class="f1040-row">
+                          <div class="label indent">└ Property tax</div>
+                          <div class="amount" x-text="fmt$(decisions.data.summary.property_tax)"></div>
+                        </div>
+                      </template>
+                      <template x-if="(decisions.data.summary.state_tax + decisions.data.summary.property_tax) > 10000">
+                        <div class="f1040-row">
+                          <div class="label indent" style="color:#f59e0b">└ SALT cap applied — excess disallowed</div>
+                          <div class="amount" style="color:#f59e0b" x-text="'+' + fmt$(decisions.data.summary.state_tax + decisions.data.summary.property_tax - 10000)"></div>
+                        </div>
+                      </template>
+
+                      <!-- Total itemized -->
+                      <div class="f1040-row subtotal">
+                        <div class="label">Total Itemized Deductions</div>
+                        <div class="amount deduct" x-text="'−' + fmt$(decisions.data.summary.total_itemized)"></div>
+                      </div>
+
+                      <!-- Benefit / shortfall vs standard -->
+                      <template x-if="decisions.data.summary.using_itemized">
+                        <div class="f1040-row" style="background:#f0fdf4">
+                          <div class="label" style="color:#16a34a">✓ Itemizing saves over standard deduction</div>
+                          <div class="amount" style="color:#16a34a" x-text="'+' + fmt$(decisions.data.summary.total_itemized - decisions.data.summary.std_deduction)"></div>
+                        </div>
+                      </template>
+                      <template x-if="!decisions.data.summary.using_itemized">
+                        <div class="f1040-row" style="background:#fef9ec">
+                          <div class="label" style="color:#92400e">⚠ Itemized &lt; standard — standard deduction used</div>
+                          <div class="amount" style="color:#92400e" x-text="fmt$(decisions.data.summary.std_deduction - decisions.data.summary.total_itemized) + ' below std'"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  <!-- Taxable Income — uses whichever deduction is larger -->
+                  <div class="f1040-row subtotal total">
+                    <div class="label">Taxable Income</div>
+                    <div class="amount" x-text="fmt$(Math.max(0, decisions.data.summary.agi - (decisions.data.summary.using_itemized ? decisions.data.summary.total_itemized : decisions.data.summary.std_deduction)))"></div>
+                  </div>
+                </div>
+
+                <!-- SECTION 3: Tax Summary -->
+                <div class="f1040-section">
+                  <div class="f1040-section-title">Tax Summary</div>
+
+                  <div class="f1040-row tax-line">
+                    <div class="label">Federal Income Tax</div>
+                    <div class="amount" x-text="fmt$(decisions.data.summary.federal_tax)"></div>
+                  </div>
+                  <div class="f1040-row">
+                    <div class="label indent">└ Effective rate (fed / AGI)</div>
+                    <div class="amount" x-text="decisions.data.summary.agi > 0 ? (decisions.data.summary.federal_tax / decisions.data.summary.agi * 100).toFixed(1) + '%' : '—'"></div>
+                  </div>
+
+                  <template x-if="decisions.data.summary.irmaa > 0">
+                    <div class="f1040-row tax-line">
+                      <div class="label">IRMAA Medicare Surcharge</div>
+                      <div class="amount" x-text="fmt$(decisions.data.summary.irmaa)"></div>
+                    </div>
+                  </template>
+
+                  <template x-if="decisions.data.summary.state_tax > 0">
+                    <div class="f1040-row tax-line">
+                      <div class="label">State Income Tax
+                        <template x-if="decisions.data.summary.wages > 0 && (decisions.data.summary.trad_to_roth > 0 || decisions.data.summary.trad_to_cash + decisions.data.summary.trad_to_brok > 0 || decisions.data.summary.rmd > 0)">
+                          <span class="f1040-badge" style="background:#e0f2fe;color:#0369a1;margin-left:.4rem">wages taxable · retirement exempt</span>
+                        </template>
+                      </div>
+                      <div class="amount" x-text="fmt$(decisions.data.summary.state_tax)"></div>
+                    </div>
+                  </template>
+                  <template x-if="decisions.data.summary.state_tax === 0 && decisions.data.summary.wages > 0">
+                    <div class="f1040-row">
+                      <div class="label indent" style="color:var(--muted)">└ State income tax — verify state in settings</div>
+                      <div class="amount zero">$0</div>
+                    </div>
+                  </template>
+
+                  <!-- Total tax burden -->
+                  <div class="f1040-row subtotal total">
+                    <div class="label">Total Tax Burden</div>
+                    <div class="amount" x-text="fmt$(decisions.data.summary.federal_tax + decisions.data.summary.irmaa + decisions.data.summary.state_tax)"></div>
+                  </div>
+                  <div class="f1040-row">
+                    <div class="label indent">└ All-in rate (total burden / AGI)</div>
+                    <div class="amount" x-text="decisions.data.summary.agi > 0 ? ((decisions.data.summary.federal_tax + decisions.data.summary.irmaa + decisions.data.summary.state_tax) / decisions.data.summary.agi * 100).toFixed(1) + '%' : '—'"></div>
+                  </div>
+                </div>
+
+                <template x-if="decisions.data.summary.magi > 0 && decisions.data.summary.magi !== decisions.data.summary.agi">
+                  <div class="f1040-note">
+                    MAGI (for IRMAA / ACA): <span x-text="fmt$(decisions.data.summary.magi)"></span>
+                    — differs from AGI when DAF contributions or other MAGI add-backs apply.
+                  </div>
+                </template>
               </div>
+              <!-- end 1040 form -->
+
               <p class="muted" x-show="!decisions.data.groups.length">The engine recorded no decisions for this year.</p>
               <template x-for="g in decisions.data.groups" :key="g.category">
                 <div class="why-group">

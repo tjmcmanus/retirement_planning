@@ -443,7 +443,29 @@ class Stage2PrepForRetirement(BaseLifeStageStrategy):
         strategy.traditional_withdrawal = _prefund_amount
         strategy.daf_contribution = daf_contribution
         strategy.daf_deductible   = daf_deductible
-        
+
+        # DAF tax strategy card — new contribution and/or carryforward active
+        _s2_cf_prior = kwargs.get('daf_carryforward_prior', 0.0) or 0.0
+        _s2_salt     = min(10_000.0, state_tax + (locals().get('_property_tax') or 0.0))
+        _s2_itemized = daf_deductible + _s2_salt
+        if daf_contribution > 0 or float(_s2_cf_prior) > 0 or daf_deductible > 0:
+            self._log_daf_tax_strategy(
+                strategy=strategy,
+                year=year,
+                agi=full_agi,
+                daf_contribution=daf_contribution,
+                daf_cf_prior=float(_s2_cf_prior),
+                daf_deductible=daf_deductible,
+                daf_30pct_limit=full_agi * 0.30,
+                daf_cf_new=daf_carryforward_new,
+                salt=_s2_salt,
+                state_tax=state_tax,
+                property_tax=(locals().get('_property_tax') or 0.0),
+                std_deduction=std_deduction,
+                total_itemized=_s2_itemized,
+                using_itemized=(_s2_itemized > std_deduction),
+            )
+
         # Set contribution fields for display
         if prefer_roth_401k:
             strategy.wages_to_roth = contribution_401k

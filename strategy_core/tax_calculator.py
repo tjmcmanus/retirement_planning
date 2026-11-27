@@ -255,7 +255,7 @@ class TaxCalculator(ITaxCalculator):
             logger.warning(f"State tax calculation not available: {e}")
             return 0.0
         except Exception as e:
-            logger.error(f"Error calculating state tax: {e}")
+            logger.error(f"Error calculating state tax for state={state}, agi={agi}: {e}", exc_info=True)
             return 0.0
     
     def calculate_irmaa_penalty(

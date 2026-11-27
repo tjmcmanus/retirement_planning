@@ -1230,16 +1230,26 @@ class Stage4Medicare(BaseLifeStageStrategy):
             logger.info(
                 f"Year {year}: Ordinary income ${ordinary_income:,.0f} already meets target"
             )
-            
-            self._log_decision(
-                strategy,
-                'tax_strategy',
-                'Standard Deduction Optimization (0% Tax)',
-                'Target met via Roth conversion + buffer withdrawals',
-                f'Ordinary income of ${ordinary_income:,.0f} meets the 90% standard deduction target.',
-                std_deduction=std_deduction,
-                target_income=min_ordinary_income_target
-            )
+
+            # Only surface a card when income is close to the floor (within 2×).
+            # When income massively exceeds the floor the check was non-binding
+            # and there's nothing useful to show — the "Deduction: Itemized" card
+            # (if applicable) covers the deduction story for that year.
+            _target_ratio = ordinary_income / min_ordinary_income_target if min_ordinary_income_target > 0 else 999
+            if _target_ratio <= 2.0:
+                self._log_decision(
+                    strategy,
+                    'tax_strategy',
+                    'Standard Deduction Optimization (0% Tax)',
+                    'Target met via Roth conversion + buffer withdrawals',
+                    f'Ordinary income of ${ordinary_income:,.0f} meets the 90% standard deduction target '
+                    f'(${min_ordinary_income_target:,.0f}). '
+                    f'The standard deduction (${std_deduction:,.0f}) offsets the first '
+                    f'${std_deduction:,.0f} of income, keeping the marginal rate on the last dollars at ~0%.',
+                    std_deduction=std_deduction,
+                    target_income=min_ordinary_income_target
+                )
+            # else: floor was non-binding — no card needed.
         
         return balances, transactions
     
@@ -1400,7 +1410,30 @@ class Stage4Medicare(BaseLifeStageStrategy):
             transactions['roth_to_brokerage']
         )
         strategy.daf_deductible = tax_result['daf_deductible_this_year']
-        
+
+        # DAF tax strategy card — new contribution and/or carryforward active
+        _s4_daf_ded  = tax_result['daf_deductible_this_year']
+        _s4_cf_new   = tax_result.get('daf_carryforward_new', 0.0)
+        _s4_ded_type = tax_result.get('deduction_type', 'Standard')
+        _s4_salt     = min(10_000.0, state_tax + property_tax)
+        if _s4_daf_ded > 0 or daf_carryforward_prior > 0:
+            self._log_daf_tax_strategy(
+                strategy=strategy,
+                year=year,
+                agi=agi,
+                daf_contribution=daf_contribution,
+                daf_cf_prior=daf_carryforward_prior,
+                daf_deductible=_s4_daf_ded,
+                daf_30pct_limit=agi * 0.30,
+                daf_cf_new=_s4_cf_new,
+                salt=_s4_salt,
+                state_tax=state_tax,
+                property_tax=property_tax,
+                std_deduction=std_deduction,
+                total_itemized=_s4_daf_ded + _s4_salt,
+                using_itemized=(_s4_ded_type == 'Itemized'),
+            )
+
         # Return updated balances with tax adjustments applied
         return balances
 

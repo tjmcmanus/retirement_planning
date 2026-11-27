@@ -1443,38 +1443,32 @@ def optimize_rmd_lookback(strategies: list,
                             except (KeyError, AttributeError):
                                 state = 'FL'
                             
-                            # CRITICAL: Use the UPDATED conversion amount for retirement_income
-                            # The year_strategy.roth_conversion has already been increased by max_additional_conversion
-                            total_retirement_income = year_strategy.traditional_withdrawal + year_strategy.roth_conversion
-                            
-                            # CRITICAL: Calculate the taxable SS portion that's actually in the AGI
-                            # AGI = retirement_income + taxable_ss + ltcg
-                            # Therefore: taxable_ss = AGI - retirement_income - ltcg
-                            #
-                            # We MUST pass only the taxable SS portion to calculate_state_tax, not the full SS benefits.
-                            # Otherwise, states like PA will try to exempt more than what's in the AGI, causing
-                            # negative taxable income.
-                            taxable_ss_in_agi = year_strategy.agi - total_retirement_income - year_strategy.ltcg_harvested
-                            
-                            # Ensure it's not negative (shouldn't happen, but safety check)
-                            taxable_ss_in_agi = max(0, taxable_ss_in_agi)
-                            
+                            # Separate income types so calculate_state_tax can apply the
+                            # correct exemptions for retirement-friendly states (e.g. PA):
+                            #   - roth_conversion  → passed via roth_conversion kwarg (exempt in PA/IL/MS)
+                            #   - traditional_withdrawal → passed via retirement_income kwarg (exempt in PA/IL/MS)
+                            #   - ss_benefits → passed via ss_benefits kwarg (exempt in PA and many others)
+                            #   - wages / LTCG → remain in AGI and are taxable in PA
+                            # Using a residual "taxable_ss_in_agi" approach incorrectly treated
+                            # wages as SS in Stage 2 years, exempting them and zeroing state tax.
+                            roth_conv_for_state   = year_strategy.roth_conversion
+                            trad_dist_for_state   = year_strategy.traditional_withdrawal
+                            ss_for_state          = year_strategy.ss_benefits
+
                             logger.info(f"  State tax inputs: AGI=${year_strategy.agi:,.0f}, "
-                                      f"retirement_income=${total_retirement_income:,.0f}, "
-                                      f"taxable_ss_in_agi=${taxable_ss_in_agi:,.0f}, "
-                                      f"full_ss_benefits=${year_strategy.ss_benefits:,.0f}, "
+                                      f"trad_dist=${trad_dist_for_state:,.0f}, "
+                                      f"roth_conv=${roth_conv_for_state:,.0f}, "
+                                      f"ss_benefits=${ss_for_state:,.0f}, "
                                       f"ltcg_harvested=${year_strategy.ltcg_harvested:,.0f}")
-                            logger.info(f"  Expected state taxable after exemptions: "
-                                      f"${year_strategy.agi - total_retirement_income - taxable_ss_in_agi:,.0f} "
-                                      f"(should equal ltcg_harvested)")
-                            
+
                             state_tax, state_details = calculate_state_tax(
                                 state_agi=year_strategy.agi,
                                 state=state,
                                 year=year_strategy.year,
                                 filing_status=filing_status,
-                                retirement_income=total_retirement_income,
-                                ss_benefits=taxable_ss_in_agi  # Pass only the taxable portion in AGI
+                                retirement_income=trad_dist_for_state,
+                                ss_benefits=ss_for_state,
+                                roth_conversion=roth_conv_for_state,
                             )
                             year_strategy.state_tax = state_tax
                             
@@ -4561,7 +4555,9 @@ class WithdrawalStrategyEngine:
             # not deductible this year is: available - deductible.
             # We derive available = (new contribution this year) + (prior carryforward).
             _daf_available = strategy.daf_contribution + self._daf_carryforward
+            strategy.daf_carryforward_prior = self._daf_carryforward
             self._daf_carryforward = max(0.0, _daf_available - strategy.daf_deductible)
+            strategy.daf_carryforward_new = self._daf_carryforward
             if self._daf_carryforward > 0:
                 logger.info(
                     f"Year {year}: Engine DAF carryforward → ${self._daf_carryforward:,.0f} "
@@ -4743,6 +4739,9 @@ class WithdrawalStrategyEngine:
                 'IRMAA Penalty': s.irmaa_penalty,
                 'ACA Premium': s.aca_premium,
                 'DAF Contribution': s.daf_contribution,
+                'DAF Deductible': s.daf_deductible,
+                'DAF CF Prior': s.daf_carryforward_prior,
+                'DAF CF New': s.daf_carryforward_new,
                 'AGI': s.agi,
                 'MAGI': s.magi,
                 'Federal Tax': s.federal_tax,

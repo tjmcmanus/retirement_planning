@@ -673,8 +673,10 @@ class YearlyStrategy:
     expenses: float = 0.0
     
     # Charitable giving
-    daf_contribution: float = 0.0   # new cash/securities donated to DAF this year
-    daf_deductible: float = 0.0     # amount actually deducted (new + carryforward, capped 30% AGI)
+    daf_contribution: float = 0.0        # new cash/securities donated to DAF this year
+    daf_deductible: float = 0.0          # amount actually deducted (new + carryforward, capped 30% AGI)
+    daf_carryforward_prior: float = 0.0  # carryforward balance entering this year (from prior years)
+    daf_carryforward_new: float = 0.0    # carryforward balance leaving this year (unused excess)
     
     # Wage contributions (accumulation phase)
     wages_to_trad: float = 0.0

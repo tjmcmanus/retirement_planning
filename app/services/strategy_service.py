@@ -57,6 +57,10 @@ def df_to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 _CACHE_TTL = 300.0
 
+# Bump this when new DataFrame columns are added so in-process caches are
+# automatically invalidated without requiring a server restart.
+_SCHEMA_VERSION = 5  # fix state tax zero bug in RMD-lookback recalculation path
+
 
 def clear_strategy_cache() -> None:
     _build_strategy.clear()
@@ -66,12 +70,14 @@ def clear_strategy_cache() -> None:
 # tax-table and portfolio save) also drops it. A private cache here was never cleared,
 # so changing a tax strategy kept returning the previous plan for up to 5 minutes.
 @app_cache.cache_data(ttl=_CACHE_TTL)
-def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+def _build_strategy(start_year: int | None, end_year: int, _schema: int = _SCHEMA_VERSION) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """Return (strategy_df, balances_df, cfg_snapshot); results are memoised by app_cache."""
     reload_config()
     cfg = get_config_manager()
     effective_start = start_year or dt.date.today().year
     rate = float(cfg.get("financial_assumptions", "expected_rate_of_return", 6) or 6) / 100
+    _filing_status = str(cfg.get("tax_info", "filing_status", "married_filing_jointly") or "married_filing_jointly")
+    _state = str(cfg.get("personal_info", "retirement_state", "FL") or "FL").upper()
     strategy_df, balances_df = build_withdrawal_strategy_display(
         start_year=effective_start,
         end_year=end_year,
@@ -86,6 +92,8 @@ def _build_strategy(start_year: int | None, end_year: int) -> tuple[pd.DataFrame
         ) / 100,
         aca_optimize=bool(cfg.get("healthcare", "aca_marketplace_enrolled", False)),
         ss_claiming_age=int(cfg.get("social_security", "person1_ssi_age", 70) or 70),
+        filing_status=_filing_status,
+        state=_state,
     )
     cfg_snap = {
         "start_year": effective_start,
@@ -165,6 +173,60 @@ def decision_log(
     def amount(col: str) -> float:
         return _val(row, col)
 
+    # Fetch standard deduction for the selected year
+    cfg = get_config_manager()
+    filing_status = cfg.get("tax_info", "filing_status", "married_filing_jointly")
+    std_deduction = 30_000.0  # 2026 MFJ fallback
+    try:
+        from load_data import get_std_deduction
+        _sd = get_std_deduction(year, filing_status)
+        if not _sd.empty:
+            std_deduction = float(_sd["deduction"].iloc[0])
+    except Exception:
+        pass
+
+    # Property tax for SALT calculation (State + Property Tax, capped at $10k)
+    property_tax = 0.0
+    try:
+        property_tax = float(
+            cfg.get("expenses", "living_expenses", {}).get("property_tax", 0) or 0
+        )
+    except (TypeError, AttributeError, ValueError):
+        pass
+
+    state_tax_val = amount("State Tax")
+    salt = min(10_000.0, state_tax_val + property_tax)
+
+    # DAF fields — new contribution, prior carryforward, engine-computed deductible
+    agi_val = amount("AGI")
+    daf_contribution_val = amount("DAF Contribution")
+    daf_cf_prior = amount("DAF CF Prior")   # carryforward entering this year
+    daf_cf_new   = amount("DAF CF New")     # carryforward leaving this year
+    daf_deductible_val = amount("DAF Deductible")  # engine-computed, 30%-capped
+
+    # Fallback for cached runs before these columns existed.
+    # Also detect carryforward-only years where daf_deductible > daf_contribution.
+    has_daf_activity = (
+        daf_contribution_val > 0.0
+        or daf_cf_prior > 0.0
+        or daf_deductible_val > daf_contribution_val  # carryforward being consumed
+    )
+    if daf_cf_prior == 0.0 and daf_deductible_val > daf_contribution_val:
+        # Reconstruct carryforward prior from deductible excess (old cache fallback)
+        daf_cf_prior = daf_deductible_val - daf_contribution_val
+    if daf_deductible_val == 0.0 and has_daf_activity:
+        daf_deductible_val = min(daf_contribution_val + daf_cf_prior, agi_val * 0.30)
+        daf_cf_new = max(0.0, (daf_contribution_val + daf_cf_prior) - daf_deductible_val)
+
+    daf_30pct_limit = agi_val * 0.30
+    # Amount consumed from prior carryforward this year
+    daf_cf_consumed = max(0.0, daf_deductible_val - daf_contribution_val)
+    # Remaining carryforward after this year
+    daf_carryforward_out = daf_cf_new  # already computed by engine
+
+    total_itemized = daf_deductible_val + salt
+    using_itemized = total_itemized > std_deduction
+
     return {
         "year": int(year),
         "stage": str(row.get("Stage", "")),
@@ -173,9 +235,28 @@ def decision_log(
             "trad_to_brok": amount("Trad→\nBrok"),
             "trad_to_roth": amount("Trad→\nRoth"),
             "brok_to_cash": amount("Brok→\nCash"),
-            "daf_contribution": amount("DAF Contribution"),
-            "agi": amount("AGI"),
+            "daf_contribution": daf_contribution_val,
+            "daf_cf_prior": daf_cf_prior,
+            "daf_deductible": daf_deductible_val,
+            "daf_30pct_limit": daf_30pct_limit,
+            "daf_cf_consumed": daf_cf_consumed,
+            "daf_carryforward_out": daf_carryforward_out,
+            "has_daf_activity": has_daf_activity,
+            "agi": agi_val,
+            "magi": amount("MAGI"),
             "federal_tax": amount("Federal Tax"),
+            "state_tax": state_tax_val,
+            "irmaa": amount("IRMAA Penalty"),
+            "wages": amount("Wages"),
+            "ss_benefits": amount("SS Benefits"),
+            "rmd": amount("RMD"),
+            "roth_cash": amount("Roth→\nCash"),
+            "ltcg_harvested": amount("LTCG Harvested"),
+            "std_deduction": std_deduction,
+            "property_tax": property_tax,
+            "salt": salt,
+            "total_itemized": total_itemized,
+            "using_itemized": using_itemized,
         },
         "groups": groups,
     }

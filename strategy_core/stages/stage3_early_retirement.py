@@ -1538,22 +1538,34 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
                 f"Year {year}: Ordinary income ${ordinary_income:,.0f} already meets "
                 f"90% std deduction target (${min_ordinary_income_target:,.0f})"
             )
-            
-            self._log_decision(
-                strategy,
-                'tax_strategy',
-                'Standard Deduction Optimization (0% Tax)',
-                'Target met via Roth conversion + buffer withdrawals',
-                f'Roth conversion (${roth_conversion:,.0f}) + buffer withdrawals (${trad_withdrawal:,.0f}) '
-                f'= ${ordinary_income:,.0f}, which meets the 90% standard deduction target '
-                f'(${min_ordinary_income_target:,.0f}). This results in ~0% tax on ordinary income.',
-                std_deduction=std_deduction,
-                target_income=min_ordinary_income_target,
-                actual_income=ordinary_income,
-                roth_conversion=roth_conversion,
-                buffer_withdrawals=trad_withdrawal,
-                effective_tax_rate='~0%'
-            )
+
+            # Only log a decision card when income is close enough to the floor
+            # that the floor check was actually relevant (within 2× of the target).
+            # When income far exceeds the floor the check was trivially non-binding
+            # and there's nothing useful to tell the user — the "Deduction: Itemized"
+            # card (logged later in _calculate_final_taxes) covers the deduction story.
+            _target_ratio = ordinary_income / min_ordinary_income_target if min_ordinary_income_target > 0 else 999
+            if _target_ratio <= 2.0:
+                self._log_decision(
+                    strategy,
+                    'tax_strategy',
+                    'Standard Deduction Optimization (0% Tax)',
+                    'Target met via Roth conversion + buffer withdrawals',
+                    f'Roth conversion (${roth_conversion:,.0f}) + buffer withdrawals (${trad_withdrawal:,.0f}) '
+                    f'= ${ordinary_income:,.0f}, which meets the 90% standard deduction target '
+                    f'(${min_ordinary_income_target:,.0f}). '
+                    f'The standard deduction (${std_deduction:,.0f}) offsets the first '
+                    f'${std_deduction:,.0f} of income, so staying near the floor keeps the '
+                    f'marginal rate on the last dollars of ordinary income at ~0%.',
+                    std_deduction=std_deduction,
+                    target_income=min_ordinary_income_target,
+                    actual_income=ordinary_income,
+                    roth_conversion=roth_conversion,
+                    buffer_withdrawals=trad_withdrawal,
+                    effective_tax_rate='~0%'
+                )
+            # else: income far exceeds the floor — no card needed; the
+            # "Deduction: Itemized (beats Standard)" card already covers this year.
         
         return balances, transactions
     
@@ -1766,7 +1778,62 @@ class Stage3EarlyRetirement(BaseLifeStageStrategy):
         # capped at 30% of AGI) so the engine can update _daf_carryforward correctly
         # across stage transitions.
         strategy.daf_deductible = tax_result['daf_deductible_this_year']
-        
+
+        # Log the final deduction choice so the decision log reflects reality.
+        # The "Standard Deduction Optimization" entry describes Roth conversion sizing
+        # (which uses the standard deduction as a target), but the final deduction
+        # applied may be Itemized (DAF carryforward + SALT > standard deduction).
+        _ded_type   = tax_result.get('deduction_type', 'Standard')
+        _ded_amount = tax_result.get('deduction', std_deduction)
+        _daf_ded    = tax_result.get('daf_deductible_this_year', 0.0)
+        _cf_prior   = daf_carryforward_prior
+        _cf_new     = tax_result.get('daf_carryforward_new', 0.0)
+        _salt       = min(10_000.0, state_tax + property_tax)
+
+        # DAF tax strategy card — new contribution and/or carryforward active
+        if _daf_ded > 0 or _cf_prior > 0:
+            self._log_daf_tax_strategy(
+                strategy=strategy,
+                year=year,
+                agi=agi,
+                daf_contribution=daf_contribution,
+                daf_cf_prior=_cf_prior,
+                daf_deductible=_daf_ded,
+                daf_30pct_limit=agi * 0.30,
+                daf_cf_new=_cf_new,
+                salt=_salt,
+                state_tax=state_tax,
+                property_tax=property_tax,
+                std_deduction=std_deduction,
+                total_itemized=_daf_ded + _salt,
+                using_itemized=(_ded_type == 'Itemized'),
+            )
+
+        if _ded_type == 'Itemized' and _daf_ded > 0:
+            self._log_decision(
+                strategy,
+                'tax_strategy',
+                'Deduction: Itemized (beats Standard)',
+                f'Final deduction = ${_ded_amount:,.0f} Itemized '
+                f'vs ${std_deduction:,.0f} Standard — saves ${_ded_amount - std_deduction:,.0f}',
+                f'DAF deductible this year: ${_daf_ded:,.0f} '
+                f'({"new contribution" if daf_contribution > 0 else "prior carryforward"}'
+                f'{f" + ${_cf_prior:,.0f} carryforward" if _cf_prior > 0 and daf_contribution > 0 else ""}). '
+                f'SALT: ${_salt:,.0f} (state tax ${state_tax:,.0f} + property tax ${property_tax:,.0f}, capped $10k). '
+                f'Total itemized: ${_daf_ded + _salt:,.0f} vs standard deduction: ${std_deduction:,.0f}. '
+                + (f'Remaining DAF carryforward to future years: ${_cf_new:,.0f}. ' if _cf_new > 0 else '')
+                + 'Note: "Standard Deduction Optimization" above describes Roth conversion sizing '
+                  '(targets 90% of standard deduction as income floor) — it is separate from the '
+                  'final deduction choice applied here.',
+                deduction_type=_ded_type,
+                itemized_total=_daf_ded + _salt,
+                std_deduction=std_deduction,
+                daf_deductible=_daf_ded,
+                salt=_salt,
+                daf_carryforward_remaining=_cf_new,
+                savings_vs_standard=_ded_amount - std_deduction,
+            )
+
         # Return updated balances with state tax deducted
         return balances
 

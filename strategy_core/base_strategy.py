@@ -770,4 +770,113 @@ class BaseLifeStageStrategy(ILifeStageStrategy):
         """String representation for debugging"""
         return f"{self.__class__.__name__}(name='{self.name}')"
 
+    def _log_daf_tax_strategy(
+        self,
+        strategy: YearlyStrategy,
+        year: int,
+        agi: float,
+        daf_contribution: float,
+        daf_cf_prior: float,
+        daf_deductible: float,
+        daf_30pct_limit: float,
+        daf_cf_new: float,
+        salt: float,
+        state_tax: float,
+        property_tax: float,
+        std_deduction: float,
+        total_itemized: float,
+        using_itemized: bool,
+    ) -> None:
+        """
+        Log a tax_strategy decision card whenever a DAF contribution or
+        carryforward is active.  Covers both new-contribution years and
+        carryforward-only years.  Called by every stage's final-tax block.
+        """
+        has_new       = daf_contribution > 0
+        has_cf        = daf_cf_prior > 0
+        total_avail   = daf_contribution + daf_cf_prior
+        savings       = max(0.0, total_itemized - std_deduction) if using_itemized else 0.0
+
+        # ── Action line ───────────────────────────────────────────────
+        if has_new and has_cf:
+            action = (
+                f'${daf_contribution:,.0f} new + ${daf_cf_prior:,.0f} carryforward '
+                f'= ${total_avail:,.0f} available; ${daf_deductible:,.0f} deducted this year'
+            )
+        elif has_new:
+            action = (
+                f'${daf_contribution:,.0f} contributed; ${daf_deductible:,.0f} deductible '
+                f'this year (30% AGI limit = ${daf_30pct_limit:,.0f})'
+            )
+        else:
+            action = (
+                f'${daf_cf_prior:,.0f} carryforward from prior year; '
+                f'${daf_deductible:,.0f} deducted this year'
+            )
+
+        # ── Reason paragraph ──────────────────────────────────────────
+        lines = []
+
+        if has_new:
+            lines.append(
+                f'New DAF contribution: ${daf_contribution:,.0f} donated from appreciated '
+                f'brokerage securities (avoid capital gains, receive full FMV deduction).'
+            )
+        if has_cf:
+            lines.append(
+                f'Prior-year carryforward applied: ${daf_cf_prior:,.0f} '
+                f'(IRC §170 — unused charitable deductions carry forward up to 5 years).'
+            )
+
+        lines.append(
+            f'30% of AGI limit (IRC §170): ${daf_30pct_limit:,.0f}. '
+            f'Deductible this year: ${daf_deductible:,.0f}.'
+        )
+
+        if daf_cf_new > 0:
+            lines.append(
+                f'Remaining carryforward to future years: ${daf_cf_new:,.0f}.'
+            )
+        else:
+            if has_cf or has_new:
+                lines.append('All available charitable deduction used this year — no carryforward.')
+
+        salt_detail = f'State income tax ${state_tax:,.0f} + property tax ${property_tax:,.0f}'
+        if state_tax + property_tax > 10_000:
+            salt_detail += f' (capped at $10,000 — ${state_tax + property_tax - 10_000:,.0f} disallowed)'
+        lines.append(f'SALT: ${salt:,.0f} ({salt_detail}).')
+
+        if using_itemized:
+            lines.append(
+                f'Total itemized (DAF + SALT) = ${total_itemized:,.0f} vs standard deduction '
+                f'${std_deduction:,.0f} → itemizing saves ${savings:,.0f} in taxable income.'
+            )
+        else:
+            lines.append(
+                f'Total itemized (DAF + SALT) = ${total_itemized:,.0f} is below the '
+                f'standard deduction (${std_deduction:,.0f}) — standard deduction used. '
+                f'Consider bundling more charitable giving to exceed the standard deduction.'
+            )
+
+        reason = ' '.join(lines)
+
+        self._log_decision(
+            strategy,
+            'tax_strategy',
+            'DAF — Charitable Deduction',
+            action,
+            reason,
+            year=year,
+            daf_contribution=daf_contribution,
+            daf_cf_prior=daf_cf_prior,
+            daf_deductible=daf_deductible,
+            daf_30pct_limit=daf_30pct_limit,
+            daf_cf_remaining=daf_cf_new,
+            salt=salt,
+            std_deduction=std_deduction,
+            total_itemized=total_itemized,
+            itemizing=using_itemized,
+            itemized_savings=savings,
+        )
+
 # Made with Bob

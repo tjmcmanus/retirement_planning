@@ -350,12 +350,28 @@ class Stage7SurvivingSpouse(BaseLifeStageStrategy):
                 f"(deductible: ${_daf_deductible_s7:,.0f}, "
                 f"carryforward: ${tax_result['daf_carryforward_new']:,.0f})"
             )
-            self._log_decision(
-                strategy, 'daf_decisions', 'DAF Contribution',
-                f'${daf_contribution:,.0f} contributed to DAF',
-                f'Deductible: ${_daf_deductible_s7:,.0f}',
+
+        # DAF tax strategy card — new contribution and/or carryforward active
+        _s7_cf_prior = float(kwargs.get('daf_carryforward_prior', 0.0))
+        _s7_cf_new   = tax_result.get('daf_carryforward_new', 0.0)
+        _s7_ded_type = tax_result.get('deduction_type', 'Standard')
+        _s7_salt     = min(10_000.0, state_tax + _property_tax)
+        if _daf_deductible_s7 > 0 or _s7_cf_prior > 0:
+            self._log_daf_tax_strategy(
+                strategy=strategy,
+                year=year,
+                agi=agi,
                 daf_contribution=daf_contribution,
+                daf_cf_prior=_s7_cf_prior,
                 daf_deductible=_daf_deductible_s7,
+                daf_30pct_limit=agi * 0.30,
+                daf_cf_new=_s7_cf_new,
+                salt=_s7_salt,
+                state_tax=state_tax,
+                property_tax=_property_tax,
+                std_deduction=std_deduction,
+                total_itemized=_daf_deductible_s7 + _s7_salt,
+                using_itemized=(_s7_ded_type == 'Itemized'),
             )
         
         # Get cost basis ratios

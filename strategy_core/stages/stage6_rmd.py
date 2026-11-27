@@ -458,12 +458,27 @@ class Stage6RMD(BaseLifeStageStrategy):
                 f"(deductible: ${_daf_deductible_s6:,.0f}, "
                 f"carryforward: ${tax_result['daf_carryforward_new']:,.0f})"
             )
-            self._log_decision(
-                strategy, 'daf_decisions', 'DAF Contribution',
-                f'${daf_contribution:,.0f} contributed to DAF',
-                f'Deductible: ${_daf_deductible_s6:,.0f}',
+
+        # DAF tax strategy card — new contribution and/or carryforward active
+        _s6_cf_new   = tax_result.get('daf_carryforward_new', 0.0)
+        _s6_ded_type = tax_result.get('deduction_type', 'Standard')
+        _s6_salt     = min(10_000.0, state_tax + _property_tax)
+        if _daf_deductible_s6 > 0 or _daf_carryforward_prior > 0:
+            self._log_daf_tax_strategy(
+                strategy=strategy,
+                year=year,
+                agi=agi,
                 daf_contribution=daf_contribution,
+                daf_cf_prior=_daf_carryforward_prior,
                 daf_deductible=_daf_deductible_s6,
+                daf_30pct_limit=agi * 0.30,
+                daf_cf_new=_s6_cf_new,
+                salt=_s6_salt,
+                state_tax=state_tax,
+                property_tax=_property_tax,
+                std_deduction=std_deduction,
+                total_itemized=_daf_deductible_s6 + _s6_salt,
+                using_itemized=(_s6_ded_type == 'Itemized'),
             )
         
         # Get cost basis ratios
